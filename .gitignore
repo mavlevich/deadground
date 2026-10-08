@@ -1,0 +1,30 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+TestResults/
+BenchmarkDotNet.Artifacts/
+
+# Godot
+.godot/
+.import/
+export/
+export_presets.cfg
+*.translation
+mono_crash.*.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local runs
+logs/
+*.replay
+*.cmdlog
