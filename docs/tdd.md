@@ -1,6 +1,6 @@
 # Dead Ground: Technical Design
 
-Status: draft v0.3
+Status: draft v0.5, M0 skeleton implemented, platform exit checks pending
 
 This document fixes the technical decisions that are expensive to change later. It does not describe balance, unit stats or content. Each decision should be either fixed, or marked as open with the experiment that will decide it.
 
@@ -362,6 +362,12 @@ Container { capacity_seats, passengers: [EntityId] }
 - Commands are delivered reliably and executed once (deduplicated by sequence number).
 - Clients give instant UI feedback (marker, radio reply). Unit positions are not predicted.
 
+M0 sends a sequence-numbered queued/rejected reply for a well-formed command.
+Queued means admission to the next simulation tick, not successful execution or
+arrival. Rejections include no unit ID or reason that could expose hidden state.
+Malformed packets are discarded. These replies use the bounded local transport;
+reliable acknowledgement, retries and reconnect reconciliation remain M1 work.
+
 ### 12.1 Attack orders
 
 An attack order targets either a `ContactId` or a ground position. Never an enemy entity ID.
@@ -548,6 +554,43 @@ No dates. Each milestone ends with something playable.
 - Core and rules test projects run in CI on three platforms.
 - Godot project shows a heightmap and moving cubes driven by the core through the in-memory transport.
 - The selected framework targets build together. The exported Godot client runs on macOS and Windows. If the fallback is needed, all client-referenced shared libraries use the compatible target from section 20.
+
+Implementation checkpoint:
+
+- .NET SDK 10.0.401 and Godot 4.7.2 .NET are pinned. All projects target `net10.0`.
+  The macOS Apple Silicon development client runs on .NET runtime 10.0.12.
+  No framework fallback is needed on this machine.
+- Arch stores entities behind `WorldState`. Public IDs do not expose Arch handles.
+  `MovementSystem` runs an allocation-free inline Arch query. Ops and Sandbox
+  select systems through `RuleSet`; a rule set can omit or replace movement.
+  MSBuild and regression fixtures check project references, SDK use and resolved
+  compile/runtime dependencies, including transitive Godot assemblies.
+- The procedural map is 128 x 128 m. Movement is straight-line at 20 Hz.
+  Height queries and input raycasts use the same immutable heightmap as the view.
+  Picking takes an explicit range from the camera and clips traversal to map bounds.
+  Visual grids support rectangular maps.
+- Commands and full snapshots cross a bounded byte transport. Snapshots run at
+  10 Hz. The client interpolates its replica with a 150 ms delay.
+  The M0 wire format uses little-endian fields and float coordinates. Bit packing,
+  quantization, contacts, map-object state and protocol negotiation are M1 work.
+  M0 session startup rejects a world capacity above the 1024-record snapshot limit.
+  The view set adds and removes nodes from full snapshots and clears removed selections.
+- The console host measures monotonic elapsed time, rather than counting timer
+  notifications. Each advance runs at most five ticks. Remaining time is retained
+  and reported as backlog; a delayed wakeup does not silently discard simulation time.
+- Forward+ is the default client renderer and has been run through Metal on Apple
+  Silicon. Compatibility remains available by command-line override. CPU-only
+  movement/snapshot microbenchmarks have no dependency on either renderer.
+- Player knowledge currently includes own units only. Hidden enemy IDs and positions
+  never enter the client replica. Sensor-driven contacts are M1 work.
+- JSON content provides the prototype unit speed. Ops and Sandbox both register
+  movement only. This does not yet prove the removable logistics system from section 19.
+- The console runner, client smoke test, xUnit projects, allocation checks and
+  movement/snapshot microbenchmark are available. CI is configured for three OSes.
+  No remote peer, reconnect, save/load or replay implementation is included yet.
+
+Open exit checks: first hosted CI run, exported macOS client, exported Windows client
+and a native Windows runtime check. M0 stays open until these checks pass.
 
 ### M1. First battle
 

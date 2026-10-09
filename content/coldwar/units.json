@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "units": [
+    { "id": "prototype_vehicle", "speed": 6.0 }
+  ]
+}

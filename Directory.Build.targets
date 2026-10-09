@@ -1,0 +1,29 @@
+<Project>
+  <Target Name="CheckArchitecture" BeforeTargets="ResolveReferences">
+    <Error Condition="'$(MSBuildProjectName)' != 'Game.Godot' and '$(UsingGodotNETSdk)' == 'true'"
+      Text="Only Game.Godot may use the Godot SDK." />
+    <ItemGroup>
+      <_ForbiddenProject Include="@(ProjectReference)"
+        Condition="$([System.String]::Copy('$(MSBuildProjectName)').StartsWith('Engine.')) and !$([System.String]::Copy('%(Filename)').StartsWith('Engine.'))" />
+      <_ForbiddenGodot Include="@(PackageReference)"
+        Condition="'$(MSBuildProjectName)' != 'Game.Godot' and $([System.String]::Copy('%(Identity)').StartsWith('Godot'))" />
+      <_ForbiddenGodotProject Include="@(ProjectReference)"
+        Condition="'$(MSBuildProjectName)' != 'Game.Godot' and '%(Filename)' == 'Game.Godot'" />
+    </ItemGroup>
+    <Error Condition="'@(_ForbiddenProject)' != ''" Text="Engine projects may only reference Engine projects: @(_ForbiddenProject)" />
+    <Error Condition="'@(_ForbiddenGodot)' != '' or '@(_ForbiddenGodotProject)' != ''" Text="Only Game.Godot may reference Godot." />
+  </Target>
+  <Target Name="CheckResolvedArchitecture" BeforeTargets="CoreCompile">
+    <ItemGroup>
+      <_ArchitectureReference Include="@(ReferencePath);@(ReferenceCopyLocalPaths)" />
+      <_ForbiddenResolvedGodot Include="@(_ArchitectureReference)"
+        Condition="'$(MSBuildProjectName)' != 'Game.Godot' and ($([System.String]::Copy('%(Filename)').StartsWith('Godot')) or '%(Filename)' == 'Game.Godot')" />
+      <_ForbiddenResolvedGame Include="@(_ArchitectureReference)"
+        Condition="$([System.String]::Copy('$(MSBuildProjectName)').StartsWith('Engine.')) and $([System.String]::Copy('%(Filename)').StartsWith('Game.'))" />
+    </ItemGroup>
+    <Error Condition="'@(_ForbiddenResolvedGodot)' != ''"
+      Text="Only Game.Godot may reference Godot assemblies, including transitive dependencies: @(_ForbiddenResolvedGodot)" />
+    <Error Condition="'@(_ForbiddenResolvedGame)' != ''"
+      Text="Engine projects must not reference Game assemblies, including transitive dependencies: @(_ForbiddenResolvedGame)" />
+  </Target>
+</Project>

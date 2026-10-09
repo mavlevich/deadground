@@ -1,0 +1,20 @@
+config_version=5
+
+[application]
+config/name="Dead Ground"
+run/main_scene="res://Main.tscn"
+config/features=PackedStringArray("4.7", "C#", "Forward Plus")
+
+[display]
+window/size/viewport_width=1440
+window/size/viewport_height=900
+window/size/window_width_override=1280
+window/size/window_height_override=800
+window/stretch/mode="canvas_items"
+
+[dotnet]
+project/assembly_name="Game.Godot"
+
+[rendering]
+renderer/rendering_method="forward_plus"
+environment/defaults/default_clear_color=Color(0.055, 0.075, 0.067, 1)

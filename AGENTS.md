@@ -8,18 +8,18 @@ Dead Ground (codename) is a Cold War tactical RTS. Limited forces, reconnaissanc
 
 The technical design is in [docs/tdd.md](docs/tdd.md). Read it before changing architecture. If a change conflicts with it, update the TDD in the same change or ask first.
 
-Status: pre-production, milestone M0 (skeleton). No code yet.
+Status: M0 skeleton implemented. Exported-client and Windows runtime checks remain open.
 
 ## Stack
 
 - C# with the .NET 10 SDK. Projects target `net10.0` by default.
 - If the Godot client needs the `net8.0` fallback, `Engine.Core`, `Engine.Net` and `Game.Rules.*` also target `net8.0`. Server, tools and tests may stay on `net10.0`. Follow TDD section 20; never make a `net8.0` client reference a `net10.0`-only library.
-- Godot 4.7 (.NET build) for rendering, UI, audio and input.
+- Godot 4.7.2 (.NET build) for rendering, UI, audio and input.
 - Clients: macOS and Windows. Dedicated server: Linux.
 
 ## Layout
 
-Planned structure (TDD section 5.2):
+Structure (TDD section 5.2):
 
 ```
 src/Engine.Core/        simulation core, no Godot
@@ -37,7 +37,7 @@ docs/                   design documents
 
 ## Dependency rules
 
-These are hard rules, enforced by project references:
+These are hard rules, enforced for project references, SDK use and resolved compile/runtime assemblies:
 
 - `Engine.*` never references `Game.*` or Godot.
 - `Game.Rules.*` never references Godot.
@@ -57,12 +57,16 @@ These are hard rules, enforced by project references:
 
 ## Build and test
 
-Commands will be filled in when the solution exists (M0 step 1):
+```sh
+dotnet build DeadGround.sln --configuration Release
+dotnet test DeadGround.sln --configuration Release --no-build
+dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test
+./tools/run-client.sh --headless -- --smoke-test
+```
 
-```
-dotnet build
-dotnet test
-```
+Use `tools/run-client.ps1` on Windows. See README for prerequisites and controls.
+The client smoke test requires the Godot .NET runtime. Build and xUnit checks
+require only the .NET SDK and restored packages.
 
 ## Writing style
 
