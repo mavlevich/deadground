@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Engine.Net/Engine.Net.csproj" />
+    <ProjectReference Include="../Game.Rules.Ops/Game.Rules.Ops.csproj" />
+  </ItemGroup>
+</Project>

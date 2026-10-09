@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
+    <ProjectReference Include="../../src/Engine.Core/Engine.Core.csproj" />
+    <ProjectReference Include="../../src/Engine.Net/Engine.Net.csproj" />
+    <ProjectReference Include="../../src/Game.Rules.Sandbox/Game.Rules.Sandbox.csproj" />
+  </ItemGroup>
+</Project>
