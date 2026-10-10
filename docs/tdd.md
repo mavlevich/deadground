@@ -1,6 +1,6 @@
 # Dead Ground: Technical Design
 
-Status: draft v0.5, M0 skeleton implemented, platform exit checks pending
+Status: draft v0.6, M0 client exports implemented, native Windows gameplay check pending
 
 This document fixes the technical decisions that are expensive to change later. It does not describe balance, unit stats or content. Each decision should be either fixed, or marked as open with the experiment that will decide it.
 
@@ -589,8 +589,21 @@ Implementation checkpoint:
   movement/snapshot microbenchmark are available. CI is configured for three OSes.
   No remote peer, reconnect, save/load or replay implementation is included yet.
 
-Open exit checks: first hosted CI run, exported macOS client, exported Windows client
-and a native Windows runtime check. M0 stays open until these checks pass.
+- The hosted three-platform CI run on main (Ubuntu, macOS, Windows; run 37940079650)
+  succeeded, verifying builds, unit tests, the server smoke test and launcher checks.
+  That run did not include export jobs or packaged game artifacts.
+- Godot 4.7.2 .NET release export presets and scripts are configured for macOS
+  (Universal, covering Apple Silicon and Intel) and Windows x64. The pinned export
+  templates package `4.7.2.stable.mono` is installed via automation scripts.
+- The exported macOS Universal package was validated locally with ad-hoc code signature
+  checks and the headless client smoke test, passing view lifecycle and rectangular grid
+  regression assertions.
+- Dedicated CI jobs (`export-macos` and `export-windows`) are configured to package the
+  clients, run the headless smoke test on the exported executables and upload game artifacts.
+
+Open exit checks: hosted CI run of the export jobs, Windows headless export smoke test,
+and native interactive Windows gameplay on a desktop Windows machine. M0 remains open
+until these checks pass.
 
 ### M1. First battle
 

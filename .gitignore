@@ -10,8 +10,9 @@ BenchmarkDotNet.Artifacts/
 # Godot
 .godot/
 .import/
+build/
 export/
-export_presets.cfg
+*.uid
 *.translation
 mono_crash.*.json
 
