@@ -24,8 +24,12 @@ detection, logistics, a bot and remote networking start in later milestones.
 The Sandbox rule set is a movement-only placeholder for the M1 rules experiment.
 
 The technical design and milestone exit criteria are in [docs/tdd.md](docs/tdd.md).
-The macOS development client has been built and run with .NET 10. Exported clients
-and Windows runtime validation are still required before closing M0.
+The hosted three-platform CI run on main (Ubuntu, macOS, Windows; run 37940079650)
+succeeded, verifying builds, unit tests, the server smoke test and launcher checks.
+Reproducible exports are implemented for macOS (Universal) and Windows x64.
+The exported macOS client passes the headless smoke test locally with ad-hoc code
+signing. CI export packaging, the Windows headless export smoke test, and native
+interactive Windows gameplay validation remain open checks before closing M0.
 
 ## Run the prototype
 
@@ -93,6 +97,78 @@ dotnet run --project tests/Benchmarks --configuration Release -- --filter '*Movi
 ```
 
 This measures M0 movement and serialization, not the later combat workload or its budget.
+
+## Export the client
+
+Godot export templates for version 4.7.2 .NET are required. Install them once:
+
+```sh
+./tools/install-templates.sh
+```
+
+On Windows:
+
+```powershell
+./tools/install-templates.ps1
+```
+
+To export the macOS client (Universal package covering Apple Silicon and Intel):
+
+```sh
+./tools/export-client.sh macOS
+```
+
+The output package is created at `build/export/macos/DeadGround.zip`.
+
+To export the Windows client (x64 package):
+
+```sh
+./tools/export-client.sh "Windows Desktop"
+```
+
+On Windows with PowerShell:
+
+```powershell
+./tools/export-client.ps1 -Preset "Windows Desktop"
+```
+
+The output files are written to `build/export/windows/DeadGround.exe`.
+
+To run the automated smoke test against the exported macOS client:
+
+```sh
+mkdir -p build/export/macos/extracted
+unzip -q build/export/macos/DeadGround.zip -d build/export/macos/extracted
+"./build/export/macos/extracted/Dead Ground.app/Contents/MacOS/Dead Ground" --headless -- --smoke-test
+```
+
+On Windows:
+
+```powershell
+& "build\export\windows\DeadGround.exe" --headless -- --smoke-test
+```
+
+## Manual verification checklist
+
+Follow this checklist to verify an exported client interactively:
+
+1. Launch: Start the exported application (`open "Dead Ground.app"` on macOS, or `DeadGround.exe` on Windows).
+2. World rendering: Confirm that the window opens, displaying the 128 x 128 m terrain, green grid overlay, directional lighting and HUD panels.
+3. Unit spawning: Confirm that 12 friendly units appear on the map. Verify that all 12 units automatically begin moving north (+60 m).
+4. Selection:
+   - Left-click any unit. Confirm that a yellow selection ring appears, and the status bar displays "1 selected / right-click terrain to move".
+   - Shift + left-click another unit to add it to the selection.
+   - Left-click empty terrain to deselect. Confirm status displays "No units selected".
+   - Press Escape to clear active selections.
+5. Movement orders:
+   - Select one or more units.
+   - Right-click terrain. Confirm that a yellow target ring appears at the click position.
+   - Confirm status updates to "Move order sent / N units / X, Z m".
+   - Verify that selected units turn and travel toward the target point.
+6. Camera:
+   - Pan using WASD or arrow keys.
+   - Zoom using the mouse scroll wheel.
+   - Press Space to return the camera to the default overview position.
 
 ## Platforms
 

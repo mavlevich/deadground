@@ -29,9 +29,77 @@ jobs:
         run: dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test
       - name: Launcher path and argument regression test
         if: runner.os != 'Windows'
-        run: bash tests/launcher-smoke.sh
+        run: |
+          bash tests/launcher-smoke.sh
+          bash tests/export-smoke.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: test-results-${{ matrix.os }}
           path: '**/TestResults/*.trx'
+
+  export-macos:
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Install Godot 4.7.2 .NET
+        run: |
+          curl -sSL -o godot_macos.zip https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/Godot_v4.7.2-stable_mono_macos.universal.zip
+          unzip -q godot_macos.zip
+          echo "GODOT_BIN=$PWD/Godot_mono.app/Contents/MacOS/Godot" >> "$GITHUB_ENV"
+      - name: Install Godot export templates
+        run: bash tools/install-templates.sh
+      - name: Export macOS client
+        run: bash tools/export-client.sh macOS build/export/macos/DeadGround.zip
+      - name: Validate exported macOS client smoke test
+        run: |
+          mkdir -p build/export/macos/extracted
+          unzip -q build/export/macos/DeadGround.zip -d build/export/macos/extracted
+          "./build/export/macos/extracted/Dead Ground.app/Contents/MacOS/Dead Ground" --headless -- --smoke-test
+      - name: Upload macOS client package
+        uses: actions/upload-artifact@v4
+        with:
+          name: deadground-client-macos-universal
+          path: build/export/macos/DeadGround.zip
+          if-no-files-found: error
+
+  export-windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Install Godot 4.7.2 .NET
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/Godot_v4.7.2-stable_mono_win64.zip" -OutFile "godot_win.zip"
+          Expand-Archive -Path "godot_win.zip" -DestinationPath "$env:RUNNER_TEMP\godot"
+          $godotExe = (Get-ChildItem -Path "$env:RUNNER_TEMP\godot" -Recurse -Filter "Godot_v4.7.2-stable_mono_win64.exe").FullName
+          "GODOT_BIN=$godotExe" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Install Godot export templates
+        shell: pwsh
+        run: ./tools/install-templates.ps1
+      - name: Export Windows client
+        shell: pwsh
+        run: ./tools/export-client.ps1 -Preset 'Windows Desktop' -Output 'build/export/windows/DeadGround.exe'
+      - name: Validate exported Windows client smoke test
+        shell: pwsh
+        run: |
+          & "build/export/windows/DeadGround.exe" --headless -- --smoke-test
+          if ($LASTEXITCODE -ne 0) { throw "Exported Windows smoke test failed with exit code $LASTEXITCODE" }
+      - name: Package Windows client
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "build\export\windows\*" -DestinationPath "build\export\DeadGround-windows-x64.zip"
+      - name: Upload Windows client package
+        uses: actions/upload-artifact@v4
+        with:
+          name: deadground-client-windows-x64
+          path: build/export/DeadGround-windows-x64.zip
+          if-no-files-found: error
