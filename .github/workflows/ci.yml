@@ -38,8 +38,23 @@ jobs:
           name: test-results-${{ matrix.os }}
           path: '**/TestResults/*.trx'
 
+  quality:
+    name: Code quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Restore
+        run: dotnet restore DeadGround.sln
+      - name: Verify C# code formatting
+        run: dotnet format DeadGround.sln --verify-no-changes --no-restore
+      - name: Build with analyzers
+        run: dotnet build DeadGround.sln --configuration Release --no-restore
+
   export-macos:
-    needs: test
+    needs: [test, quality]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -71,7 +86,7 @@ jobs:
           if-no-files-found: error
 
   export-windows:
-    needs: test
+    needs: [test, quality]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

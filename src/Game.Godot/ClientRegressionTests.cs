@@ -1,6 +1,6 @@
-using Godot;
 using DeadGround.Engine;
 using DeadGround.Engine.Net;
+using Godot;
 using NumericsVector2 = System.Numerics.Vector2;
 
 namespace DeadGround.Client;

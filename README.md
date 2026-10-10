@@ -100,11 +100,25 @@ launcher. Renderer and driver must be recorded with graphics performance results
 
 ## Build and check
 
+Run the verification pipeline in order: restore, code quality check, build, and tests:
+
 ```sh
-dotnet build DeadGround.sln --configuration Release
+dotnet restore DeadGround.sln
+dotnet format DeadGround.sln --verify-no-changes --no-restore
+dotnet build DeadGround.sln --configuration Release --no-restore
 dotnet test DeadGround.sln --configuration Release --no-build
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test
 ```
+
+To automatically format C# code according to the repository rules:
+
+```sh
+dotnet format DeadGround.sln
+```
+
+EditorConfig sets editor conventions for various file formats. Note that `dotnet format` only formats C# source files, not JSON, YAML, or shell scripts.
+
+Built-in .NET SDK analyzers are enabled in `Directory.Build.props` and configured via `.editorconfig`. They enforce correctness, reliability, resource disposal, and performance best practices. Generated code and build outputs (`bin`, `obj`, `.godot`, `build`, `export`, `TestResults`, and benchmark artifacts) are excluded from analysis and formatting via `generated_code = true` in `.editorconfig`.
 
 Run the console host without `--smoke-test` to watch it advance until Ctrl+C.
 It measures elapsed monotonic time between wakeups. Each update runs at most five

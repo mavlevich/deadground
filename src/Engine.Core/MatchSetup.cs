@@ -25,8 +25,8 @@ public sealed record MatchSetup(
         hash = HashFloat(hash, map.CellSize);
         hash = HashFloat(hash, map.HeightScale);
         for (int z = 0; z < map.Rows; z++)
-        for (int x = 0; x < map.Columns; x++)
-            hash = HashFloat(hash, map.GetHeight(x * map.CellSize, z * map.CellSize));
+            for (int x = 0; x < map.Columns; x++)
+                hash = HashFloat(hash, map.GetHeight(x * map.CellSize, z * map.CellSize));
         return hash;
     }
 

@@ -1,9 +1,9 @@
+using System.Numerics;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
 using DeadGround.Engine;
 using DeadGround.Engine.Net;
 using DeadGround.Rules.Sandbox;
-using System.Numerics;
 
 BenchmarkSwitcher.FromAssembly(typeof(MovementBenchmark).Assembly).Run(args);
 

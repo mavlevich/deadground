@@ -1,7 +1,7 @@
-using Godot;
 using DeadGround.Engine;
 using DeadGround.Engine.Net;
 using DeadGround.Rules.Ops;
+using Godot;
 using NumericsVector2 = System.Numerics.Vector2;
 using NumericsVector3 = System.Numerics.Vector3;
 
@@ -74,8 +74,10 @@ public partial class Main : Node3D
         AddChild(TerrainView.CreateGrid(_map));
         AddChild(new DirectionalLight3D
         {
-            RotationDegrees = new Vector3(-55, -35, 0), LightColor = new Color("fff0d2"),
-            LightEnergy = 1.2f, ShadowEnabled = true
+            RotationDegrees = new Vector3(-55, -35, 0),
+            LightColor = new Color("fff0d2"),
+            LightEnergy = 1.2f,
+            ShadowEnabled = true
         });
         AddChild(new WorldEnvironment
         {
@@ -84,7 +86,8 @@ public partial class Main : Node3D
                 BackgroundMode = Godot.Environment.BGMode.Color,
                 BackgroundColor = new Color("17211c"),
                 AmbientLightSource = Godot.Environment.AmbientSource.Color,
-                AmbientLightColor = new Color("b9c6b2"), AmbientLightEnergy = 0.55f,
+                AmbientLightColor = new Color("b9c6b2"),
+                AmbientLightEnergy = 0.55f,
                 TonemapMode = Godot.Environment.ToneMapper.Filmic
             }
         });
@@ -109,7 +112,8 @@ public partial class Main : Node3D
             Scale = new Vector3(1, 0.15f, 1),
             MaterialOverride = new StandardMaterial3D
             {
-                AlbedoColor = new Color("edc76b"), ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded
+                AlbedoColor = new Color("edc76b"),
+                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded
             },
             Visible = false
         };
@@ -269,9 +273,15 @@ public partial class Main : Node3D
     private static StyleBoxFlat PanelStyle() => new()
     {
         BgColor = new Color(0.055f, 0.08f, 0.065f, 0.94f),
-        BorderColor = new Color("46533e"), BorderWidthBottom = 1, BorderWidthTop = 1,
-        BorderWidthLeft = 1, BorderWidthRight = 1,
-        CornerRadiusBottomLeft = 6, CornerRadiusBottomRight = 6, CornerRadiusTopLeft = 6, CornerRadiusTopRight = 6
+        BorderColor = new Color("46533e"),
+        BorderWidthBottom = 1,
+        BorderWidthTop = 1,
+        BorderWidthLeft = 1,
+        BorderWidthRight = 1,
+        CornerRadiusBottomLeft = 6,
+        CornerRadiusBottomRight = 6,
+        CornerRadiusTopLeft = 6,
+        CornerRadiusTopRight = 6
     };
 
     public override void _ExitTree() => _session?.Dispose();

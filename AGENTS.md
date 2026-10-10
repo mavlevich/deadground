@@ -58,7 +58,9 @@ These are hard rules, enforced for project references, SDK use and resolved comp
 ## Build and test
 
 ```sh
-dotnet build DeadGround.sln --configuration Release
+dotnet restore DeadGround.sln
+dotnet format DeadGround.sln --verify-no-changes --no-restore
+dotnet build DeadGround.sln --configuration Release --no-restore
 dotnet test DeadGround.sln --configuration Release --no-build
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test
 ./tools/run-client.sh --headless -- --smoke-test
@@ -77,6 +79,8 @@ require only the .NET SDK and restored packages.
 ## Workflow
 
 - Work on a feature branch, never commit directly to `main` after the initial commit.
+- Run code quality checks and tests before submitting changes for review. Fix formatting with `dotnet format DeadGround.sln`.
+- EditorConfig defines editor rules for multiple file formats, but `dotnet format` only formats C# source files.
 - Show the diff and wait for review before committing or pushing.
 - The maintainer creates pull requests manually. Agents only prepare a PR title and description.
 - Commit messages are short. No AI attribution or co-author lines in commits or PRs.
