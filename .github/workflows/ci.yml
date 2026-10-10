@@ -83,7 +83,10 @@ jobs:
         run: |
           Invoke-WebRequest -Uri "https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/Godot_v4.7.2-stable_mono_win64.zip" -OutFile "godot_win.zip"
           Expand-Archive -Path "godot_win.zip" -DestinationPath "$env:RUNNER_TEMP\godot"
-          $godotExe = (Get-ChildItem -Path "$env:RUNNER_TEMP\godot" -Recurse -Filter "Godot_v4.7.2-stable_mono_win64.exe").FullName
+          $godotExe = (Get-ChildItem -Path "$env:RUNNER_TEMP\godot" -Recurse -Filter "Godot_v4.7.2-stable_mono_win64_console.exe").FullName
+          if (-not $godotExe) { throw 'Godot console executable was not found in the downloaded archive.' }
+          & $godotExe --version
+          if ($LASTEXITCODE -ne 0) { throw 'Godot version command failed.' }
           "GODOT_BIN=$godotExe" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Install Godot export templates
         shell: pwsh
