@@ -8,7 +8,7 @@ Dead Ground (codename) is a Cold War tactical RTS. Limited forces, reconnaissanc
 
 The technical design is in [docs/tdd.md](docs/tdd.md). Read it before changing architecture. If a change conflicts with it, update the TDD in the same change or ask first.
 
-Status: M0 client exports implemented. CI export jobs and native Windows interactive gameplay check remain open.
+Status: M1 network session implemented. Dedicated server runs two clients over LiteNetLib UDP. Reconnect recovery and native interactive Windows gameplay check remain open.
 
 ## Stack
 

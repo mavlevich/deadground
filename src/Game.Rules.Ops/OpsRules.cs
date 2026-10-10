@@ -46,4 +46,34 @@ public static class PrototypeScenario
             world.CreateUnit(2, 0, new Vector2(90 + i * 6, 90), data.Units[0].Speed);
         return new Simulation(world, new OpsRules());
     }
+
+    public static ulong ComputeCatalogHash()
+    {
+        using Stream stream = typeof(PrototypeScenario).Assembly.GetManifestResourceStream("DeadGround.Units.json")
+            ?? throw new InvalidOperationException("Unit data not found.");
+        byte[] buffer = new byte[1024];
+        ulong hash = 14695981039346656037UL;
+        int read;
+        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            for (int i = 0; i < read; i++)
+            {
+                hash ^= buffer[i];
+                hash *= 1099511628211UL;
+            }
+        }
+        return hash;
+    }
+
+    public static ulong ComputeCatalogHash(UnitCatalog catalog) => ComputeCatalogHash();
+
+    public static MatchSetup CreateMatchSetup(HeightMap map, string ruleSetId = "Ops")
+    {
+        _ = LoadCatalog();
+        return new MatchSetup(
+            MatchSetup.CurrentProtocolVersion,
+            ComputeCatalogHash(),
+            MatchSetup.ComputeMapHash(map),
+            ruleSetId);
+    }
 }

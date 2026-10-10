@@ -2,6 +2,9 @@ namespace DeadGround.Engine.Net;
 
 public interface ITransport : IDisposable
 {
+    bool IsConnected { get; }
+    byte[]? TerminalData => null;
+    bool HasTerminalEvent => false;
     bool TrySend(ReadOnlySpan<byte> message);
     bool TryReceive(Span<byte> destination, out int length);
 }
@@ -11,6 +14,9 @@ public sealed class InMemoryTransport : ITransport
 {
     private readonly MessageRing _incoming;
     private readonly MessageRing _outgoing;
+
+    public bool IsConnected => !_incoming.IsClosed && !_outgoing.IsClosed;
+    public bool HasTerminalEvent => !IsConnected;
 
     private InMemoryTransport(MessageRing incoming, MessageRing outgoing)
     {
@@ -69,6 +75,7 @@ public sealed class InMemoryTransport : ITransport
             return true;
         }
 
+        public bool IsClosed => _closed;
         public void Close() { _closed = true; _count = 0; }
     }
 }

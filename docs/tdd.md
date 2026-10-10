@@ -600,10 +600,11 @@ Implementation checkpoint:
   regression assertions.
 - Dedicated CI jobs (`export-macos` and `export-windows`) are configured to package the
   clients, run the headless smoke test on the exported executables and upload game artifacts.
+  The hosted export CI run (run 38075713603) succeeded, validating packages and headless
+  smoke tests on macOS and Windows.
 
-Open exit checks: hosted CI run of the export jobs, Windows headless export smoke test,
-and native interactive Windows gameplay on a desktop Windows machine. M0 remains open
-until these checks pass.
+Open exit check: native interactive Windows gameplay on a desktop Windows machine. M0 remains open
+until this check passes.
 
 ### M1. First battle
 
@@ -615,6 +616,23 @@ until these checks pass.
 - Separate stress scene.
 - Movement test scenarios from section 9.3 pass.
 - Open questions from section 4 that block M1 are closed.
+
+Implementation checkpoint:
+
+- Network session slice implemented. `Game.Server` runs an authoritative dedicated server
+  ticking at 20 Hz on a single monotonic clock.
+- Two independent Godot clients connect over LiteNetLib UDP transport.
+- The server assigns player slots and binds movement commands to the connected peer.
+  Client-supplied player identity is never trusted.
+- Handshake protocol validates protocol version, content hash, map hash and rule set.
+- Rejection of foreign unit commands and duplicate sequence numbers is enforced.
+- Fog of war filters full snapshots per player at 10 Hz; hidden enemy units never reach
+  the client replica.
+- Snapshots larger than one UDP packet are fragmented and reassembled; only complete,
+  validated snapshots are applied.
+- Automated integration tests cover two-client loopback sessions, foreign unit rejection,
+  hidden state preservation, handshake mismatch and multi-packet snapshot reassembly.
+- Reconnect recovery, combat, sensors, pathfinding, bots and save/load remain pending M1 work.
 
 Exit criteria (technical):
 
