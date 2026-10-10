@@ -56,10 +56,13 @@ jobs:
       - name: Export macOS client
         run: bash tools/export-client.sh macOS build/export/macos/DeadGround.zip
       - name: Validate exported macOS client smoke test
+        timeout-minutes: 2
         run: |
           mkdir -p build/export/macos/extracted
           unzip -q build/export/macos/DeadGround.zip -d build/export/macos/extracted
-          "./build/export/macos/extracted/Dead Ground.app/Contents/MacOS/Dead Ground" --headless -- --smoke-test
+          codesign --verify --deep --strict --verbose=2 "./build/export/macos/extracted/Dead Ground.app"
+          "./build/export/macos/extracted/Dead Ground.app/Contents/MacOS/Dead Ground" --headless -- --smoke-test | tee macos-smoke.log
+          grep -Fxq 'M0_CLIENT_SMOKE_OK' macos-smoke.log
       - name: Upload macOS client package
         uses: actions/upload-artifact@v4
         with:
@@ -89,10 +92,14 @@ jobs:
         shell: pwsh
         run: ./tools/export-client.ps1 -Preset 'Windows Desktop' -Output 'build/export/windows/DeadGround.exe'
       - name: Validate exported Windows client smoke test
+        timeout-minutes: 2
         shell: pwsh
         run: |
-          & "build/export/windows/DeadGround.exe" --headless -- --smoke-test
-          if ($LASTEXITCODE -ne 0) { throw "Exported Windows smoke test failed with exit code $LASTEXITCODE" }
+          $smokeOutput = & "build/export/windows/DeadGround.console.exe" --headless -- --smoke-test 2>&1
+          $smokeExitCode = $LASTEXITCODE
+          $smokeOutput | Write-Output
+          if ($smokeExitCode -ne 0) { throw "Exported Windows smoke test failed with exit code $smokeExitCode" }
+          if ($smokeOutput -notcontains 'M0_CLIENT_SMOKE_OK') { throw 'Exported client did not complete the smoke test.' }
       - name: Package Windows client
         shell: pwsh
         run: |

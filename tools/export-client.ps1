@@ -15,6 +15,13 @@ if (-not $GodotBin) {
     }
 }
 
+# Godot's Windows GUI executable does not provide console output for --version.
+# Prefer its console companion for version checks, export logs and exit status.
+if ([System.IO.Path]::GetExtension($GodotBin) -eq '.exe' -and $GodotBin -notlike '*_console.exe') {
+    $consoleBin = [System.IO.Path]::ChangeExtension($GodotBin, $null) + '_console.exe'
+    if (Test-Path $consoleBin) { $GodotBin = $consoleBin }
+}
+
 $version = & $GodotBin --version
 if ($LASTEXITCODE -ne 0 -or $version -notlike '4.7.2.*.mono.*') {
     throw 'This project requires Godot 4.7.2 .NET. Check GODOT_BIN.'

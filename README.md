@@ -100,7 +100,8 @@ This measures M0 movement and serialization, not the later combat workload or it
 
 ## Export the client
 
-Godot export templates for version 4.7.2 .NET are required. Install them once:
+Godot export templates for version 4.7.2 .NET are required. macOS exports use the
+native `codesign` tool for ad-hoc signing and must be created on macOS. Install them once:
 
 ```sh
 ./tools/install-templates.sh
@@ -145,7 +146,7 @@ unzip -q build/export/macos/DeadGround.zip -d build/export/macos/extracted
 On Windows:
 
 ```powershell
-& "build\export\windows\DeadGround.exe" --headless -- --smoke-test
+& "build\export\windows\DeadGround.console.exe" --headless -- --smoke-test
 ```
 
 ## Manual verification checklist
