@@ -98,14 +98,14 @@ public sealed class HeightMap
         const int size = 65;
         ushort[] heights = new ushort[size * size];
         for (int z = 0; z < size; z++)
-        for (int x = 0; x < size; x++)
-        {
-            float dx = x * 2 - 86, dz = z * 2 - 44;
-            float h = MathF.Max(0, 1 - (dx * dx + dz * dz) / 1200) * 9;
-            dx = x * 2 - 34; dz = z * 2 - 100;
-            h += MathF.Max(0, 1 - (dx * dx + dz * dz) / 650) * 5;
-            heights[z * size + x] = (ushort)MathF.Round(h * 100);
-        }
+            for (int x = 0; x < size; x++)
+            {
+                float dx = x * 2 - 86, dz = z * 2 - 44;
+                float h = MathF.Max(0, 1 - (dx * dx + dz * dz) / 1200) * 9;
+                dx = x * 2 - 34; dz = z * 2 - 100;
+                h += MathF.Max(0, 1 - (dx * dx + dz * dz) / 650) * 5;
+                heights[z * size + x] = (ushort)MathF.Round(h * 100);
+            }
         return new HeightMap(size, size, 2, 0.01f, heights);
     }
 }

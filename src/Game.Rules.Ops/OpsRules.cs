@@ -1,6 +1,6 @@
+using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Numerics;
 using DeadGround.Engine;
 
 namespace DeadGround.Rules.Ops;
@@ -40,8 +40,8 @@ public static class PrototypeScenario
         UnitCatalog data = LoadCatalog();
         WorldState world = new(map);
         for (int z = 0; z < 3; z++)
-        for (int x = 0; x < 4; x++)
-            world.CreateUnit(1, 0, new Vector2(24 + x * 9, 24 + z * 9), data.Units[0].Speed);
+            for (int x = 0; x < 4; x++)
+                world.CreateUnit(1, 0, new Vector2(24 + x * 9, 24 + z * 9), data.Units[0].Speed);
         for (int i = 0; i < 4; i++)
             world.CreateUnit(2, 0, new Vector2(90 + i * 6, 90), data.Units[0].Speed);
         return new Simulation(world, new OpsRules());
