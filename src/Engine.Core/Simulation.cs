@@ -44,6 +44,12 @@ public sealed class Simulation : IDisposable
         _rules.Update(_world, Tick);
     }
 
+    public void ResetPlayer(int player)
+    {
+        if (player >= 1 && player <= _lastAccepted.Length)
+            _lastAccepted[player - 1] = 0;
+    }
+
     public void UpdateKnowledge(PlayerKnowledge knowledge) => knowledge.Refresh(_world);
     public void Dispose() => _world.Dispose();
 }

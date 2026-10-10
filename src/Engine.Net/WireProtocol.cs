@@ -1,7 +1,18 @@
 using System.Buffers.Binary;
 using System.Numerics;
+using System.Text;
 
 namespace DeadGround.Engine.Net;
+
+public enum HandshakeReason : byte
+{
+    Accepted = 0,
+    ProtocolVersionMismatch = 1,
+    ContentMismatch = 2,
+    MapMismatch = 3,
+    RuleSetMismatch = 4,
+    ServerFull = 5
+}
 
 public static class WireProtocol
 {
@@ -12,7 +23,16 @@ public static class WireProtocol
     public const int UnitSize = 18;
     public const int MaxUnits = 1024;
     public const int MaxMessageSize = SnapshotHeaderSize + MaxUnits * UnitSize;
-    private const byte MoveKind = 1, SnapshotKind = 2, CommandResultKind = 3;
+    public const int HandshakeResponseSize = 5;
+    public const int FragmentHeaderSize = 22;
+    public const int MaxFragmentPayloadSize = 960;
+
+    public const byte MoveKind = 1;
+    public const byte SnapshotKind = 2;
+    public const byte CommandResultKind = 3;
+    public const byte SnapshotFragmentKind = 4;
+    public const byte HandshakeRequestKind = 5;
+    public const byte HandshakeResponseKind = 6;
 
     public static void WriteCommandResult(Span<byte> bytes, CommandResult result)
     {
@@ -60,6 +80,58 @@ public static class WireProtocol
         return true;
     }
 
+    public static int WriteHandshakeRequest(Span<byte> bytes, MatchSetup setup)
+    {
+        int stringByteCount = Encoding.UTF8.GetByteCount(setup.RuleSetId);
+        int totalSize = 20 + stringByteCount;
+        if (bytes.Length < totalSize) throw new ArgumentException("Handshake buffer is too small.");
+        bytes[0] = Version;
+        bytes[1] = HandshakeRequestKind;
+        bytes[2] = setup.ProtocolVersion;
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes[3..], setup.ContentHash);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes[11..], setup.MapHash);
+        bytes[19] = (byte)stringByteCount;
+        Encoding.UTF8.GetBytes(setup.RuleSetId, bytes[20..]);
+        return totalSize;
+    }
+
+    public static bool TryReadHandshakeRequest(ReadOnlySpan<byte> bytes, out MatchSetup setup)
+    {
+        setup = default!;
+        if (bytes.Length < 20 || bytes[0] != Version || bytes[1] != HandshakeRequestKind) return false;
+        byte protocolVersion = bytes[2];
+        ulong contentHash = BinaryPrimitives.ReadUInt64LittleEndian(bytes[3..]);
+        ulong mapHash = BinaryPrimitives.ReadUInt64LittleEndian(bytes[11..]);
+        byte strLen = bytes[19];
+        if (bytes.Length != 20 + strLen) return false;
+        string ruleSetId = Encoding.UTF8.GetString(bytes.Slice(20, strLen));
+        setup = new MatchSetup(protocolVersion, contentHash, mapHash, ruleSetId);
+        return true;
+    }
+
+    public static void WriteHandshakeResponse(Span<byte> bytes, bool accepted, int assignedPlayer, HandshakeReason reason)
+    {
+        if (bytes.Length < HandshakeResponseSize) throw new ArgumentException("Handshake response buffer too small.");
+        bytes[0] = Version;
+        bytes[1] = HandshakeResponseKind;
+        bytes[2] = accepted ? (byte)1 : (byte)0;
+        bytes[3] = (byte)assignedPlayer;
+        bytes[4] = (byte)reason;
+    }
+
+    public static bool TryReadHandshakeResponse(ReadOnlySpan<byte> bytes, out bool accepted, out int assignedPlayer, out HandshakeReason reason)
+    {
+        accepted = false;
+        assignedPlayer = 0;
+        reason = default;
+        if (bytes.Length != HandshakeResponseSize || bytes[0] != Version || bytes[1] != HandshakeResponseKind || bytes[2] > 1)
+            return false;
+        accepted = bytes[2] == 1;
+        assignedPlayer = bytes[3];
+        reason = (HandshakeReason)bytes[4];
+        return true;
+    }
+
     public static int WriteSnapshot(Span<byte> bytes, uint sequence, int tick, ReadOnlySpan<OwnUnitObservation> units)
     {
         int length = checked(SnapshotHeaderSize + units.Length * UnitSize);
@@ -79,6 +151,60 @@ public static class WireProtocol
             BinaryPrimitives.WriteUInt32LittleEndian(record[14..], unit.SupportSurface);
         }
         return length;
+    }
+
+    public static int WriteSnapshotFragment(Span<byte> bytes, uint sequence, int serverTick, ushort fragmentIndex,
+        ushort fragmentCount, int totalPayloadSize, int fragmentOffset, ReadOnlySpan<byte> payload)
+    {
+        int totalLength = FragmentHeaderSize + payload.Length;
+        if (bytes.Length < totalLength) throw new ArgumentException("Fragment buffer is too small.");
+        bytes[0] = Version;
+        bytes[1] = SnapshotFragmentKind;
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[2..], sequence);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[6..], serverTick);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes[10..], fragmentIndex);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes[12..], fragmentCount);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[14..], totalPayloadSize);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[18..], fragmentOffset);
+        payload.CopyTo(bytes[FragmentHeaderSize..]);
+        return totalLength;
+    }
+
+    public static bool TryReadSnapshotFragment(ReadOnlySpan<byte> bytes, out uint sequence, out int serverTick,
+        out ushort fragmentIndex, out ushort fragmentCount, out int totalPayloadSize, out int fragmentOffset,
+        out ReadOnlySpan<byte> payload)
+    {
+        sequence = 0;
+        serverTick = 0;
+        fragmentIndex = 0;
+        fragmentCount = 0;
+        totalPayloadSize = 0;
+        fragmentOffset = 0;
+        payload = default;
+        if (bytes.Length < FragmentHeaderSize || bytes[0] != Version || bytes[1] != SnapshotFragmentKind)
+            return false;
+        sequence = BinaryPrimitives.ReadUInt32LittleEndian(bytes[2..]);
+        serverTick = BinaryPrimitives.ReadInt32LittleEndian(bytes[6..]);
+        fragmentIndex = BinaryPrimitives.ReadUInt16LittleEndian(bytes[10..]);
+        fragmentCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes[12..]);
+        totalPayloadSize = BinaryPrimitives.ReadInt32LittleEndian(bytes[14..]);
+        fragmentOffset = BinaryPrimitives.ReadInt32LittleEndian(bytes[18..]);
+        payload = bytes[FragmentHeaderSize..];
+
+        if (sequence == 0 || serverTick < 0 || fragmentCount == 0 || fragmentIndex >= fragmentCount ||
+            totalPayloadSize < SnapshotHeaderSize || totalPayloadSize > MaxMessageSize ||
+            fragmentOffset < 0 || payload.Length < 0 || payload.Length > MaxFragmentPayloadSize ||
+            payload.Length > totalPayloadSize || fragmentOffset > totalPayloadSize - payload.Length)
+            return false;
+
+        int expectedOffset = fragmentIndex * MaxFragmentPayloadSize;
+        if (fragmentOffset != expectedOffset) return false;
+        int expectedLength = Math.Min(MaxFragmentPayloadSize, totalPayloadSize - expectedOffset);
+        if (payload.Length != expectedLength) return false;
+        ushort expectedCount = (ushort)((totalPayloadSize + MaxFragmentPayloadSize - 1) / MaxFragmentPayloadSize);
+        if (fragmentCount != expectedCount) return false;
+
+        return true;
     }
 
     internal static bool TryReadSnapshot(ReadOnlySpan<byte> bytes, SnapshotFrame frame)
@@ -104,6 +230,59 @@ public static class WireProtocol
         }
         frame.Sequence = sequence; frame.Tick = tick; frame.Count = count;
         return true;
+    }
+}
+
+public sealed class SnapshotAssembler
+{
+    private readonly byte[] _buffer = new byte[WireProtocol.MaxMessageSize];
+    private readonly bool[] _received = new bool[64];
+    private uint _sequence;
+    private int _serverTick;
+    private int _totalSize;
+    private ushort _count;
+    private ushort _receivedCount;
+    private int _bytesReceived;
+    public uint LatestCompletedSequence { get; private set; }
+
+    public bool TryAddFragment(ReadOnlySpan<byte> message, out ReadOnlySpan<byte> completeSnapshot)
+    {
+        completeSnapshot = default;
+        if (!WireProtocol.TryReadSnapshotFragment(message, out uint sequence, out int serverTick, out ushort index,
+            out ushort count, out int totalSize, out int offset, out ReadOnlySpan<byte> payload))
+            return false;
+
+        if (sequence <= LatestCompletedSequence || sequence < _sequence) return false;
+        if (totalSize > _buffer.Length || count > _received.Length) return false;
+
+        if (sequence != _sequence)
+        {
+            Array.Clear(_buffer, 0, Math.Max(_totalSize, totalSize));
+            _sequence = sequence;
+            _serverTick = serverTick;
+            _totalSize = totalSize;
+            _count = count;
+            _receivedCount = 0;
+            _bytesReceived = 0;
+            Array.Clear(_received, 0, _received.Length);
+        }
+
+        if (totalSize != _totalSize || count != _count || serverTick != _serverTick) return false;
+        if (_received[index]) return false;
+
+        payload.CopyTo(_buffer.AsSpan(offset, payload.Length));
+        _received[index] = true;
+        _receivedCount++;
+        _bytesReceived += payload.Length;
+
+        if (_receivedCount == _count && _bytesReceived == _totalSize)
+        {
+            LatestCompletedSequence = _sequence;
+            completeSnapshot = _buffer.AsSpan(0, _totalSize);
+            return true;
+        }
+
+        return false;
     }
 }
 

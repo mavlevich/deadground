@@ -19,43 +19,78 @@ Arch query system selected by the rule set. M0 sessions support worlds with a
 capacity up to 1024 units; larger configurations are rejected at startup.
 
 Movement is straight-line, without collision avoidance or pathfinding. Combat,
-detection, logistics, a bot and remote networking start in later milestones.
-`Game.Server` is currently a console simulation runner, not a network server.
+detection, logistics, a bot and save/load start in later milestones.
+`Game.Server` runs an authoritative dedicated server over LiteNetLib UDP.
 The Sandbox rule set is a movement-only placeholder for the M1 rules experiment.
+Reconnect recovery is pending M1 work.
 
 The technical design and milestone exit criteria are in [docs/tdd.md](docs/tdd.md).
 The hosted three-platform CI run on main (Ubuntu, macOS, Windows; run 37940079650)
 succeeded, verifying builds, unit tests, the server smoke test and launcher checks.
-Reproducible exports are implemented for macOS (Universal) and Windows x64.
-The exported macOS client passes the headless smoke test locally with ad-hoc code
-signing. CI export packaging, the Windows headless export smoke test, and native
-interactive Windows gameplay validation remain open checks before closing M0.
+The hosted export CI run (run 38075713603) succeeded, validating reproducible client
+exports for macOS Universal and Windows x64 along with headless export smoke tests.
+Native interactive Windows gameplay remains unverified.
 
 ## Run the prototype
 
 Install .NET SDK 10.0.401 and Godot 4.7.2 **.NET**. The standard Godot build cannot
 run C# projects. Package versions are pinned in the project files.
 
-On macOS, the launcher finds `/Applications/Godot_mono.app` automatically:
+### Local play
+
+To run a self-contained local session with an in-memory simulation:
+
+On macOS:
 
 ```sh
 ./tools/run-client.sh
 ```
 
-For a different installation, set `GODOT_BIN` to the executable before launching.
-On Windows, use PowerShell:
+On Windows:
 
 ```powershell
 ./tools/run-client.ps1 -GodotBin 'C:\Tools\Godot\Godot_v4.7.2-stable_mono_win64.exe'
 ```
 
+### Dedicated server and two clients
+
+To run one dedicated server and two network clients:
+
+Start the dedicated server on UDP port 7777:
+
+```sh
+dotnet run --project src/Game.Server --configuration Release -- --port 7777
+```
+
+In a second terminal, start the first client:
+
+```sh
+./tools/run-client.sh -- --connect 127.0.0.1:7777
+```
+
+In a third terminal, start the second client:
+
+```sh
+./tools/run-client.sh -- --connect 127.0.0.1:7777
+```
+
+On Windows with PowerShell:
+
+```powershell
+./tools/run-client.ps1 -GodotArgs @("--", "--connect", "127.0.0.1:7777")
+```
+
+The server assigns player slots automatically. Client 1 controls friendly units,
+while Client 2 controls its own units. Each client renders only units allowed by
+its fog of war filter.
+
 Alternatively, build `src/Game.Godot/Game.Godot.csproj`, then import
 `src/Game.Godot/project.godot` in the Godot .NET editor and run the main scene.
 
-Units move automatically at startup. Left-click selects a unit, Shift + left-click
+Units move automatically in local demo mode. Left-click selects a unit, Shift + left-click
 adds to the selection, and right-click orders a move. WASD or arrow keys pan the
 camera. The mouse wheel zooms, Space restores the overview, and Escape clears
-the selection. The HUD shows tick time, managed tick allocations and snapshot traffic.
+the selection. The HUD shows connection state, tick time, allocations and traffic.
 The host reports whether a valid command was queued or rejected. Rejections give
 no hidden-world details. Queue admission does not guarantee arrival at the target.
 

@@ -10,9 +10,9 @@ namespace DeadGround.Client;
 public partial class Main : Node3D
 {
     private HeightMap _map = null!;
-    private LocalSession _session = null!;
+    private IGameSession _session = null!;
     private Camera3D _camera = null!;
-    private Label _stats = null!, _status = null!;
+    private Label _stats = null!, _status = null!, _subtitle = null!;
     private UnitViewSet _unitViews = null!;
     private MeshInstance3D _destination = null!;
     private Vector3 _focus = new(64, 0, 64);
@@ -24,15 +24,50 @@ public partial class Main : Node3D
 
     public override void _Ready()
     {
-        _smokeTest = OS.GetCmdlineUserArgs().Contains("--smoke-test");
+        string[] userArgs = OS.GetCmdlineUserArgs();
+        _smokeTest = userArgs.Contains("--smoke-test");
         if (_smokeTest && !ClientRegressionTests.Run(this))
         {
             SetProcess(false);
             GetTree().Quit(1);
             return;
         }
+
+        string? connectTarget = null;
+        int port = 7777;
+        for (int i = 0; i < userArgs.Length; i++)
+        {
+            if (userArgs[i] == "--connect" && i + 1 < userArgs.Length)
+            {
+                connectTarget = userArgs[i + 1];
+                i++;
+            }
+            else if (userArgs[i] == "--port" && i + 1 < userArgs.Length && int.TryParse(userArgs[i + 1], out int p))
+            {
+                port = p;
+                i++;
+            }
+        }
+
         _map = HeightMap.CreatePrototype();
-        _session = new LocalSession(PrototypeScenario.Create(_map));
+
+        if (connectTarget is not null)
+        {
+            string host = connectTarget;
+            if (connectTarget.Contains(':'))
+            {
+                string[] parts = connectTarget.Split(':');
+                host = parts[0];
+                if (int.TryParse(parts[1], out int p)) port = p;
+            }
+            MatchSetup setup = PrototypeScenario.CreateMatchSetup(_map);
+            _session = ClientSession.Connect(host, port, setup);
+        }
+        else
+        {
+            _session = new LocalSession(PrototypeScenario.Create(_map));
+        }
+
         MeshInstance3D terrain = TerrainView.Create(_map);
         AddChild(terrain);
         _terrainWindingValid = !_smokeTest || TerrainView.HasUpwardFrontFaces(terrain);
@@ -57,12 +92,17 @@ public partial class Main : Node3D
         AddChild(_camera);
         UpdateCamera();
         _unitViews = new UnitViewSet(this, _map);
-        foreach (OwnUnitObservation unit in _session.Replica.OwnUnits)
+
+        if (_session is LocalSession)
         {
-            // Demo movement is sent as normal client commands through the byte transport.
-            _session.Move(unit.Id, unit.Position + new NumericsVector2(0, 60));
+            foreach (OwnUnitObservation unit in _session.Replica.OwnUnits)
+            {
+                // Demo movement is sent as normal client commands through the byte transport.
+                _session.Move(unit.Id, unit.Position + new NumericsVector2(0, 60));
+            }
+            if (_session.Replica.OwnUnits.Length > 0) _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
         }
-        if (_session.Replica.OwnUnits.Length > 0) _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
+
         _destination = new MeshInstance3D
         {
             Mesh = new TorusMesh { InnerRadius = 1.5f, OuterRadius = 1.8f, Rings = 24, RingSegments = 8 },
@@ -83,12 +123,15 @@ public partial class Main : Node3D
     {
         _session.Advance(delta);
         UpdateViews();
+        _subtitle.Text = _session.StatusDescription;
+
         if (_session.LastCommandResult is { } result && result.Sequence != _lastCommandResult)
         {
             _lastCommandResult = result.Sequence;
             _status.Text = result.Queued ? "Move order queued" : "Move order rejected / select a unit and try again";
             if (!result.Queued) _destination.Visible = false;
         }
+
         float dx = 0, dz = 0;
         if (Input.IsPhysicalKeyPressed(Key.A) || Input.IsPhysicalKeyPressed(Key.Left)) dx--;
         if (Input.IsPhysicalKeyPressed(Key.D) || Input.IsPhysicalKeyPressed(Key.Right)) dx++;
@@ -101,14 +144,19 @@ public partial class Main : Node3D
             _focus.Z = Mathf.Clamp(_focus.Z, 0, _map.Depth);
             UpdateCamera();
         }
+
         _hudTimer += delta;
         if (_hudTimer >= 0.5)
         {
             double rate = (_session.BytesReceived - _lastBytes) / _hudTimer / 1024;
             _lastBytes = _session.BytesReceived;
-            _stats.Text = $"20 Hz SIM  /  10 Hz STATE  /  TICK {_session.Tick:00000}  /  {_session.Replica.OwnUnits.Length} UNITS\n{_session.LastTickMilliseconds:F3} ms per tick  /  {_session.LastTickAllocatedBytes} B tick allocations  /  {rate:F1} KiB/s";
+            string simInfo = _session is LocalSession local
+                ? $"{local.LastTickMilliseconds:F3} ms per tick / {local.LastTickAllocatedBytes} B tick allocations"
+                : _session.StatusDescription;
+            _stats.Text = $"20 Hz SIM / 10 Hz STATE / TICK {_session.Tick:00000} / {_session.Replica.OwnUnits.Length} UNITS\n{simInfo} / {rate:F1} KiB/s";
             _hudTimer = 0;
         }
+
         if (_smokeTest)
         {
             _smokeTimer += delta;
@@ -189,14 +237,14 @@ public partial class Main : Node3D
         foreach (string side in new[] { "left", "right", "top", "bottom" }) margin.AddThemeConstantOverride("margin_" + side, 18);
         VBoxContainer stack = new() { MouseFilter = Control.MouseFilterEnum.Ignore };
         stack.AddThemeConstantOverride("separation", 9);
-        Label title = new() { Text = "DEAD GROUND   /   M0 FIELD TEST", MouseFilter = Control.MouseFilterEnum.Ignore };
+        Label title = new() { Text = "DEAD GROUND   /   M1 NETWORK TEST", MouseFilter = Control.MouseFilterEnum.Ignore };
         title.AddThemeFontSizeOverride("font_size", 21);
         title.AddThemeColorOverride("font_color", new Color("edc76b"));
         stack.AddChild(title);
-        Label subtitle = new() { Text = "Local authoritative simulation / prototype terrain", MouseFilter = Control.MouseFilterEnum.Ignore };
-        subtitle.AddThemeColorOverride("font_color", new Color("b2beb1"));
-        stack.AddChild(subtitle);
-        _stats = new Label { Text = "Starting simulation...", MouseFilter = Control.MouseFilterEnum.Ignore };
+        _subtitle = new Label { Text = _session.StatusDescription, MouseFilter = Control.MouseFilterEnum.Ignore };
+        _subtitle.AddThemeColorOverride("font_color", new Color("b2beb1"));
+        stack.AddChild(_subtitle);
+        _stats = new Label { Text = "Starting session...", MouseFilter = Control.MouseFilterEnum.Ignore };
         _stats.AddThemeFontSizeOverride("font_size", 14);
         stack.AddChild(_stats);
         margin.AddChild(stack); top.AddChild(margin); canvas.AddChild(top);
@@ -213,7 +261,7 @@ public partial class Main : Node3D
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
         controls.AddThemeFontSizeOverride("font_size", 15);
-        _status = new Label { Text = "  Demo movement active / one unit selected", MouseFilter = Control.MouseFilterEnum.Ignore };
+        _status = new Label { Text = "  Select a unit to issue orders", MouseFilter = Control.MouseFilterEnum.Ignore };
         _status.AddThemeColorOverride("font_color", new Color("edc76b"));
         instructions.AddChild(controls); instructions.AddChild(_status); bottom.AddChild(instructions);
     }
