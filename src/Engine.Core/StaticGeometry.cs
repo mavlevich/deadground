@@ -200,6 +200,71 @@ public sealed class StaticGeometry
     }
 
     /// <summary>
+    /// Checks whether line of sight between two 3D world coordinates is clear.
+    /// Fast boolean query for visual detection: checks structures first, skipping terrain
+    /// traversal when blocked by structures or when the ray segment is strictly above maximum terrain height.
+    /// </summary>
+    public bool IsLineOfSightClear(Vector3 start, Vector3 end) =>
+        IsLineOfSightClear(start, end, null, out _);
+
+    /// <summary>
+    /// Checks whether line of sight between two 3D world coordinates is clear using an optional caller-provided context.
+    /// </summary>
+    public bool IsLineOfSightClear(Vector3 start, Vector3 end, LineOfSightContext? context) =>
+        IsLineOfSightClear(start, end, context, out _);
+
+    /// <summary>
+    /// Checks whether line of sight between two 3D world coordinates is clear, indicating if the obstruction was terrain.
+    /// </summary>
+    public bool IsLineOfSightClear(Vector3 start, Vector3 end, LineOfSightContext? context, out bool blockedByTerrain)
+    {
+        blockedByTerrain = false;
+        if (!float.IsFinite(start.X) || !float.IsFinite(start.Y) || !float.IsFinite(start.Z) ||
+            !float.IsFinite(end.X) || !float.IsFinite(end.Y) || !float.IsFinite(end.Z))
+        {
+            throw new ArgumentException("Start and end coordinates must be finite values.");
+        }
+
+        Vector3 delta = end - start;
+        float totalDistance = delta.Length();
+
+        if (totalDistance < 1e-7f)
+        {
+            bool insideTerrain = start.Y < HeightMap.MaxHeight - GroundTolerance && IsInsideTerrain(start);
+            if (insideTerrain)
+            {
+                blockedByTerrain = true;
+                return false;
+            }
+            return _structures.Length == 0 || !TryGetContainingStructure(start, out _);
+        }
+
+
+        if (_structures.Length > 0 && TryGetContainingStructure(start, out _))
+            return false;
+
+        if (_structures.Length > 0 && TryTraceAnyStructure(start, delta, totalDistance, context))
+            return false;
+
+        if (MathF.Min(start.Y, end.Y) >= HeightMap.MaxHeight - GroundTolerance)
+            return true;
+
+        if (start.Y < HeightMap.MaxHeight - GroundTolerance && IsInsideTerrain(start))
+        {
+            blockedByTerrain = true;
+            return false;
+        }
+
+        if (TryTraceTerrainAny(start, delta, end, totalDistance))
+        {
+            blockedByTerrain = true;
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Checks line of sight between two 3D world coordinates.
     /// Allocation-free value-type query.
     /// </summary>
@@ -375,6 +440,7 @@ public sealed class StaticGeometry
         return LineOfSightResult.Clear(point, 0);
     }
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     private bool IsInsideTerrain(Vector3 point) =>
         HeightMap.Contains(new Vector2(point.X, point.Z)) &&
         point.Y < HeightMap.GetHeight(point.X, point.Z) - GroundTolerance;
@@ -428,6 +494,9 @@ public sealed class StaticGeometry
     private bool TryTraceTerrain(Vector3 start, Vector3 delta, Vector3 end, float totalDistance, out float hitT, ref int visitedCells)
     {
         hitT = 1.0f;
+        if (MathF.Min(start.Y, end.Y) >= HeightMap.MaxHeight - GroundTolerance)
+            return false;
+
         float dx = delta.X;
         float dz = delta.Z;
         float l2d = MathF.Sqrt(dx * dx + dz * dz);
@@ -472,31 +541,45 @@ public sealed class StaticGeometry
         int stepX = dx > 0 ? 1 : (dx < 0 ? -1 : 0);
         int stepZ = dz > 0 ? 1 : (dz < 0 ? -1 : 0);
 
+        double invDx = dx != 0 ? 1.0 / (double)dx : 0.0;
+        double invDz = dz != 0 ? 1.0 / (double)dz : 0.0;
+        double tDeltaX = stepX != 0 ? Math.Abs(cellSize * invDx) : double.PositiveInfinity;
+        double tDeltaZ = stepZ != 0 ? Math.Abs(cellSize * invDz) : double.PositiveInfinity;
+
+        double nextBoundaryX = stepX > 0
+            ? ((ix + 1) * cellSize - start.X) * invDx
+            : (stepX < 0 ? (ix * cellSize - start.X) * invDx : double.PositiveInfinity);
+
+        double nextBoundaryZ = stepZ > 0
+            ? ((iz + 1) * cellSize - start.Z) * invDz
+            : (stepZ < 0 ? (iz * cellSize - start.Z) * invDz : double.PositiveInfinity);
+
         while (tCurr < tLimit)
         {
             visitedCells++;
 
-            double nextBoundaryX = stepX != 0
-                ? ((ix + (stepX > 0 ? 1 : 0)) * cellSize - start.X) / (double)dx
-                : double.PositiveInfinity;
-            double nextBoundaryZ = stepZ != 0
-                ? ((iz + (stepZ > 0 ? 1 : 0)) * cellSize - start.Z) / (double)dz
-                : double.PositiveInfinity;
-
             double tNext = Math.Min(tLimit, Math.Min(nextBoundaryX, nextBoundaryZ));
 
-            if (TryIntersectTerrainCell(ix, iz, start, delta, end, (float)tCurr, (float)tNext, out float cellHitT))
+            float cellMaxH = HeightMap.GetCellMaxHeight(ix, iz);
+            float rayMinYInCell = MathF.Min(
+                (float)(start.Y + tCurr * delta.Y),
+                (float)(start.Y + tNext * delta.Y));
+
+            if (rayMinYInCell < cellMaxH - GroundTolerance)
             {
-                float remainingDistance = (1.0f - cellHitT) * totalDistance;
-                if (remainingDistance <= EndContactTolerance &&
-                    end.Y >= HeightMap.GetHeight(end.X, end.Z) - GroundTolerance)
+                if (TryIntersectTerrainCell(ix, iz, start, delta, end, (float)tCurr, (float)tNext, out float cellHitT))
                 {
-                    // Touching surface at or near a valid surface target does not obstruct line of sight.
-                }
-                else
-                {
-                    hitT = cellHitT;
-                    return true;
+                    float remainingDistance = (1.0f - cellHitT) * totalDistance;
+                    if (remainingDistance <= EndContactTolerance &&
+                        end.Y >= HeightMap.GetHeight(end.X, end.Z) - GroundTolerance)
+                    {
+                        // Touching surface at or near a valid surface target does not obstruct line of sight.
+                    }
+                    else
+                    {
+                        hitT = cellHitT;
+                        return true;
+                    }
                 }
             }
 
@@ -506,15 +589,19 @@ public sealed class StaticGeometry
             if (nextBoundaryX < nextBoundaryZ - 1e-9)
             {
                 ix += stepX;
+                nextBoundaryX += tDeltaX;
             }
             else if (nextBoundaryZ < nextBoundaryX - 1e-9)
             {
                 iz += stepZ;
+                nextBoundaryZ += tDeltaZ;
             }
             else
             {
                 ix += stepX;
                 iz += stepZ;
+                nextBoundaryX += tDeltaX;
+                nextBoundaryZ += tDeltaZ;
             }
 
             if (ix < 0 || ix > maxCellX || iz < 0 || iz > maxCellZ) break;
@@ -523,32 +610,33 @@ public sealed class StaticGeometry
         return false;
     }
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     private bool TryIntersectTerrainCell(int ix, int iz, Vector3 start, Vector3 delta, Vector3 end, float tIn, float tOut, out float hitT)
     {
         hitT = 1.0f;
         if (tOut < tIn) return false;
 
         float cellSize = HeightMap.CellSize;
+        float invCellSize = 1.0f / cellSize;
         float cellOriginX = ix * cellSize;
         float cellOriginZ = iz * cellSize;
 
         Vector3 pIn = tIn <= 1e-6f ? start : start + delta * tIn;
         Vector3 pOut = tOut >= 1.0f - 1e-6f ? end : start + delta * tOut;
 
-        float uIn = Math.Clamp((pIn.X - cellOriginX) / cellSize, 0, 1);
-        float vIn = Math.Clamp((pIn.Z - cellOriginZ) / cellSize, 0, 1);
-        float uOut = Math.Clamp((pOut.X - cellOriginX) / cellSize, 0, 1);
-        float vOut = Math.Clamp((pOut.Z - cellOriginZ) / cellSize, 0, 1);
+        float uIn = Math.Clamp((pIn.X - cellOriginX) * invCellSize, 0, 1);
+        float vIn = Math.Clamp((pIn.Z - cellOriginZ) * invCellSize, 0, 1);
+        float uOut = Math.Clamp((pOut.X - cellOriginX) * invCellSize, 0, 1);
+        float vOut = Math.Clamp((pOut.Z - cellOriginZ) * invCellSize, 0, 1);
 
-        float h00 = HeightMap.SampleHeight(ix, iz);
-        float h10 = HeightMap.SampleHeight(ix + 1, iz);
-        float h01 = HeightMap.SampleHeight(ix, iz + 1);
-        float h11 = HeightMap.SampleHeight(ix + 1, iz + 1);
+        HeightMap.GetCellCornerHeights(ix, iz, out float h00, out float h10, out float h01, out float h11);
 
-        float cuv = h11 - h10 - h01 + h00;
+        float du0 = h10 - h00;
+        float dv0 = h01 - h00;
+        float cuv = (h11 - h10) - dv0;
 
-        float hIn = BilinearHeight(h00, h10, h01, cuv, uIn, vIn);
-        float hOut = BilinearHeight(h00, h10, h01, cuv, uOut, vOut);
+        float hIn = h00 + du0 * uIn + dv0 * vIn + cuv * uIn * vIn;
+        float hOut = h00 + du0 * uOut + dv0 * vOut + cuv * uOut * vOut;
 
         float dIn = pIn.Y - hIn;
         float dOut = pOut.Y - hOut;
@@ -628,8 +716,271 @@ public sealed class StaticGeometry
         return false;
     }
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     private static float BilinearHeight(float h00, float h10, float h01, float cuv, float u, float v) =>
         h00 + (h10 - h00) * u + (h01 - h00) * v + cuv * u * v;
+
+    private bool TryTraceTerrainAny(Vector3 start, Vector3 delta, Vector3 end, float totalDistance)
+    {
+        if (MathF.Min(start.Y, end.Y) >= HeightMap.MaxHeight - GroundTolerance)
+            return false;
+
+        float dx = delta.X;
+        float dz = delta.Z;
+        if (dx * dx + dz * dz < 1e-14f)
+        {
+            if (!HeightMap.Contains(new Vector2(start.X, start.Z)))
+                return false;
+
+            float groundY = HeightMap.GetHeight(start.X, start.Z);
+            return start.Y < groundY - GroundTolerance ||
+                   (start.Y >= groundY - GroundTolerance && start.Y + delta.Y < groundY - GroundTolerance);
+        }
+
+        double tMin = 0.0, tMax = 1.0;
+        float mapWidth = HeightMap.Width;
+        float mapDepth = HeightMap.Depth;
+        if (start.X < 0 || start.X > mapWidth || end.X < 0 || end.X > mapWidth ||
+            start.Z < 0 || start.Z > mapDepth || end.Z < 0 || end.Z > mapDepth)
+        {
+            if (!ClipInterval(start.X, dx, 0, mapWidth, ref tMin, ref tMax) ||
+                !ClipInterval(start.Z, dz, 0, mapDepth, ref tMin, ref tMax))
+            {
+                return false;
+            }
+        }
+
+        float cellSize = HeightMap.CellSize;
+        float invCellSize = 1.0f / cellSize;
+        int maxCellX = HeightMap.Columns - 2;
+        int maxCellZ = HeightMap.Rows - 2;
+        int cellStride = HeightMap.Columns - 1;
+
+        double tCurr = tMin;
+        double tLimit = tMax;
+
+        double startRayX = tCurr == 0.0 ? start.X : start.X + tCurr * dx;
+        double startRayZ = tCurr == 0.0 ? start.Z : start.Z + tCurr * dz;
+
+        int stepX = dx > 0 ? 1 : (dx < 0 ? -1 : 0);
+        int stepZ = dz > 0 ? 1 : (dz < 0 ? -1 : 0);
+
+        double invDx = dx != 0 ? 1.0 / (double)dx : 0.0;
+        double invDz = dz != 0 ? 1.0 / (double)dz : 0.0;
+        double tDeltaX = stepX != 0 ? Math.Abs(cellSize * invDx) : double.PositiveInfinity;
+        double tDeltaZ = stepZ != 0 ? Math.Abs(cellSize * invDz) : double.PositiveInfinity;
+
+        float toleranceTThreshold = totalDistance > 1e-5f
+            ? Math.Max(0.0f, 1.0f - EndContactTolerance / totalDistance)
+            : 0.0f;
+
+        float yCurr = (float)(start.Y + tCurr * delta.Y);
+
+        int blockCells = HeightMap.BlockCells;
+        float blockSize = HeightMap.BlockSize;
+        float invBlockSize = 1.0f / blockSize;
+        int maxBlockX = HeightMap.BlockColumns - 1;
+        int maxBlockZ = HeightMap.BlockRows - 1;
+
+        double tBlockDeltaX = stepX != 0 ? Math.Abs(blockSize * invDx) : double.PositiveInfinity;
+        double tBlockDeltaZ = stepZ != 0 ? Math.Abs(blockSize * invDz) : double.PositiveInfinity;
+
+        int bx = Math.Clamp((int)(startRayX * invBlockSize), 0, maxBlockX);
+        int bz = Math.Clamp((int)(startRayZ * invBlockSize), 0, maxBlockZ);
+
+        double nextBlockBoundaryX = stepX > 0
+            ? ((bx + 1) * blockSize - start.X) * invDx
+            : (stepX < 0 ? (bx * blockSize - start.X) * invDx : double.PositiveInfinity);
+
+        double nextBlockBoundaryZ = stepZ > 0
+            ? ((bz + 1) * blockSize - start.Z) * invDz
+            : (stepZ < 0 ? (bz * blockSize - start.Z) * invDz : double.PositiveInfinity);
+
+        int indexStepX = stepX;
+        int indexStepZ = stepZ * cellStride;
+
+        while (tCurr < tLimit)
+        {
+            double tBlockExit = Math.Min(tLimit, Math.Min(nextBlockBoundaryX, nextBlockBoundaryZ));
+            float blockMaxH = HeightMap.GetBlockMaxHeight(bx, bz);
+            float yNextBlock = (float)(start.Y + tBlockExit * delta.Y);
+            float rayMinYInBlock = MathF.Min(yCurr, yNextBlock);
+
+            if (rayMinYInBlock >= blockMaxH - GroundTolerance)
+            {
+                // Skip entire flat block
+                yCurr = yNextBlock;
+                tCurr = tBlockExit;
+                if (tCurr >= tLimit) break;
+
+                bool advanceBlockX = nextBlockBoundaryX <= nextBlockBoundaryZ + 1e-9;
+                bool advanceBlockZ = nextBlockBoundaryZ <= nextBlockBoundaryX + 1e-9;
+                if (advanceBlockX)
+                {
+                    bx += stepX;
+                    nextBlockBoundaryX += tBlockDeltaX;
+                }
+                if (advanceBlockZ)
+                {
+                    bz += stepZ;
+                    nextBlockBoundaryZ += tBlockDeltaZ;
+                }
+                if (bx < 0 || bx > maxBlockX || bz < 0 || bz > maxBlockZ) break;
+                continue;
+            }
+
+            // Traverse cells within this non-flat block
+            double curRayX = tCurr == 0.0 ? start.X : start.X + tCurr * dx;
+            double curRayZ = tCurr == 0.0 ? start.Z : start.Z + tCurr * dz;
+
+            int ix = Math.Clamp((int)(curRayX * invCellSize), 0, maxCellX);
+            int iz = Math.Clamp((int)(curRayZ * invCellSize), 0, maxCellZ);
+            int cellIndex = iz * cellStride + ix;
+
+            double nextBoundaryX = stepX > 0
+                ? ((ix + 1) * cellSize - start.X) * invDx
+                : (stepX < 0 ? (ix * cellSize - start.X) * invDx : double.PositiveInfinity);
+
+            double nextBoundaryZ = stepZ > 0
+                ? ((iz + 1) * cellSize - start.Z) * invDz
+                : (stepZ < 0 ? (iz * cellSize - start.Z) * invDz : double.PositiveInfinity);
+
+            while (tCurr < tBlockExit)
+            {
+                double tNext = Math.Min(tBlockExit, Math.Min(nextBoundaryX, nextBoundaryZ));
+
+                float cellMaxH = HeightMap.GetCellMaxHeightByIndex(cellIndex);
+                float yNext = (float)(start.Y + tNext * delta.Y);
+                float rayMinYInCell = MathF.Min(yCurr, yNext);
+
+                if (rayMinYInCell < cellMaxH - GroundTolerance)
+                {
+                    if (tNext < toleranceTThreshold)
+                    {
+                        if (DoesTerrainCellIntersect(ix, iz, start, delta, end, (float)tCurr, (float)tNext))
+                        {
+                            return true;
+                        }
+                    }
+                    else
+                    {
+                        if (TryIntersectTerrainCell(ix, iz, start, delta, end, (float)tCurr, (float)tNext, out float cellHitT))
+                        {
+                            float remainingDistance = (1.0f - cellHitT) * totalDistance;
+                            if (remainingDistance <= EndContactTolerance &&
+                                end.Y >= HeightMap.GetHeight(end.X, end.Z) - GroundTolerance)
+                            {
+                                // Touching surface at or near a valid surface target does not obstruct line of sight.
+                            }
+                            else
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+
+                yCurr = yNext;
+                tCurr = tNext;
+                if (tCurr >= tBlockExit) break;
+
+                if (nextBoundaryX < nextBoundaryZ - 1e-9)
+                {
+                    ix += stepX;
+                    cellIndex += indexStepX;
+                    nextBoundaryX += tDeltaX;
+                }
+                else if (nextBoundaryZ < nextBoundaryX - 1e-9)
+                {
+                    iz += stepZ;
+                    cellIndex += indexStepZ;
+                    nextBoundaryZ += tDeltaZ;
+                }
+                else
+                {
+                    ix += stepX;
+                    iz += stepZ;
+                    cellIndex += indexStepX + indexStepZ;
+                    nextBoundaryX += tDeltaX;
+                    nextBoundaryZ += tDeltaZ;
+                }
+
+                if (ix < 0 || ix > maxCellX || iz < 0 || iz > maxCellZ) break;
+            }
+
+            tCurr = tBlockExit;
+            yCurr = yNextBlock;
+            if (tCurr >= tLimit) break;
+
+            bool advanceAfterCellBlockX = nextBlockBoundaryX <= nextBlockBoundaryZ + 1e-9;
+            bool advanceAfterCellBlockZ = nextBlockBoundaryZ <= nextBlockBoundaryX + 1e-9;
+            if (advanceAfterCellBlockX)
+            {
+                bx += stepX;
+                nextBlockBoundaryX += tBlockDeltaX;
+            }
+            if (advanceAfterCellBlockZ)
+            {
+                bz += stepZ;
+                nextBlockBoundaryZ += tBlockDeltaZ;
+            }
+            if (bx < 0 || bx > maxBlockX || bz < 0 || bz > maxBlockZ) break;
+        }
+
+        return false;
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    private bool DoesTerrainCellIntersect(int ix, int iz, Vector3 start, Vector3 delta, Vector3 end, float tIn, float tOut)
+    {
+        if (tOut < tIn) return false;
+
+        float cellSize = HeightMap.CellSize;
+        float invCellSize = 1.0f / cellSize;
+        float cellOriginX = ix * cellSize;
+        float cellOriginZ = iz * cellSize;
+
+        Vector3 pIn = tIn <= 1e-6f ? start : start + delta * tIn;
+        Vector3 pOut = tOut >= 1.0f - 1e-6f ? end : start + delta * tOut;
+
+        float uIn = Math.Clamp((pIn.X - cellOriginX) * invCellSize, 0, 1);
+        float vIn = Math.Clamp((pIn.Z - cellOriginZ) * invCellSize, 0, 1);
+        float uOut = Math.Clamp((pOut.X - cellOriginX) * invCellSize, 0, 1);
+        float vOut = Math.Clamp((pOut.Z - cellOriginZ) * invCellSize, 0, 1);
+
+        HeightMap.GetCellCornerHeights(ix, iz, out float h00, out float h10, out float h01, out float h11);
+
+        float du0 = h10 - h00;
+        float dv0 = h01 - h00;
+        float cuv = (h11 - h10) - dv0;
+
+        float hIn = h00 + du0 * uIn + dv0 * vIn + cuv * uIn * vIn;
+        float hOut = h00 + du0 * uOut + dv0 * vOut + cuv * uOut * vOut;
+
+        float dInEff = pIn.Y - hIn + GroundTolerance;
+        float dOutEff = pOut.Y - hOut + GroundTolerance;
+
+        if (dInEff < 0 || dOutEff < 0)
+            return true;
+
+        float du = uOut - uIn;
+        float dv = vOut - vIn;
+        float a = -cuv * du * dv;
+
+        if (a <= 1e-9f)
+            return false;
+
+        float c = dInEff;
+        float b = dOutEff - dInEff - a;
+        if (b < 0 && -b < 2 * a)
+        {
+            float discr = b * b - 4 * a * c;
+            if (discr >= 0)
+                return true;
+        }
+
+        return false;
+    }
 
     private bool TryTraceStructures(
         Vector3 start,
@@ -648,6 +999,25 @@ public sealed class StaticGeometry
 
         if (_structures.Length == 0 || maxT <= 0)
             return false;
+
+        if (_structures.Length <= 16)
+        {
+            for (int i = 0; i < _structures.Length; i++)
+            {
+                OpaqueStructure s = _structures[i];
+                testedStructures++;
+                if (TryIntersectBox(s, start, delta, totalDistance, out float tNear))
+                {
+                    if (tNear <= maxT + VolumeEpsilon && IsBetterHit(tNear, s.Id, hitT, hitStructureId, foundHit))
+                    {
+                        hitT = tNear;
+                        hitStructureId = s.Id;
+                        foundHit = true;
+                    }
+                }
+            }
+            return foundHit;
+        }
 
         LineOfSightContext ctx = context ?? GetThreadContext(_structures.Length);
         ctx.EnsureCapacity(_structures.Length);
@@ -778,6 +1148,127 @@ public sealed class StaticGeometry
         }
 
         return foundHit;
+    }
+
+    private bool TryTraceAnyStructure(
+        Vector3 start,
+        Vector3 delta,
+        float totalDistance,
+        LineOfSightContext? context)
+    {
+        if (_structures.Length == 0)
+            return false;
+
+        if (_structures.Length <= 16)
+        {
+            for (int i = 0; i < _structures.Length; i++)
+            {
+                if (TryIntersectBox(_structures[i], start, delta, totalDistance, out _))
+                    return true;
+            }
+            return false;
+        }
+
+        LineOfSightContext ctx = context ?? GetThreadContext(_structures.Length);
+        ctx.EnsureCapacity(_structures.Length);
+        int queryId = ctx.NextQueryId();
+        int[] mailbox = ctx.Mailbox;
+
+        float dx = delta.X;
+        float dz = delta.Z;
+        float l2d = MathF.Sqrt(dx * dx + dz * dz);
+
+        if (l2d < 1e-7f)
+        {
+            int cx = Math.Clamp((int)MathF.Floor(start.X / StructureCellSize), 0, _gridColumns - 1);
+            int cz = Math.Clamp((int)MathF.Floor(start.Z / StructureCellSize), 0, _gridRows - 1);
+            int cellIndex = cz * _gridColumns + cx;
+
+            int startIdx = _cellOffsets[cellIndex];
+            int endIdx = _cellOffsets[cellIndex + 1];
+
+            for (int i = startIdx; i < endIdx; i++)
+            {
+                int sIdx = _structureIndices[i];
+                if (mailbox[sIdx] == queryId) continue;
+                mailbox[sIdx] = queryId;
+
+                OpaqueStructure s = _structures[sIdx];
+                if (TryIntersectBox(s, start, delta, totalDistance, out _))
+                    return true;
+            }
+            return false;
+        }
+
+        double tMin = 0.0, tMax = 1.0;
+        float gridWidth = _gridColumns * StructureCellSize;
+        float gridDepth = _gridRows * StructureCellSize;
+
+        if (!ClipInterval(start.X, dx, 0, gridWidth, ref tMin, ref tMax) ||
+            !ClipInterval(start.Z, dz, 0, gridDepth, ref tMin, ref tMax))
+        {
+            return false;
+        }
+
+        double tCurr = tMin;
+        double tLimit = tMax;
+
+        double startRayX = start.X + tCurr * dx;
+        double startRayZ = start.Z + tCurr * dz;
+
+        int cxCurr = Math.Clamp((int)Math.Floor(startRayX / StructureCellSize), 0, _gridColumns - 1);
+        int czCurr = Math.Clamp((int)Math.Floor(startRayZ / StructureCellSize), 0, _gridRows - 1);
+
+        int stepX = dx > 0 ? 1 : (dx < 0 ? -1 : 0);
+        int stepZ = dz > 0 ? 1 : (dz < 0 ? -1 : 0);
+
+        while (tCurr < tLimit)
+        {
+            double nextBoundaryX = stepX != 0
+                ? ((cxCurr + (stepX > 0 ? 1 : 0)) * StructureCellSize - start.X) / (double)dx
+                : double.PositiveInfinity;
+            double nextBoundaryZ = stepZ != 0
+                ? ((czCurr + (stepZ > 0 ? 1 : 0)) * StructureCellSize - start.Z) / (double)dz
+                : double.PositiveInfinity;
+
+            double tNext = Math.Min(tLimit, Math.Min(nextBoundaryX, nextBoundaryZ));
+
+            int cellIndex = czCurr * _gridColumns + cxCurr;
+            int startIdx = _cellOffsets[cellIndex];
+            int endIdx = _cellOffsets[cellIndex + 1];
+
+            for (int i = startIdx; i < endIdx; i++)
+            {
+                int sIdx = _structureIndices[i];
+                if (mailbox[sIdx] == queryId) continue;
+                mailbox[sIdx] = queryId;
+
+                OpaqueStructure s = _structures[sIdx];
+                if (TryIntersectBox(s, start, delta, totalDistance, out _))
+                    return true;
+            }
+
+            tCurr = tNext;
+            if (tCurr >= tLimit) break;
+
+            if (nextBoundaryX < nextBoundaryZ - 1e-9)
+            {
+                cxCurr += stepX;
+            }
+            else if (nextBoundaryZ < nextBoundaryX - 1e-9)
+            {
+                czCurr += stepZ;
+            }
+            else
+            {
+                cxCurr += stepX;
+                czCurr += stepZ;
+            }
+
+            if (cxCurr < 0 || cxCurr >= _gridColumns || czCurr < 0 || czCurr >= _gridRows) break;
+        }
+
+        return false;
     }
 
     private static bool TryIntersectBox(OpaqueStructure structure, Vector3 start, Vector3 delta, float totalDistance, out float hitT)

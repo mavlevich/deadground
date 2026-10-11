@@ -16,13 +16,15 @@ public enum HandshakeReason : byte
 
 public static class WireProtocol
 {
-    public const byte Version = 1;
+    public const byte Version = 2;
     public const int MoveSize = 22;
     public const int CommandResultSize = 11;
-    public const int SnapshotHeaderSize = 12;
+    public const int SnapshotHeaderSize = 14;
     public const int UnitSize = 18;
     public const int MaxUnits = 1024;
-    public const int MaxMessageSize = SnapshotHeaderSize + MaxUnits * UnitSize;
+    public const int ContactSize = 18;
+    public const int MaxContacts = 256;
+    public const int MaxMessageSize = SnapshotHeaderSize + MaxUnits * UnitSize + MaxContacts * ContactSize;
     public const int HandshakeResponseSize = 5;
     public const int FragmentHeaderSize = 22;
     public const int MaxFragmentPayloadSize = 960;
@@ -132,14 +134,23 @@ public static class WireProtocol
         return true;
     }
 
-    public static int WriteSnapshot(Span<byte> bytes, uint sequence, int tick, ReadOnlySpan<OwnUnitObservation> units)
+    public static int WriteSnapshot(
+        Span<byte> bytes,
+        uint sequence,
+        int tick,
+        ReadOnlySpan<OwnUnitObservation> units,
+        ReadOnlySpan<ContactObservation> contacts = default)
     {
-        int length = checked(SnapshotHeaderSize + units.Length * UnitSize);
-        if (units.Length > MaxUnits || bytes.Length < length) throw new ArgumentException("Snapshot buffer is too small.");
+        int length = checked(SnapshotHeaderSize + units.Length * UnitSize + contacts.Length * ContactSize);
+        if (units.Length > MaxUnits || contacts.Length > MaxContacts || bytes.Length < length)
+            throw new ArgumentException("Snapshot buffer is too small or capacity exceeded.");
+
         bytes[0] = Version; bytes[1] = SnapshotKind;
         BinaryPrimitives.WriteUInt32LittleEndian(bytes[2..], sequence);
         BinaryPrimitives.WriteInt32LittleEndian(bytes[6..], tick);
         BinaryPrimitives.WriteUInt16LittleEndian(bytes[10..], (ushort)units.Length);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes[12..], (ushort)contacts.Length);
+
         for (int i = 0; i < units.Length; i++)
         {
             OwnUnitObservation unit = units[i];
@@ -150,6 +161,20 @@ public static class WireProtocol
             BinaryPrimitives.WriteSingleLittleEndian(record[10..], unit.Position.Y);
             BinaryPrimitives.WriteUInt32LittleEndian(record[14..], unit.SupportSurface);
         }
+
+        int contactsOffset = SnapshotHeaderSize + units.Length * UnitSize;
+        for (int i = 0; i < contacts.Length; i++)
+        {
+            ContactObservation contact = contacts[i];
+            Span<byte> record = bytes.Slice(contactsOffset + i * ContactSize, ContactSize);
+            BinaryPrimitives.WriteUInt32LittleEndian(record, contact.Id.Value);
+            record[4] = (byte)contact.State;
+            record[5] = (byte)contact.Classification;
+            BinaryPrimitives.WriteSingleLittleEndian(record[6..], contact.Position.X);
+            BinaryPrimitives.WriteSingleLittleEndian(record[10..], contact.Position.Y);
+            BinaryPrimitives.WriteInt32LittleEndian(record[14..], contact.LastSeenTick);
+        }
+
         return length;
     }
 
@@ -212,11 +237,17 @@ public static class WireProtocol
         if (bytes.Length < SnapshotHeaderSize || bytes[0] != Version || bytes[1] != SnapshotKind) return false;
         uint sequence = BinaryPrimitives.ReadUInt32LittleEndian(bytes[2..]);
         int tick = BinaryPrimitives.ReadInt32LittleEndian(bytes[6..]);
-        int count = BinaryPrimitives.ReadUInt16LittleEndian(bytes[10..]);
-        if (sequence == 0 || tick < 0 || count > frame.Units.Length ||
-            bytes.Length != SnapshotHeaderSize + count * UnitSize) return false;
+        int unitCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes[10..]);
+        int contactCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes[12..]);
+
+        if (sequence == 0 || tick < 0 || unitCount > frame.Units.Length || contactCount > frame.Contacts.Length)
+            return false;
+
+        int expectedLength = checked(SnapshotHeaderSize + unitCount * UnitSize + contactCount * ContactSize);
+        if (bytes.Length != expectedLength) return false;
+
         frame.Indices.Clear();
-        for (int i = 0; i < count; i++)
+        for (int i = 0; i < unitCount; i++)
         {
             ReadOnlySpan<byte> record = bytes.Slice(SnapshotHeaderSize + i * UnitSize, UnitSize);
             EntityId id = new(BinaryPrimitives.ReadUInt32LittleEndian(record));
@@ -228,7 +259,38 @@ public static class WireProtocol
                 !frame.Indices.TryAdd(id, i)) return false;
             frame.Units[i] = new OwnUnitObservation(id, definition, position, surface);
         }
-        frame.Sequence = sequence; frame.Tick = tick; frame.Count = count;
+
+        int contactsOffset = SnapshotHeaderSize + unitCount * UnitSize;
+        frame.ContactIndices.Clear();
+        for (int i = 0; i < contactCount; i++)
+        {
+            ReadOnlySpan<byte> record = bytes.Slice(contactsOffset + i * ContactSize, ContactSize);
+            ContactId contactId = new(BinaryPrimitives.ReadUInt32LittleEndian(record));
+            byte stateByte = record[4];
+            byte classByte = record[5];
+            Vector2 position = new(BinaryPrimitives.ReadSingleLittleEndian(record[6..]),
+                BinaryPrimitives.ReadSingleLittleEndian(record[10..]));
+            int lastSeenTick = BinaryPrimitives.ReadInt32LittleEndian(record[14..]);
+
+            if (contactId.Value == 0 ||
+                stateByte is not ((byte)ContactState.Current or (byte)ContactState.LastKnown) ||
+                classByte != (byte)ContactClassification.Unknown ||
+                !float.IsFinite(position.X) || !float.IsFinite(position.Y) ||
+                lastSeenTick < 0 || lastSeenTick > tick ||
+                !frame.ContactIndices.TryAdd(contactId, i))
+            {
+                return false;
+            }
+
+            frame.Contacts[i] = new ContactObservation(
+                contactId,
+                (ContactState)stateByte,
+                (ContactClassification)classByte,
+                position,
+                lastSeenTick);
+        }
+
+        frame.Sequence = sequence; frame.Tick = tick; frame.Count = unitCount; frame.ContactCount = contactCount;
         return true;
     }
 }
@@ -289,12 +351,17 @@ public sealed class SnapshotAssembler
 internal sealed class SnapshotFrame
 {
     public readonly OwnUnitObservation[] Units;
+    public readonly ContactObservation[] Contacts;
     public readonly Dictionary<EntityId, int> Indices;
-    public int Count, Tick;
+    public readonly Dictionary<ContactId, int> ContactIndices;
+    public int Count, ContactCount, Tick;
     public uint Sequence;
-    public SnapshotFrame(int capacity)
+
+    public SnapshotFrame(int capacity, int contactCapacity = WireProtocol.MaxContacts)
     {
         Units = new OwnUnitObservation[capacity];
+        Contacts = new ContactObservation[contactCapacity];
         Indices = new Dictionary<EntityId, int>(capacity);
+        ContactIndices = new Dictionary<ContactId, int>(contactCapacity);
     }
 }

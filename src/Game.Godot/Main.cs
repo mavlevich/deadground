@@ -12,8 +12,9 @@ public partial class Main : Node3D
     private HeightMap _map = null!;
     private IGameSession _session = null!;
     private Camera3D _camera = null!;
-    private Label _stats = null!, _status = null!, _subtitle = null!;
+    private Label _stats = null!, _status = null!, _subtitle = null!, _title = null!;
     private UnitViewSet _unitViews = null!;
+    private ContactViewSet _contactViews = null!;
     private MeshInstance3D _destination = null!;
     private Vector3 _focus = new(64, 0, 64);
     private double _hudTimer, _smokeTimer;
@@ -21,6 +22,7 @@ public partial class Main : Node3D
     private bool _terrainWindingValid;
     private long _lastBytes;
     private uint _lastCommandResult;
+    private string _scenario = "prototype";
 
     public override void _Ready()
     {
@@ -76,9 +78,27 @@ public partial class Main : Node3D
                 port = p;
                 i++;
             }
+            else if (userArgs[i] == "--scenario" && i + 1 < userArgs.Length)
+            {
+                _scenario = userArgs[i + 1].ToLowerInvariant();
+                i++;
+            }
         }
 
-        _map = HeightMap.CreatePrototype();
+        StaticGeometry? visibilityGeometry = null;
+        MatchSetup setup;
+
+        if (_scenario == "visibility")
+        {
+            visibilityGeometry = VisibilityScenario.CreateStaticGeometry();
+            _map = visibilityGeometry.HeightMap;
+            setup = VisibilityScenario.CreateMatchSetup(visibilityGeometry);
+        }
+        else
+        {
+            _map = HeightMap.CreatePrototype();
+            setup = PrototypeScenario.CreateMatchSetup(_map);
+        }
 
         if (connectTarget is not null)
         {
@@ -89,18 +109,25 @@ public partial class Main : Node3D
                 host = parts[0];
                 if (int.TryParse(parts[1], out int p)) port = p;
             }
-            MatchSetup setup = PrototypeScenario.CreateMatchSetup(_map);
             _session = ClientSession.Connect(host, port, setup);
         }
         else
         {
-            _session = new LocalSession(PrototypeScenario.Create(_map));
+            _session = _scenario == "visibility"
+                ? new LocalSession(VisibilityScenario.CreateSimulation(visibilityGeometry!))
+                : new LocalSession(PrototypeScenario.Create(_map));
         }
 
         MeshInstance3D terrain = TerrainView.Create(_map);
         AddChild(terrain);
         _terrainWindingValid = !_smokeTest || TerrainView.HasUpwardFrontFaces(terrain);
         AddChild(TerrainView.CreateGrid(_map));
+
+        if (visibilityGeometry is not null)
+        {
+            SetupStructures(visibilityGeometry);
+        }
+
         AddChild(new DirectionalLight3D
         {
             RotationDegrees = new Vector3(-55, -35, 0),
@@ -124,8 +151,9 @@ public partial class Main : Node3D
         AddChild(_camera);
         UpdateCamera();
         _unitViews = new UnitViewSet(this, _map);
+        _contactViews = new ContactViewSet(this, _map);
 
-        if (_session is LocalSession)
+        if (_session is LocalSession && _scenario != "visibility")
         {
             foreach (OwnUnitObservation unit in _session.Replica.OwnUnits)
             {
@@ -152,11 +180,50 @@ public partial class Main : Node3D
         GD.Print($"M0_CLIENT_READY runtime={System.Environment.Version} own_units={_session.Replica.OwnUnits.Length}");
     }
 
+    private void SetupStructures(StaticGeometry geometry)
+    {
+        StandardMaterial3D buildingMat = new() { AlbedoColor = new Color("5c5346"), Roughness = 0.85f };
+        StandardMaterial3D wallMat = new() { AlbedoColor = new Color("6b756c"), Roughness = 0.9f };
+
+        foreach (OpaqueStructure structure in geometry.Structures)
+        {
+            float sizeX = structure.Max.X - structure.Min.X;
+            float sizeY = structure.Max.Y - structure.Min.Y;
+            float sizeZ = structure.Max.Z - structure.Min.Z;
+            float posX = (structure.Min.X + structure.Max.X) * 0.5f;
+            float posY = (structure.Min.Y + structure.Max.Y) * 0.5f;
+            float posZ = (structure.Min.Z + structure.Max.Z) * 0.5f;
+
+            AddChild(new MeshInstance3D
+            {
+                Mesh = new BoxMesh { Size = new Vector3(sizeX, sizeY, sizeZ) },
+                Position = new Vector3(posX, posY, posZ),
+                MaterialOverride = structure.Id.Value == 1 ? buildingMat : wallMat
+            });
+        }
+    }
+
     public override void _Process(double delta)
     {
         _session.Advance(delta);
         UpdateViews();
         _subtitle.Text = _session.StatusDescription;
+        if (_title is not null)
+        {
+            _title.Text = FormatTitle(_session.AssignedPlayerId, _scenario);
+        }
+
+        if (_contactViews.Selected.Count > 0)
+        {
+            ContactId firstSelected = _contactViews.Selected.First();
+            if (_contactViews.Views.TryGetValue(firstSelected, out ContactView? cv))
+            {
+                string kind = cv.Observation.State == ContactState.Current ? "Current observation" : "Last-known marker";
+                int ageTicks = Math.Max(0, _session.Tick - cv.Observation.LastSeenTick);
+                float ageSeconds = ageTicks / (float)Simulation.TickRate;
+                _status.Text = $"Enemy Contact #{cv.Observation.Id.Value}: {kind} (age: {ageSeconds:F1}s) / cannot receive orders";
+            }
+        }
 
         if (_session.LastCommandResult is { } result && result.Sequence != _lastCommandResult)
         {
@@ -186,7 +253,7 @@ public partial class Main : Node3D
             string simInfo = _session is LocalSession local
                 ? $"{local.LastTickMilliseconds:F3} ms per tick / {local.LastTickAllocatedBytes} B tick allocations"
                 : _session.StatusDescription;
-            _stats.Text = $"20 Hz SIM / 10 Hz STATE / TICK {_session.Tick:00000} / {_session.Replica.OwnUnits.Length} UNITS\n{simInfo} / {rate:F1} KiB/s";
+            _stats.Text = $"20 Hz SIM / 10 Hz STATE / TICK {_session.Tick:00000} / OWN: {_session.Replica.OwnUnits.Length} / CONTACTS: {_session.Replica.ContactCount}\n{simInfo} / {rate:F1} KiB/s";
             _hudTimer = 0;
         }
 
@@ -195,8 +262,10 @@ public partial class Main : Node3D
             _smokeTimer += delta;
             if (_smokeTimer >= 1)
             {
-                bool ok = _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
-                    _session.Replica.OwnUnits[0].Position.Y > 24;
+                bool ok = _scenario == "visibility"
+                    ? _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 2
+                    : _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
+                        _session.Replica.OwnUnits[0].Position.Y > 24;
                 GD.Print(ok ? "M0_CLIENT_SMOKE_OK" : "M0_CLIENT_SMOKE_FAILED");
                 GetTree().Quit(ok ? 0 : 1);
             }
@@ -208,7 +277,12 @@ public partial class Main : Node3D
         if (@event is InputEventKey { Pressed: true, Echo: false } key)
         {
             if (key.Keycode == Key.Space) { _focus = new Vector3(64, 0, 64); _camera.Size = 112; UpdateCamera(); }
-            if (key.Keycode == Key.Escape) { _unitViews.Selected.Clear(); _status.Text = "No units selected"; }
+            if (key.Keycode == Key.Escape)
+            {
+                _unitViews.Selected.Clear();
+                _contactViews.Selected.Clear();
+                _status.Text = "No units selected";
+            }
         }
         if (@event is not InputEventMouseButton { Pressed: true } mouse) return;
         if (mouse.ButtonIndex is MouseButton.WheelUp or MouseButton.WheelDown)
@@ -218,40 +292,94 @@ public partial class Main : Node3D
         }
         if (mouse.ButtonIndex == MouseButton.Left)
         {
-            EntityId? nearest = null;
-            float nearestDistance = 24 * 24;
+            EntityId? nearestUnit = null;
+            float nearestUnitDistance = 24 * 24;
             foreach ((EntityId id, UnitView view) in _unitViews.Views)
             {
                 Vector3 center = view.Root.Position + Vector3.Up;
                 if (_camera.IsPositionBehind(center)) continue;
                 float distance = _camera.UnprojectPosition(center).DistanceSquaredTo(mouse.Position);
-                if (distance < nearestDistance) { nearestDistance = distance; nearest = id; }
+                if (distance < nearestUnitDistance) { nearestUnitDistance = distance; nearestUnit = id; }
             }
-            if (!mouse.ShiftPressed) _unitViews.Selected.Clear();
-            if (nearest is { } selected) _unitViews.Selected.Add(selected);
-            _status.Text = _unitViews.Selected.Count == 0 ? "No units selected" : $"{_unitViews.Selected.Count} selected / right-click terrain to move";
+
+            ContactId? nearestContact = null;
+            float nearestContactDistance = 24 * 24;
+            foreach ((ContactId id, ContactView view) in _contactViews.Views)
+            {
+                Vector3 center = view.Root.Position + Vector3.Up * 1.5f;
+                if (_camera.IsPositionBehind(center)) continue;
+                float distance = _camera.UnprojectPosition(center).DistanceSquaredTo(mouse.Position);
+                if (distance < nearestContactDistance) { nearestContactDistance = distance; nearestContact = id; }
+            }
+
+            if (nearestContact is not null && (nearestUnit is null || nearestContactDistance <= nearestUnitDistance))
+            {
+                _unitViews.Selected.Clear();
+                if (!mouse.ShiftPressed) _contactViews.Selected.Clear();
+                _contactViews.Selected.Add(nearestContact.Value);
+
+                if (_contactViews.Views.TryGetValue(nearestContact.Value, out ContactView? cv))
+                {
+                    string kind = cv.Observation.State == ContactState.Current ? "Current observation" : "Last-known marker";
+                    int ageTicks = Math.Max(0, _session.Tick - cv.Observation.LastSeenTick);
+                    float ageSeconds = ageTicks / (float)Simulation.TickRate;
+                    _status.Text = $"Enemy Contact #{cv.Observation.Id.Value}: {kind} (age: {ageSeconds:F1}s) / cannot receive orders";
+                }
+            }
+            else if (nearestUnit is not null)
+            {
+                _contactViews.Selected.Clear();
+                if (!mouse.ShiftPressed) _unitViews.Selected.Clear();
+                _unitViews.Selected.Add(nearestUnit.Value);
+                _status.Text = $"{_unitViews.Selected.Count} selected / right-click terrain to move";
+            }
+            else
+            {
+                if (!mouse.ShiftPressed)
+                {
+                    _unitViews.Selected.Clear();
+                    _contactViews.Selected.Clear();
+                    _status.Text = "No units selected";
+                }
+            }
         }
-        if (mouse.ButtonIndex == MouseButton.Right && _unitViews.Selected.Count > 0)
+        if (mouse.ButtonIndex == MouseButton.Right)
         {
-            Vector3 origin = _camera.ProjectRayOrigin(mouse.Position);
-            Vector3 direction = _camera.ProjectRayNormal(mouse.Position);
-            if (!_map.TryRaycast(new NumericsVector3(origin.X, origin.Y, origin.Z),
-                new NumericsVector3(direction.X, direction.Y, direction.Z), _camera.Far, out NumericsVector3 hit)) return;
-            int sent = 0;
-            foreach (EntityId id in _unitViews.Selected)
-                if (_session.Move(id, new NumericsVector2(hit.X, hit.Z))) sent++;
-            _destination.Position = new Vector3(hit.X, hit.Y + 0.12f, hit.Z);
-            _destination.Visible = sent > 0;
-            _status.Text = $"Move order sent / {sent} units / {hit.X:F0}, {hit.Z:F0} m";
+            if (_unitViews.Selected.Count > 0)
+            {
+                Vector3 origin = _camera.ProjectRayOrigin(mouse.Position);
+                Vector3 direction = _camera.ProjectRayNormal(mouse.Position);
+                if (!_map.TryRaycast(new NumericsVector3(origin.X, origin.Y, origin.Z),
+                    new NumericsVector3(direction.X, direction.Y, direction.Z), _camera.Far, out NumericsVector3 hit)) return;
+                int sent = 0;
+                foreach (EntityId id in _unitViews.Selected)
+                    if (_session.Move(id, new NumericsVector2(hit.X, hit.Z))) sent++;
+                _destination.Position = new Vector3(hit.X, hit.Y + 0.12f, hit.Z);
+                _destination.Visible = sent > 0;
+                _status.Text = $"Move order sent / {sent} units / {hit.X:F0}, {hit.Z:F0} m";
+            }
+            else if (_contactViews.Selected.Count > 0)
+            {
+                _status.Text = "Enemy contacts cannot receive move orders";
+            }
         }
     }
 
     private void UpdateViews()
     {
-        int selected = _unitViews.Selected.Count;
+        int selectedUnits = _unitViews.Selected.Count;
+        int selectedContacts = _contactViews.Selected.Count;
         _unitViews.Sync(_session.Replica, _session.RenderTick);
-        if (selected != _unitViews.Selected.Count)
-            _status.Text = $"{_unitViews.Selected.Count} selected / unit removed from view";
+        _contactViews.Sync(_session.Replica, _session.RenderTick);
+        if (selectedUnits != _unitViews.Selected.Count || selectedContacts != _contactViews.Selected.Count)
+        {
+            if (_unitViews.Selected.Count > 0)
+                _status.Text = $"{_unitViews.Selected.Count} selected / right-click terrain to move";
+            else if (_contactViews.Selected.Count > 0)
+                _status.Text = $"{_contactViews.Selected.Count} contacts selected / cannot receive orders";
+            else
+                _status.Text = "No selection / unit or contact removed from view";
+        }
     }
 
     private void UpdateCamera()
@@ -270,10 +398,14 @@ public partial class Main : Node3D
         foreach (string side in new[] { "left", "right", "top", "bottom" }) margin.AddThemeConstantOverride("margin_" + side, 18);
         VBoxContainer stack = new() { MouseFilter = Control.MouseFilterEnum.Ignore };
         stack.AddThemeConstantOverride("separation", 9);
-        Label title = new() { Text = "DEAD GROUND   /   M1 NETWORK TEST", MouseFilter = Control.MouseFilterEnum.Ignore };
-        title.AddThemeFontSizeOverride("font_size", 21);
-        title.AddThemeColorOverride("font_color", new Color("edc76b"));
-        stack.AddChild(title);
+        _title = new Label
+        {
+            Text = FormatTitle(_session.AssignedPlayerId, _scenario),
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        _title.AddThemeFontSizeOverride("font_size", 21);
+        _title.AddThemeColorOverride("font_color", new Color("edc76b"));
+        stack.AddChild(_title);
         _subtitle = new Label { Text = _session.StatusDescription, MouseFilter = Control.MouseFilterEnum.Ignore };
         _subtitle.AddThemeColorOverride("font_color", new Color("b2beb1"));
         stack.AddChild(_subtitle);
@@ -312,6 +444,11 @@ public partial class Main : Node3D
         CornerRadiusTopLeft = 6,
         CornerRadiusTopRight = 6
     };
+
+    public static string FormatTitle(int assignedSide, string scenario) =>
+        $"DEAD GROUND   /   SIDE {assignedSide}   /   {(scenario == "visibility" ? "RECON SCENARIO" : "M0 NETWORK TEST")}";
+
+    public string TitleText => _title?.Text ?? string.Empty;
 
     public override void _ExitTree() => _session?.Dispose();
 }

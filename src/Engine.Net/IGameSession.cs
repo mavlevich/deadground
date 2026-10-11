@@ -12,6 +12,7 @@ public interface IGameSession : IDisposable
     CommandResult? LastCommandResult { get; }
     long RejectedCommands { get; }
     bool IsConnected { get; }
+    int AssignedPlayerId { get; }
     string StatusDescription { get; }
     bool Move(EntityId unit, System.Numerics.Vector2 target);
     void Advance(double elapsedSeconds);

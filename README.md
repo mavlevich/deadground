@@ -94,6 +94,52 @@ the selection. The HUD shows connection state, tick time, allocations and traffi
 The host reports whether a valid command was queued or rejected. Rejections give
 no hidden-world details. Queue admission does not guarantee arrival at the target.
 
+### Visual reconnaissance scenario
+
+To run the playable visual reconnaissance scenario with server-side line-of-sight detection and replicated enemy contacts:
+
+Start the dedicated server:
+
+```sh
+dotnet run --project src/Game.Server --configuration Release -- --scenario visibility --port 7777
+```
+
+In a second terminal, start the first client (Side 1: Recon observers):
+
+```sh
+./tools/run-client.sh -- --scenario visibility --connect 127.0.0.1:7777
+```
+
+In a third terminal, start the second client (Side 2: Opponent forces):
+
+```sh
+./tools/run-client.sh -- --scenario visibility --connect 127.0.0.1:7777
+```
+
+For self-contained local inspection without a dedicated server:
+
+```sh
+./tools/run-client.sh -- --scenario visibility
+```
+
+#### Reconnaissance controls and presentation
+
+- **Own units**:
+  - `recon_vehicle`: Olive chassis with a tall surveillance antenna.
+  - `prototype_tank`: Olive chassis with a turret and main gun barrel.
+- **Enemy contacts**:
+  - `Current`: Vibrant red diamond marker with a vertical ground indicator stem, updating with live enemy position.
+  - `LastKnown`: Muted translucent red diamond marker with a base ring on the ground, fixed at the position where line of sight was lost.
+- **Selection**:
+  - Left-click selects an own unit or an enemy contact marker.
+  - Selecting an enemy contact shows its contact ID and observation state in the HUD.
+  - Enemy contacts cannot be commanded to move; move orders are only accepted for owned units.
+- **Scenario lifecycle walkthrough**:
+  1. **Initial detection**: Side 1 has two recon vehicles at (20, 25) and (20, 45). Side 2 has a tank at (33, 27) behind a 1.0 m low wall, a second tank at (60, 45) behind a 6.0 m opaque building, and a recon vehicle at (95, 95) behind an 8.0 m hill. Observer 1 detects Tank 1 over the low wall (hull is covered, but upper observation point is clear). Client 1 sees a `Current` red diamond marker.
+  2. **Occlusion and track loss**: Select Tank 1 in Client 2 and right-click to move behind the 6.0 m building. As soon as line of sight is broken, Client 1's marker freezes and transitions to a muted `LastKnown` ghost marker.
+  3. **Rediscovery and track correlation**: If Tank 1 moves back into view within the correlation window (60 ticks / 3.0 s) and distance gate (25 m), the existing contact track is resumed under the same Contact ID without flicker.
+  4. **Contact expiration**: If Tank 1 remains hidden for longer than the memory duration (100 ticks / 5.0 s), the `LastKnown` marker expires and disappears from Client 1's view.
+
 ### Line-of-sight sandbox
 
 To launch the standalone visual line-of-sight geometry sandbox:
@@ -137,6 +183,8 @@ dotnet format DeadGround.sln --verify-no-changes --no-restore
 dotnet build DeadGround.sln --configuration Release --no-restore
 dotnet test DeadGround.sln --configuration Release --no-build
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test
+dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario visibility
+./tools/run-client.sh --headless -- --smoke-test
 ```
 
 To automatically format C# code according to the repository rules:

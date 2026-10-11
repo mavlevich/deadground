@@ -6,5 +6,6 @@
     <ProjectReference Include="../../src/Engine.Net/Engine.Net.csproj" />
     <ProjectReference Include="../../src/Game.Rules.Sandbox/Game.Rules.Sandbox.csproj" />
     <ProjectReference Include="../../src/Game.Sandbox/Game.Sandbox.csproj" />
+    <ProjectReference Include="../../src/Game.Rules.Ops/Game.Rules.Ops.csproj" />
   </ItemGroup>
 </Project>

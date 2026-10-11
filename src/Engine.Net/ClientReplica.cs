@@ -11,6 +11,19 @@ public sealed class ClientReplica
     public int LatestTick => _count == 0 ? 0 : Latest.Tick;
     public uint LatestSequence => _count == 0 ? 0 : Latest.Sequence;
     public ReadOnlySpan<OwnUnitObservation> OwnUnits => _count == 0 ? [] : Latest.Units.AsSpan(0, Latest.Count);
+    public ReadOnlySpan<ContactObservation> Contacts => _count == 0 ? [] : Latest.Contacts.AsSpan(0, Latest.ContactCount);
+    public int ContactCount => _count == 0 ? 0 : Latest.ContactCount;
+
+    public bool TryGetContact(ContactId id, out ContactObservation contact)
+    {
+        if (_count == 0 || !Latest.ContactIndices.TryGetValue(id, out int index))
+        {
+            contact = default;
+            return false;
+        }
+        contact = Latest.Contacts[index];
+        return true;
+    }
 
     public ClientReplica(int capacity = WireProtocol.MaxUnits)
     {
@@ -49,5 +62,37 @@ public sealed class ClientReplica
         float alpha = right.Tick == left.Tick ? 1 :
             (float)Math.Clamp((renderTick - left.Tick) / (right.Tick - left.Tick), 0, 1);
         return Vector2.Lerp(left.Units[li].Position, right.Units[ri].Position, alpha);
+    }
+
+    public Vector2 SampleContactPosition(ContactId id, double renderTick)
+    {
+        if (_count == 0 || !Latest.ContactIndices.TryGetValue(id, out int index)) return default;
+        ref readonly ContactObservation latestContact = ref Latest.Contacts[index];
+        if (latestContact.State != ContactState.Current)
+            return latestContact.Position;
+
+        int oldest = (_next - _count + _frames.Length) % _frames.Length;
+        SnapshotFrame left = _frames[oldest];
+        SnapshotFrame right = Latest;
+        for (int i = 0; i < _count; i++)
+        {
+            SnapshotFrame frame = _frames[(oldest + i) % _frames.Length];
+            if (frame.Tick <= renderTick) left = frame;
+            if (frame.Tick >= renderTick) { right = frame; break; }
+        }
+
+        if (!left.ContactIndices.TryGetValue(id, out int li) || !right.ContactIndices.TryGetValue(id, out int ri))
+            return latestContact.Position;
+
+        ref readonly ContactObservation leftContact = ref left.Contacts[li];
+        ref readonly ContactObservation rightContact = ref right.Contacts[ri];
+
+        // Only interpolate when both frames observe the contact as Current
+        if (leftContact.State != ContactState.Current || rightContact.State != ContactState.Current)
+            return latestContact.Position;
+
+        float alpha = right.Tick == left.Tick ? 1 :
+            (float)Math.Clamp((renderTick - left.Tick) / (right.Tick - left.Tick), 0, 1);
+        return Vector2.Lerp(leftContact.Position, rightContact.Position, alpha);
     }
 }

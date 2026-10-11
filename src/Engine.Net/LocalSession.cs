@@ -18,11 +18,13 @@ public sealed class LocalSession : IGameSession
     public CommandResult? LastCommandResult => _client.LastCommandResult;
     public long RejectedCommands => _client.RejectedCommands;
     public bool IsConnected => true;
+    public int AssignedPlayerId { get; }
     public string StatusDescription => "Local authoritative simulation / prototype terrain";
 
     public LocalSession(Simulation simulation, int player = 1)
     {
         SimulationHost.ValidateConfiguration(simulation, player);
+        AssignedPlayerId = player;
         (ITransport client, ITransport server) = InMemoryTransport.CreatePair(maxMessageSize: WireProtocol.MaxMessageSize);
         _host = new SimulationHost(simulation, server, player);
         _client = new ClientSession(client, replicaCapacity: simulation.Capacity);

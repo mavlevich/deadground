@@ -19,7 +19,7 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map)
             _present.Add(unit.Id);
             if (!Views.TryGetValue(unit.Id, out UnitView? view))
             {
-                view = new UnitView();
+                view = new UnitView(unit.Definition);
                 Views.Add(unit.Id, view);
                 parent.AddChild(view.Root);
             }

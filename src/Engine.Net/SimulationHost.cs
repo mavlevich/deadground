@@ -37,6 +37,11 @@ public sealed class SimulationHost : IDisposable
         _simulation = simulation;
         _transport = transport;
         _matchSetup = matchSetup;
+        if (matchSetup?.PlayerTeams is { Length: > 0 } teams)
+        {
+            for (int p = 1; p <= teams.Length; p++)
+                simulation.SetPlayerTeam(p, teams[p - 1]);
+        }
         _knowledge = new PlayerKnowledge[Simulation.MaxPlayers];
 
         for (int i = 0; i < Simulation.MaxPlayers; i++)
@@ -209,7 +214,7 @@ public sealed class SimulationHost : IDisposable
     {
         PlayerKnowledge knowledge = _knowledge[player - 1];
         _simulation.UpdateKnowledge(knowledge);
-        int length = WireProtocol.WriteSnapshot(_send, checked(++_snapshotSequence), Tick, knowledge.OwnUnits);
+        int length = WireProtocol.WriteSnapshot(_send, checked(++_snapshotSequence), Tick, knowledge.OwnUnits, knowledge.Contacts);
 
         if (_transport is SinglePlayerServerTransport || length <= WireProtocol.MaxFragmentPayloadSize)
         {

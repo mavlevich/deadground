@@ -1,6 +1,35 @@
 {
   "schema_version": 1,
+  "detection": {
+    "memory_duration_ticks": 100,
+    "correlation_window_ticks": 60,
+    "correlation_distance_gate": 25.0,
+    "evaluation_interval_ticks": 2,
+    "max_correlation_speed": 10.0,
+    "slack": 5.0,
+    "max_gate": 35.0
+  },
   "units": [
-    { "id": "prototype_vehicle", "speed": 6.0 }
+    {
+      "id": "prototype_vehicle",
+      "speed": 6.0,
+      "sensor_range": 60.0,
+      "eye_height": 1.8,
+      "target_points": [0.7, 1.6]
+    },
+    {
+      "id": "recon_vehicle",
+      "speed": 7.0,
+      "sensor_range": 70.0,
+      "eye_height": 1.6,
+      "target_points": [0.6, 1.4]
+    },
+    {
+      "id": "prototype_tank",
+      "speed": 5.0,
+      "sensor_range": 50.0,
+      "eye_height": 2.0,
+      "target_points": [0.8, 1.8]
+    }
   ]
 }

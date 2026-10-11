@@ -2,19 +2,28 @@ namespace DeadGround.Engine;
 
 public sealed class PlayerKnowledge
 {
+    public const int DefaultContactCapacity = 256;
     private readonly OwnUnitObservation[] _ownUnits;
+    private readonly ContactObservation[] _contacts;
+
     public int Player { get; }
     public int Count { get; private set; }
-    public ReadOnlySpan<OwnUnitObservation> OwnUnits => _ownUnits.AsSpan(0, Count);
+    public int ContactCount { get; private set; }
 
-    public PlayerKnowledge(int player, int capacity = 1024)
+    public ReadOnlySpan<OwnUnitObservation> OwnUnits => _ownUnits.AsSpan(0, Count);
+    public ReadOnlySpan<ContactObservation> Contacts => _contacts.AsSpan(0, ContactCount);
+
+    public PlayerKnowledge(int player, int capacity = 1024, int contactCapacity = DefaultContactCapacity)
     {
         if (player < 1) throw new ArgumentOutOfRangeException(nameof(player));
         Player = player;
         _ownUnits = new OwnUnitObservation[capacity];
+        _contacts = new ContactObservation[contactCapacity];
     }
 
-    internal void Refresh(WorldState world)
+    internal void Refresh(WorldState world) => Refresh(world, []);
+
+    internal void Refresh(WorldState world, ReadOnlySpan<ContactObservation> contacts)
     {
         int count = 0;
         for (int i = 0; i < world.Count; i++)
@@ -25,5 +34,11 @@ public sealed class PlayerKnowledge
             _ownUnits[count++] = new OwnUnitObservation(unit.Id, unit.Definition, unit.Position, 0);
         }
         Count = count;
+
+        if (contacts.Length > _contacts.Length)
+            throw new InvalidOperationException("Contact knowledge capacity exceeded.");
+
+        contacts.CopyTo(_contacts.AsSpan(0, contacts.Length));
+        ContactCount = contacts.Length;
     }
 }
