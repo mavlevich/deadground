@@ -94,6 +94,35 @@ the selection. The HUD shows connection state, tick time, allocations and traffi
 The host reports whether a valid command was queued or rejected. Rejections give
 no hidden-world details. Queue admission does not guarantee arrival at the target.
 
+### Line-of-sight sandbox
+
+To launch the standalone visual line-of-sight geometry sandbox:
+
+On macOS:
+
+```sh
+./tools/run-client.sh -- --los-sandbox
+```
+
+On Windows:
+
+```powershell
+./tools/run-client.ps1 -GodotArgs @("--", "--los-sandbox")
+```
+
+The sandbox visualizes 3D line-of-sight rays against bilinear terrain and opaque structures:
+- Green rays indicate clear line of sight.
+- Red rays indicate obstructed line of sight with hit markers at intersection points.
+- Keys 1 to 6 select reproducible scenarios: open field, hill occlusion, building occlusion, corner peek, low wall hull-down, and elevated vantage.
+- Left bracket `[` and right bracket `]` cycle presets.
+- WASD or arrow keys pan the camera. The mouse scroll wheel zooms. Space resets the camera.
+
+To run the automated headless regression test for all sandbox scenarios:
+
+```sh
+./tools/run-client.sh --headless -- --los-sandbox --smoke-test
+```
+
 Forward+ is the default renderer. It has been run on Apple Silicon using Metal.
 For a Compatibility comparison, pass `--rendering-method gl_compatibility` to the
 launcher. Renderer and driver must be recorded with graphics performance results.
@@ -146,6 +175,12 @@ dotnet run --project tests/Benchmarks --configuration Release -- --filter '*Movi
 ```
 
 This measures M0 movement and serialization, not the later combat workload or its budget.
+
+The line-of-sight microbenchmark measures single-query and batch geometric queries:
+
+```sh
+dotnet run --project tests/Benchmarks --configuration Release -- --filter '*LineOfSight*'
+```
 
 ## Export the client
 

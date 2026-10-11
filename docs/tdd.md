@@ -314,7 +314,14 @@ Path following is a separate problem from path planning and needs as much attent
 ## 10. Detection and fog of war
 
 - Sensors and signatures, not `canSee()`. Start with visual only. Radar, thermal and SIGINT are new sensor types later.
-- Line of sight is a 2.5D ray march over the heightmap plus obstacles. Forests reduce visibility by accumulated density along the ray, not by individual trees.
+- Line of sight geometric foundation: checks finite 3D segments against continuous bilinear terrain and opaque structures without engine dependencies or Godot calls.
+- Exact bilinear surface intersection: solves the quadratic equation A*tau^2 + B*tau + C <= 0 across traversed heightmap cells using numerically stable formulations. Convex curves dip below zero only when the vertex lies inside the traversed interval. This avoids discrete step sampling artifacts and catastrophic cancellation.
+- Surface contact rule: Contact with a surface does not block. Only penetration deeper than the tolerance (1 cm) blocks. Targets on the terrain surface (within 5 cm endpoint contact tolerance of the ground) remain visible to observers above without false obstruction.
+- Start-point interior rule: Start points on boundaries (such as rooftop observation posts or units flush against a wall) use a strict interior test (`ContainsInterior`). Exterior contact does not make an observer blind. Penetration entering a structure volume blocks at distance zero.
+- Grounded structures: Structures marked `IsGrounded` (the default) verify at construction that their base height does not exceed the lowest terrain point under their horizontal footprint, evaluating footprint corners, interior grid vertices, and edge intersections with terrain grid lines. Elevated structures such as bridge decks declare `IsGrounded = false`.
+- Spatial index: flat uniform grid with compressed sparse row (CSR) indexing caches structure bounding boxes.
+- Zero allocation query hot paths: returns readonly struct `LineOfSightResult`.
+- Current geometric limitations: structures are modeled as axis-aligned bounding boxes (AABBs). Rotated bounding boxes (OBBs), triangle meshes, vegetation density attenuation, and dynamic entity obstacles will be integrated in later milestones.
 - Candidate targets come from the spatial grid, never from all entities.
 - Detection runs at 2 to 5 Hz, spread across ticks. Hysteresis prevents contacts from flickering.
 - Detection results feed `PlayerKnowledge`: detected, identified, last known position and time, estimated type and strength.
@@ -632,6 +639,20 @@ Implementation checkpoint:
   validated snapshots are applied.
 - Automated integration tests cover two-client loopback sessions, foreign unit rejection,
   hidden state preservation, handshake mismatch and multi-packet snapshot reassembly.
+- Geometric line-of-sight query foundation implemented in `Engine.Core`.
+  `StaticGeometry` provides fast ray obstruction checks against continuous bilinear
+  terrain and opaque axis-aligned structures.
+- Exact quadratic intersection solves bilinear terrain patches analytically without
+  sampling step errors.
+- Flat uniform spatial grid indexes structures with zero heap allocation per query.
+- Diagnostic `LineOfSightResult` reports obstruction kind, hit coordinate, distance,
+  and obstructing structure identifier.
+- Standalone visual sandbox in `Game.Godot` (`--los-sandbox`) allows interactive inspection
+  and headless automated regression testing across six reproducible scenarios:
+  open field, hill occlusion, building occlusion, corner peek, low wall hull-down,
+  and elevated vantage.
+- Sensor ranges, detection probabilities, forest vegetation density, and dynamic
+  unit hitboxes remain future stages.
 - Reconnect recovery, combat, sensors, pathfinding, bots and save/load remain pending M1 work.
 
 Exit criteria (technical):

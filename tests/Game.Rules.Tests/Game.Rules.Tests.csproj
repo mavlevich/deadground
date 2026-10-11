@@ -6,6 +6,7 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" PrivateAssets="all" />
     <ProjectReference Include="../../src/Game.Rules.Ops/Game.Rules.Ops.csproj" />
     <ProjectReference Include="../../src/Game.Rules.Sandbox/Game.Rules.Sandbox.csproj" />
+    <ProjectReference Include="../../src/Game.Sandbox/Game.Sandbox.csproj" />
     <ProjectReference Include="../../src/Engine.Net/Engine.Net.csproj" />
   </ItemGroup>
 </Project>
