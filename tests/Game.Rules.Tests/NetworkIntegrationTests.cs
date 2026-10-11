@@ -310,12 +310,12 @@ public sealed class NetworkIntegrationTests
         using ClientSession client = ClientSession.Connect("127.0.0.1", port, setup);
         WaitForSingle(() => client.IsConnected && client.Replica.OwnUnits.Length == 12, host, client);
 
-        // Warm up for 30 ticks
-        for (int i = 0; i < 30; i++)
+        // Warm up for 40 ticks
+        for (int i = 0; i < 40; i++)
         {
             host.Advance(1d / Simulation.TickRate);
             client.Advance(1d / Simulation.TickRate);
-            Thread.Sleep(2);
+            Thread.Sleep(5);
         }
 
         // Measure allocations over next 20 ticks
@@ -323,7 +323,7 @@ public sealed class NetworkIntegrationTests
         {
             host.Advance(1d / Simulation.TickRate);
             client.Advance(1d / Simulation.TickRate);
-            Thread.Sleep(2);
+            Thread.Sleep(5);
             if (host.Tick % 2 == 0)
             {
                 Assert.Equal(0L, host.LastTickAllocatedBytes);

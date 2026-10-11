@@ -74,6 +74,7 @@ public sealed class LiteNetLibClientTransport : ITransport, INetEventListener
         }
         if (peer is null || peer.ConnectionState != ConnectionState.Connected) return false;
         peer.Send(message, DeliveryMethod.ReliableOrdered);
+        _netManager.TriggerUpdate();
         return true;
     }
 
@@ -204,6 +205,7 @@ public sealed class LiteNetLibServerTransport : IServerTransport, INetEventListe
         if (peer is null || peer.ConnectionState != ConnectionState.Connected) return false;
         DeliveryMethod method = reliable ? DeliveryMethod.ReliableOrdered : DeliveryMethod.Unreliable;
         peer.Send(message, method);
+        _netManager.TriggerUpdate();
         return true;
     }
 
@@ -256,22 +258,29 @@ public sealed class LiteNetLibServerTransport : IServerTransport, INetEventListe
 
     public void DisconnectPlayer(int player, ReadOnlySpan<byte> reason = default)
     {
+        NetPeer? peerToDisconnect = null;
+        byte[]? data = null;
         lock (_lock)
         {
             if (_slotToPeer.Remove(player, out NetPeer? peer))
             {
                 _peerToSlot.Remove(peer.Id);
                 _slotConnectionIds[player] = 0;
+                peerToDisconnect = peer;
                 if (!reason.IsEmpty)
                 {
-                    byte[] data = reason.ToArray();
-                    peer.Disconnect(data);
-                }
-                else
-                {
-                    peer.Disconnect();
+                    data = reason.ToArray();
                 }
             }
+        }
+
+        if (peerToDisconnect is not null)
+        {
+            if (data is not null)
+                peerToDisconnect.Disconnect(data);
+            else
+                peerToDisconnect.Disconnect();
+            _netManager.TriggerUpdate();
         }
     }
 
