@@ -25,6 +25,35 @@ public partial class Main : Node3D
     public override void _Ready()
     {
         string[] userArgs = OS.GetCmdlineUserArgs();
+        string[] allArgs = OS.GetCmdlineArgs();
+        bool isLosSandbox = userArgs.Contains("--los-sandbox") || allArgs.Contains("--los-sandbox");
+        bool hasConnect = userArgs.Contains("--connect") || allArgs.Contains("--connect");
+
+        if (isLosSandbox && hasConnect)
+        {
+            GD.PushError("Invalid arguments: --los-sandbox cannot be combined with --connect.");
+            SetProcess(false);
+            GetTree().Quit(1);
+            return;
+        }
+
+        if (isLosSandbox)
+        {
+            bool isSmoke = userArgs.Contains("--smoke-test") || allArgs.Contains("--smoke-test");
+            if (isSmoke)
+            {
+                bool ok = LosSandboxRegressionTests.Run();
+                SetProcess(false);
+                GetTree().Quit(ok ? 0 : 1);
+                return;
+            }
+
+            SetProcess(false);
+            SetProcessUnhandledInput(false);
+            AddChild(new LosSandboxView());
+            return;
+        }
+
         _smokeTest = userArgs.Contains("--smoke-test");
         if (_smokeTest && !ClientRegressionTests.Run(this))
         {

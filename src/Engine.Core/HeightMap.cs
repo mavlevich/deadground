@@ -27,6 +27,8 @@ public sealed class HeightMap
     public bool Contains(Vector2 point) => float.IsFinite(point.X) && float.IsFinite(point.Y) &&
         point.X >= 0 && point.Y >= 0 && point.X <= Width && point.Y <= Depth;
 
+    internal float SampleHeight(int column, int row) => _samples[row * Columns + column] * HeightScale;
+
     public float GetHeight(float x, float z)
     {
         if (!float.IsFinite(x) || !float.IsFinite(z))
