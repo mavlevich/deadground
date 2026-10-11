@@ -20,4 +20,13 @@ public class RuleSet : ISimulationRules
     {
         foreach (ISimulationSystem system in _systems) system.Update(world, tick);
     }
+
+    public T? FindSystem<T>() where T : class
+    {
+        for (int i = 0; i < _systems.Length; i++)
+        {
+            if (_systems[i] is T match) return match;
+        }
+        return null;
+    }
 }

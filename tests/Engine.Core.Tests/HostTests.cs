@@ -53,7 +53,7 @@ public sealed class HostTests
         for (int i = 0; i < WireProtocol.MaxUnits; i++) world.CreateUnit(1, 0, new Vector2(1, 1), 1);
         using LocalSession session = new(new Simulation(world, new RuleSet()));
         Assert.Equal(WireProtocol.MaxUnits, session.Replica.OwnUnits.Length);
-        Assert.Equal(WireProtocol.MaxMessageSize, session.BytesReceived);
+        Assert.Equal(WireProtocol.SnapshotHeaderSize + WireProtocol.MaxUnits * WireProtocol.UnitSize, session.BytesReceived);
     }
 
     [Fact]
@@ -83,5 +83,47 @@ public sealed class HostTests
         Assert.False(WireProtocol.TryReadCommandResult(bytes[..^1], out _));
         bytes[10] = 2;
         Assert.False(WireProtocol.TryReadCommandResult(bytes, out _));
+    }
+
+    [Fact]
+    public void ClientReplica_SampleContactPosition_InterpolatesCurrentContacts()
+    {
+        ClientReplica replica = new();
+        byte[] buffer = new byte[WireProtocol.MaxMessageSize];
+
+        ContactId contactId = new(1);
+        ContactObservation c1 = new(contactId, ContactState.Current, ContactClassification.Unknown, new Vector2(10, 10), 10);
+        int size1 = WireProtocol.WriteSnapshot(buffer, sequence: 1, tick: 10, units: [], contacts: [c1]);
+        Assert.True(replica.TryApply(buffer.AsSpan(0, size1)));
+
+        ContactObservation c2 = new(contactId, ContactState.Current, ContactClassification.Unknown, new Vector2(30, 10), 20);
+        int size2 = WireProtocol.WriteSnapshot(buffer, sequence: 2, tick: 20, units: [], contacts: [c2]);
+        Assert.True(replica.TryApply(buffer.AsSpan(0, size2)));
+
+        // Midpoint at renderTick = 15
+        Vector2 sampled = replica.SampleContactPosition(contactId, renderTick: 15.0);
+        Assert.Equal(20f, sampled.X, 0.001f);
+        Assert.Equal(10f, sampled.Y, 0.001f);
+    }
+
+    [Fact]
+    public void ClientReplica_SampleContactPosition_DoesNotInterpolateLastKnownContacts()
+    {
+        ClientReplica replica = new();
+        byte[] buffer = new byte[WireProtocol.MaxMessageSize];
+
+        ContactId contactId = new(1);
+        ContactObservation c1 = new(contactId, ContactState.Current, ContactClassification.Unknown, new Vector2(10, 10), 10);
+        int size1 = WireProtocol.WriteSnapshot(buffer, sequence: 1, tick: 10, units: [], contacts: [c1]);
+        Assert.True(replica.TryApply(buffer.AsSpan(0, size1)));
+
+        // In second frame, contact becomes LastKnown at (10, 10)
+        ContactObservation c2 = new(contactId, ContactState.LastKnown, ContactClassification.Unknown, new Vector2(10, 10), 10);
+        int size2 = WireProtocol.WriteSnapshot(buffer, sequence: 2, tick: 20, units: [], contacts: [c2]);
+        Assert.True(replica.TryApply(buffer.AsSpan(0, size2)));
+
+        Vector2 sampled = replica.SampleContactPosition(contactId, renderTick: 15.0);
+        Assert.Equal(10f, sampled.X);
+        Assert.Equal(10f, sampled.Y);
     }
 }

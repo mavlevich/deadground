@@ -6,17 +6,40 @@ public sealed record MatchSetup(
     byte ProtocolVersion,
     ulong ContentHash,
     ulong MapHash,
-    string RuleSetId)
+    string RuleSetId,
+    int[]? PlayerTeams = null)
 {
-    public const byte CurrentProtocolVersion = 1;
+    public const byte CurrentProtocolVersion = 2;
 
-    public bool Matches(MatchSetup other) =>
-        ProtocolVersion == other.ProtocolVersion &&
-        ContentHash == other.ContentHash &&
-        MapHash == other.MapHash &&
-        string.Equals(RuleSetId, other.RuleSetId, StringComparison.Ordinal);
+    public bool Matches(MatchSetup other)
+    {
+        if (ProtocolVersion != other.ProtocolVersion ||
+            ContentHash != other.ContentHash ||
+            MapHash != other.MapHash ||
+            !string.Equals(RuleSetId, other.RuleSetId, StringComparison.Ordinal))
+        {
+            return false;
+        }
 
-    public static ulong ComputeMapHash(HeightMap map)
+        if (PlayerTeams is not null && other.PlayerTeams is not null)
+        {
+            if (!PlayerTeams.AsSpan().SequenceEqual(other.PlayerTeams))
+                return false;
+        }
+
+        return true;
+    }
+
+    public static ulong ComputeMapHash(HeightMap map) => ComputeMapHash(map, ReadOnlySpan<OpaqueStructure>.Empty);
+
+    public static ulong ComputeMapHash(StaticGeometry geometry)
+    {
+        ArgumentNullException.ThrowIfNull(geometry);
+        OpaqueStructure[] array = geometry.Structures.ToArray();
+        return ComputeMapHash(geometry.HeightMap, array.AsSpan());
+    }
+
+    public static ulong ComputeMapHash(HeightMap map, ReadOnlySpan<OpaqueStructure> structures)
     {
         ArgumentNullException.ThrowIfNull(map);
         ulong hash = 14695981039346656037UL;
@@ -27,6 +50,28 @@ public sealed record MatchSetup(
         for (int z = 0; z < map.Rows; z++)
             for (int x = 0; x < map.Columns; x++)
                 hash = HashFloat(hash, map.GetHeight(x * map.CellSize, z * map.CellSize));
+
+        if (structures.Length > 0)
+        {
+            // Canonical ordering by StructureId to prevent input record permutation differences
+            OpaqueStructure[] sorted = structures.ToArray();
+            Array.Sort(sorted, static (a, b) => a.Id.Value.CompareTo(b.Id.Value));
+
+            hash = HashInt(hash, sorted.Length);
+            for (int i = 0; i < sorted.Length; i++)
+            {
+                OpaqueStructure s = sorted[i];
+                hash = HashInt(hash, (int)s.Id.Value);
+                hash = HashFloat(hash, s.MinX);
+                hash = HashFloat(hash, s.MinY);
+                hash = HashFloat(hash, s.MinZ);
+                hash = HashFloat(hash, s.MaxX);
+                hash = HashFloat(hash, s.MaxY);
+                hash = HashFloat(hash, s.MaxZ);
+                hash = HashInt(hash, s.IsGrounded ? 1 : 0);
+            }
+        }
+
         return hash;
     }
 

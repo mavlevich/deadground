@@ -6,6 +6,7 @@ using DeadGround.Rules.Ops;
 int port = 7777;
 int maxClients = 2;
 bool smokeTest = false;
+string scenario = "prototype";
 
 for (int i = 0; i < args.Length; i++)
 {
@@ -19,17 +20,45 @@ for (int i = 0; i < args.Length; i++)
         maxClients = mc;
         i++;
     }
+    else if (args[i] == "--scenario" && i + 1 < args.Length)
+    {
+        scenario = args[i + 1].ToLowerInvariant();
+        i++;
+    }
     else if (args[i] == "--smoke-test")
     {
         smokeTest = true;
     }
 }
 
-HeightMap map = HeightMap.CreatePrototype();
+HeightMap map = scenario == "visibility"
+    ? VisibilityScenario.CreateMap()
+    : HeightMap.CreatePrototype();
+
+StaticGeometry? visibilityGeometry = scenario == "visibility"
+    ? VisibilityScenario.CreateStaticGeometry()
+    : null;
+
+MatchSetup setup = scenario == "visibility"
+    ? VisibilityScenario.CreateMatchSetup(visibilityGeometry!)
+    : PrototypeScenario.CreateMatchSetup(map);
+
+Simulation CreateSimulation() => scenario == "visibility"
+    ? VisibilityScenario.CreateSimulation(visibilityGeometry!)
+    : PrototypeScenario.Create(map);
 
 if (smokeTest)
 {
-    using LocalSession session = new(PrototypeScenario.Create(map));
+    using LocalSession session = new(CreateSimulation());
+    if (scenario == "visibility")
+    {
+        for (int i = 0; i < 40; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.Tick != 40 || session.Replica.OwnUnits.Length != 2)
+            throw new InvalidOperationException("Visibility smoke test failed.");
+        Console.WriteLine($"VISIBILITY_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} contacts={session.Replica.ContactCount}");
+        return;
+    }
+
     EntityId first = session.Replica.OwnUnits[0].Id;
     Vector2 start = session.Replica.OwnUnits[0].Position;
     for (int i = 0; i < session.Replica.OwnUnits.Length; i++)
@@ -45,9 +74,8 @@ if (smokeTest)
     return;
 }
 
-MatchSetup setup = PrototypeScenario.CreateMatchSetup(map);
 using LiteNetLibServerTransport transport = LiteNetLibTransport.CreateServer(port, maxClients);
-using SimulationHost host = new(PrototypeScenario.Create(map), transport, setup);
+using SimulationHost host = new(CreateSimulation(), transport, setup);
 
 using CancellationTokenSource cancellation = new();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };

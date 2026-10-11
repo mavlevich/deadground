@@ -5,12 +5,20 @@ namespace DeadGround.Engine;
 public sealed class HeightMap
 {
     private readonly ushort[] _samples;
+    private readonly float[] _cellMaxHeights;
+    private readonly float[] _blockMaxHeights;
     public int Columns { get; }
     public int Rows { get; }
     public float CellSize { get; }
     public float HeightScale { get; }
+    public float MaxHeight { get; }
+    public float MinHeight { get; }
     public float Width => (Columns - 1) * CellSize;
     public float Depth => (Rows - 1) * CellSize;
+    public int BlockCells { get; }
+    public float BlockSize { get; }
+    public int BlockColumns { get; }
+    public int BlockRows { get; }
 
     public HeightMap(int columns, int rows, float cellSize, float heightScale, ReadOnlySpan<ushort> samples)
     {
@@ -22,13 +30,93 @@ public sealed class HeightMap
         CellSize = cellSize;
         HeightScale = heightScale;
         _samples = samples.ToArray();
+
+        ushort minSample = ushort.MaxValue;
+        ushort maxSample = ushort.MinValue;
+        for (int i = 0; i < samples.Length; i++)
+        {
+            ushort s = samples[i];
+            if (s < minSample) minSample = s;
+            if (s > maxSample) maxSample = s;
+        }
+        MinHeight = minSample * heightScale;
+        MaxHeight = maxSample * heightScale;
+
+        _cellMaxHeights = new float[(columns - 1) * (rows - 1)];
+        for (int r = 0; r < rows - 1; r++)
+        {
+            int rowOffset = r * (columns - 1);
+            int sampleRowOffset = r * columns;
+            int nextSampleRowOffset = (r + 1) * columns;
+            for (int c = 0; c < columns - 1; c++)
+            {
+                ushort s00 = samples[sampleRowOffset + c];
+                ushort s10 = samples[sampleRowOffset + c + 1];
+                ushort s01 = samples[nextSampleRowOffset + c];
+                ushort s11 = samples[nextSampleRowOffset + c + 1];
+                ushort maxS = Math.Max(Math.Max(s00, s10), Math.Max(s01, s11));
+                _cellMaxHeights[rowOffset + c] = maxS * heightScale;
+            }
+        }
+
+        BlockCells = Math.Max(1, Math.Min(8, (columns - 1) / 4));
+        BlockSize = BlockCells * CellSize;
+        BlockColumns = (columns - 2) / BlockCells + 1;
+        BlockRows = (rows - 2) / BlockCells + 1;
+        _blockMaxHeights = new float[BlockColumns * BlockRows];
+
+        for (int br = 0; br < BlockRows; br++)
+        {
+            int rStart = br * BlockCells;
+            int rEnd = Math.Min(rows - 1, rStart + BlockCells);
+            for (int bc = 0; bc < BlockColumns; bc++)
+            {
+                int cStart = bc * BlockCells;
+                int cEnd = Math.Min(columns - 1, cStart + BlockCells);
+                float maxH = float.MinValue;
+                for (int r = rStart; r < rEnd; r++)
+                {
+                    int rowOff = r * (columns - 1);
+                    for (int c = cStart; c < cEnd; c++)
+                    {
+                        float ch = _cellMaxHeights[rowOff + c];
+                        if (ch > maxH) maxH = ch;
+                    }
+                }
+                _blockMaxHeights[br * BlockColumns + bc] = maxH;
+            }
+        }
     }
 
     public bool Contains(Vector2 point) => float.IsFinite(point.X) && float.IsFinite(point.Y) &&
         point.X >= 0 && point.Y >= 0 && point.X <= Width && point.Y <= Depth;
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     internal float SampleHeight(int column, int row) => _samples[row * Columns + column] * HeightScale;
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    internal void GetCellCornerHeights(int column, int row, out float h00, out float h10, out float h01, out float h11)
+    {
+        int rowStride = Columns;
+        int idx = row * rowStride + column;
+        float scale = HeightScale;
+        ReadOnlySpan<ushort> samples = _samples;
+        h00 = samples[idx] * scale;
+        h10 = samples[idx + 1] * scale;
+        h01 = samples[idx + rowStride] * scale;
+        h11 = samples[idx + rowStride + 1] * scale;
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    internal float GetCellMaxHeight(int column, int row) => _cellMaxHeights[row * (Columns - 1) + column];
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    internal float GetCellMaxHeightByIndex(int index) => _cellMaxHeights[index];
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    internal float GetBlockMaxHeight(int blockCol, int blockRow) => _blockMaxHeights[blockRow * BlockColumns + blockCol];
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public float GetHeight(float x, float z)
     {
         if (!float.IsFinite(x) || !float.IsFinite(z))

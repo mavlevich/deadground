@@ -10,6 +10,7 @@ public sealed class WorldState : IDisposable
     private readonly EcsWorld _storage = EcsWorld.Create();
     private readonly Entity[] _entities;
     private readonly Dictionary<EntityId, int> _indices;
+    private readonly int[] _playerTeams;
     private uint _nextId = 1;
     private bool _disposed;
     public HeightMap Map { get; }
@@ -19,14 +20,33 @@ public sealed class WorldState : IDisposable
 
     private record struct Identity(EntityId Id, int Owner, ushort Definition);
 
-    public WorldState(HeightMap map, int capacity = 1024)
+    public WorldState(HeightMap map, int capacity = 1024, ReadOnlySpan<int> playerTeams = default)
     {
         ArgumentNullException.ThrowIfNull(map);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
         Map = map;
         _entities = new Entity[capacity];
         _indices = new Dictionary<EntityId, int>(capacity);
+        _playerTeams = new int[Simulation.MaxPlayers];
+        for (int i = 0; i < _playerTeams.Length; i++)
+        {
+            _playerTeams[i] = (i < playerTeams.Length && playerTeams[i] > 0) ? playerTeams[i] : i + 1;
+        }
     }
+
+    public void SetPlayerTeam(int player, int team)
+    {
+        if (player >= 1 && player <= _playerTeams.Length)
+        {
+            _playerTeams[player - 1] = team;
+        }
+    }
+
+    public int GetPlayerTeam(int player) =>
+        (player >= 1 && player <= _playerTeams.Length) ? _playerTeams[player - 1] : player;
+
+    public bool AreHostile(int playerA, int playerB) =>
+        playerA != playerB && GetPlayerTeam(playerA) != GetPlayerTeam(playerB);
 
     public EntityId CreateUnit(int owner, ushort definition, Vector2 position, float speed)
     {

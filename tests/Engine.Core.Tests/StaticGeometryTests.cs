@@ -1114,4 +1114,337 @@ public sealed class StaticGeometryTests
         Assert.Single(geoTouching.Structures);
         Assert.Single(geoPenetrating.Structures);
     }
+
+    // -------------------------------------------------------------------------
+    // 9. Equivalence Tests (IsLineOfSightClear vs CheckLineOfSight.IsClear)
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void Equivalence_Wall_OccludedAndClearRaysMatch()
+    {
+        HeightMap map = CreateFlatMap();
+        OpaqueStructure wall = new(
+            new StructureId(1),
+            new Vector3(10f, 0f, 0f),
+            new Vector3(12f, 3.0f, 20f),
+            isGrounded: true);
+        StaticGeometry geo = new(map, [wall]);
+
+        // 1. Ray through wall (blocked)
+        Vector3 startBlocked = new(5f, 1.5f, 10f);
+        Vector3 endBlocked = new(15f, 1.5f, 10f);
+        bool fastBlocked = geo.IsLineOfSightClear(startBlocked, endBlocked);
+        bool detailedBlocked = geo.CheckLineOfSight(startBlocked, endBlocked).IsClear;
+        Assert.False(fastBlocked);
+        Assert.Equal(detailedBlocked, fastBlocked);
+
+        // 2. Ray over wall (clear)
+        Vector3 startClear = new(5f, 4.0f, 10f);
+        Vector3 endClear = new(15f, 4.0f, 10f);
+        bool fastClear = geo.IsLineOfSightClear(startClear, endClear);
+        bool detailedClear = geo.CheckLineOfSight(startClear, endClear).IsClear;
+        Assert.True(fastClear);
+        Assert.Equal(detailedClear, fastClear);
+    }
+
+    [Fact]
+    public void Equivalence_Hill_OccludedAndClearRaysMatch()
+    {
+        // 9m hill centered at (86, 44)
+        HeightMap map = HeightMap.CreatePrototype();
+        StaticGeometry geo = new(map, []);
+
+        // 1. Ray through hill (blocked)
+        Vector3 startBlocked = new(50f, 1.5f, 44f);
+        Vector3 endBlocked = new(122f, 1.5f, 44f);
+        bool fastBlocked = geo.IsLineOfSightClear(startBlocked, endBlocked);
+        bool detailedBlocked = geo.CheckLineOfSight(startBlocked, endBlocked).IsClear;
+        Assert.False(fastBlocked);
+        Assert.Equal(detailedBlocked, fastBlocked);
+
+        // 2. Ray elevated over hill crest (clear)
+        Vector3 startClear = new(70f, 15f, 44f);
+        Vector3 endClear = new(102f, 15f, 44f);
+        bool fastClear = geo.IsLineOfSightClear(startClear, endClear);
+        bool detailedClear = geo.CheckLineOfSight(startClear, endClear).IsClear;
+        Assert.True(fastClear);
+        Assert.Equal(detailedClear, fastClear);
+    }
+
+    [Fact]
+    public void Equivalence_LowCover_StandingVisibleAndProneBlockedMatch()
+    {
+        HeightMap map = CreateFlatMap();
+        // 1.0m low cover wall
+        OpaqueStructure lowWall = new(
+            new StructureId(1),
+            new Vector3(10f, 0f, 0f),
+            new Vector3(12f, 1.0f, 20f),
+            isGrounded: true);
+        StaticGeometry geo = new(map, [lowWall]);
+
+        Vector3 observerEye = new(5f, 1.6f, 10f);
+
+        // Standing target point at 1.8m clears over low cover
+        Vector3 standingTarget = new(15f, 1.8f, 10f);
+        bool fastStanding = geo.IsLineOfSightClear(observerEye, standingTarget);
+        bool detailedStanding = geo.CheckLineOfSight(observerEye, standingTarget).IsClear;
+        Assert.True(fastStanding);
+        Assert.Equal(detailedStanding, fastStanding);
+
+        // Prone target point at 0.4m is occluded behind 1.0m low cover
+        Vector3 proneTarget = new(15f, 0.4f, 10f);
+        bool fastProne = geo.IsLineOfSightClear(observerEye, proneTarget);
+        bool detailedProne = geo.CheckLineOfSight(observerEye, proneTarget).IsClear;
+        Assert.False(fastProne);
+        Assert.Equal(detailedProne, fastProne);
+    }
+
+    [Fact]
+    public void Equivalence_BoundaryContactsAndTolerancesMatch()
+    {
+        HeightMap map = CreateFlatMap(16, 16, 2.0f, 0.0f);
+        OpaqueStructure wall = new(
+            new StructureId(1),
+            new Vector3(10f, 0f, 5f),
+            new Vector3(12f, 3f, 15f),
+            isGrounded: true);
+        StaticGeometry geo = new(map, [wall]);
+
+        // 1. Grazing ray alongside wall boundary without penetration
+        Vector3 grazeStart = new(5f, 1.5f, 4.999f);
+        Vector3 grazeEnd = new(15f, 1.5f, 4.999f);
+        bool fastGraze = geo.IsLineOfSightClear(grazeStart, grazeEnd);
+        bool detailedGraze = geo.CheckLineOfSight(grazeStart, grazeEnd).IsClear;
+        Assert.True(fastGraze);
+        Assert.Equal(detailedGraze, fastGraze);
+
+        // 2. Surface target contact tolerance: end touches ground exactly at valid surface
+        Vector3 eye = new(2f, 1.5f, 2f);
+        Vector3 groundTarget = new(8f, 0.0f, 2f);
+        bool fastGround = geo.IsLineOfSightClear(eye, groundTarget);
+        bool detailedGround = geo.CheckLineOfSight(eye, groundTarget).IsClear;
+        Assert.True(fastGround);
+        Assert.Equal(detailedGround, fastGround);
+
+        // 3. Underground start point below tolerance is blocked
+        Vector3 undergroundStart = new(2f, -0.2f, 2f);
+        Vector3 normalEnd = new(8f, 1.5f, 2f);
+        bool fastUnderground = geo.IsLineOfSightClear(undergroundStart, normalEnd);
+        bool detailedUnderground = geo.CheckLineOfSight(undergroundStart, normalEnd).IsClear;
+        Assert.False(fastUnderground);
+        Assert.Equal(detailedUnderground, fastUnderground);
+    }
+
+    [Fact]
+    public void Equivalence_CornerPeek_TransitionMatches()
+    {
+        HeightMap map = CreateFlatMap();
+        // Building corner at (10, 10) to (16, 16), height 4m
+        OpaqueStructure building = new(
+            new StructureId(1),
+            new Vector3(10f, 0f, 10f),
+            new Vector3(16f, 4.0f, 16f),
+            isGrounded: true);
+        StaticGeometry geo = new(map, [building]);
+
+        Vector3 target = new(13f, 1.5f, 20f);
+
+        // Observer moves along X at Z=5 stepping past the building edge at X=10
+        // X = 8, 9 is behind the building (blocked)
+        // X = 17, 18 has stepped around the corner (clear)
+        float[] testXPositions = [6f, 8f, 9.5f, 10.5f, 12f, 16.5f, 18f, 20f];
+        foreach (float obsX in testXPositions)
+        {
+            Vector3 observer = new(obsX, 1.5f, 5f);
+            bool fastResult = geo.IsLineOfSightClear(observer, target);
+            bool detailedResult = geo.CheckLineOfSight(observer, target).IsClear;
+            Assert.Equal(detailedResult, fastResult);
+        }
+    }
+
+    [Fact]
+    public void Equivalence_TwoObservers_OneSeesTargetMatch()
+    {
+        HeightMap map = CreateFlatMap();
+        OpaqueStructure centralObstacle = new(
+            new StructureId(1),
+            new Vector3(8f, 0f, 8f),
+            new Vector3(12f, 3.0f, 12f),
+            isGrounded: true);
+        StaticGeometry geo = new(map, [centralObstacle]);
+
+        Vector3 target = new(16f, 1.5f, 10f);
+
+        // Observer 1 is directly behind obstacle at Z=10
+        Vector3 observer1Behind = new(4f, 1.5f, 10f);
+        bool fastObs1 = geo.IsLineOfSightClear(observer1Behind, target);
+        bool detailedObs1 = geo.CheckLineOfSight(observer1Behind, target).IsClear;
+        Assert.False(fastObs1);
+        Assert.Equal(detailedObs1, fastObs1);
+
+        // Observer 2 has clear flanking sightline at Z=2
+        Vector3 observer2Flank = new(4f, 1.5f, 2f);
+        bool fastObs2 = geo.IsLineOfSightClear(observer2Flank, target);
+        bool detailedObs2 = geo.CheckLineOfSight(observer2Flank, target).IsClear;
+        Assert.True(fastObs2);
+        Assert.Equal(detailedObs2, fastObs2);
+    }
+
+    [Fact]
+    public void Equivalence_SparsePeak_DiagonalRayBlockedInBothDirectionsAndAllSigns()
+    {
+        const int size = 65;
+        ushort[] spike = new ushort[size * size];
+        spike[5 * size + 10] = 500; // 5m peak at x=20, z=10
+        HeightMap spikeMap = new(size, size, 2.0f, 0.01f, spike);
+        StaticGeometry spikeGeo = new(spikeMap, []);
+
+        Vector3 a = new(1f, 1f, 1f);
+        Vector3 b = new(101f, 1f, 51f);
+
+        // Forward ray through peak
+        bool fastForward = spikeGeo.IsLineOfSightClear(a, b);
+        bool detailedForward = spikeGeo.CheckLineOfSight(a, b).IsClear;
+        Assert.False(fastForward);
+        Assert.Equal(detailedForward, fastForward);
+
+        // Reverse ray through peak
+        bool fastReverse = spikeGeo.IsLineOfSightClear(b, a);
+        bool detailedReverse = spikeGeo.CheckLineOfSight(b, a).IsClear;
+        Assert.False(fastReverse);
+        Assert.Equal(detailedReverse, fastReverse);
+
+        // All 4 direction quadrants crossing through the peak at (20, 10)
+        // 1. +dx, +dz
+        Vector3 q1 = new(10f, 1f, 5f);
+        Vector3 q2 = new(30f, 1f, 15f);
+        Assert.False(spikeGeo.IsLineOfSightClear(q1, q2));
+        Assert.Equal(spikeGeo.CheckLineOfSight(q1, q2).IsClear, spikeGeo.IsLineOfSightClear(q1, q2));
+
+        // 2. -dx, -dz
+        Assert.False(spikeGeo.IsLineOfSightClear(q2, q1));
+        Assert.Equal(spikeGeo.CheckLineOfSight(q2, q1).IsClear, spikeGeo.IsLineOfSightClear(q2, q1));
+
+        // 3. +dx, -dz
+        Vector3 q3 = new(10f, 1f, 15f);
+        Vector3 q4 = new(30f, 1f, 5f);
+        Assert.False(spikeGeo.IsLineOfSightClear(q3, q4));
+        Assert.Equal(spikeGeo.CheckLineOfSight(q3, q4).IsClear, spikeGeo.IsLineOfSightClear(q3, q4));
+
+        // 4. -dx, +dz
+        Assert.False(spikeGeo.IsLineOfSightClear(q4, q3));
+        Assert.Equal(spikeGeo.CheckLineOfSight(q4, q3).IsClear, spikeGeo.IsLineOfSightClear(q4, q3));
+    }
+
+    [Fact]
+    public void Equivalence_RectangularMap_WithPartialBlocksAndCornerCrossings()
+    {
+        const int cols = 33;
+        const int rows = 49;
+        ushort[] samples = new ushort[cols * rows];
+        samples[24 * cols + 16] = 800; // 8m peak at world (32, 48)
+        HeightMap map = new(cols, rows, 2.0f, 0.01f, samples);
+        StaticGeometry geo = new(map, []);
+
+        Vector3 start = new(2f, 1.5f, 3f);
+        Vector3 end = new(62f, 1.5f, 93f);
+
+        bool fast = geo.IsLineOfSightClear(start, end);
+        bool detailed = geo.CheckLineOfSight(start, end).IsClear;
+        Assert.False(fast);
+        Assert.Equal(detailed, fast);
+
+        // Reverse direction
+        Assert.False(geo.IsLineOfSightClear(end, start));
+        Assert.Equal(geo.CheckLineOfSight(end, start).IsClear, geo.IsLineOfSightClear(end, start));
+
+        // Diagonal corner-to-corner crossing above max terrain height
+        Vector3 cornerStart = new(0.1f, 15.0f, 0.1f);
+        Vector3 cornerEnd = new(map.Width - 0.1f, 15.0f, map.Depth - 0.1f);
+        Assert.True(geo.IsLineOfSightClear(cornerStart, cornerEnd));
+        Assert.Equal(geo.CheckLineOfSight(cornerStart, cornerEnd).IsClear, geo.IsLineOfSightClear(cornerStart, cornerEnd));
+    }
+
+    [Fact]
+    public void Equivalence_RandomSparsePeaks_36000RaysDifferentialProbeHasZeroMismatches()
+    {
+        const int size = 65;
+        Random random = new(821734);
+        int mismatch = 0;
+
+        for (int mapIndex = 0; mapIndex < 12; mapIndex++)
+        {
+            ushort[] samples = new ushort[size * size];
+            for (int k = 0; k < 45; k++)
+            {
+                int cx = random.Next(3, 62);
+                int cz = random.Next(3, 62);
+                samples[cz * size + cx] = (ushort)random.Next(80, 1200);
+            }
+            HeightMap map = new(size, size, 2.0f, 0.01f, samples);
+            StaticGeometry geo = new(map, []);
+
+            for (int ray = 0; ray < 3000; ray++)
+            {
+                float ax = 1f + (float)random.NextDouble() * 126f;
+                float az = 1f + (float)random.NextDouble() * 126f;
+                float bx = 1f + (float)random.NextDouble() * 126f;
+                float bz = 1f + (float)random.NextDouble() * 126f;
+                Vector3 start = new(ax, map.GetHeight(ax, az) + 1.6f, az);
+                Vector3 end = new(bx, map.GetHeight(bx, bz) + 1.8f, bz);
+
+                bool fast = geo.IsLineOfSightClear(start, end);
+                bool detailed = geo.CheckLineOfSight(start, end).IsClear;
+                if (fast != detailed)
+                {
+                    mismatch++;
+                }
+            }
+        }
+
+        Assert.Equal(0, mismatch);
+    }
+
+    [Fact]
+    public void Equivalence_UndergroundOriginsAndVerticalRays_BlockedByTerrain()
+    {
+        const int size = 65;
+        HeightMap map = new(size, size, 2.0f, 0.01f, new ushort[size * size]);
+        StaticGeometry geo = new(map, []);
+
+        var cases = new (Vector3 Start, Vector3 End, bool ExpectedClear, bool ExpectedBlockedByTerrain)[]
+        {
+            // Upward vertical ray starting underground
+            (new Vector3(4f, -1f, 4f), new Vector3(4f, 1f, 4f), false, true),
+            // Downward vertical ray entirely underground
+            (new Vector3(4f, -1f, 4f), new Vector3(4f, -2f, 4f), false, true),
+            // Short oblique ray starting slightly underground ending at surface
+            (new Vector3(4f, -0.02f, 4f), new Vector3(4.01f, 0f, 4f), false, true),
+            // Longer oblique ray starting slightly underground ending at surface
+            (new Vector3(4f, -0.02f, 4f), new Vector3(4.1f, 0f, 4f), false, true),
+            // Downward vertical ray starting above ground and entering ground
+            (new Vector3(4f, 1f, 4f), new Vector3(4f, -1f, 4f), false, true),
+            // Downward vertical ray starting above ground and touching surface
+            (new Vector3(4f, 1f, 4f), new Vector3(4f, 0f, 4f), true, false),
+            // Both endpoints underground oblique
+            (new Vector3(5f, -0.5f, 5f), new Vector3(8f, -0.5f, 8f), false, true),
+            // Upward oblique ray starting underground and ending above ground
+            (new Vector3(5f, -0.5f, 5f), new Vector3(8f, 2f, 8f), false, true),
+        };
+
+        foreach (var (start, end, expectedClear, expectedBlockedByTerrain) in cases)
+        {
+            bool fast = geo.IsLineOfSightClear(start, end, null, out bool blockedByTerrain);
+            LineOfSightResult detailed = geo.CheckLineOfSight(start, end);
+
+            Assert.Equal(expectedClear, fast);
+            Assert.Equal(expectedClear, detailed.IsClear);
+            Assert.Equal(expectedBlockedByTerrain, blockedByTerrain);
+            if (expectedBlockedByTerrain)
+            {
+                Assert.Equal(ObstructionKind.Terrain, detailed.ObstructionKind);
+            }
+        }
+    }
 }
