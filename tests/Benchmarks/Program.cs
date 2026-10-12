@@ -65,6 +65,11 @@ static void RunProbe()
         allPassed = false;
     }
 
+    if (!RunCombatProbe())
+    {
+        allPassed = false;
+    }
+
     if (!allPassed)
     {
         Console.WriteLine("Performance gate FAILED: one or more scenarios exceeded the 15 ms target budget or had allocations.");
@@ -310,6 +315,141 @@ static bool RunNavigationProbe()
     Console.WriteLine($"  NoPath searches:   {sim.Navigation?.FailedSearches ?? 0}");
     Console.WriteLine($"  Capacity exceeded: {sim.Navigation?.CapacityExceeded ?? 0}");
     Console.WriteLine($"  Performance gate:  {(meetsBudget ? "PASS (p99 < 15 ms, median < 15 ms, 0 B)" : "FAIL")}");
+    Console.WriteLine();
+
+    return meetsBudget;
+}
+
+static bool RunCombatProbe()
+{
+    const int size = 128;
+    HeightMap map = new(size, size, 1.0f, 0.01f, new ushort[size * size]);
+    StaticGeometry geo = new(map, []);
+    UnitCatalog catalog = PrototypeScenario.LoadCatalog();
+
+    OpsRules rules = new(geo, catalog);
+    WorldState world = new(map, capacity: 1024, playerTeams: [1, 2]);
+    using Simulation sim = new(world, rules);
+
+    ushort tankIdx = catalog.RequireDefinitionIndex("prototype_tank");
+    UnitDefinition tankDef = catalog.RequireDefinition("prototype_tank");
+
+    // 100 tanks per side facing each other across a 30m firing lane
+    // Side 1: X=30, Y=14..113 (100 tanks)
+    // Side 2: X=60, Y=14..113 (100 tanks, distance 30m within 60m gun range)
+    const int tanksPerSide = 100;
+    EntityId[] side1Tanks = new EntityId[tanksPerSide];
+    EntityId[] side2Tanks = new EntityId[tanksPerSide];
+
+    for (int i = 0; i < tanksPerSide; i++)
+    {
+        float y = 14f + i;
+        side1Tanks[i] = world.CreateUnit(1, tankIdx, new Vector2(30f, y), tankDef.Speed, maxHealth: 2000, ammo: 100);
+        side2Tanks[i] = world.CreateUnit(2, tankIdx, new Vector2(60f, y), tankDef.Speed, maxHealth: 2000, ammo: 100);
+    }
+
+    // Advance 4 ticks so detection completes observer phases for both sides
+    for (int t = 0; t < 4; t++) sim.Step();
+
+    // Enqueue attack orders for all 100 Side 1 tanks targeting opposing Side 2 tanks
+    uint cmdSeq1 = 1;
+    for (int i = 0; i < tanksPerSide; i++)
+    {
+        if (sim.Detection!.TryGetContactByEntity(1, side2Tanks[i], out ContactObservation targetContact))
+        {
+            sim.TryEnqueue(1, new AttackCommand(cmdSeq1++, sim.Tick, side1Tanks[i], targetContact.Id));
+        }
+    }
+
+    // Enqueue attack orders for all 100 Side 2 tanks targeting opposing Side 1 tanks
+    uint cmdSeq2 = 1;
+    for (int i = 0; i < tanksPerSide; i++)
+    {
+        if (sim.Detection!.TryGetContactByEntity(2, side1Tanks[i], out ContactObservation targetContact))
+        {
+            sim.TryEnqueue(2, new AttackCommand(cmdSeq2++, sim.Tick, side2Tanks[i], targetContact.Id));
+        }
+    }
+
+    PlayerKnowledge k1 = new(1);
+    PlayerKnowledge k2 = new(2);
+    byte[] b1 = new byte[WireProtocol.MaxMessageSize];
+    byte[] b2 = new byte[WireProtocol.MaxMessageSize];
+
+    // Warm up JIT and internal buffers over 10 ticks
+    for (int i = 0; i < 10; i++)
+    {
+        sim.Step();
+        if (sim.Tick % 2 == 0)
+        {
+            sim.UpdateKnowledge(k1);
+            WireProtocol.WriteSnapshot(b1, (uint)sim.Tick, sim.Tick, k1.OwnUnits, k1.Contacts, k1.Events);
+            sim.UpdateKnowledge(k2);
+            WireProtocol.WriteSnapshot(b2, (uint)sim.Tick, sim.Tick, k2.OwnUnits, k2.Contacts, k2.Events);
+        }
+    }
+
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    GC.Collect();
+
+    const int measuredTicks = 100;
+    double[] times = new double[measuredTicks];
+    long totalAllocated = 0;
+    long totalEventBytes = 0;
+    int minActiveAttackers = int.MaxValue;
+    int maxActiveAttackers = 0;
+    int initialShots = sim.Combat?.TotalShotsFired ?? 0;
+    int initialDamage = sim.Combat?.TotalDamageApplied ?? 0;
+
+    for (int i = 0; i < measuredTicks; i++)
+    {
+        long startAlloc = GC.GetAllocatedBytesForCurrentThread();
+        long start = Stopwatch.GetTimestamp();
+
+        sim.Step();
+        if (sim.Tick % 2 == 0)
+        {
+            sim.UpdateKnowledge(k1);
+            int bytes1 = WireProtocol.WriteSnapshot(b1, (uint)sim.Tick, sim.Tick, k1.OwnUnits, k1.Contacts, k1.Events);
+            sim.UpdateKnowledge(k2);
+            int bytes2 = WireProtocol.WriteSnapshot(b2, (uint)sim.Tick, sim.Tick, k2.OwnUnits, k2.Contacts, k2.Events);
+            totalEventBytes += (bytes1 + bytes2);
+        }
+
+        long elapsed = Stopwatch.GetTimestamp() - start;
+        long endAlloc = GC.GetAllocatedBytesForCurrentThread();
+
+        totalAllocated += (endAlloc - startAlloc);
+        times[i] = (double)elapsed / Stopwatch.Frequency * 1000.0;
+
+        int attackers = sim.Combat?.ActiveAttackersCount ?? 0;
+        minActiveAttackers = Math.Min(minActiveAttackers, attackers);
+        maxActiveAttackers = Math.Max(maxActiveAttackers, attackers);
+    }
+
+    int measuredShots = (sim.Combat?.TotalShotsFired ?? 0) - initialShots;
+    int measuredDamage = (sim.Combat?.TotalDamageApplied ?? 0) - initialDamage;
+
+    Array.Sort(times);
+    double median = times[50];
+    double p95 = times[94];
+    double p99 = times[98];
+    double max = times[99];
+
+    bool meetsBudget = totalAllocated == 0 && median < 15.0 && p99 < 15.0 && minActiveAttackers >= 180 && measuredShots > 0;
+
+    Console.WriteLine("Scenario: Direct-Fire Combat 200 Tanks (100 vs 100 active engagement) (100 measured ticks)");
+    Console.WriteLine($"  Active attackers:  {minActiveAttackers}..{maxActiveAttackers}/200");
+    Console.WriteLine($"  Shots resolved:    {measuredShots}");
+    Console.WriteLine($"  Damage applied:    {measuredDamage}");
+    Console.WriteLine($"  Event traffic:     {totalEventBytes / 1024.0:F1} KiB");
+    Console.WriteLine($"  Median (p50):      {median:F2} ms");
+    Console.WriteLine($"  p95:               {p95:F2} ms");
+    Console.WriteLine($"  p99:               {p99:F2} ms");
+    Console.WriteLine($"  Max:               {max:F2} ms");
+    Console.WriteLine($"  Allocations:       {totalAllocated} B");
+    Console.WriteLine($"  Performance gate:  {(meetsBudget ? "PASS (p99 < 15 ms, median < 15 ms, 0 B, continuous combat)" : "FAIL")}");
     Console.WriteLine();
 
     return meetsBudget;

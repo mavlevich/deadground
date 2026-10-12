@@ -44,6 +44,9 @@ public sealed class SimulationHost : IDisposable
         }
         _knowledge = new PlayerKnowledge[Simulation.MaxPlayers];
 
+        for (int p = 1; p <= Simulation.MaxPlayers; p++)
+            _simulation.SetPlayerAdmitted(p, false);
+
         for (int i = 0; i < Simulation.MaxPlayers; i++)
             _knowledge[i] = new PlayerKnowledge(i + 1, simulation.Capacity);
 
@@ -53,6 +56,7 @@ public sealed class SimulationHost : IDisposable
             long connId = transport.GetPlayerConnectionId(initial);
             _admittedConnectionIds[initial - 1] = connId;
             _peerConnectionIds[initial - 1] = connId;
+            _simulation.SetPlayerAdmitted(initial, true);
         }
 
         PublishAll();
@@ -95,6 +99,7 @@ public sealed class SimulationHost : IDisposable
                 if (_admittedConnectionIds[p - 1] != 0 && _admittedConnectionIds[p - 1] != currentConnId)
                 {
                     _admittedConnectionIds[p - 1] = 0;
+                    _simulation.SetPlayerAdmitted(p, false);
                     _simulation.ResetPlayer(p);
                 }
             }
@@ -119,6 +124,21 @@ public sealed class SimulationHost : IDisposable
                 if (WireProtocol.TryReadMove(_receive.AsSpan(0, length), out MoveCommand command))
                 {
                     // Player identity is bound strictly from the transport peer, never trusted from packet.
+                    bool queued = _simulation.TryEnqueue(player, command);
+                    WireProtocol.WriteCommandResult(_reply, new CommandResult(command.Sequence, Tick, queued));
+                    if (_transport.TrySend(player, _reply.AsSpan(0, WireProtocol.CommandResultSize)))
+                        BytesSent += WireProtocol.CommandResultSize;
+                    else
+                        DroppedCommandResults++;
+                }
+            }
+            else if (kind == WireProtocol.AttackKind)
+            {
+                if (connectionId == 0 || _admittedConnectionIds[player - 1] != connectionId)
+                    continue;
+
+                if (WireProtocol.TryReadAttack(_receive.AsSpan(0, length), out AttackCommand command))
+                {
                     bool queued = _simulation.TryEnqueue(player, command);
                     WireProtocol.WriteCommandResult(_reply, new CommandResult(command.Sequence, Tick, queued));
                     if (_transport.TrySend(player, _reply.AsSpan(0, WireProtocol.CommandResultSize)))
@@ -184,10 +204,12 @@ public sealed class SimulationHost : IDisposable
 
         if (_admittedConnectionIds[player - 1] != 0 && _admittedConnectionIds[player - 1] != connectionId)
         {
+            _simulation.SetPlayerAdmitted(player, false);
             _simulation.ResetPlayer(player);
         }
 
         _admittedConnectionIds[player - 1] = connectionId;
+        _simulation.SetPlayerAdmitted(player, true);
         SendHandshakeResponse(player, accepted: true, HandshakeReason.Accepted);
         PublishPlayer(player);
     }
@@ -195,6 +217,8 @@ public sealed class SimulationHost : IDisposable
     private void RejectHandshake(int player, HandshakeReason reason)
     {
         _admittedConnectionIds[player - 1] = 0;
+        _simulation.SetPlayerAdmitted(player, false);
+        _simulation.ResetPlayer(player);
         WireProtocol.WriteHandshakeResponse(_reply, accepted: false, player, reason);
         _transport.DisconnectPlayer(player, _reply.AsSpan(0, WireProtocol.HandshakeResponseSize));
     }
@@ -219,24 +243,47 @@ public sealed class SimulationHost : IDisposable
     {
         PlayerKnowledge knowledge = _knowledge[player - 1];
         _simulation.UpdateKnowledge(knowledge);
-        int length = WireProtocol.WriteSnapshot(_send, checked(++_snapshotSequence), Tick, knowledge.OwnUnits, knowledge.Contacts);
+        int length = WireProtocol.WriteSnapshot(
+            _send,
+            checked(++_snapshotSequence),
+            Tick,
+            knowledge.OwnUnits,
+            knowledge.Contacts,
+            knowledge.Events);
 
+        bool sentSuccessfully = false;
         if (_transport is SinglePlayerServerTransport || length <= WireProtocol.MaxFragmentPayloadSize)
         {
             if (_transport.TrySend(player, _send.AsSpan(0, length), reliable: _transport is SinglePlayerServerTransport))
+            {
                 BytesSent += length;
+                sentSuccessfully = true;
+            }
         }
         else
         {
             ushort count = (ushort)((length + WireProtocol.MaxFragmentPayloadSize - 1) / WireProtocol.MaxFragmentPayloadSize);
+            bool allFragsSent = true;
             for (ushort i = 0; i < count; i++)
             {
                 int offset = i * WireProtocol.MaxFragmentPayloadSize;
                 int sliceLen = Math.Min(WireProtocol.MaxFragmentPayloadSize, length - offset);
                 int fragLen = WireProtocol.WriteSnapshotFragment(_fragmentBuffer, _snapshotSequence, Tick, i, count, length, offset, _send.AsSpan(offset, sliceLen));
                 if (_transport.TrySend(player, _fragmentBuffer.AsSpan(0, fragLen), reliable: false))
+                {
                     BytesSent += fragLen;
+                }
+                else
+                {
+                    allFragsSent = false;
+                }
             }
+            sentSuccessfully = allFragsSent;
+        }
+
+        if (sentSuccessfully && knowledge.EventCount > 0)
+        {
+            _simulation.AcknowledgeCombatEvents(player, knowledge.EventCount);
         }
     }
 

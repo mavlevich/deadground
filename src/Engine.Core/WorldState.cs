@@ -49,7 +49,17 @@ public sealed class WorldState : IDisposable
     public bool AreHostile(int playerA, int playerB) =>
         playerA != playerB && GetPlayerTeam(playerA) != GetPlayerTeam(playerB);
 
-    public EntityId CreateUnit(int owner, ushort definition, Vector2 position, float speed)
+    public record struct CombatState(
+        int CurrentHealth,
+        int MaxHealth,
+        int Ammunition,
+        int ReloadTicksRemaining,
+        bool HasAttackOrder,
+        ContactId TargetContactId,
+        EntityId TargetEntityId,
+        AttackExecutionStatus Status);
+
+    public EntityId CreateUnit(int owner, ushort definition, Vector2 position, float speed, int maxHealth = 100, int ammo = 0)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (Count == Capacity) throw new InvalidOperationException("World capacity exceeded.");
@@ -57,8 +67,17 @@ public sealed class WorldState : IDisposable
             throw new ArgumentException("Invalid unit definition or position.");
         EntityId id = new(_nextId);
         _nextId = checked(_nextId + 1);
+        CombatState combat = new(
+            maxHealth,
+            maxHealth,
+            ammo,
+            0,
+            false,
+            default,
+            default,
+            AttackExecutionStatus.None);
         Entity entity = _storage.Create(new Identity(id, owner, definition),
-            new Position(position), new Motion(position, speed, false));
+            new Position(position), new Motion(position, speed, false), combat);
         _entities[Count] = entity;
         _indices.Add(id, Count++);
         return id;
@@ -115,6 +134,46 @@ public sealed class WorldState : IDisposable
         pos.Value = position;
         motion.Target = target;
         motion.Active = active;
+        return true;
+    }
+
+    public bool TryGetCombatState(EntityId id, out CombatState combat)
+    {
+        if (_indices.TryGetValue(id, out int index))
+        {
+            combat = _storage.Get<CombatState>(_entities[index]);
+            return true;
+        }
+        combat = default;
+        return false;
+    }
+
+    public bool SetCombatState(EntityId id, in CombatState combat)
+    {
+        if (!_indices.TryGetValue(id, out int index)) return false;
+        _storage.Get<CombatState>(_entities[index]) = combat;
+        return true;
+    }
+
+    public bool ApplyDamage(EntityId id, int damage, out bool destroyed)
+    {
+        destroyed = false;
+        if (!_indices.TryGetValue(id, out int index)) return false;
+        ref CombatState combat = ref _storage.Get<CombatState>(_entities[index]);
+        bool wasAlive = combat.CurrentHealth > 0;
+        combat.CurrentHealth = Math.Max(0, combat.CurrentHealth - damage);
+        destroyed = wasAlive && combat.CurrentHealth == 0;
+        return true;
+    }
+
+    public bool ClearAttackOrder(EntityId id)
+    {
+        if (!_indices.TryGetValue(id, out int index)) return false;
+        ref CombatState combat = ref _storage.Get<CombatState>(_entities[index]);
+        combat.HasAttackOrder = false;
+        combat.TargetContactId = default;
+        combat.TargetEntityId = default;
+        combat.Status = AttackExecutionStatus.None;
         return true;
     }
 

@@ -316,6 +316,18 @@ public sealed class NavigationSystem : ISimulationSystem
         }
     }
 
+    public void ClearUnit(EntityId unit)
+    {
+        if (TryGetSlot(unit, out int slot))
+        {
+            if (_hasActiveSearch && _activeRequest.Unit == unit)
+            {
+                _hasActiveSearch = false;
+            }
+            ReleaseSlot(slot);
+        }
+    }
+
     public PathRequestStatus GetUnitStatus(EntityId unit)
     {
         if (TryGetSlot(unit, out int slot))
@@ -323,7 +335,7 @@ public sealed class NavigationSystem : ISimulationSystem
         return PathRequestStatus.None;
     }
 
-    public bool EnqueueCommand(int player, MoveCommand command)
+    public bool EnqueueCommand(int player, MoveCommand command, WorldState? world = null)
     {
         if (!GetOrCreateSlot(command.Unit, out int slot))
         {
@@ -336,6 +348,30 @@ public sealed class NavigationSystem : ISimulationSystem
             CapacityExceeded++;
             _unitStatuses[slot] = PathRequestStatus.CapacityExceeded;
             return false;
+        }
+
+        // Validate destination if world is provided
+        if (world is not null && world.TryGetUnit(command.Unit, out UnitState unit))
+        {
+            float unitRadius = 1.0f;
+            if (_catalog.TryGetProfile(unit.Definition, out UnitMovementProfile profile))
+            {
+                unitRadius = profile.Radius;
+            }
+
+            if (!_grid.IsPointClear(command.Target, unitRadius))
+            {
+                if (!TrySnapDestination(unit.Position, command.Target, unitRadius, out _))
+                {
+                    _unitStatuses[slot] = PathRequestStatus.InvalidDestination;
+                    FailedSearches++;
+                    _unitHasActiveRoutes[slot] = false;
+                    _routeCounts[slot] = 0;
+                    _routeIndices[slot] = 0;
+                    world.UpdateUnitNavigation(command.Unit, unit.Position, unit.Position, false);
+                    return false;
+                }
+            }
         }
 
         // Cancel previous active search if it belonged to this unit

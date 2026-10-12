@@ -17,7 +17,9 @@ internal static class ClientRegressionTests
             CheckRemoteHudSideAssignment(scene);
             CheckRectangularGrid(5, 3);
             CheckRectangularGrid(3, 5);
-            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids");
+            CheckCombatEffectsAndLifecycle(scene);
+            CheckConfiguredUnitHealthBars(scene);
+            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health");
             return true;
         }
         catch (Exception exception)
@@ -152,6 +154,105 @@ internal static class ClientRegressionTests
 
         string proto = Main.FormatTitle(1, "prototype");
         Require(proto.Contains("SIDE 1") && proto.Contains("M0 NETWORK TEST"), "Prototype title did not format correctly.");
+
+        string combat = Main.FormatTitle(1, "combat");
+        Require(combat.Contains("SIDE 1") && combat.Contains("COMBAT SCENARIO"), "Combat title did not format correctly.");
+    }
+
+    private static void CheckCombatEffectsAndLifecycle(Node3D scene)
+    {
+        Node3D parent = new();
+        scene.AddChild(parent);
+        try
+        {
+            HeightMap map = HeightMap.CreatePrototype();
+            UnitViewSet unitViews = new(parent, map);
+            CombatEffects effects = new(map);
+            parent.AddChild(effects);
+
+            ClientReplica replica = new();
+            byte[] bytes = new byte[WireProtocol.MaxMessageSize];
+
+            OwnUnitObservation tank = new(
+                new EntityId(10),
+                2,
+                new NumericsVector2(20, 20),
+                0,
+                PathRequestStatus.None,
+                Health: 120,
+                Ammunition: 8,
+                ReloadTicksRemaining: 15,
+                AttackStatus: AttackExecutionStatus.Aiming,
+                TargetContactId: new ContactId(202));
+
+            OwnUnitObservation recon = new(
+                new EntityId(11),
+                1,
+                new NumericsVector2(18, 20),
+                0,
+                PathRequestStatus.None,
+                Health: 60,
+                Ammunition: 0,
+                ReloadTicksRemaining: 0,
+                AttackStatus: AttackExecutionStatus.None,
+                TargetContactId: default);
+
+            CombatEventObservation shotEvent = new(
+                EventId: 1,
+                ServerTick: 5,
+                Kind: CombatEventKind.ShotFired,
+                PresentationId: 1,
+                Origin: new System.Numerics.Vector3(20, 1.9f, 20),
+                Target: new System.Numerics.Vector3(40, 1.5f, 20),
+                ShooterUnitId: tank.Id);
+
+            int size = WireProtocol.WriteSnapshot(bytes, 1, 5, [tank, recon], [], [shotEvent]);
+            Require(replica.TryApply(bytes.AsSpan(0, size)), "Combat snapshot was rejected by replica.");
+
+            unitViews.Sync(replica, 5);
+            Require(unitViews.Views.ContainsKey(tank.Id), "Tank unit view was not created.");
+            Require(unitViews.Views.ContainsKey(recon.Id), "Recon unit view was not created.");
+
+            // Finding 9: Health bar normalization using actual definition maximum health
+            // Full health recon (60/60) must display 1.0 (100%), not 0.60
+            Require(MathF.Abs(unitViews.Views[recon.Id].HealthBarScaleX - 1.0f) < 0.01f,
+                $"Full recon health bar scale was {unitViews.Views[recon.Id].HealthBarScaleX}, expected 1.0");
+            // Full health tank (120/120) must display 1.0 (100%)
+            Require(MathF.Abs(unitViews.Views[tank.Id].HealthBarScaleX - 1.0f) < 0.01f,
+                $"Full tank health bar scale was {unitViews.Views[tank.Id].HealthBarScaleX}, expected 1.0");
+
+            // Process shot event
+            effects.ProcessEvents(replica.Events, unitViews);
+
+            // Finding 8: Vehicle recoil applies only to shooter, not adjacent recon vehicle (2 meters away)
+            Require(unitViews.Views[tank.Id].RecoilOffset != Vector3.Zero, "Shooter tank did not receive recoil.");
+            Require(unitViews.Views[recon.Id].RecoilOffset == Vector3.Zero, "Adjacent recon vehicle wrongly received recoil.");
+
+            // Finding 6: Tracer longitudinal Z scale preserved during animation
+            float shotDist = new Vector3(20, 1.9f, 20).DistanceTo(new Vector3(40, 1.5f, 20));
+            Require(MathF.Abs(effects.Tracers[0].Mesh.Scale.Z - shotDist) < 0.05f,
+                $"Tracer initial scale Z was {effects.Tracers[0].Mesh.Scale.Z}, expected {shotDist}");
+
+            effects.Update(0.05);
+            unitViews.UpdateRecoil(0.05);
+
+            Require(MathF.Abs(effects.Tracers[0].Mesh.Scale.Z - shotDist) < 0.05f,
+                $"Tracer longitudinal scale Z collapsed to {effects.Tracers[0].Mesh.Scale.Z} after update, expected {shotDist}");
+            Require(effects.Tracers[0].Mesh.Scale.X < 1.0f,
+                "Tracer transverse scale was not scaled down during animation.");
+
+            // Re-processing same event should deduplicate (no duplicate recoil)
+            Vector3 tankRecoilBefore = unitViews.Views[tank.Id].RecoilOffset;
+            effects.ProcessEvents(replica.Events, unitViews);
+            Require(unitViews.Views[tank.Id].RecoilOffset == tankRecoilBefore,
+                "Duplicate event repeated recoil on shooter.");
+
+            effects.Update(0.2);
+        }
+        finally
+        {
+            parent.QueueFree();
+        }
     }
 
     private static void CheckRectangularGrid(int columns, int rows)
@@ -167,6 +268,95 @@ internal static class ClientRegressionTests
                 Require(map.Contains(new NumericsVector2(vertex.X, vertex.Z)), "Grid extends outside the map.");
         }
         finally { grid.Free(); }
+    }
+
+    private static void CheckConfiguredUnitHealthBars(Node3D scene)
+    {
+        Node3D parent = new();
+        scene.AddChild(parent);
+        try
+        {
+            HeightMap map = HeightMap.CreatePrototype();
+            // Create a custom catalog with non-default health values and reordered definitions
+            // Definition 0: recon with 40 max health
+            // Definition 1: tank with 200 max health
+            string customCatalogJson = """
+            {
+              "schema_version": 1,
+              "units": [
+                {
+                  "id": "custom_recon",
+                  "speed": 6.0,
+                  "sensor_range": 60.0,
+                  "eye_height": 1.8,
+                  "radius": 1.0,
+                  "max_health": 40,
+                  "target_points": [1.0]
+                },
+                {
+                  "id": "custom_tank",
+                  "speed": 4.0,
+                  "sensor_range": 60.0,
+                  "eye_height": 2.0,
+                  "radius": 1.5,
+                  "max_health": 200,
+                  "target_points": [1.0]
+                }
+              ]
+            }
+            """;
+            DeadGround.Rules.Ops.UnitCatalog customCatalog = DeadGround.Rules.Ops.PrototypeScenario.LoadCatalog(customCatalogJson);
+
+            // UnitViewSet constructed with custom catalog
+            UnitViewSet views = new(parent, map, customCatalog);
+            ClientReplica replica = new();
+            byte[] bytes = new byte[WireProtocol.MaxMessageSize];
+
+            // Unit 1 is custom_recon (def 0) with full health (40/40)
+            OwnUnitObservation recon = new(
+                new EntityId(1),
+                Definition: 0,
+                Position: new NumericsVector2(10, 10),
+                SupportSurface: 0,
+                NavStatus: PathRequestStatus.None,
+                Health: 40);
+
+            // Unit 2 is custom_tank (def 1) with full health (200/200)
+            OwnUnitObservation tank = new(
+                new EntityId(2),
+                Definition: 1,
+                Position: new NumericsVector2(20, 20),
+                SupportSurface: 0,
+                NavStatus: PathRequestStatus.None,
+                Health: 200);
+
+            int size = WireProtocol.WriteSnapshot(bytes, 1, 1, [recon, tank]);
+            Require(replica.TryApply(bytes.AsSpan(0, size)), "Snapshot apply failed.");
+
+            views.Sync(replica, 1);
+
+            Require(views.Views.ContainsKey(recon.Id), "Recon view missing.");
+            Require(views.Views.ContainsKey(tank.Id), "Tank view missing.");
+
+            // Full health (40/40) must scale to 1.0 (100%), not 40/60 = 0.6667
+            float reconScale = views.Views[recon.Id].HealthBarScaleX;
+            Require(MathF.Abs(reconScale - 1.0f) < 0.01f,
+                $"Configured recon health bar scale was {reconScale}, expected 1.0");
+
+            // Full health (200/200) must scale to 1.0 (100%), not 200/120 = 1.6667
+            float tankScale = views.Views[tank.Id].HealthBarScaleX;
+            Require(MathF.Abs(tankScale - 1.0f) < 0.01f,
+                $"Configured tank health bar scale was {tankScale}, expected 1.0");
+
+            // Also test default UnitViewSet fallback pulls from loaded catalog
+            UnitViewSet defaultViews = new(parent, map);
+            Require(UnitViewSet.GetDefaultMaxHealth(0) == DeadGround.Rules.Ops.PrototypeScenario.LoadCatalog().Units[0].MaxHealth,
+                "Default max health provider should match loaded catalog.");
+        }
+        finally
+        {
+            parent.QueueFree();
+        }
     }
 
     private static void Require(bool condition, string message)

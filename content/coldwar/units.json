@@ -9,6 +9,17 @@
     "slack": 5.0,
     "max_gate": 35.0
   },
+  "weapons": [
+    {
+      "id": "tank_gun_100mm",
+      "range": 60.0,
+      "reload_duration_ticks": 40,
+      "damage": 50,
+      "ammo_capacity": 10,
+      "muzzle_height": 1.9,
+      "presentation_id": "cannon_100mm"
+    }
+  ],
   "units": [
     {
       "id": "prototype_vehicle",
@@ -16,7 +27,8 @@
       "sensor_range": 60.0,
       "eye_height": 1.8,
       "target_points": [0.7, 1.6],
-      "radius": 1.0
+      "radius": 1.0,
+      "max_health": 100
     },
     {
       "id": "recon_vehicle",
@@ -24,7 +36,8 @@
       "sensor_range": 70.0,
       "eye_height": 1.6,
       "target_points": [0.6, 1.4],
-      "radius": 0.8
+      "radius": 0.8,
+      "max_health": 60
     },
     {
       "id": "prototype_tank",
@@ -32,7 +45,9 @@
       "sensor_range": 50.0,
       "eye_height": 2.0,
       "target_points": [0.8, 1.8],
-      "radius": 1.4
+      "radius": 1.4,
+      "max_health": 120,
+      "weapon": "tank_gun_100mm"
     }
   ]
 }

@@ -1,15 +1,29 @@
 using DeadGround.Engine;
 using DeadGround.Engine.Net;
+using DeadGround.Rules.Ops;
 using Godot;
 
 namespace DeadGround.Client;
 
-internal sealed class UnitViewSet(Node3D parent, HeightMap map)
+internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int>? maxHealthProvider = null)
 {
     internal Dictionary<EntityId, UnitView> Views { get; } = new();
     internal HashSet<EntityId> Selected { get; } = new();
     private readonly HashSet<EntityId> _present = new(WireProtocol.MaxUnits);
     private readonly List<EntityId> _removed = new(WireProtocol.MaxUnits);
+    private readonly Func<ushort, int>? _maxHealthProvider = maxHealthProvider;
+    private static readonly Lazy<UnitCatalog> DefaultCatalog = new(() => PrototypeScenario.LoadCatalog());
+
+    public UnitViewSet(Node3D parent, HeightMap map, UnitCatalog catalog)
+        : this(parent, map, def => def < catalog.Units.Length ? catalog.Units[def].MaxHealth : 100)
+    {
+    }
+
+    public static int GetDefaultMaxHealth(ushort definition)
+    {
+        UnitCatalog catalog = DefaultCatalog.Value;
+        return definition < catalog.Units.Length ? catalog.Units[definition].MaxHealth : 100;
+    }
 
     internal void Sync(ClientReplica replica, double renderTick)
     {
@@ -24,7 +38,9 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map)
                 parent.AddChild(view.Root);
             }
             System.Numerics.Vector2 position = replica.SamplePosition(unit.Id, renderTick);
-            view.Root.Position = new Vector3(position.X, map.GetHeight(position.X, position.Y), position.Y);
+            view.Root.Position = new Vector3(position.X, map.GetHeight(position.X, position.Y), position.Y) + view.RecoilOffset;
+            int maxHealth = _maxHealthProvider?.Invoke(unit.Definition) ?? GetDefaultMaxHealth(unit.Definition);
+            view.UpdateHealth(unit.Health, maxHealth);
             view.SetSelected(Selected.Contains(unit.Id));
         }
         _removed.Clear();
@@ -38,5 +54,11 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map)
             Views.Remove(id);
             Selected.Remove(id);
         }
+    }
+
+    internal void UpdateRecoil(double delta)
+    {
+        foreach (UnitView view in Views.Values)
+            view.UpdateRecoil(delta);
     }
 }

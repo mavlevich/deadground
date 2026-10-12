@@ -35,6 +35,7 @@ HeightMap map = scenario switch
 {
     "visibility" => VisibilityScenario.CreateMap(),
     "navigation" => NavigationScenario.CreateMap(),
+    "combat" => CombatScenario.CreateMap(),
     _ => HeightMap.CreatePrototype()
 };
 
@@ -42,6 +43,7 @@ StaticGeometry? scenarioGeometry = scenario switch
 {
     "visibility" => VisibilityScenario.CreateStaticGeometry(),
     "navigation" => NavigationScenario.CreateStaticGeometry(),
+    "combat" => CombatScenario.CreateStaticGeometry(),
     _ => null
 };
 
@@ -49,6 +51,7 @@ MatchSetup setup = scenario switch
 {
     "visibility" => VisibilityScenario.CreateMatchSetup(scenarioGeometry!),
     "navigation" => NavigationScenario.CreateMatchSetup(scenarioGeometry!),
+    "combat" => CombatScenario.CreateMatchSetup(scenarioGeometry!),
     _ => PrototypeScenario.CreateMatchSetup(map)
 };
 
@@ -56,6 +59,7 @@ Simulation CreateSimulation() => scenario switch
 {
     "visibility" => VisibilityScenario.CreateSimulation(scenarioGeometry!),
     "navigation" => NavigationScenario.CreateSimulation(scenarioGeometry!),
+    "combat" => CombatScenario.CreateSimulation(scenarioGeometry!),
     _ => PrototypeScenario.Create(map)
 };
 
@@ -76,6 +80,32 @@ if (smokeTest)
         if (session.Tick != 40 || session.Replica.OwnUnits.Length != 3)
             throw new InvalidOperationException("Navigation smoke test failed.");
         Console.WriteLine($"NAVIGATION_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length}");
+        return;
+    }
+    if (scenario == "combat")
+    {
+        for (int i = 0; i < 20; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.Replica.OwnUnits.Length != 3 || session.Replica.ContactCount == 0)
+            throw new InvalidOperationException("Combat smoke test initial detection failed.");
+
+        EntityId tankId = default;
+        for (int i = 0; i < session.Replica.OwnUnits.Length; i++)
+        {
+            if (session.Replica.OwnUnits[i].Ammunition > 0)
+            {
+                tankId = session.Replica.OwnUnits[i].Id;
+                break;
+            }
+        }
+        ContactId targetContact = session.Replica.Contacts[0].Id;
+        bool attacked = session.Attack(tankId, targetContact);
+        if (!attacked) throw new InvalidOperationException("Failed to issue attack command.");
+
+        for (int i = 0; i < 100; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.Tick != 120)
+            throw new InvalidOperationException("Combat smoke test tick mismatch.");
+
+        Console.WriteLine($"COMBAT_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} contacts={session.Replica.ContactCount}");
         return;
     }
 
