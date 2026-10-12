@@ -502,6 +502,66 @@ public sealed class NetworkIntegrationTests
         Assert.Equal("Disconnected from server", client.StatusDescription);
     }
 
+    [Fact]
+    public void TwoClientsConnectOnLargeNavigationScenarioAndMoveIndependentlyWithOpponentRouteIsolation()
+    {
+        StaticGeometry geo = LargeNavigationScenario.CreateStaticGeometry();
+        MatchSetup setup = LargeNavigationScenario.CreateMatchSetup(geo);
+
+        using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 2);
+        int port = serverTransport.Port;
+        using SimulationHost host = new(LargeNavigationScenario.CreateSimulation(geo), serverTransport, setup);
+
+        using ClientSession client1 = ClientSession.Connect("127.0.0.1", port, setup);
+        using ClientSession client2 = ClientSession.Connect("127.0.0.1", port, setup);
+
+        // Wait for both clients to connect and receive initial snapshots on 2x2 km map
+        WaitFor(() => client1.IsConnected && client2.IsConnected &&
+            client1.Replica.OwnUnits.Length == 3 && client2.Replica.OwnUnits.Length == 3, host, client1, client2);
+
+        Assert.Equal(1, client1.AssignedPlayerId);
+        Assert.Equal(2, client2.AssignedPlayerId);
+
+        EntityId player1Unit = client1.Replica.OwnUnits[0].Id;
+        EntityId player2Unit = client2.Replica.OwnUnits[0].Id;
+
+        // Route isolation: Client replicas must only contain own units; opponents are in fog of war
+        HashSet<EntityId> c1Units = new(client1.Replica.OwnUnits.ToArray().Select(u => u.Id));
+        HashSet<EntityId> c2Units = new(client2.Replica.OwnUnits.ToArray().Select(u => u.Id));
+        Assert.DoesNotContain(player2Unit, c1Units);
+        Assert.DoesNotContain(player1Unit, c2Units);
+        Assert.Equal(0, client1.Replica.Contacts.Length);
+        Assert.Equal(0, client2.Replica.Contacts.Length);
+
+        // Cross-ownership order rejection
+        Assert.True(client1.Move(player2Unit, new Vector2(300f, 300f)));
+        WaitFor(() => client1.LastCommandResult is { Sequence: 1 }, host, client1, client2);
+        Assert.False(client1.LastCommandResult!.Value.Queued);
+        Assert.Equal(1L, client1.RejectedCommands);
+
+        // Client 1 issues valid movement order across hierarchical sectors
+        Vector2 c1Target = new(350f, 350f);
+        Assert.True(client1.Move(player1Unit, c1Target));
+        WaitFor(() => client1.LastCommandResult is { Sequence: 2 }, host, client1, client2);
+        Assert.True(client1.LastCommandResult!.Value.Queued);
+
+        // Client 2 issues valid movement order
+        Vector2 c2Target = new(1700f, 1700f);
+        Assert.True(client2.Move(player2Unit, c2Target));
+        WaitFor(() => client2.LastCommandResult is { Sequence: 1 }, host, client1, client2);
+        Assert.True(client2.LastCommandResult!.Value.Queued);
+
+        // Advance simulation and verify movement replication over network
+        WaitFor(() => client1.Replica.OwnUnits[0].Position.X > 205f &&
+                      client2.Replica.OwnUnits[0].Position.X < 1795f, host, client1, client2, maxAttempts: 150);
+
+        // Verify position replication and that route isolation is preserved
+        Assert.Equal(PathRequestStatus.PathFound, client1.Replica.OwnUnits[0].NavStatus);
+        Assert.Equal(PathRequestStatus.PathFound, client2.Replica.OwnUnits[0].NavStatus);
+        Assert.Equal(0, client1.Replica.Contacts.Length);
+        Assert.Equal(0, client2.Replica.Contacts.Length);
+    }
+
     private sealed class PausingServerTransport(IServerTransport inner) : IServerTransport
     {
         public Action? BeforeNextReceive;

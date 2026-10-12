@@ -35,6 +35,7 @@ HeightMap map = scenario switch
 {
     "visibility" => VisibilityScenario.CreateMap(),
     "navigation" => NavigationScenario.CreateMap(),
+    "navigation-large" => LargeNavigationScenario.CreateMap(),
     "combat" => CombatScenario.CreateMap(),
     _ => HeightMap.CreatePrototype()
 };
@@ -43,6 +44,7 @@ StaticGeometry? scenarioGeometry = scenario switch
 {
     "visibility" => VisibilityScenario.CreateStaticGeometry(),
     "navigation" => NavigationScenario.CreateStaticGeometry(),
+    "navigation-large" => LargeNavigationScenario.CreateStaticGeometry(),
     "combat" => CombatScenario.CreateStaticGeometry(),
     _ => null
 };
@@ -51,6 +53,7 @@ MatchSetup setup = scenario switch
 {
     "visibility" => VisibilityScenario.CreateMatchSetup(scenarioGeometry!),
     "navigation" => NavigationScenario.CreateMatchSetup(scenarioGeometry!),
+    "navigation-large" => LargeNavigationScenario.CreateMatchSetup(scenarioGeometry!),
     "combat" => CombatScenario.CreateMatchSetup(scenarioGeometry!),
     _ => PrototypeScenario.CreateMatchSetup(map)
 };
@@ -59,6 +62,7 @@ Simulation CreateSimulation() => scenario switch
 {
     "visibility" => VisibilityScenario.CreateSimulation(scenarioGeometry!),
     "navigation" => NavigationScenario.CreateSimulation(scenarioGeometry!),
+    "navigation-large" => LargeNavigationScenario.CreateSimulation(scenarioGeometry!),
     "combat" => CombatScenario.CreateSimulation(scenarioGeometry!),
     _ => PrototypeScenario.Create(map)
 };
@@ -82,6 +86,26 @@ if (smokeTest)
         Console.WriteLine($"NAVIGATION_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length}");
         return;
     }
+    if (scenario == "navigation-large")
+    {
+        for (int i = 0; i < 40; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.Tick != 40 || session.Replica.OwnUnits.Length != 3)
+            throw new InvalidOperationException("Navigation-large smoke test failed.");
+
+        Vector2 startPos = session.Replica.OwnUnits[0].Position;
+        EntityId reconId = session.Replica.OwnUnits[0].Id;
+        session.Move(reconId, new Vector2(300f, 300f));
+        for (int i = 0; i < 30; i++) session.Advance(1d / Simulation.TickRate);
+
+        Vector2 movedPos = session.Replica.OwnUnits[0].Position;
+        bool hasMoved = Vector2.Distance(startPos, movedPos) > 1.0f;
+        if (!hasMoved)
+            throw new InvalidOperationException("Navigation-large unit movement failed.");
+
+        Console.WriteLine($"NAVIGATION_LARGE_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} moved={hasMoved} nav_status={session.Replica.OwnUnits[0].NavStatus}");
+        return;
+    }
+
     if (scenario == "combat")
     {
         for (int i = 0; i < 20; i++) session.Advance(1d / Simulation.TickRate);
