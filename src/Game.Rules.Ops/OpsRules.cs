@@ -12,8 +12,28 @@ public sealed class OpsRules : RuleSet
     public OpsRules(StaticGeometry geometry, IUnitPerceptionCatalog catalog, DetectionTuning? tuning = null)
         : base(new MovementSystem(), new DetectionSystem(geometry, catalog, tuning)) { }
 
+    public OpsRules(
+        StaticGeometry geometry,
+        IUnitPerceptionCatalog perceptionCatalog,
+        IUnitMovementCatalog movementCatalog,
+        NavigationTuning? navTuning = null,
+        DetectionTuning? detTuning = null)
+        : base(
+            new NavigationSystem(new NavigationGrid(geometry, navTuning?.CellSize ?? NavigationTuning.DefaultCellSize), movementCatalog, navTuning),
+            new DetectionSystem(geometry, perceptionCatalog, detTuning))
+    { }
+
     public OpsRules(StaticGeometry geometry, UnitCatalog catalog)
         : this(geometry, new OpsPerceptionCatalog(catalog), PrototypeScenario.CreateDetectionTuning(catalog)) { }
+
+    public OpsRules(StaticGeometry geometry, UnitCatalog catalog, NavigationTuning? navTuning, DetectionTuning? detTuning = null)
+        : this(
+            geometry,
+            new OpsPerceptionCatalog(catalog),
+            new OpsMovementCatalog(catalog),
+            navTuning,
+            detTuning ?? PrototypeScenario.CreateDetectionTuning(catalog))
+    { }
 }
 
 public sealed record DetectionSettings(
@@ -30,7 +50,8 @@ public sealed record UnitDefinition(
     float Speed,
     float SensorRange = 60.0f,
     float EyeHeight = 1.8f,
-    float[]? TargetPoints = null);
+    float[]? TargetPoints = null,
+    float Radius = 1.0f);
 
 public sealed record UnitCatalog(
     int SchemaVersion,
@@ -103,6 +124,33 @@ public sealed class OpsPerceptionCatalog : IUnitPerceptionCatalog
     }
 }
 
+public sealed class OpsMovementCatalog : IUnitMovementCatalog
+{
+    private readonly UnitMovementProfile[] _profiles;
+
+    public OpsMovementCatalog(UnitCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        _profiles = new UnitMovementProfile[catalog.Units.Length];
+        for (int i = 0; i < catalog.Units.Length; i++)
+        {
+            UnitDefinition unit = catalog.Units[i];
+            _profiles[i] = new UnitMovementProfile(unit.Speed, unit.Radius);
+        }
+    }
+
+    public bool TryGetProfile(ushort definition, out UnitMovementProfile profile)
+    {
+        if (definition < _profiles.Length)
+        {
+            profile = _profiles[definition];
+            return true;
+        }
+        profile = default;
+        return false;
+    }
+}
+
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
     ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true)]
 [JsonSerializable(typeof(UnitCatalog))]
@@ -157,6 +205,8 @@ public static class PrototypeScenario
                 throw new InvalidOperationException("Invalid unit definition ID.");
             if (!float.IsFinite(unit.Speed) || unit.Speed <= 0)
                 throw new InvalidOperationException("Invalid unit speed.");
+            if (!float.IsFinite(unit.Radius) || unit.Radius <= 0)
+                throw new InvalidOperationException("Invalid unit radius.");
             if (!float.IsFinite(unit.SensorRange) || unit.SensorRange <= 0)
                 throw new InvalidOperationException("Invalid sensor range.");
             if (!float.IsFinite(unit.EyeHeight) || unit.EyeHeight <= 0)
@@ -319,6 +369,139 @@ public static class VisibilityScenario
     }
 
     public static MatchSetup CreateMatchSetup(StaticGeometry? geometry = null, string ruleSetId = "Visibility", UnitCatalog? catalog = null)
+    {
+        geometry ??= CreateStaticGeometry();
+        catalog ??= PrototypeScenario.LoadCatalog();
+        return new MatchSetup(
+            MatchSetup.CurrentProtocolVersion,
+            catalog.ContentHash,
+            MatchSetup.ComputeMapHash(geometry),
+            ruleSetId);
+    }
+}
+
+public static class NavigationScenario
+{
+    public static HeightMap CreateMap()
+    {
+        const int size = 65;
+        ushort[] heights = new ushort[size * size];
+        return new HeightMap(size, size, 2f, 0.01f, heights);
+    }
+
+    public static StaticGeometry CreateStaticGeometry()
+    {
+        HeightMap map = CreateMap();
+
+        // 1. Standalone building at (30..44, 30..44), height 6.0m
+        OpaqueStructure building = new(
+            new StructureId(1),
+            minX: 30f, minY: 0f, minZ: 30f,
+            maxX: 44f, maxY: 6f, maxZ: 44f,
+            isGrounded: true);
+
+        // 2. Wall with bypass at (58..60, 10..40), height 3.0m
+        OpaqueStructure wallWithBypass = new(
+            new StructureId(2),
+            minX: 58f, minY: 0f, minZ: 10f,
+            maxX: 60f, maxY: 3f, maxZ: 40f,
+            isGrounded: true);
+
+        // 3. L-shaped obstacle: two contiguous perpendicular walls
+        OpaqueStructure lWall1 = new(
+            new StructureId(3),
+            minX: 75f, minY: 0f, minZ: 25f,
+            maxX: 77f, maxY: 3f, maxZ: 50f,
+            isGrounded: true);
+
+        OpaqueStructure lWall2 = new(
+            new StructureId(4),
+            minX: 75f, minY: 0f, minZ: 48f,
+            maxX: 95f, maxY: 3f, maxZ: 50f,
+            isGrounded: true);
+
+        // 4. Narrow passage: 2.2m gap between X=55 and X=57.2
+        // Passable for recon vehicle (radius 0.8m, clearance 1.6m), blocked for tank (radius 1.4m, clearance 2.8m)
+        OpaqueStructure narrowWest = new(
+            new StructureId(5),
+            minX: 40f, minY: 0f, minZ: 70f,
+            maxX: 55f, maxY: 3f, maxZ: 85f,
+            isGrounded: true);
+
+        OpaqueStructure narrowEast = new(
+            new StructureId(6),
+            minX: 57.2f, minY: 0f, minZ: 70f,
+            maxX: 72.2f, maxY: 3f, maxZ: 85f,
+            isGrounded: true);
+
+        // 5. Fully enclosed courtyard: 4 walls enclosing interior [92..108, 77..95]
+        OpaqueStructure courtSouth = new(
+            new StructureId(7),
+            minX: 90f, minY: 0f, minZ: 75f,
+            maxX: 110f, maxY: 3f, maxZ: 77f,
+            isGrounded: true);
+
+        OpaqueStructure courtNorth = new(
+            new StructureId(8),
+            minX: 90f, minY: 0f, minZ: 95f,
+            maxX: 110f, maxY: 3f, maxZ: 97f,
+            isGrounded: true);
+
+        OpaqueStructure courtWest = new(
+            new StructureId(9),
+            minX: 90f, minY: 0f, minZ: 77f,
+            maxX: 92f, maxY: 3f, maxZ: 95f,
+            isGrounded: true);
+
+        OpaqueStructure courtEast = new(
+            new StructureId(10),
+            minX: 108f, minY: 0f, minZ: 77f,
+            maxX: 110f, maxY: 3f, maxZ: 95f,
+            isGrounded: true);
+
+        return new StaticGeometry(map,
+        [
+            building,
+            wallWithBypass,
+            lWall1,
+            lWall2,
+            narrowWest,
+            narrowEast,
+            courtSouth,
+            courtNorth,
+            courtWest,
+            courtEast
+        ]);
+    }
+
+    public static Simulation CreateSimulation(StaticGeometry? geometry = null, UnitCatalog? catalog = null, NavigationTuning? navTuning = null)
+    {
+        geometry ??= CreateStaticGeometry();
+        catalog ??= PrototypeScenario.LoadCatalog();
+
+        OpsRules rules = new(geometry, catalog, navTuning);
+        WorldState world = new(geometry.HeightMap);
+
+        UnitDefinition reconDef = catalog.RequireDefinition("recon_vehicle");
+        ushort reconIdx = catalog.RequireDefinitionIndex("recon_vehicle");
+        UnitDefinition tankDef = catalog.RequireDefinition("prototype_tank");
+        ushort tankIdx = catalog.RequireDefinitionIndex("prototype_tank");
+        UnitDefinition vehicleDef = catalog.RequireDefinition("prototype_vehicle");
+        ushort vehicleIdx = catalog.RequireDefinitionIndex("prototype_vehicle");
+
+        // Side 1: friendly units in open area
+        world.CreateUnit(1, reconIdx, new Vector2(15f, 20f), reconDef.Speed);
+        world.CreateUnit(1, tankIdx, new Vector2(18f, 20f), tankDef.Speed);
+        world.CreateUnit(1, vehicleIdx, new Vector2(21f, 20f), vehicleDef.Speed);
+
+        // Side 2: other units
+        world.CreateUnit(2, tankIdx, new Vector2(65f, 30f), tankDef.Speed);
+        world.CreateUnit(2, reconIdx, new Vector2(80f, 80f), reconDef.Speed);
+
+        return new Simulation(world, rules);
+    }
+
+    public static MatchSetup CreateMatchSetup(StaticGeometry? geometry = null, string ruleSetId = "Navigation", UnitCatalog? catalog = null)
     {
         geometry ??= CreateStaticGeometry();
         catalog ??= PrototypeScenario.LoadCatalog();

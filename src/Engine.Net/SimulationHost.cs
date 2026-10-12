@@ -182,6 +182,11 @@ public sealed class SimulationHost : IDisposable
             return;
         }
 
+        if (_admittedConnectionIds[player - 1] != 0 && _admittedConnectionIds[player - 1] != connectionId)
+        {
+            _simulation.ResetPlayer(player);
+        }
+
         _admittedConnectionIds[player - 1] = connectionId;
         SendHandshakeResponse(player, accepted: true, HandshakeReason.Accepted);
         PublishPlayer(player);

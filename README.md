@@ -140,6 +140,51 @@ For self-contained local inspection without a dedicated server:
   3. **Rediscovery and track correlation**: If Tank 1 moves back into view within the correlation window (60 ticks / 3.0 s) and distance gate (25 m), the existing contact track is resumed under the same Contact ID without flicker.
   4. **Contact expiration**: If Tank 1 remains hidden for longer than the memory duration (100 ticks / 5.0 s), the `LastKnown` marker expires and disappears from Client 1's view.
 
+### Navigation scenario
+
+To run the playable navigation scenario with server-side A* pathfinding around static obstacles:
+
+Start the dedicated server:
+
+```sh
+dotnet run --project src/Game.Server --configuration Release -- --scenario navigation --port 7777
+```
+
+In a second terminal, start the first client (Side 1: Friendly units):
+
+```sh
+./tools/run-client.sh -- --scenario navigation --connect 127.0.0.1:7777
+```
+
+In a third terminal, start the second client (Side 2: Opponent forces):
+
+```sh
+./tools/run-client.sh -- --scenario navigation --connect 127.0.0.1:7777
+```
+
+For self-contained local inspection without a dedicated server:
+
+```sh
+./tools/run-client.sh -- --scenario navigation
+```
+
+On Windows, use `run-client.ps1`:
+
+```powershell
+./tools/run-client.ps1 -GodotArgs @("--", "--scenario", "navigation", "--connect", "127.0.0.1:7777")
+```
+
+#### Obstacles and clearance verification
+
+The navigation scenario map includes five obstacle topologies:
+- **Standalone building**: A 14 m x 14 m opaque block at (30..44, 30..44), height 6.0 m. Units smoothly navigate around both sides without clipping corners or penetrating walls.
+- **Wall with bypass**: A 30 m long wall at X=58..60, Z=10..40. Ordering a move to the opposite side plans a clean detour around the wall ends.
+- **L-shaped obstacle**: Two perpendicular joined walls at (75..77, 25..50) and (75..95, 48..50). Units traverse around the concave or convex corner without getting trapped or cutting corners.
+- **Narrow passage**: A 2.2 m gap between X=55 and X=57.2 (Z=70..85):
+  - Passable for `recon_vehicle` (radius 0.8 m, width clearance 1.6 m) and `prototype_vehicle` (radius 1.0 m, width clearance 2.0 m).
+  - Blocked for `prototype_tank` (radius 1.4 m, width clearance 2.8 m). Ordering the tank across the gap routes it around the exterior perimeter rather than through the choke point.
+- **Enclosed courtyard**: A 4-wall perimeter enclosing interior [92..108, 77..95]. Ordering a unit inside an unreachable enclosure fails pathfinding gracefully without stalling the tick budget or freezing the simulation.
+
 ### Line-of-sight sandbox
 
 To launch the standalone visual line-of-sight geometry sandbox:
@@ -184,6 +229,7 @@ dotnet build DeadGround.sln --configuration Release --no-restore
 dotnet test DeadGround.sln --configuration Release --no-build
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario visibility
+dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario navigation
 ./tools/run-client.sh --headless -- --smoke-test
 ```
 
@@ -228,6 +274,12 @@ The line-of-sight microbenchmark measures single-query and batch geometric queri
 
 ```sh
 dotnet run --project tests/Benchmarks --configuration Release -- --filter '*LineOfSight*'
+```
+
+To run the automated performance regression probe suite (measuring 1000-unit steady-state allocations, p99 tick times, visibility under occlusion, and navigation pathfinding):
+
+```sh
+dotnet run --project tests/Benchmarks --configuration Release -- --probe
 ```
 
 ## Export the client

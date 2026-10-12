@@ -145,10 +145,31 @@ public sealed class NetworkIntegrationTests
             }
         }
 
+        // Legacy version 2 client from main (18-byte snapshot records) must be rejected by version 3 server
+        AssertRejected(setup with { ProtocolVersion = 2 }, "ProtocolVersionMismatch");
         AssertRejected(setup with { ProtocolVersion = 99 }, "ProtocolVersionMismatch");
         AssertRejected(setup with { ContentHash = 0xDEADBEEF }, "ContentMismatch");
         AssertRejected(setup with { MapHash = 0xCAFEBABE }, "MapMismatch");
         AssertRejected(setup with { RuleSetId = "UnknownRules" }, "RuleSetMismatch");
+    }
+
+    [Fact]
+    public void LegacyVersion2Client_ConnectingToVersion3Server_IsRejectedWithProtocolVersionMismatch()
+    {
+        HeightMap map = HeightMap.CreatePrototype();
+        MatchSetup serverSetup = PrototypeScenario.CreateMatchSetup(map);
+        Assert.Equal(3, serverSetup.ProtocolVersion);
+
+        using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
+        int port = serverTransport.Port;
+        using SimulationHost host = new(PrototypeScenario.Create(map), serverTransport, serverSetup);
+
+        // Client configured with legacy protocol version 2 (from main before navigation snapshot status)
+        MatchSetup v2ClientSetup = serverSetup with { ProtocolVersion = 2 };
+        using ClientSession client = ClientSession.Connect("127.0.0.1", port, v2ClientSetup);
+
+        WaitForSingle(() => client.State == SessionConnectionState.Failed, host, client);
+        Assert.Contains("ProtocolVersionMismatch", client.StatusDescription);
     }
 
     [Fact]
