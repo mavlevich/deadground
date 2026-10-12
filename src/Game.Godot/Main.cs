@@ -1,6 +1,7 @@
 using DeadGround.Engine;
 using DeadGround.Engine.Net;
 using DeadGround.Rules.Ops;
+using DeadGround.Sandbox;
 using Godot;
 using NumericsVector2 = System.Numerics.Vector2;
 using NumericsVector3 = System.Numerics.Vector3;
@@ -12,11 +13,16 @@ public partial class Main : Node3D
     private HeightMap _map = null!;
     private IGameSession _session = null!;
     private Camera3D _camera = null!;
+    private CameraRig _cameraRig = null!;
+    private SettingsPanel _settingsPanel = null!;
+    private FramePacingMetrics? _benchmarkMetrics;
+    private int _benchmarkTargetFrames;
+    private long _lastFrameTimestamp;
+    private int _benchmarkWarmupFrames = 5;
     private Label _stats = null!, _status = null!, _subtitle = null!, _title = null!;
     private UnitViewSet _unitViews = null!;
     private ContactViewSet _contactViews = null!;
     private MeshInstance3D _destination = null!;
-    private Vector3 _focus = new(64, 0, 64);
     private double _hudTimer, _smokeTimer;
     private bool _smokeTest;
     private bool _terrainWindingValid;
@@ -24,6 +30,9 @@ public partial class Main : Node3D
     private uint _lastCommandResult;
     private string _scenario = "prototype";
     private CombatEffects _combatEffects = null!;
+
+    internal CameraRig CameraRig => _cameraRig;
+    internal SettingsPanel SettingsPanel => _settingsPanel;
 
     public override void _Ready()
     {
@@ -179,18 +188,31 @@ public partial class Main : Node3D
                 TonemapMode = Godot.Environment.ToneMapper.Filmic
             }
         });
+        DisplaySettings loadedConfig = SettingsPanel.LoadConfig();
+        string[] combinedArgs = allArgs.Concat(userArgs).ToArray();
+        bool cliOverridesVsync = DisplaySettings.HasVsyncOverride(combinedArgs);
+        bool cliOverridesMaxFps = DisplaySettings.HasMaxFpsOverride(combinedArgs);
+        DisplaySettings activeSettings = DisplaySettings.ParseCommandLine(combinedArgs, loadedConfig);
+
+        _settingsPanel = new SettingsPanel();
+        AddChild(_settingsPanel);
+        _settingsPanel.Initialize(loadedConfig, activeSettings, cliOverridesVsync, cliOverridesMaxFps);
+
+        if (activeSettings.BenchmarkFrames > 0)
+        {
+            _benchmarkMetrics = new FramePacingMetrics(activeSettings.BenchmarkFrames + 16);
+            _benchmarkTargetFrames = activeSettings.BenchmarkFrames;
+        }
+
         float initialCameraSize = _scenario == "combat" ? 75 : (_scenario == "navigation-large" ? 450 : 112);
         _camera = new Camera3D { Projection = Camera3D.ProjectionType.Orthogonal, Size = initialCameraSize, Far = 3500, Current = true };
         AddChild(_camera);
-        if (_scenario == "combat")
-        {
-            _focus = new Vector3(45, 0, 45);
-        }
-        else if (_scenario == "navigation-large")
-        {
-            _focus = new Vector3(300, 0, 300);
-        }
-        UpdateCamera();
+        Vector3 initialFocus = _scenario == "combat"
+            ? new Vector3(45, 0, 45)
+            : (_scenario == "navigation-large" ? new Vector3(300, 0, 300) : new Vector3(64, 0, 64));
+        _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
+        _cameraRig.SetDefaultView(initialFocus, initialCameraSize);
+
         _unitViews = new UnitViewSet(this, _map, PrototypeScenario.LoadCatalog());
         _contactViews = new ContactViewSet(this, _map);
         _combatEffects = new CombatEffects(_map);
@@ -259,6 +281,14 @@ public partial class Main : Node3D
 
     public override void _Process(double delta)
     {
+        long frameStartTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+        float wallClockIntervalMs = 0f;
+        if (_lastFrameTimestamp > 0)
+        {
+            wallClockIntervalMs = (float)((frameStartTimestamp - _lastFrameTimestamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+        }
+        _lastFrameTimestamp = frameStartTimestamp;
+
         _session.Advance(delta);
         UpdateViews();
         _unitViews.UpdateRecoil(delta);
@@ -309,17 +339,31 @@ public partial class Main : Node3D
             if (!result.Queued) _destination.Visible = false;
         }
 
-        float dx = 0, dz = 0;
-        if (Input.IsPhysicalKeyPressed(Key.A) || Input.IsPhysicalKeyPressed(Key.Left)) dx--;
-        if (Input.IsPhysicalKeyPressed(Key.D) || Input.IsPhysicalKeyPressed(Key.Right)) dx++;
-        if (Input.IsPhysicalKeyPressed(Key.W) || Input.IsPhysicalKeyPressed(Key.Up)) dz--;
-        if (Input.IsPhysicalKeyPressed(Key.S) || Input.IsPhysicalKeyPressed(Key.Down)) dz++;
-        if (dx != 0 || dz != 0)
+        _cameraRig.Update(delta, allowInput: !_settingsPanel.IsOpen);
+
+        long frameEndTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+        float cpuWorkMs = (float)((frameEndTimestamp - frameStartTimestamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+
+        if (_benchmarkMetrics is not null)
         {
-            _focus += new Vector3(dx, 0, dz).Normalized() * (float)delta * _camera.Size * 0.6f;
-            _focus.X = Mathf.Clamp(_focus.X, 0, _map.Width);
-            _focus.Z = Mathf.Clamp(_focus.Z, 0, _map.Depth);
-            UpdateCamera();
+            if (_benchmarkWarmupFrames > 0)
+            {
+                _benchmarkWarmupFrames--;
+            }
+            else if (_benchmarkMetrics.Count < _benchmarkTargetFrames && wallClockIntervalMs > 0f)
+            {
+                _benchmarkMetrics.Record(wallClockIntervalMs, cpuWorkMs);
+
+                if (_benchmarkMetrics.Count >= _benchmarkTargetFrames)
+                {
+                    string hardware = $"{OS.GetName()} / {OS.GetProcessorName()} / Cores: {OS.GetProcessorCount()}";
+                    Vector2 viewSize = GetViewport().GetVisibleRect().Size;
+                    string resolution = $"{viewSize.X:F0}x{viewSize.Y:F0}";
+                    string report = _benchmarkMetrics.FormatReport(
+                        _scenario, hardware, resolution, _settingsPanel.CurrentSettings.VSyncEnabled, _settingsPanel.CurrentSettings.MaxFps, warmupFrames: 5);
+                    GD.Print(report);
+                }
+            }
         }
 
         _hudTimer += delta;
@@ -361,22 +405,52 @@ public partial class Main : Node3D
 
     public override void _UnhandledInput(InputEvent @event)
     {
-        if (@event is InputEventKey { Pressed: true, Echo: false } key)
+        if (_settingsPanel.IsOpen)
         {
-            if (key.Keycode == Key.Space)
+            if (@event is InputEventKey { Pressed: true, Echo: false } openKey)
             {
-                _focus = _scenario == "navigation-large"
-                    ? new Vector3(300, 0, 300)
-                    : (_scenario == "combat" ? new Vector3(45, 0, 45) : new Vector3(64, 0, 64));
-                _camera.Size = _scenario == "navigation-large" ? 450 : (_scenario == "combat" ? 75 : 112);
-                UpdateCamera();
+                if (openKey.Keycode == Key.Escape)
+                {
+                    _settingsPanel.Close();
+                    GetViewport().SetInputAsHandled();
+                    return;
+                }
+
+                if (openKey.Keycode is Key.F10 or Key.O)
+                {
+                    _settingsPanel.Toggle();
+                    GetViewport().SetInputAsHandled();
+                    return;
+                }
             }
 
-            float panStep = Mathf.Max(25f, _camera.Size * 0.15f);
-            if (key.Keycode is Key.W or Key.Up) { _focus += new Vector3(0, 0, -panStep); UpdateCamera(); }
-            if (key.Keycode is Key.S or Key.Down) { _focus += new Vector3(0, 0, panStep); UpdateCamera(); }
-            if (key.Keycode is Key.A or Key.Left) { _focus += new Vector3(-panStep, 0, 0); UpdateCamera(); }
-            if (key.Keycode is Key.D or Key.Right) { _focus += new Vector3(panStep, 0, 0); UpdateCamera(); }
+            // Centrally block all gameplay input while settings overlay is open
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
+        if (@event is InputEventKey { Pressed: true, Echo: false } key)
+        {
+            if (key.Keycode is Key.F10 or Key.O)
+            {
+                _settingsPanel.Toggle();
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if (key.Keycode == Key.Escape)
+            {
+                _unitViews.Selected.Clear();
+                _contactViews.Selected.Clear();
+                _status.Text = "No units selected";
+                return;
+            }
+
+            if (key.Keycode == Key.Space)
+            {
+                _cameraRig.ResetToDefault();
+                return;
+            }
 
             if (_scenario == "navigation-large" && _unitViews.Selected.Count > 0)
             {
@@ -401,12 +475,6 @@ public partial class Main : Node3D
                 }
             }
 
-            if (key.Keycode == Key.Escape)
-            {
-                _unitViews.Selected.Clear();
-                _contactViews.Selected.Clear();
-                _status.Text = "No units selected";
-            }
             if (key.Keycode == Key.F && _unitViews.Selected.Count > 0 && _contactViews.Selected.Count > 0)
             {
                 ContactId target = _contactViews.Selected.First();
@@ -418,11 +486,12 @@ public partial class Main : Node3D
                 _status.Text = $"Attack order sent / {sent} units -> Contact #{target.Value}";
             }
         }
+
         if (@event is not InputEventMouseButton { Pressed: true } mouse) return;
         if (mouse.ButtonIndex is MouseButton.WheelUp or MouseButton.WheelDown)
         {
-            float maxCameraSize = Mathf.Max(175, _map.Width * 1.25f);
-            _camera.Size = Mathf.Clamp(_camera.Size * (mouse.ButtonIndex == MouseButton.WheelUp ? 0.9f : 1.1f), 35, maxCameraSize);
+            if (mouse.ButtonIndex == MouseButton.WheelUp) _cameraRig.ZoomIn();
+            else _cameraRig.ZoomOut();
             return;
         }
 
@@ -544,10 +613,22 @@ public partial class Main : Node3D
         }
     }
 
-    private void UpdateCamera()
+    public override void _Notification(int what)
     {
-        _camera.Position = _focus + new Vector3(0, 115, 80);
-        _camera.LookAt(_focus, Vector3.Up);
+        base._Notification(what);
+
+        if (what is (int)NotificationApplicationFocusOut or (int)NotificationWMWindowFocusOut)
+        {
+            _cameraRig?.ClearInput();
+            Godot.Engine.MaxFps = 30;
+        }
+        else if (what is (int)NotificationApplicationFocusIn or (int)NotificationWMWindowFocusIn)
+        {
+            if (_settingsPanel is not null)
+            {
+                SettingsPanel.ApplyToEngine(_settingsPanel.CurrentSettings);
+            }
+        }
     }
 
     private void BuildHud()
@@ -582,15 +663,28 @@ public partial class Main : Node3D
         bottom.OffsetLeft = 24; bottom.OffsetRight = -24; bottom.OffsetTop = -88; bottom.OffsetBottom = -24;
         bottom.AddThemeStyleboxOverride("panel", PanelStyle());
         VBoxContainer instructions = new() { MouseFilter = Control.MouseFilterEnum.Ignore };
+
+        HBoxContainer footer = new() { MouseFilter = Control.MouseFilterEnum.Ignore };
+        footer.AddThemeConstantOverride("separation", 16);
         Label controls = new()
         {
-            Text = "  LMB select   /   Shift+LMB add   /   RMB contact to attack or terrain to move   /   F attack   /   WASD pan",
-            MouseFilter = Control.MouseFilterEnum.Ignore
+            Text = "  LMB select   /   Shift+LMB add   /   RMB order   /   F attack   /   WASD pan   /   Wheel zoom",
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
         };
         controls.AddThemeFontSizeOverride("font_size", 15);
+        Button settingsBtn = new()
+        {
+            Text = "SETTINGS [F10]",
+            MouseFilter = Control.MouseFilterEnum.Stop
+        };
+        settingsBtn.Pressed += () => _settingsPanel.Toggle();
+        footer.AddChild(controls);
+        footer.AddChild(settingsBtn);
+
         _status = new Label { Text = "  Select a unit to issue orders", MouseFilter = Control.MouseFilterEnum.Ignore };
         _status.AddThemeColorOverride("font_color", new Color("edc76b"));
-        instructions.AddChild(controls); instructions.AddChild(_status); bottom.AddChild(instructions);
+        instructions.AddChild(footer); instructions.AddChild(_status); bottom.AddChild(instructions);
     }
 
     private static StyleBoxFlat PanelStyle() => new()

@@ -1,5 +1,6 @@
 using DeadGround.Engine;
 using DeadGround.Engine.Net;
+using DeadGround.Sandbox;
 using Godot;
 using NumericsVector2 = System.Numerics.Vector2;
 
@@ -19,7 +20,10 @@ internal static class ClientRegressionTests
             CheckRectangularGrid(3, 5);
             CheckCombatEffectsAndLifecycle(scene);
             CheckConfiguredUnitHealthBars(scene);
-            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health");
+            CheckCameraRig(scene);
+            CheckDisplaySettings(scene);
+            CheckCombatEffectsFramePacing(scene);
+            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health camera_rig display_settings combat_frame_pacing");
             return true;
         }
         catch (Exception exception)
@@ -352,6 +356,137 @@ internal static class ClientRegressionTests
             UnitViewSet defaultViews = new(parent, map);
             Require(UnitViewSet.GetDefaultMaxHealth(0) == DeadGround.Rules.Ops.PrototypeScenario.LoadCatalog().Units[0].MaxHealth,
                 "Default max health provider should match loaded catalog.");
+        }
+        finally
+        {
+            parent.QueueFree();
+        }
+    }
+
+    private static void CheckCameraRig(Node3D scene)
+    {
+        Camera3D camera = new();
+        scene.AddChild(camera);
+        try
+        {
+            CameraRig rig = new(camera, initialFocus: new Vector3(64, 0, 64), initialSize: 112, mapWidth: 128, mapDepth: 128);
+            Require(rig.Focus == new Vector3(64, 0, 64), "Initial focus mismatch.");
+            Require(rig.Size == 112f, "Initial size mismatch.");
+            Require(camera.Size == 112f, "Camera projection size mismatch.");
+            Require(camera.Position.Y > 64f, "Camera Y offset missing.");
+
+            // Test zoom in
+            rig.ZoomIn();
+            Require(rig.Model.TargetSize < 112f, "ZoomIn did not reduce target size.");
+            rig.Update(0.1, allowInput: false);
+            Require(rig.Size < 112f, "Camera size did not decrease after zoom in update.");
+
+            // Test reset to default view
+            rig.ResetToDefault();
+            Require(rig.Focus == new Vector3(64, 0, 64), "Reset did not restore focus.");
+            Require(rig.Size == 112f, "Reset did not restore size.");
+
+            // Test bounds clamping
+            rig.Model.SetInput(100f, 100f);
+            rig.Update(1.0, allowInput: true);
+            Require(rig.Focus.X <= 128f && rig.Focus.Z <= 128f, "Focus exceeded map bounds.");
+        }
+        finally
+        {
+            camera.QueueFree();
+        }
+    }
+
+    private static void CheckDisplaySettings(Node3D scene)
+    {
+        Require(DisplaySettings.SanitizeMaxFps(144) == 144, "SanitizeMaxFps failed on valid value.");
+        Require(DisplaySettings.SanitizeMaxFps(75) == 60, "SanitizeMaxFps failed to fall back.");
+        Require(DisplaySettings.SanitizeMaxFps(0) == 0, "SanitizeMaxFps failed on unlimited (0).");
+
+        SettingsPanel panel = new();
+        scene.AddChild(panel);
+        try
+        {
+            DisplaySettings saved = new(VSyncEnabled: true, MaxFps: 60, BenchmarkFrames: 0);
+            DisplaySettings effective = new(VSyncEnabled: true, MaxFps: 144, BenchmarkFrames: 0);
+            panel.Initialize(saved, effective, cliOverridesVsync: false, cliOverridesMaxFps: true);
+
+            Require(!panel.IsOpen, "Panel should be closed initially.");
+            panel.Toggle();
+            Require(panel.IsOpen, "Panel should be open after toggle.");
+            panel.Close();
+            Require(!panel.IsOpen, "Panel should be closed after Close().");
+
+            Require(panel.CurrentSettings.VSyncEnabled == true, "Panel VSync setting mismatch.");
+            Require(panel.CurrentSettings.MaxFps == 144, "Panel effective MaxFps should reflect CLI override.");
+            Require(panel.SavedConfig.MaxFps == 60, "Panel saved config must retain original 60 FPS, not CLI override.");
+        }
+        finally
+        {
+            panel.QueueFree();
+        }
+    }
+
+    private static void CheckCombatEffectsFramePacing(Node3D scene)
+    {
+        Node3D parent = new();
+        scene.AddChild(parent);
+        try
+        {
+            HeightMap map = HeightMap.CreatePrototype();
+            CombatEffects effects = new(map);
+            parent.AddChild(effects);
+            UnitViewSet unitViews = new(parent, map);
+
+            ClientReplica replica = new();
+            byte[] bytes = new byte[WireProtocol.MaxMessageSize];
+
+            OwnUnitObservation tank = new(
+                new EntityId(10),
+                2,
+                new NumericsVector2(20, 20),
+                0,
+                PathRequestStatus.None,
+                Health: 120,
+                Ammunition: 8,
+                ReloadTicksRemaining: 15,
+                AttackStatus: AttackExecutionStatus.Aiming,
+                TargetContactId: new ContactId(202));
+
+            CombatEventObservation shotEvent = new(
+                EventId: 101,
+                ServerTick: 5,
+                Kind: CombatEventKind.ShotFired,
+                PresentationId: 1,
+                Origin: new System.Numerics.Vector3(20, 1.9f, 20),
+                Target: new System.Numerics.Vector3(40, 1.5f, 20),
+                ShooterUnitId: tank.Id);
+
+            int size = WireProtocol.WriteSnapshot(bytes, 1, 5, [tank], [], [shotEvent]);
+            Require(replica.TryApply(bytes.AsSpan(0, size)), "Snapshot apply failed.");
+            unitViews.Sync(replica, 5);
+
+            effects.ProcessEvents(replica.Events, unitViews);
+            Require(effects.Tracers[0].Active, "Tracer was not activated.");
+
+            float initialDistance = new Vector3(20, 1.9f, 20).DistanceTo(new Vector3(40, 1.5f, 20));
+
+            // Run updates at high frame rate (144 FPS -> dt = 1/144s)
+            for (int i = 0; i < 5; i++)
+            {
+                effects.Update(1.0 / 144.0);
+                unitViews.UpdateRecoil(1.0 / 144.0);
+            }
+
+            Require(MathF.Abs(effects.Tracers[0].Mesh.Scale.Z - initialDistance) < 0.05f,
+                "Tracer longitudinal scale Z deviated during high-fps updates.");
+
+            // Run update at low frame rate (30 FPS -> dt = 1/30s)
+            effects.Update(1.0 / 30.0);
+            unitViews.UpdateRecoil(1.0 / 30.0);
+
+            Require(MathF.Abs(effects.Tracers[0].Mesh.Scale.Z - initialDistance) < 0.05f,
+                "Tracer longitudinal scale Z deviated after low-fps update.");
         }
         finally
         {

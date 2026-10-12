@@ -88,9 +88,10 @@ Alternatively, build `src/Game.Godot/Game.Godot.csproj`, then import
 `src/Game.Godot/project.godot` in the Godot .NET editor and run the main scene.
 
 Units move automatically in local demo mode. Left-click selects a unit, Shift + left-click
-adds to the selection, and right-click orders a move. WASD or arrow keys pan the
-camera. The mouse wheel zooms, Space restores the overview, and Escape clears
-the selection. The HUD shows connection state, tick time, allocations and traffic.
+adds to the selection, and right-click orders a move. WASD or arrow keys smoothly pan the
+camera with normalized diagonal speed scaled by zoom. The mouse wheel smoothly zooms, Space restores
+the overview, and Escape closes open dialogs or clears unit selection. F10, O, or the HUD SETTINGS button
+opens display settings (VSync toggle and FPS cap). The HUD shows connection state, tick time, allocations and traffic.
 The host reports whether a valid command was queued or rejected. Rejections give
 no hidden-world details. Queue admission does not guarantee arrival at the target.
 
@@ -395,9 +396,14 @@ Follow this checklist to verify an exported client interactively:
    - Confirm status updates to "Move order sent / N units / X, Z m".
    - Verify that selected units turn and travel toward the target point.
 6. Camera:
-   - Pan using WASD or arrow keys.
-   - Zoom using the mouse scroll wheel.
+   - Pan using WASD or arrow keys. Confirm diagonal movement speed matches axial speed and stops instantly on key release.
+   - Zoom using the mouse scroll wheel. Confirm smooth exponential zooming.
    - Press Space to return the camera to the default overview position.
+7. Display settings and frame pacing:
+   - Press F10, O, or click SETTINGS in the HUD to open the settings panel.
+   - Toggle VSync and select frame rate limits (Unlimited, 30, 60, 120, 144 FPS).
+   - Press Escape to close the settings panel before clearing unit selections.
+   - Launch with `--benchmark-frames <N>` to record and display frame pacing percentiles.
 
 ## Platforms
 

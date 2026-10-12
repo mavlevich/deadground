@@ -25,8 +25,13 @@ public sealed class ClientSession : IGameSession
     private double _disconnectedAt = -1.0;
     private bool _everConnected;
 
+    public const double InterpolationBufferTicks = 3.0;
+    public const double MaxClockLagTicks = 6.0;
+    private double _renderTick;
+    private bool _clockInitialized;
+
     public ClientReplica Replica { get; }
-    public double RenderTick => Replica.LatestTick + (_time - _receivedAt) * Simulation.TickRate - 3;
+    public double RenderTick => _renderTick;
     public int Tick => Replica.LatestTick;
     public double LastTickMilliseconds => 0;
     public long LastTickAllocatedBytes => 0;
@@ -64,6 +69,7 @@ public sealed class ClientSession : IGameSession
         }
 
         Poll();
+        UpdateRenderClock(0);
     }
 
     public static ClientSession Connect(string host, int port, MatchSetup setup)
@@ -86,6 +92,58 @@ public sealed class ClientSession : IGameSession
 
         _time += elapsedSeconds;
         Poll();
+        UpdateRenderClock(elapsedSeconds);
+    }
+
+    private void UpdateRenderClock(double elapsedSeconds)
+    {
+        if (Replica.LatestTick == 0)
+        {
+            _renderTick = 0;
+            return;
+        }
+
+        if (!_clockInitialized)
+        {
+            _renderTick = Math.Max(0.0, Replica.LatestTick - InterpolationBufferTicks);
+            _clockInitialized = true;
+            return;
+        }
+
+        double prevRenderTick = _renderTick;
+        double targetTick = Replica.LatestTick + (_time - _receivedAt) * Simulation.TickRate - InterpolationBufferTicks;
+        double clampedTarget = Math.Min(targetTick, (double)Replica.LatestTick);
+        double deltaTicks = elapsedSeconds * Simulation.TickRate;
+
+        if (prevRenderTick < clampedTarget)
+        {
+            double lag = clampedTarget - prevRenderTick;
+            if (lag > MaxClockLagTicks)
+            {
+                // After a network stall or pause, snap directly to target time to avoid
+                // lagging in the past and exceeding the replica buffer history.
+                _renderTick = clampedTarget;
+            }
+            else
+            {
+                double speed = Math.Clamp(1.0 + lag * 0.5, 1.0, 1.5);
+                _renderTick = Math.Min(prevRenderTick + deltaTicks * speed, clampedTarget);
+            }
+        }
+        else
+        {
+            // Clock is ahead of ideal target (e.g. delayed snapshot just arrived).
+            // Retain monotonic progress and slow down or hold until target catches up.
+            double error = clampedTarget - prevRenderTick;
+            double speed = Math.Max(0.0, 1.0 + error * 0.5);
+            _renderTick = Math.Min(prevRenderTick + deltaTicks * speed, (double)Replica.LatestTick);
+        }
+
+        // Monotonic invariant: presentation clock must never rewind
+        if (_renderTick < prevRenderTick)
+        {
+            _renderTick = prevRenderTick;
+        }
     }
 
     public bool Move(EntityId unit, Vector2 target)
