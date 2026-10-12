@@ -574,6 +574,26 @@ The AI sends normal commands and reads only its side's knowledge. Headless bot v
 - Strategic zoom is also a performance tool, not just style.
 - Terrain: Terrain3D or a custom clipmap, decided in milestone 1. Pin an engine and plugin version pair that works on both platforms.
 
+### 18.1 Camera controls
+
+- Orthogonal projection camera.
+- Unified WASD and arrow key panning with normalized diagonal displacement, speed scaling proportionally to `CurrentSize / ReferenceSize`, clamped to map boundaries `[0, MapWidth]` and `[0, MapDepth]`.
+- Immediate stop on key release without inertia or drift.
+- Exponential zoom smoothing: `1 - exp(-12 * delta)`, frame-rate independent over arbitrary frame rates.
+- Space key restores default focus and zoom size.
+- Panning and zooming remain active while issuing move/attack orders and selecting units.
+
+### 18.2 Display settings and frame pacing
+
+- VSync toggle (On/Off) and Max FPS cap (0 = Unlimited, 30, 60, 120, 144 FPS).
+- Display settings persisted to `user://display_settings.cfg`.
+- Command line overrides: `--vsync <on|off>`, `--max-fps <fps>`, `--benchmark-frames <N>`.
+- In-game settings overlay panel (F10 / O / HUD button), with Escape key closing the panel first before clearing unit selections.
+- Unfocused window throttling to 30 FPS, restoring saved settings when window focus returns.
+- Clamped delta (max 0.1 s) on window focus return and long frame hitches to prevent camera teleportation.
+- Simulation invariance: simulation runs at fixed 20 Hz, snapshots at 10 Hz; rendering at 30, 60, 120, 144 FPS only interpolates client replicas (`ClientReplica.SamplePosition`), with `LastKnown` contact markers strictly motionless.
+- Zero steady-state heap allocations during active camera model updates and frame pacing metric collection.
+
 ## 19. Rule sets and modularity
 
 A rule set is a list of systems plus data. Replaceable points:
