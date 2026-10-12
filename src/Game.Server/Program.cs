@@ -31,21 +31,33 @@ for (int i = 0; i < args.Length; i++)
     }
 }
 
-HeightMap map = scenario == "visibility"
-    ? VisibilityScenario.CreateMap()
-    : HeightMap.CreatePrototype();
+HeightMap map = scenario switch
+{
+    "visibility" => VisibilityScenario.CreateMap(),
+    "navigation" => NavigationScenario.CreateMap(),
+    _ => HeightMap.CreatePrototype()
+};
 
-StaticGeometry? visibilityGeometry = scenario == "visibility"
-    ? VisibilityScenario.CreateStaticGeometry()
-    : null;
+StaticGeometry? scenarioGeometry = scenario switch
+{
+    "visibility" => VisibilityScenario.CreateStaticGeometry(),
+    "navigation" => NavigationScenario.CreateStaticGeometry(),
+    _ => null
+};
 
-MatchSetup setup = scenario == "visibility"
-    ? VisibilityScenario.CreateMatchSetup(visibilityGeometry!)
-    : PrototypeScenario.CreateMatchSetup(map);
+MatchSetup setup = scenario switch
+{
+    "visibility" => VisibilityScenario.CreateMatchSetup(scenarioGeometry!),
+    "navigation" => NavigationScenario.CreateMatchSetup(scenarioGeometry!),
+    _ => PrototypeScenario.CreateMatchSetup(map)
+};
 
-Simulation CreateSimulation() => scenario == "visibility"
-    ? VisibilityScenario.CreateSimulation(visibilityGeometry!)
-    : PrototypeScenario.Create(map);
+Simulation CreateSimulation() => scenario switch
+{
+    "visibility" => VisibilityScenario.CreateSimulation(scenarioGeometry!),
+    "navigation" => NavigationScenario.CreateSimulation(scenarioGeometry!),
+    _ => PrototypeScenario.Create(map)
+};
 
 if (smokeTest)
 {
@@ -56,6 +68,14 @@ if (smokeTest)
         if (session.Tick != 40 || session.Replica.OwnUnits.Length != 2)
             throw new InvalidOperationException("Visibility smoke test failed.");
         Console.WriteLine($"VISIBILITY_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} contacts={session.Replica.ContactCount}");
+        return;
+    }
+    if (scenario == "navigation")
+    {
+        for (int i = 0; i < 40; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.Tick != 40 || session.Replica.OwnUnits.Length != 3)
+            throw new InvalidOperationException("Navigation smoke test failed.");
+        Console.WriteLine($"NAVIGATION_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length}");
         return;
     }
 

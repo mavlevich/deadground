@@ -85,14 +85,20 @@ public partial class Main : Node3D
             }
         }
 
-        StaticGeometry? visibilityGeometry = null;
+        StaticGeometry? scenarioGeometry = null;
         MatchSetup setup;
 
         if (_scenario == "visibility")
         {
-            visibilityGeometry = VisibilityScenario.CreateStaticGeometry();
-            _map = visibilityGeometry.HeightMap;
-            setup = VisibilityScenario.CreateMatchSetup(visibilityGeometry);
+            scenarioGeometry = VisibilityScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = VisibilityScenario.CreateMatchSetup(scenarioGeometry);
+        }
+        else if (_scenario == "navigation")
+        {
+            scenarioGeometry = NavigationScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = NavigationScenario.CreateMatchSetup(scenarioGeometry);
         }
         else
         {
@@ -113,9 +119,12 @@ public partial class Main : Node3D
         }
         else
         {
-            _session = _scenario == "visibility"
-                ? new LocalSession(VisibilityScenario.CreateSimulation(visibilityGeometry!))
-                : new LocalSession(PrototypeScenario.Create(_map));
+            _session = _scenario switch
+            {
+                "visibility" => new LocalSession(VisibilityScenario.CreateSimulation(scenarioGeometry!)),
+                "navigation" => new LocalSession(NavigationScenario.CreateSimulation(scenarioGeometry!)),
+                _ => new LocalSession(PrototypeScenario.Create(_map))
+            };
         }
 
         MeshInstance3D terrain = TerrainView.Create(_map);
@@ -123,9 +132,9 @@ public partial class Main : Node3D
         _terrainWindingValid = !_smokeTest || TerrainView.HasUpwardFrontFaces(terrain);
         AddChild(TerrainView.CreateGrid(_map));
 
-        if (visibilityGeometry is not null)
+        if (scenarioGeometry is not null)
         {
-            SetupStructures(visibilityGeometry);
+            SetupStructures(scenarioGeometry);
         }
 
         AddChild(new DirectionalLight3D
@@ -262,10 +271,13 @@ public partial class Main : Node3D
             _smokeTimer += delta;
             if (_smokeTimer >= 1)
             {
-                bool ok = _scenario == "visibility"
-                    ? _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 2
-                    : _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
-                        _session.Replica.OwnUnits[0].Position.Y > 24;
+                bool ok = _scenario switch
+                {
+                    "visibility" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 2,
+                    "navigation" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
+                    _ => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
+                        _session.Replica.OwnUnits[0].Position.Y > 24
+                };
                 GD.Print(ok ? "M0_CLIENT_SMOKE_OK" : "M0_CLIENT_SMOKE_FAILED");
                 GetTree().Quit(ok ? 0 : 1);
             }

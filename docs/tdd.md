@@ -293,6 +293,17 @@ Test scenes: observing through a forest edge, firing over a ridge, a road under 
 - Group orders produce one route plus formation slots, not one route per unit.
 - Group routes respect the most limited member (width, fording, bridge weight).
 - Path requests are synchronous with a per-tick work budget. Async comes later, only with a clear rule for late results.
+- M1 static navigation prototype slice:
+  - Flat grid resolution: 0.5 m cells with continuous clearance field built from static grounded obstacles (IsGrounded == true).
+  - Allocation limit: flat prototype grid enforces MaxSupportedCells = 262_144 cells (e.g. 512x512 cells or 256 m x 256 m). Maps larger than 256 m require hierarchical navigation.
+  - Swept-capsule safety checks: continuous segment clearance prevents corner cutting and wall tunneling.
+  - Time-sliced A* planning: bounded per-tick node expansion budget with an indexed min-heap supporting decrease-key for admissible shortest path extraction without priority corruption.
+  - Virtual goal node: connects exact destinations to nearby passable anchor cells via continuous swept clearance, incorporating exact final segment costs.
+  - Direct order decoupling: unobstructed straight-line orders are satisfied immediately and do not block behind multi-tick search expansions.
+  - Authoritative slot reclamation: navigation slots are recycled using world entity removal version tracking (WorldState.RemovalCount).
+  - In-flight route retention: moving units continue following their previous route during multi-tick search until the new route is ready.
+  - Stand-off destination snapping: obstructed destinations snap to the nearest passable cell center within 3 m; deep interior destinations report InvalidDestination and halt.
+  - Owner-only status replication: snapshots carry navigation outcome to the unit owner without leaking intent to enemy contacts.
 
 ### 9.2 Following the path
 
@@ -333,11 +344,12 @@ Path following is a separate problem from path planning and needs as much attent
   - Expiration: `LastKnown` contacts age out and are permanently removed once unobserved for longer than `MemoryDurationTicks` (default 100 ticks / 5.0 s).
   - Overflow eviction policy: each side supports up to 256 contacts. If capacity is exceeded, the oldest `LastKnown` contact is evicted first. `Current` contacts are never evicted in favor of `LastKnown` markers.
   - Canonical export: exported contacts are sorted deterministically by `ContactId` for consistent network serialization.
-- Snapshot wire protocol v2:
-  - Protocol version incremented to 2.
+- Snapshot wire protocol v3:
+  - Protocol version incremented to 3.
   - Header is 14 bytes (added `ushort ContactCount` at offset 12).
+  - Own unit record is 19 bytes: `uint Id` (4 bytes), `ushort Definition` (2 bytes), `Vector2 Position` (8 bytes), `uint SupportSurface` (4 bytes), `byte NavStatus` (1 byte).
   - Contact record is 18 bytes: `uint ContactId` (4 bytes), `byte State` (1 byte), `byte Classification` (1 byte), `Vector2 Position` (8 bytes), `int LastSeenTick` (4 bytes).
-  - Maximum snapshot payload size is 23,054 bytes (`14 + 1024 * 18 + 256 * 18`).
+  - Maximum snapshot payload size is 24,078 bytes (`14 + 1024 * 19 + 256 * 18`).
   - Information isolation: server-filtered snapshots only contain permitted observations for the recipient player. Foreign truth state is never transmitted.
 
 Detection is a measured CPU hotspot that fits the per-tick simulation budget: steady-state detection and snapshot serialization execute with zero managed heap allocations.
@@ -670,11 +682,25 @@ Implementation checkpoint:
   - Authoritative scheduled detection running at 10 Hz (interleaved across ticks) with allocation-free spatial candidate lookup (`UnitSpatialGrid`).
   - Authoritative per-side tracking (`SideContactTracker`) with strongly typed `ContactId` decoupled from `EntityId`.
   - Continuous track maintenance (`Current`), track loss to frozen coordinates (`LastKnown`), track correlation on rediscovery within distance and time gates, and expiration after memory duration.
-  - Wire protocol v2 snapshot encoding with dedicated 18-byte contact records and strict information isolation.
+  - Wire protocol v3 snapshot encoding with dedicated 18-byte contact records, 19-byte own unit records with navigation status, and strict information isolation.
   - Client replica contact management (`ClientReplica.Contacts`, `TryGetContact`) with distinct Godot views for own units (recon antenna, tank turret) and contacts (vibrant red diamond vs muted ghost marker with ground ring).
   - Repeatable two-client reconnaissance scenario (`--scenario visibility`) running over dedicated server UDP loopback and local session.
   - Automated test coverage across engine core, rules validation, protocol serialization, UDP loopback network integration, and Godot client lifecycle.
-- Reconnect recovery, combat, weapons, pathfinding, bots and save/load remain pending M1 work.
+- Server-side static navigation slice implemented in `Engine.Core`, `Engine.Net`, `Game.Rules.Ops`, and `Game.Godot`:
+  - Time-sliced A* planning over 0.5 m static clearance grid with per-tick node expansion budget and indexed min-heap.
+  - Continuous swept-capsule segment clearance preventing wall tunneling and corner clipping.
+  - In-flight route retention: moving units keep moving along their old route during multi-tick search until the new route is found.
+  - Obstacle stand-off snapping: targets within 3 m of obstacles snap to the closest passable clearance point; deep interior destinations report InvalidDestination and halt.
+  - Owner-only status reporting: snapshots convey navigation outcome to unit owner without leaking to enemy views.
+  - Zero steady-state heap allocations during simulation ticks.
+- Navigation on the 2 km map requires the coarse cost grid (section 9.1).
+- Scope of the next PR (coarse cost grid):
+  - Narrow corridor passability per movement class (tracked, wheeled, foot, amphibious).
+  - Routes > 64 waypoints re-planning and hierarchical path chunking.
+  - Spatial candidate queries for segment checks and smoothing budget.
+  - Once-only direct check for queued requests.
+  - Coarse 5 m grid design with per-side overlays and group formation paths.
+- Reconnect recovery, combat, weapons, bots and save/load remain pending M1 work.
 
 Exit criteria (technical):
 

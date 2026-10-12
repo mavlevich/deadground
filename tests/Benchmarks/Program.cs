@@ -4,6 +4,7 @@ using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
 using DeadGround.Engine;
 using DeadGround.Engine.Net;
+using DeadGround.Rules.Ops;
 using DeadGround.Rules.Sandbox;
 
 if (args.Length > 0 && args[0] == "--probe")
@@ -57,6 +58,11 @@ static void RunProbe()
         {
             allPassed = false;
         }
+    }
+
+    if (!RunNavigationProbe())
+    {
+        allPassed = false;
     }
 
     if (!allPassed)
@@ -143,6 +149,172 @@ static bool RunSingleScenarioProbe(string scenarioName, StaticGeometry geo)
     return meetsBudget;
 }
 
+static bool RunNavigationProbe()
+{
+    const int size = 65;
+    HeightMap map = new(size, size, 2.0f, 0.01f, new ushort[size * size]);
+
+    // Central building obstacle at X in [58..70], Z in [40..88]
+    OpaqueStructure building = new(
+        new StructureId(1),
+        minX: 58f, minY: 0f, minZ: 40f,
+        maxX: 70f, maxY: 6f, maxZ: 88f,
+        isGrounded: true);
+
+    // Enclosed courtyard obstacle: 4 walls enclosing interior [92..108, 77..95]
+    OpaqueStructure courtS = new(new StructureId(2), 90f, 0f, 75f, 110f, 3f, 77f, isGrounded: true);
+    OpaqueStructure courtN = new(new StructureId(3), 90f, 0f, 95f, 110f, 3f, 97f, isGrounded: true);
+    OpaqueStructure courtW = new(new StructureId(4), 90f, 0f, 77f, 92f, 3f, 95f, isGrounded: true);
+    OpaqueStructure courtE = new(new StructureId(5), 108f, 0f, 77f, 110f, 3f, 95f, isGrounded: true);
+
+    StaticGeometry geo = new(map, [building, courtS, courtN, courtW, courtE]);
+    UnitCatalog catalog = PrototypeScenario.LoadCatalog();
+
+    NavigationTuning navTuning = new(MaxNodeExpansionsPerTick: 1000, MaxPendingRequests: 1024);
+    OpsRules rules = new(geo, new OpsPerceptionCatalog(catalog), new SlowMovementCatalog(), navTuning);
+    WorldState world = new(geo.HeightMap);
+    using Simulation sim = new(world, rules);
+
+    // 500 units on Side 1: moving North in West corridor X in [10..46]
+    for (int i = 0; i < 500; i++)
+    {
+        float x = 10f + (i % 25) * 1.5f;
+        float y = 10f + (i / 25) * 2.5f;
+        EntityId id = world.CreateUnit(1, 1, new Vector2(x, y), 0.001f);
+        bool enqueued = sim.TryEnqueue(1, new MoveCommand((uint)(i + 1), 0, id, new Vector2(x, y + 60f)));
+        if (!enqueued) throw new InvalidOperationException($"Failed to enqueue unit {id.Value}");
+        if (i % 200 == 199) sim.Step();
+    }
+    sim.Step();
+
+    // 500 units on Side 2: moving South in West corridor X in [10..46]
+    for (int i = 0; i < 500; i++)
+    {
+        float x = 10f + (i % 25) * 1.5f;
+        float y = 118f - (i / 25) * 2.5f;
+        EntityId id = world.CreateUnit(2, 2, new Vector2(x, y), 0.001f);
+        bool enqueued = sim.TryEnqueue(2, new MoveCommand((uint)(500 + i + 1), 0, id, new Vector2(x, y - 60f)));
+        if (!enqueued) throw new InvalidOperationException($"Failed to enqueue unit {id.Value}");
+        if (i % 200 == 199) sim.Step();
+    }
+    sim.Step();
+
+    // Step simulation until all 1000 units have routes established and are moving
+    int prepTicks = 0;
+    while (prepTicks < 150)
+    {
+        sim.Step();
+        prepTicks++;
+        int moving = 0;
+        for (int u = 0; u < world.Count; u++) if (world.GetUnitAt(u).Moving) moving++;
+        if (moving == 1000) break;
+    }
+
+    int initialMoving = 0;
+    for (int u = 0; u < world.Count; u++) if (world.GetUnitAt(u).Moving) initialMoving++;
+    if (initialMoving != 1000)
+        throw new InvalidOperationException($"Failed to establish routes for all 1000 units. Moving={initialMoving}/1000");
+
+    PlayerKnowledge k1 = new(1);
+    PlayerKnowledge k2 = new(2);
+    byte[] b1 = new byte[WireProtocol.MaxMessageSize];
+    byte[] b2 = new byte[WireProtocol.MaxMessageSize];
+
+    uint commandSeq = 2001;
+
+    // Warm up for 20 ticks with representative workload to JIT compile all code paths
+    for (int m = 0; m < 5; m++)
+    {
+        EntityId uId = world.GetUnitAt(m).Id;
+        sim.TryEnqueue(1, new MoveCommand(commandSeq++, 0, uId, new Vector2(15f + (m * 4f), 80f)));
+    }
+    EntityId warmupUnreachableId = world.GetUnitAt(500).Id;
+    sim.TryEnqueue(2, new MoveCommand(commandSeq++, 0, warmupUnreachableId, new Vector2(100f, 86f)));
+
+    for (int i = 0; i < 20; i++)
+    {
+        sim.Step();
+        if (sim.Tick % 2 == 0)
+        {
+            sim.UpdateKnowledge(k1);
+            WireProtocol.WriteSnapshot(b1, (uint)sim.Tick, sim.Tick, k1.OwnUnits, k1.Contacts);
+            sim.UpdateKnowledge(k2);
+            WireProtocol.WriteSnapshot(b2, (uint)sim.Tick, sim.Tick, k2.OwnUnits, k2.Contacts);
+        }
+    }
+
+    double[] times = new double[100];
+    long totalAllocated = 0;
+    int minMoving = 1000;
+    int maxMoving = 0;
+
+    for (int i = 0; i < 100; i++)
+    {
+        // At tick 0, enqueue a bounded burst of new move orders and genuine unreachable searches
+        if (i == 0)
+        {
+            for (int m = 0; m < 10; m++)
+            {
+                EntityId uId = world.GetUnitAt(10 + m).Id;
+                sim.TryEnqueue(1, new MoveCommand(commandSeq++, 0, uId, new Vector2(15f + (m * 2f), 80f)));
+            }
+            for (int u = 0; u < 2; u++)
+            {
+                EntityId uId = world.GetUnitAt(501 + u).Id;
+                sim.TryEnqueue(2, new MoveCommand(commandSeq++, 0, uId, new Vector2(100f, 86f)));
+            }
+        }
+
+        long startAlloc = GC.GetAllocatedBytesForCurrentThread();
+        long start = Stopwatch.GetTimestamp();
+
+        sim.Step();
+        if (sim.Tick % 2 == 0)
+        {
+            sim.UpdateKnowledge(k1);
+            WireProtocol.WriteSnapshot(b1, (uint)sim.Tick, sim.Tick, k1.OwnUnits, k1.Contacts);
+            sim.UpdateKnowledge(k2);
+            WireProtocol.WriteSnapshot(b2, (uint)sim.Tick, sim.Tick, k2.OwnUnits, k2.Contacts);
+        }
+
+        long elapsed = Stopwatch.GetTimestamp() - start;
+        long endAlloc = GC.GetAllocatedBytesForCurrentThread();
+
+        totalAllocated += (endAlloc - startAlloc);
+        times[i] = (double)elapsed / Stopwatch.Frequency * 1000.0;
+
+        int currentMoving = 0;
+        for (int n = 0; n < world.Count; n++) if (world.GetUnitAt(n).Moving) currentMoving++;
+        minMoving = Math.Min(minMoving, currentMoving);
+        maxMoving = Math.Max(maxMoving, currentMoving);
+    }
+
+    Array.Sort(times);
+    double median = times[50];
+    double p95 = times[94];
+    double p99 = times[98];
+    double max = times[99];
+
+    bool meetsBudget = totalAllocated == 0 && median < 15.0 && p99 < 15.0 && minMoving >= 980;
+
+    Console.WriteLine("Scenario: Navigation 1000 Units (moving + batch planning + unreachable searches) (100 measured ticks)");
+    Console.WriteLine($"  Moving units:      {minMoving}..{maxMoving}/1000");
+    Console.WriteLine($"  Pending queue:     {sim.Navigation?.PendingRequests ?? 0}");
+    Console.WriteLine($"  Median (p50):      {median:F2} ms");
+    Console.WriteLine($"  p95:               {p95:F2} ms");
+    Console.WriteLine($"  p99:               {p99:F2} ms");
+    Console.WriteLine($"  Max:               {max:F2} ms");
+    Console.WriteLine($"  Allocations:       {totalAllocated} B");
+    Console.WriteLine($"  Nodes expanded:    {sim.Navigation?.TotalNodesExpanded ?? 0}");
+    Console.WriteLine($"  Searches done:     {sim.Navigation?.CompletedSearches ?? 0}");
+    Console.WriteLine($"  NoPath searches:   {sim.Navigation?.FailedSearches ?? 0}");
+    Console.WriteLine($"  Capacity exceeded: {sim.Navigation?.CapacityExceeded ?? 0}");
+    Console.WriteLine($"  Performance gate:  {(meetsBudget ? "PASS (p99 < 15 ms, median < 15 ms, 0 B)" : "FAIL")}");
+    Console.WriteLine();
+
+    return meetsBudget;
+}
+
 [MemoryDiagnoser]
 public class MovementBenchmark
 {
@@ -185,4 +357,13 @@ public class MovementBenchmark
     }
 
     [IterationCleanup] public void Cleanup() => _simulation.Dispose();
+}
+
+internal sealed class SlowMovementCatalog : IUnitMovementCatalog
+{
+    public bool TryGetProfile(ushort definition, out UnitMovementProfile profile)
+    {
+        profile = new UnitMovementProfile(0.001f, 1.0f);
+        return true;
+    }
 }

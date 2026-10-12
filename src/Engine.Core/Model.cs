@@ -11,7 +11,7 @@ public readonly record struct UnitState(EntityId Id, int Owner, ushort Definitio
 
 // This DTO only represents a player's own unit. Enemy contacts will have separate IDs.
 public readonly record struct OwnUnitObservation(EntityId Id, ushort Definition,
-    Vector2 Position, uint SupportSurface);
+    Vector2 Position, uint SupportSurface, PathRequestStatus NavStatus = PathRequestStatus.None);
 
 public interface ISimulationRules
 {

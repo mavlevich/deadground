@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
+using DeadGround.Engine;
 
 namespace DeadGround.Engine.Net;
 
@@ -16,11 +17,11 @@ public enum HandshakeReason : byte
 
 public static class WireProtocol
 {
-    public const byte Version = 2;
+    public const byte Version = 3;
     public const int MoveSize = 22;
     public const int CommandResultSize = 11;
     public const int SnapshotHeaderSize = 14;
-    public const int UnitSize = 18;
+    public const int UnitSize = 19;
     public const int MaxUnits = 1024;
     public const int ContactSize = 18;
     public const int MaxContacts = 256;
@@ -160,6 +161,7 @@ public static class WireProtocol
             BinaryPrimitives.WriteSingleLittleEndian(record[6..], unit.Position.X);
             BinaryPrimitives.WriteSingleLittleEndian(record[10..], unit.Position.Y);
             BinaryPrimitives.WriteUInt32LittleEndian(record[14..], unit.SupportSurface);
+            record[18] = (byte)unit.NavStatus;
         }
 
         int contactsOffset = SnapshotHeaderSize + units.Length * UnitSize;
@@ -255,9 +257,11 @@ public static class WireProtocol
             Vector2 position = new(BinaryPrimitives.ReadSingleLittleEndian(record[6..]),
                 BinaryPrimitives.ReadSingleLittleEndian(record[10..]));
             uint surface = BinaryPrimitives.ReadUInt32LittleEndian(record[14..]);
+            byte navStatusByte = record[18];
             if (id.Value == 0 || !float.IsFinite(position.X) || !float.IsFinite(position.Y) ||
+                navStatusByte > (byte)PathRequestStatus.CapacityExceeded ||
                 !frame.Indices.TryAdd(id, i)) return false;
-            frame.Units[i] = new OwnUnitObservation(id, definition, position, surface);
+            frame.Units[i] = new OwnUnitObservation(id, definition, position, surface, (PathRequestStatus)navStatusByte);
         }
 
         int contactsOffset = SnapshotHeaderSize + unitCount * UnitSize;

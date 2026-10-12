@@ -15,6 +15,7 @@ public sealed class WorldState : IDisposable
     private bool _disposed;
     public HeightMap Map { get; }
     public int Count { get; private set; }
+    public uint RemovalCount { get; private set; }
     public int Capacity => _entities.Length;
     internal EcsWorld Storage => _storage;
 
@@ -68,6 +69,7 @@ public sealed class WorldState : IDisposable
         if (!_indices.Remove(id, out int index)) return false;
         _storage.Destroy(_entities[index]);
         Count--;
+        RemovalCount++;
         if (index != Count)
         {
             _entities[index] = _entities[Count];
@@ -101,6 +103,18 @@ public sealed class WorldState : IDisposable
         ref Motion motion = ref _storage.Get<Motion>(entity);
         motion.Target = target;
         motion.Active = true;
+        return true;
+    }
+
+    internal bool UpdateUnitNavigation(EntityId id, Vector2 position, Vector2 target, bool active)
+    {
+        if (!_indices.TryGetValue(id, out int index)) return false;
+        Entity entity = _entities[index];
+        ref Position pos = ref _storage.Get<Position>(entity);
+        ref Motion motion = ref _storage.Get<Motion>(entity);
+        pos.Value = position;
+        motion.Target = target;
+        motion.Active = active;
         return true;
     }
 

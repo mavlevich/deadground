@@ -21,9 +21,11 @@ public sealed class PlayerKnowledge
         _contacts = new ContactObservation[contactCapacity];
     }
 
-    internal void Refresh(WorldState world) => Refresh(world, []);
+    internal void Refresh(WorldState world) => Refresh(world, [], null);
 
-    internal void Refresh(WorldState world, ReadOnlySpan<ContactObservation> contacts)
+    internal void Refresh(WorldState world, ReadOnlySpan<ContactObservation> contacts) => Refresh(world, contacts, null);
+
+    internal void Refresh(WorldState world, ReadOnlySpan<ContactObservation> contacts, NavigationSystem? navigation)
     {
         int count = 0;
         for (int i = 0; i < world.Count; i++)
@@ -31,7 +33,8 @@ public sealed class PlayerKnowledge
             UnitState unit = world.GetUnitAt(i);
             if (unit.Owner != Player) continue;
             if (count == _ownUnits.Length) throw new InvalidOperationException("Knowledge capacity exceeded.");
-            _ownUnits[count++] = new OwnUnitObservation(unit.Id, unit.Definition, unit.Position, 0);
+            PathRequestStatus navStatus = navigation?.GetUnitStatus(unit.Id) ?? PathRequestStatus.None;
+            _ownUnits[count++] = new OwnUnitObservation(unit.Id, unit.Definition, unit.Position, 0, navStatus);
         }
         Count = count;
 
