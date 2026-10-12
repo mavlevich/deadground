@@ -52,7 +52,7 @@ public sealed class OpsRules : RuleSet
         NavigationTuning? navTuning,
         DetectionTuning? detTuning)
     {
-        NavigationSystem nav = new(new NavigationGrid(geometry, navTuning?.CellSize ?? NavigationTuning.DefaultCellSize), movementCatalog, navTuning);
+        NavigationSystem nav = new(new NavigationGrid(geometry, navTuning?.CellSize ?? NavigationTuning.DefaultCellSize, enableHierarchical: true), movementCatalog, navTuning);
         DetectionSystem det = new(geometry, perceptionCatalog, detTuning);
         if (combatCatalog is not null)
         {
@@ -636,6 +636,138 @@ public static class NavigationScenario
             ruleSetId);
     }
 }
+
+public static class LargeNavigationScenario
+{
+    public const int MapResolution = 1001; // 1001 x 1001 samples at 2.0m spacing = 2000m x 2000m
+    public const float MapSpacing = 2.0f;
+
+    public static HeightMap CreateMap()
+    {
+        ushort[] heights = new ushort[MapResolution * MapResolution];
+        return new HeightMap(MapResolution, MapResolution, MapSpacing, 0.01f, heights);
+    }
+
+    public static StaticGeometry CreateStaticGeometry()
+    {
+        HeightMap map = CreateMap();
+        List<OpaqueStructure> structures = new(32);
+        int structId = 1;
+
+        // 1. Urban blocks around [500..800, 500..800]
+        for (int r = 0; r < 3; r++)
+        {
+            float z = 520f + r * 90f;
+            for (int c = 0; c < 3; c++)
+            {
+                float x = 520f + c * 90f;
+                structures.Add(new OpaqueStructure(
+                    new StructureId(structId++),
+                    minX: x, minY: 0f, minZ: z,
+                    maxX: x + 50f, maxY: 6f, maxZ: z + 50f,
+                    isGrounded: true));
+            }
+        }
+
+        // 2. Long 500m barrier forcing large detour: [950..956, 300..800]
+        structures.Add(new OpaqueStructure(
+            new StructureId(structId++),
+            minX: 950f, minY: 0f, minZ: 300f,
+            maxX: 956f, maxY: 4f, maxZ: 800f,
+            isGrounded: true));
+
+        // 3. Narrow 2.2m passage at X=1200, Z=500..540
+        // West building: [1150..1200, 500..540]
+        structures.Add(new OpaqueStructure(
+            new StructureId(structId++),
+            minX: 1150f, minY: 0f, minZ: 500f,
+            maxX: 1200f, maxY: 4f, maxZ: 540f,
+            isGrounded: true));
+
+        // East building: [1202.2..1252.2, 500..540]
+        structures.Add(new OpaqueStructure(
+            new StructureId(structId++),
+            minX: 1202.2f, minY: 0f, minZ: 500f,
+            maxX: 1252.2f, maxY: 4f, maxZ: 540f,
+            isGrounded: true));
+
+        // 4. Enclosed unreachable courtyard: [1400..1480, 1400..1480]
+        structures.Add(new OpaqueStructure(
+            new StructureId(structId++),
+            minX: 1400f, minY: 0f, minZ: 1400f,
+            maxX: 1480f, maxY: 4f, maxZ: 1404f,
+            isGrounded: true));
+        structures.Add(new OpaqueStructure(
+            new StructureId(structId++),
+            minX: 1400f, minY: 0f, minZ: 1476f,
+            maxX: 1480f, maxY: 4f, maxZ: 1480f,
+            isGrounded: true));
+        structures.Add(new OpaqueStructure(
+            new StructureId(structId++),
+            minX: 1400f, minY: 0f, minZ: 1404f,
+            maxX: 1404f, maxY: 4f, maxZ: 1476f,
+            isGrounded: true));
+        structures.Add(new OpaqueStructure(
+            new StructureId(structId++),
+            minX: 1476f, minY: 0f, minZ: 1404f,
+            maxX: 1480f, maxY: 4f, maxZ: 1476f,
+            isGrounded: true));
+
+        // 5. Winding slalom route requiring > 64 waypoints at [1600..1900, 200..700]
+        // 8 alternating barrier walls
+        for (int i = 0; i < 8; i++)
+        {
+            float z = 250f + i * 55f;
+            float minX = (i % 2 == 0) ? 1600f : 1660f;
+            float maxX = (i % 2 == 0) ? 1840f : 1900f;
+            structures.Add(new OpaqueStructure(
+                new StructureId(structId++),
+                minX: minX, minY: 0f, minZ: z,
+                maxX: maxX, maxY: 3f, maxZ: z + 4f,
+                isGrounded: true));
+        }
+
+        return new StaticGeometry(map, structures.ToArray());
+    }
+
+    public static Simulation CreateSimulation(StaticGeometry? geometry = null, UnitCatalog? catalog = null, NavigationTuning? navTuning = null)
+    {
+        geometry ??= CreateStaticGeometry();
+        catalog ??= PrototypeScenario.LoadCatalog();
+
+        OpsRules rules = new(geometry, catalog, navTuning);
+        WorldState world = new(geometry.HeightMap);
+
+        UnitDefinition reconDef = catalog.RequireDefinition("recon_vehicle");
+        ushort reconIdx = catalog.RequireDefinitionIndex("recon_vehicle");
+        UnitDefinition tankDef = catalog.RequireDefinition("prototype_tank");
+        ushort tankIdx = catalog.RequireDefinitionIndex("prototype_tank");
+
+        // Side 1: base in open area [200, 200]
+        world.CreateUnit(1, reconIdx, new Vector2(200f, 200f), reconDef.Speed);
+        world.CreateUnit(1, tankIdx, new Vector2(215f, 200f), tankDef.Speed);
+        world.CreateUnit(1, tankIdx, new Vector2(230f, 200f), tankDef.Speed);
+
+        // Side 2: base in eastern area [1800, 1800]
+        world.CreateUnit(2, reconIdx, new Vector2(1800f, 1800f), reconDef.Speed);
+        world.CreateUnit(2, tankIdx, new Vector2(1815f, 1800f), tankDef.Speed);
+        world.CreateUnit(2, tankIdx, new Vector2(1830f, 1800f), tankDef.Speed);
+
+        return new Simulation(world, rules);
+    }
+
+    public static MatchSetup CreateMatchSetup(StaticGeometry? geometry = null, string ruleSetId = "LargeNavigation", UnitCatalog? catalog = null)
+    {
+        geometry ??= CreateStaticGeometry();
+        catalog ??= PrototypeScenario.LoadCatalog();
+        return new MatchSetup(
+            MatchSetup.CurrentProtocolVersion,
+            catalog.ContentHash,
+            MatchSetup.ComputeMapHash(geometry),
+            ruleSetId);
+    }
+}
+
 
 public static class CombatScenario
 {

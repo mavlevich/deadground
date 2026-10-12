@@ -10,9 +10,21 @@ namespace DeadGround.Engine;
 public sealed class NavigationGrid
 {
     private const float GeometryTolerance = 1e-4f;
+    private const float SpatialBucketSize = 32.0f;
 
     private readonly GroundedObstacle[] _obstacles;
     private readonly float[] _clearance;
+    private readonly HierarchicalNavGraph[] _hierarchicalGraphs;
+
+    // 2D spatial bucket partitioning for fast O(1) obstacle queries
+    private readonly int _bucketCols;
+    private readonly int _bucketRows;
+    private readonly int[] _bucketOffsets;
+    private readonly int[] _bucketCounts;
+    private readonly int[] _bucketObstacleIndices;
+    private readonly int[] _obstacleQueryStamp;
+    private int _currentQueryStamp;
+    private readonly int[] _windowObstacleBuffer;
 
     public const int MaxSupportedCells = 262_144;
 
@@ -23,18 +35,27 @@ public sealed class NavigationGrid
     public int Rows { get; }
     public int TotalCells => Columns * Rows;
     public int GroundedObstacleCount => _obstacles.Length;
+    public ReadOnlySpan<GroundedObstacle> GroundedObstacles => _obstacles;
 
     public readonly record struct GroundedObstacle(float MinX, float MinZ, float MaxX, float MaxZ);
 
-    public NavigationGrid(StaticGeometry geometry, float cellSize = NavigationTuning.DefaultCellSize)
+    public NavigationGrid(
+        StaticGeometry geometry,
+        float cellSize = NavigationTuning.DefaultCellSize,
+        bool enableHierarchical = false)
         : this(
             (geometry ?? throw new ArgumentNullException(nameof(geometry))).HeightMap,
             geometry.Structures is { Count: > 0 } ? GetStructuresArray(geometry) : [],
-            cellSize)
+            cellSize,
+            enableHierarchical)
     {
     }
 
-    public NavigationGrid(HeightMap heightMap, ReadOnlySpan<OpaqueStructure> structures, float cellSize = NavigationTuning.DefaultCellSize)
+    public NavigationGrid(
+        HeightMap heightMap,
+        ReadOnlySpan<OpaqueStructure> structures,
+        float cellSize = NavigationTuning.DefaultCellSize,
+        bool enableHierarchical = false)
     {
         ArgumentNullException.ThrowIfNull(heightMap);
         if (!float.IsFinite(cellSize) || cellSize <= 0f)
@@ -46,11 +67,14 @@ public sealed class NavigationGrid
         Columns = Math.Max(1, (int)MathF.Ceiling(MapWidth / cellSize));
         Rows = Math.Max(1, (int)MathF.Ceiling(MapDepth / cellSize));
 
-        if ((long)Columns * Rows > MaxSupportedCells)
+        if (!enableHierarchical && (long)Columns * Rows > MaxSupportedCells)
         {
             throw new InvalidOperationException(
                 $"NavigationGrid of {Columns}x{Rows} ({Columns * Rows} cells) exceeds flat prototype limit of {MaxSupportedCells} cells. Large maps require hierarchical navigation.");
         }
+
+        bool isFlatSupported = (long)Columns * Rows <= MaxSupportedCells;
+
 
         // Filter only grounded structures
         int groundedCount = 0;
@@ -68,43 +92,127 @@ public sealed class NavigationGrid
             _obstacles[writeIdx++] = new GroundedObstacle(s.MinX, s.MinZ, s.MaxX, s.MaxZ);
         }
 
-        // Build precomputed clearance field for grid cell centers
-        _clearance = new float[Columns * Rows];
-        for (int r = 0; r < Rows; r++)
+        if (isFlatSupported)
         {
-            float cz = (r + 0.5f) * CellSize;
-            for (int c = 0; c < Columns; c++)
+            // Build precomputed clearance field for grid cell centers on bounded prototype maps
+            _clearance = new float[Columns * Rows];
+            for (int r = 0; r < Rows; r++)
             {
-                float cx = (c + 0.5f) * CellSize;
-
-                // Distance to map boundaries
-                float edgeDist = MathF.Min(MathF.Min(cx, MapWidth - cx), MathF.Min(cz, MapDepth - cz));
-                if (edgeDist <= 0f)
+                float cz = (r + 0.5f) * CellSize;
+                for (int c = 0; c < Columns; c++)
                 {
-                    _clearance[r * Columns + c] = 0f;
-                    continue;
-                }
+                    float cx = (c + 0.5f) * CellSize;
 
-                float cellClearance = edgeDist;
-                for (int o = 0; o < _obstacles.Length; o++)
-                {
-                    GroundedObstacle obs = _obstacles[o];
-                    if (cx >= obs.MinX && cx <= obs.MaxX && cz >= obs.MinZ && cz <= obs.MaxZ)
+                    // Distance to map boundaries
+                    float edgeDist = MathF.Min(MathF.Min(cx, MapWidth - cx), MathF.Min(cz, MapDepth - cz));
+                    if (edgeDist <= 0f)
                     {
-                        cellClearance = 0f;
-                        break;
+                        _clearance[r * Columns + c] = 0f;
+                        continue;
                     }
 
-                    float dx = MathF.Max(0f, MathF.Max(obs.MinX - cx, cx - obs.MaxX));
-                    float dz = MathF.Max(0f, MathF.Max(obs.MinZ - cz, cz - obs.MaxZ));
-                    float dist = MathF.Sqrt(dx * dx + dz * dz);
-                    if (dist < cellClearance) cellClearance = dist;
-                }
+                    float cellClearance = edgeDist;
+                    for (int o = 0; o < _obstacles.Length; o++)
+                    {
+                        GroundedObstacle obs = _obstacles[o];
+                        if (cx >= obs.MinX && cx <= obs.MaxX && cz >= obs.MinZ && cz <= obs.MaxZ)
+                        {
+                            cellClearance = 0f;
+                            break;
+                        }
 
-                _clearance[r * Columns + c] = MathF.Max(0f, cellClearance);
+                        float dx = MathF.Max(0f, MathF.Max(obs.MinX - cx, cx - obs.MaxX));
+                        float dz = MathF.Max(0f, MathF.Max(obs.MinZ - cz, cz - obs.MaxZ));
+                        float dist = MathF.Sqrt(dx * dx + dz * dz);
+                        if (dist < cellClearance) cellClearance = dist;
+                    }
+
+                    _clearance[r * Columns + c] = MathF.Max(0f, cellClearance);
+                }
             }
         }
+        else
+        {
+            _clearance = [];
+        }
+
+        // Build 2D spatial bucket grid for fast O(1) obstacle queries
+        _bucketCols = Math.Max(1, (int)MathF.Ceiling(MapWidth / SpatialBucketSize));
+        _bucketRows = Math.Max(1, (int)MathF.Ceiling(MapDepth / SpatialBucketSize));
+        int totalBuckets = _bucketCols * _bucketRows;
+
+        int[] tempCounts = new int[totalBuckets];
+        for (int i = 0; i < _obstacles.Length; i++)
+        {
+            GroundedObstacle obs = _obstacles[i];
+            int minBx = Math.Clamp((int)(obs.MinX / SpatialBucketSize), 0, _bucketCols - 1);
+            int maxBx = Math.Clamp((int)(obs.MaxX / SpatialBucketSize), 0, _bucketCols - 1);
+            int minBz = Math.Clamp((int)(obs.MinZ / SpatialBucketSize), 0, _bucketRows - 1);
+            int maxBz = Math.Clamp((int)(obs.MaxZ / SpatialBucketSize), 0, _bucketRows - 1);
+
+            for (int bz = minBz; bz <= maxBz; bz++)
+            {
+                int row = bz * _bucketCols;
+                for (int bx = minBx; bx <= maxBx; bx++)
+                {
+                    tempCounts[row + bx]++;
+                }
+            }
+        }
+
+        _bucketOffsets = new int[totalBuckets];
+        _bucketCounts = new int[totalBuckets];
+        int totalEntries = 0;
+        for (int b = 0; b < totalBuckets; b++)
+        {
+            _bucketOffsets[b] = totalEntries;
+            totalEntries += tempCounts[b];
+        }
+
+        _bucketObstacleIndices = new int[totalEntries];
+        int[] currentFill = new int[totalBuckets];
+
+        for (int i = 0; i < _obstacles.Length; i++)
+        {
+            GroundedObstacle obs = _obstacles[i];
+            int minBx = Math.Clamp((int)(obs.MinX / SpatialBucketSize), 0, _bucketCols - 1);
+            int maxBx = Math.Clamp((int)(obs.MaxX / SpatialBucketSize), 0, _bucketCols - 1);
+            int minBz = Math.Clamp((int)(obs.MinZ / SpatialBucketSize), 0, _bucketRows - 1);
+            int maxBz = Math.Clamp((int)(obs.MaxZ / SpatialBucketSize), 0, _bucketRows - 1);
+
+            for (int bz = minBz; bz <= maxBz; bz++)
+            {
+                int row = bz * _bucketCols;
+                for (int bx = minBx; bx <= maxBx; bx++)
+                {
+                    int b = row + bx;
+                    int pos = _bucketOffsets[b] + currentFill[b]++;
+                    _bucketObstacleIndices[pos] = i;
+                    _bucketCounts[b]++;
+                }
+            }
+        }
+
+        _obstacleQueryStamp = new int[_obstacles.Length];
+        _currentQueryStamp = 0;
+        _windowObstacleBuffer = new int[_obstacles.Length];
+
+        _hierarchicalGraphs = new HierarchicalNavGraph[4];
+        _hierarchicalGraphs[(int)MovementClass.Foot] = new HierarchicalNavGraph(this, MovementClass.Foot, cellSize: CellSize);
+        _hierarchicalGraphs[(int)MovementClass.Wheeled] = new HierarchicalNavGraph(this, MovementClass.Wheeled, cellSize: CellSize);
+        _hierarchicalGraphs[(int)MovementClass.Medium] = new HierarchicalNavGraph(this, MovementClass.Medium, cellSize: CellSize);
+        _hierarchicalGraphs[(int)MovementClass.Tracked] = new HierarchicalNavGraph(this, MovementClass.Tracked, cellSize: CellSize);
     }
+
+    public bool IsFlatGrid => _clearance.Length > 0;
+    public HierarchicalNavGraph HierarchicalGraph => GetHierarchicalGraph(MovementClass.Tracked);
+
+    public HierarchicalNavGraph GetHierarchicalGraph(MovementClass movementClass) =>
+        _hierarchicalGraphs[(int)movementClass];
+
+    public HierarchicalNavGraph GetHierarchicalGraph(float radius) =>
+        GetHierarchicalGraph(MovementClassExtensions.FromRadius(radius));
+
 
     private static OpaqueStructure[] GetStructuresArray(StaticGeometry geometry)
     {
@@ -134,13 +242,184 @@ public sealed class NavigationGrid
     public float GetCellClearance(int col, int row)
     {
         if (!IsInBounds(col, row)) return 0f;
-        return _clearance[row * Columns + col];
+        if (IsFlatGrid) return _clearance[row * Columns + col];
+        return ComputePointClearance(CellCenter(col, row));
     }
 
     public bool IsCellPassable(int col, int row, float radius)
     {
         if (!IsInBounds(col, row)) return false;
-        return _clearance[row * Columns + col] >= radius;
+        if (IsFlatGrid) return _clearance[row * Columns + col] >= radius;
+        return IsPointClear(CellCenter(col, row), radius);
+    }
+
+    public bool HasObstaclesInBox(float minX, float minZ, float maxX, float maxZ)
+    {
+        if (_obstacles.Length == 0) return false;
+        int minBx = Math.Clamp((int)(minX / SpatialBucketSize), 0, _bucketCols - 1);
+        int maxBx = Math.Clamp((int)(maxX / SpatialBucketSize), 0, _bucketCols - 1);
+        int minBz = Math.Clamp((int)(minZ / SpatialBucketSize), 0, _bucketRows - 1);
+        int maxBz = Math.Clamp((int)(maxZ / SpatialBucketSize), 0, _bucketRows - 1);
+
+        for (int bz = minBz; bz <= maxBz; bz++)
+        {
+            int row = bz * _bucketCols;
+            for (int bx = minBx; bx <= maxBx; bx++)
+            {
+                int b = row + bx;
+                int start = _bucketOffsets[b];
+                int count = _bucketCounts[b];
+                for (int i = 0; i < count; i++)
+                {
+                    int obsIdx = _bucketObstacleIndices[start + i];
+                    ref readonly GroundedObstacle obs = ref _obstacles[obsIdx];
+                    if (obs.MaxX >= minX && obs.MinX <= maxX && obs.MaxZ >= minZ && obs.MinZ <= maxZ)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    public int QueryObstacles(float minX, float minZ, float maxX, float maxZ, Span<int> results)
+    {
+        if (_obstacles.Length == 0 || results.Length == 0) return 0;
+        int minBx = Math.Clamp((int)(minX / SpatialBucketSize), 0, _bucketCols - 1);
+        int maxBx = Math.Clamp((int)(maxX / SpatialBucketSize), 0, _bucketCols - 1);
+        int minBz = Math.Clamp((int)(minZ / SpatialBucketSize), 0, _bucketRows - 1);
+        int maxBz = Math.Clamp((int)(maxZ / SpatialBucketSize), 0, _bucketRows - 1);
+
+        _currentQueryStamp++;
+        if (_currentQueryStamp == int.MaxValue)
+        {
+            Array.Clear(_obstacleQueryStamp);
+            _currentQueryStamp = 1;
+        }
+
+        int count = 0;
+        for (int bz = minBz; bz <= maxBz; bz++)
+        {
+            int row = bz * _bucketCols;
+            for (int bx = minBx; bx <= maxBx; bx++)
+            {
+                int b = row + bx;
+                int start = _bucketOffsets[b];
+                int bCount = _bucketCounts[b];
+                for (int i = 0; i < bCount; i++)
+                {
+                    int obsIdx = _bucketObstacleIndices[start + i];
+                    if (_obstacleQueryStamp[obsIdx] == _currentQueryStamp) continue;
+                    _obstacleQueryStamp[obsIdx] = _currentQueryStamp;
+
+                    ref readonly GroundedObstacle obs = ref _obstacles[obsIdx];
+                    if (obs.MaxX >= minX && obs.MinX <= maxX && obs.MaxZ >= minZ && obs.MinZ <= maxZ)
+                    {
+                        results[count++] = obsIdx;
+                        if (count == results.Length) return count;
+                    }
+                }
+            }
+        }
+        return count;
+    }
+
+    public float ComputePointClearance(Vector2 point)
+    {
+        float edgeDist = MathF.Min(MathF.Min(point.X, MapWidth - point.X), MathF.Min(point.Y, MapDepth - point.Y));
+        if (edgeDist <= 0f) return 0f;
+        if (_obstacles.Length == 0) return edgeDist;
+
+        float searchRadius = MathF.Min(edgeDist, 50.0f);
+        int minBx = Math.Clamp((int)((point.X - searchRadius) / SpatialBucketSize), 0, _bucketCols - 1);
+        int maxBx = Math.Clamp((int)((point.X + searchRadius) / SpatialBucketSize), 0, _bucketCols - 1);
+        int minBz = Math.Clamp((int)((point.Y - searchRadius) / SpatialBucketSize), 0, _bucketRows - 1);
+        int maxBz = Math.Clamp((int)((point.Y + searchRadius) / SpatialBucketSize), 0, _bucketRows - 1);
+
+        float clearance = searchRadius;
+        bool foundAny = false;
+
+        for (int bz = minBz; bz <= maxBz; bz++)
+        {
+            int row = bz * _bucketCols;
+            for (int bx = minBx; bx <= maxBx; bx++)
+            {
+                int b = row + bx;
+                int start = _bucketOffsets[b];
+                int count = _bucketCounts[b];
+                for (int i = 0; i < count; i++)
+                {
+                    int obsIdx = _bucketObstacleIndices[start + i];
+                    ref readonly GroundedObstacle obs = ref _obstacles[obsIdx];
+                    if (point.X >= obs.MinX && point.X <= obs.MaxX && point.Y >= obs.MinZ && point.Y <= obs.MaxZ)
+                        return 0f;
+
+                    float dx = MathF.Max(0f, MathF.Max(obs.MinX - point.X, point.X - obs.MaxX));
+                    float dz = MathF.Max(0f, MathF.Max(obs.MinZ - point.Y, point.Y - obs.MaxZ));
+                    float dist = MathF.Sqrt(dx * dx + dz * dz);
+                    if (dist < clearance)
+                    {
+                        clearance = dist;
+                        foundAny = true;
+                    }
+                }
+            }
+        }
+
+        if (foundAny) return MathF.Max(0f, clearance);
+        return MathF.Min(edgeDist, searchRadius);
+    }
+
+    public void PopulateWindowClearance(
+        float minX, float minZ,
+        int cols, int rows,
+        float cellSize,
+        Span<float> clearance)
+    {
+        float effectiveRadiusMargin = 10.0f;
+        float maxX = minX + cols * cellSize;
+        float maxZ = minZ + rows * cellSize;
+
+        int overlapCount = QueryObstacles(
+            minX - effectiveRadiusMargin,
+            minZ - effectiveRadiusMargin,
+            maxX + effectiveRadiusMargin,
+            maxZ + effectiveRadiusMargin,
+            _windowObstacleBuffer);
+
+        for (int r = 0; r < rows; r++)
+        {
+            float cz = minZ + (r + 0.5f) * cellSize;
+            for (int c = 0; c < cols; c++)
+            {
+                float cx = minX + (c + 0.5f) * cellSize;
+                float edgeDist = MathF.Min(MathF.Min(cx, MapWidth - cx), MathF.Min(cz, MapDepth - cz));
+                if (edgeDist <= 0f)
+                {
+                    clearance[r * cols + c] = 0f;
+                    continue;
+                }
+
+                float cellClearance = edgeDist;
+                for (int oi = 0; oi < overlapCount; oi++)
+                {
+                    ref readonly GroundedObstacle obs = ref _obstacles[_windowObstacleBuffer[oi]];
+                    if (cx >= obs.MinX && cx <= obs.MaxX && cz >= obs.MinZ && cz <= obs.MaxZ)
+                    {
+                        cellClearance = 0f;
+                        break;
+                    }
+
+                    float dx = MathF.Max(0f, MathF.Max(obs.MinX - cx, cx - obs.MaxX));
+                    float dz = MathF.Max(0f, MathF.Max(obs.MinZ - cz, cz - obs.MaxZ));
+                    float dist = MathF.Sqrt(dx * dx + dz * dz);
+                    if (dist < cellClearance) cellClearance = dist;
+                }
+
+                clearance[r * cols + c] = MathF.Max(0f, cellClearance);
+            }
+        }
     }
 
     public bool IsPointClear(Vector2 point, float radius)
@@ -152,17 +431,35 @@ public sealed class NavigationGrid
             return false;
         }
 
-        for (int i = 0; i < _obstacles.Length; i++)
-        {
-            GroundedObstacle obs = _obstacles[i];
-            if (point.X >= obs.MinX && point.X <= obs.MaxX && point.Y >= obs.MinZ && point.Y <= obs.MaxZ)
-                return false;
+        if (_obstacles.Length == 0) return true;
 
-            float dx = MathF.Max(0f, MathF.Max(obs.MinX - point.X, point.X - obs.MaxX));
-            float dz = MathF.Max(0f, MathF.Max(obs.MinZ - point.Y, point.Y - obs.MaxZ));
-            float distSq = dx * dx + dz * dz;
-            if (distSq < effectiveRadius * effectiveRadius)
-                return false;
+        int minBx = Math.Clamp((int)((point.X - effectiveRadius) / SpatialBucketSize), 0, _bucketCols - 1);
+        int maxBx = Math.Clamp((int)((point.X + effectiveRadius) / SpatialBucketSize), 0, _bucketCols - 1);
+        int minBz = Math.Clamp((int)((point.Y - effectiveRadius) / SpatialBucketSize), 0, _bucketRows - 1);
+        int maxBz = Math.Clamp((int)((point.Y + effectiveRadius) / SpatialBucketSize), 0, _bucketRows - 1);
+
+        float radiusSq = effectiveRadius * effectiveRadius;
+        for (int bz = minBz; bz <= maxBz; bz++)
+        {
+            int row = bz * _bucketCols;
+            for (int bx = minBx; bx <= maxBx; bx++)
+            {
+                int b = row + bx;
+                int start = _bucketOffsets[b];
+                int count = _bucketCounts[b];
+                for (int i = 0; i < count; i++)
+                {
+                    int obsIdx = _bucketObstacleIndices[start + i];
+                    ref readonly GroundedObstacle obs = ref _obstacles[obsIdx];
+                    if (point.X >= obs.MinX && point.X <= obs.MaxX && point.Y >= obs.MinZ && point.Y <= obs.MaxZ)
+                        return false;
+
+                    float dx = MathF.Max(0f, MathF.Max(obs.MinX - point.X, point.X - obs.MaxX));
+                    float dz = MathF.Max(0f, MathF.Max(obs.MinZ - point.Y, point.Y - obs.MaxZ));
+                    if (dx * dx + dz * dz < radiusSq)
+                        return false;
+                }
+            }
         }
 
         return true;
@@ -185,26 +482,65 @@ public sealed class NavigationGrid
             return false;
         }
 
+        if (_obstacles.Length == 0) return true;
+
         float segMinX = MathF.Min(start.X, end.X) - effectiveRadius;
         float segMaxX = MathF.Max(start.X, end.X) + effectiveRadius;
         float segMinZ = MathF.Min(start.Y, end.Y) - effectiveRadius;
         float segMaxZ = MathF.Max(start.Y, end.Y) + effectiveRadius;
 
-        for (int i = 0; i < _obstacles.Length; i++)
+        int minBx = Math.Clamp((int)(segMinX / SpatialBucketSize), 0, _bucketCols - 1);
+        int maxBx = Math.Clamp((int)(segMaxX / SpatialBucketSize), 0, _bucketCols - 1);
+        int minBz = Math.Clamp((int)(segMinZ / SpatialBucketSize), 0, _bucketRows - 1);
+        int maxBz = Math.Clamp((int)(segMaxZ / SpatialBucketSize), 0, _bucketRows - 1);
+
+        if (minBx == maxBx && minBz == maxBz)
         {
-            GroundedObstacle obs = _obstacles[i];
+            int b = minBz * _bucketCols + minBx;
+            int startIdx = _bucketOffsets[b];
+            int count = _bucketCounts[b];
+            for (int i = 0; i < count; i++)
+            {
+                int obsIdx = _bucketObstacleIndices[startIdx + i];
+                ref readonly GroundedObstacle obs = ref _obstacles[obsIdx];
+                if (segMaxX < obs.MinX || segMinX > obs.MaxX || segMaxZ < obs.MinZ || segMinZ > obs.MaxZ)
+                    continue;
 
-            // Broad-phase AABB rejection
-            if (segMaxX < obs.MinX || segMinX > obs.MaxX || segMaxZ < obs.MinZ || segMinZ > obs.MaxZ)
-                continue;
+                if (SegmentIntersectsExpandedObstacle(start, end, obs, effectiveRadius))
+                    return false;
+            }
+            return true;
+        }
 
-            // Detailed continuous Minkowski sum check:
-            // The region of points within distance < effectiveRadius of an AABB is the union of:
-            // 1. Box expanded in X
-            // 2. Box expanded in Z
-            // 3. Four corner circles
-            if (SegmentIntersectsExpandedObstacle(start, end, obs, effectiveRadius))
-                return false;
+        _currentQueryStamp++;
+        if (_currentQueryStamp == int.MaxValue)
+        {
+            Array.Clear(_obstacleQueryStamp);
+            _currentQueryStamp = 1;
+        }
+
+        for (int bz = minBz; bz <= maxBz; bz++)
+        {
+            int row = bz * _bucketCols;
+            for (int bx = minBx; bx <= maxBx; bx++)
+            {
+                int b = row + bx;
+                int startIdx = _bucketOffsets[b];
+                int count = _bucketCounts[b];
+                for (int i = 0; i < count; i++)
+                {
+                    int obsIdx = _bucketObstacleIndices[startIdx + i];
+                    if (_obstacleQueryStamp[obsIdx] == _currentQueryStamp) continue;
+                    _obstacleQueryStamp[obsIdx] = _currentQueryStamp;
+
+                    ref readonly GroundedObstacle obs = ref _obstacles[obsIdx];
+                    if (segMaxX < obs.MinX || segMinX > obs.MaxX || segMaxZ < obs.MinZ || segMinZ > obs.MaxZ)
+                        continue;
+
+                    if (SegmentIntersectsExpandedObstacle(start, end, obs, effectiveRadius))
+                        return false;
+                }
+            }
         }
 
         return true;

@@ -15,18 +15,49 @@ public enum PathRequestStatus : byte
 }
 
 /// <summary>
-/// Configuration tuning parameters for server-side static obstacle navigation and A* planning.
+/// Execution stage of the multi-stage path planning pipeline.
+/// </summary>
+public enum NavigationSearchStage : byte
+{
+    None = 0,
+    GlobalPlanning = 1,
+    AreaPreparation = 2,
+    LocalPlanning = 3,
+    PathSmoothing = 4,
+    Completed = 5,
+    Failed = 6
+}
+
+/// <summary>
+/// Configuration tuning parameters for server-side static obstacle navigation and hierarchical planning.
 /// </summary>
 public sealed record NavigationTuning(
     int MaxNodeExpansionsPerTick = NavigationTuning.DefaultMaxNodeExpansionsPerTick,
     int MaxPendingRequests = NavigationTuning.DefaultMaxPendingRequests,
     int MaxWaypointsPerRoute = NavigationTuning.DefaultMaxWaypointsPerRoute,
     float CellSize = NavigationTuning.DefaultCellSize,
-    float MaxSnapDistance = NavigationTuning.DefaultMaxSnapDistance)
+    float MaxSnapDistance = NavigationTuning.DefaultMaxSnapDistance,
+    int MaxGlobalExpansionsPerTick = NavigationTuning.DefaultMaxGlobalExpansionsPerTick,
+    int MaxLocalExpansionsPerTick = NavigationTuning.DefaultMaxLocalExpansionsPerTick,
+    int MaxSmoothingRaycastsPerTick = NavigationTuning.DefaultMaxSmoothingRaycastsPerTick,
+    int MaxAreaPrepCellsPerTick = NavigationTuning.DefaultMaxAreaPrepCellsPerTick,
+    int MaxTotalExpansionsPerRequest = NavigationTuning.DefaultMaxTotalExpansionsPerRequest,
+    float SectorSize = NavigationTuning.DefaultSectorSize,
+    float MaxLocalWindowSize = NavigationTuning.DefaultMaxLocalWindowSize,
+    int ChunkLookaheadWaypoints = NavigationTuning.DefaultChunkLookaheadWaypoints)
 {
     public const int DefaultMaxNodeExpansionsPerTick = 1000;
     public const int DefaultMaxPendingRequests = 256;
     public const int DefaultMaxWaypointsPerRoute = 64;
     public const float DefaultCellSize = 0.5f;
     public const float DefaultMaxSnapDistance = 3.0f;
+    public const int DefaultMaxGlobalExpansionsPerTick = 500;
+    public const int DefaultMaxLocalExpansionsPerTick = 1000;
+    public const int DefaultMaxSmoothingRaycastsPerTick = 200;
+    public const int DefaultMaxAreaPrepCellsPerTick = 40000;
+    public const int DefaultMaxTotalExpansionsPerRequest = 20000;
+    public const float DefaultSectorSize = 50.0f;
+    public const float DefaultMaxLocalWindowSize = 160.0f;
+    public const int DefaultChunkLookaheadWaypoints = 2;
 }
+

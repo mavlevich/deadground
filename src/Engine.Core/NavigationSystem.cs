@@ -4,12 +4,16 @@ using System.Runtime.CompilerServices;
 namespace DeadGround.Engine;
 
 /// <summary>
-/// Server-side authoritative navigation and deterministic path planning system.
-/// Executes time-sliced A* search over NavigationGrid with bounded per-tick node expansion budget.
-/// Strictly allocation-free during simulation ticks.
+/// Server-side authoritative hierarchical navigation and deterministic path planning system.
+/// Combines high-level Region-Portal Graph planning with fine local window A* search.
+/// Strictly allocation-free during simulation ticks with bounded per-tick work across all expensive stages.
 /// </summary>
 public sealed class NavigationSystem : ISimulationSystem
 {
+    private const float GeometryTolerance = 1e-4f;
+    private const int MaxGlobalPlanPortals = 1024;
+    private const int MaxLocalWindowCells = 262_144;
+
     private readonly NavigationGrid _grid;
     private readonly IUnitMovementCatalog _catalog;
     private readonly NavigationTuning _tuning;
@@ -34,13 +38,29 @@ public sealed class NavigationSystem : ISimulationSystem
     private int _queueTail;
     private int _queueCount;
 
-    // Active in-flight search state
+    // Active in-flight search state machine
     private bool _hasActiveSearch;
     private PathRequest _activeRequest;
-    private readonly int _virtualGoalCell;
+    private NavigationSearchStage _activeStage;
     private float _activeRadius;
+    private int _activeTotalExpansions;
 
-    // A* preallocated search buffers (sized to TotalCells + 1 for virtual goal)
+    // Global planning state
+    private readonly Vector2[] _activeGlobalPortals;
+    private int _activeGlobalPortalCount;
+
+    // Local window definition
+    private float _localWinMinX;
+    private float _localWinMinZ;
+    private int _localWinCols;
+    private int _localWinRows;
+    private int _localWinTotalCells;
+    private readonly float[] _localClearance;
+    private int _areaPrepCurrentRow;
+    private int _areaPrepCurrentCol;
+
+    // Local A* preallocated search buffers
+    private readonly int _virtualGoalCell;
     private readonly int[] _heap;
     private int _heapCount;
     private readonly int[] _heapPosition;
@@ -54,7 +74,12 @@ public sealed class NavigationSystem : ISimulationSystem
 
     // Path reconstruction and smoothing buffers
     private readonly Vector2[] _rawPathBuffer;
+    private int _rawPathCount;
     private readonly Vector2[] _smoothedPathBuffer;
+    private int _smoothingAnchorIdx;
+    private int _smoothingCandidateIdx;
+    private int _smoothedCount;
+    private Vector2 _smoothingCurrentAnchor;
 
     // Bounded live unit storage slots and lookup table
     private readonly int _maxUnits;
@@ -66,7 +91,7 @@ public sealed class NavigationSystem : ISimulationSystem
     private readonly int _idTableMask;
     private uint _lastWorldRemovalCount;
 
-    // Preallocated per-slot route storage
+    // Preallocated per-slot route storage and chunk chaining
     private readonly Vector2[] _routeWaypoints;
     private readonly int[] _routeCounts;
     private readonly int[] _routeIndices;
@@ -74,16 +99,63 @@ public sealed class NavigationSystem : ISimulationSystem
     private readonly PathRequestStatus[] _unitStatuses;
     private readonly uint[] _unitOrderGenerations;
     private readonly bool[] _unitHasActiveRoutes;
+    private readonly bool[] _unitChunkPending;
+    private readonly int[] _unitChunkWaitTicks;
     private uint _nextOrderGeneration;
+
+    // Next chunk staging buffers per unit slot
+    private readonly Vector2[] _slotNextChunkWaypoints;
+    private readonly int[] _slotNextChunkCounts;
+
+    // Global portal plans stored per unit slot
+    private readonly Vector2[] _slotGlobalPortals;
+    private readonly int[] _slotGlobalPortalCounts;
+    private readonly int[] _slotGlobalPortalIndices;
 
     public NavigationGrid Grid => _grid;
     public NavigationTuning Tuning => _tuning;
     public int PendingRequests => _queueCount + (_hasActiveSearch ? 1 : 0);
-    public int NodesExpandedThisTick { get; private set; }
-    public int TotalNodesExpanded { get; private set; }
+    public NavigationSearchStage ActiveStage => _activeStage;
+
+    // Metrics and counters
+    public int NodesExpandedThisTick => GlobalExpansionsThisTick + LocalExpansionsThisTick;
+    public int TotalNodesExpanded => TotalGlobalExpansions + TotalLocalExpansions;
+
+    public int GlobalExpansionsThisTick { get; private set; }
+    public int TotalGlobalExpansions { get; private set; }
+
+    public int LocalExpansionsThisTick { get; private set; }
+    public int TotalLocalExpansions { get; private set; }
+
+    public int SmoothingRaycastsThisTick { get; private set; }
+    public int TotalSmoothingRaycasts { get; private set; }
+
+    public int AreaPrepCellsThisTick { get; private set; }
+    public int TotalAreaPrepCells { get; private set; }
+
     public int CompletedSearches { get; private set; }
     public int FailedSearches { get; private set; }
     public int CapacityExceeded { get; private set; }
+
+    public int ChunkRequestsCompleted { get; private set; }
+    public int ChunkWaitTicks { get; private set; }
+
+    public long EstimatedMemoryBytes
+    {
+        get
+        {
+            long bytes = 0;
+            bytes += _requestQueue.Length * Unsafe.SizeOf<PathRequest>() * 2;
+            bytes += _maxUnits * 4 * 8;
+            bytes += _routeWaypoints.Length * 8;
+            bytes += _slotNextChunkWaypoints.Length * 8;
+            bytes += _slotGlobalPortals.Length * 8;
+            bytes += _localClearance.Length * 4;
+            bytes += _heap.Length * 4 * 7;
+            bytes += _rawPathBuffer.Length * 8;
+            return bytes;
+        }
+    }
 
     public readonly record struct PathRequest(
         int Player,
@@ -91,7 +163,8 @@ public sealed class NavigationSystem : ISimulationSystem
         Vector2 Start,
         Vector2 Target,
         float Radius,
-        uint OrderGeneration);
+        uint OrderGeneration,
+        bool IsChunkContinuation = false);
 
     public NavigationSystem(
         NavigationGrid grid,
@@ -110,9 +183,15 @@ public sealed class NavigationSystem : ISimulationSystem
         _requestQueue = new PathRequest[_tuning.MaxPendingRequests];
         _tempQueue = new PathRequest[_tuning.MaxPendingRequests];
 
-        int totalCells = _grid.TotalCells;
-        int nodeCount = totalCells + 1;
-        _virtualGoalCell = totalCells;
+        int localCellCapacity = _grid.IsFlatGrid
+            ? _grid.TotalCells
+            : Math.Min(MaxLocalWindowCells, Math.Max(4096, (int)MathF.Ceiling((_tuning.MaxLocalWindowSize / _grid.CellSize) * (_tuning.MaxLocalWindowSize / _grid.CellSize))));
+
+        int nodeCount = localCellCapacity + 1;
+        _virtualGoalCell = localCellCapacity;
+
+        _localClearance = new float[localCellCapacity];
+        _activeGlobalPortals = new Vector2[MaxGlobalPlanPortals];
 
         _heap = new int[nodeCount];
         _heapPosition = new int[nodeCount];
@@ -123,7 +202,7 @@ public sealed class NavigationSystem : ISimulationSystem
         _closedGen = new uint[nodeCount];
         _goalAnchorGen = new uint[nodeCount];
 
-        _rawPathBuffer = new Vector2[Math.Max(1024, totalCells + 4)];
+        _rawPathBuffer = new Vector2[Math.Max(1024, localCellCapacity + 4)];
         _smoothedPathBuffer = new Vector2[_tuning.MaxWaypointsPerRoute];
 
         // Slot management structures
@@ -148,6 +227,15 @@ public sealed class NavigationSystem : ISimulationSystem
         _unitStatuses = new PathRequestStatus[_maxUnits];
         _unitOrderGenerations = new uint[_maxUnits];
         _unitHasActiveRoutes = new bool[_maxUnits];
+        _unitChunkPending = new bool[_maxUnits];
+        _unitChunkWaitTicks = new int[_maxUnits];
+
+        _slotNextChunkWaypoints = new Vector2[_maxUnits * _tuning.MaxWaypointsPerRoute];
+        _slotNextChunkCounts = new int[_maxUnits];
+
+        _slotGlobalPortals = new Vector2[_maxUnits * MaxGlobalPlanPortals];
+        _slotGlobalPortalCounts = new int[_maxUnits];
+        _slotGlobalPortalIndices = new int[_maxUnits];
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -225,6 +313,11 @@ public sealed class NavigationSystem : ISimulationSystem
                 _routeIndices[slot] = 0;
                 _unitOrderGenerations[slot] = 0;
                 _unitFinalTargets[slot] = Vector2.Zero;
+                _unitChunkPending[slot] = false;
+                _unitChunkWaitTicks[slot] = 0;
+                _slotNextChunkCounts[slot] = 0;
+                _slotGlobalPortalCounts[slot] = 0;
+                _slotGlobalPortalIndices[slot] = 0;
                 return true;
             }
             idx = (idx + 1) & mask;
@@ -246,7 +339,6 @@ public sealed class NavigationSystem : ISimulationSystem
             idx = (idx + 1) & mask;
         }
 
-        // Backward-shift deletion in open-addressing table
         uint curr = idx;
         while (true)
         {
@@ -283,6 +375,11 @@ public sealed class NavigationSystem : ISimulationSystem
         _routeIndices[slot] = 0;
         _unitOrderGenerations[slot] = 0;
         _unitFinalTargets[slot] = Vector2.Zero;
+        _unitChunkPending[slot] = false;
+        _unitChunkWaitTicks[slot] = 0;
+        _slotNextChunkCounts[slot] = 0;
+        _slotGlobalPortalCounts[slot] = 0;
+        _slotGlobalPortalIndices[slot] = 0;
         _freeSlots[_freeSlotCount++] = slot;
     }
 
@@ -309,7 +406,7 @@ public sealed class NavigationSystem : ISimulationSystem
             {
                 if (_hasActiveSearch && _activeRequest.Unit == id)
                 {
-                    _hasActiveSearch = false;
+                    CancelActiveSearch();
                 }
                 ReleaseSlot(s);
             }
@@ -322,10 +419,17 @@ public sealed class NavigationSystem : ISimulationSystem
         {
             if (_hasActiveSearch && _activeRequest.Unit == unit)
             {
-                _hasActiveSearch = false;
+                CancelActiveSearch();
             }
             ReleaseSlot(slot);
         }
+    }
+
+    private void CancelActiveSearch()
+    {
+        _hasActiveSearch = false;
+        _activeStage = NavigationSearchStage.None;
+        _grid.GetHierarchicalGraph(_activeRadius > 0f ? _activeRadius : MovementClassExtensions.TrackedRadius).CancelGlobalSearch();
     }
 
     public PathRequestStatus GetUnitStatus(EntityId unit)
@@ -363,11 +467,14 @@ public sealed class NavigationSystem : ISimulationSystem
             {
                 if (!TrySnapDestination(unit.Position, command.Target, unitRadius, out _))
                 {
+                    _unitOrderGenerations[slot] = checked(++_nextOrderGeneration);
                     _unitStatuses[slot] = PathRequestStatus.InvalidDestination;
                     FailedSearches++;
                     _unitHasActiveRoutes[slot] = false;
                     _routeCounts[slot] = 0;
                     _routeIndices[slot] = 0;
+                    _unitChunkPending[slot] = false;
+                    _slotNextChunkCounts[slot] = 0;
                     world.UpdateUnitNavigation(command.Unit, unit.Position, unit.Position, false);
                     return false;
                 }
@@ -377,11 +484,9 @@ public sealed class NavigationSystem : ISimulationSystem
         // Cancel previous active search if it belonged to this unit
         if (_hasActiveSearch && _activeRequest.Unit == command.Unit)
         {
-            _hasActiveSearch = false;
+            CancelActiveSearch();
         }
 
-        // Keep previous active route running while the new path is being searched.
-        // Only bump order generation and mark status as Pending.
         uint orderGen = checked(++_nextOrderGeneration);
         _unitOrderGenerations[slot] = orderGen;
         if (!_unitHasActiveRoutes[slot])
@@ -389,9 +494,14 @@ public sealed class NavigationSystem : ISimulationSystem
             _unitFinalTargets[slot] = command.Target;
         }
         _unitStatuses[slot] = PathRequestStatus.Pending;
+        _unitChunkPending[slot] = false;
+        _unitChunkWaitTicks[slot] = 0;
+        _slotNextChunkCounts[slot] = 0;
+        _slotGlobalPortalCounts[slot] = 0;
+        _slotGlobalPortalIndices[slot] = 0;
 
         float radius = 1.0f;
-        Vector2 start = command.Target; // Resolved upon dequeue
+        Vector2 start = command.Target;
         _requestQueue[_queueTail] = new PathRequest(player, command.Unit, start, command.Target, radius, orderGen);
         _queueTail = (_queueTail + 1) % _requestQueue.Length;
         _queueCount++;
@@ -400,18 +510,22 @@ public sealed class NavigationSystem : ISimulationSystem
 
     public void ResetPlayer(int player)
     {
-        // 1. Cancel active in-flight search if it belongs to this player
         if (_hasActiveSearch && _activeRequest.Player == player)
         {
             EntityId unitId = _activeRequest.Unit;
-            _hasActiveSearch = false;
+            CancelActiveSearch();
             if (TryGetSlot(unitId, out int s))
             {
                 _unitStatuses[s] = PathRequestStatus.None;
+                _unitHasActiveRoutes[s] = false;
+                _routeCounts[s] = 0;
+                _routeIndices[s] = 0;
+                _unitFinalTargets[s] = Vector2.Zero;
+                _unitChunkPending[s] = false;
+                _slotNextChunkCounts[s] = 0;
             }
         }
 
-        // 2. Remove all pending deferred requests in queue for this player
         if (_queueCount > 0)
         {
             int remaining = 0;
@@ -426,6 +540,12 @@ public sealed class NavigationSystem : ISimulationSystem
                     if (TryGetSlot(req.Unit, out int s) && req.OrderGeneration == _unitOrderGenerations[s])
                     {
                         _unitStatuses[s] = PathRequestStatus.None;
+                        _unitHasActiveRoutes[s] = false;
+                        _routeCounts[s] = 0;
+                        _routeIndices[s] = 0;
+                        _unitFinalTargets[s] = Vector2.Zero;
+                        _unitChunkPending[s] = false;
+                        _slotNextChunkCounts[s] = 0;
                     }
                     continue;
                 }
@@ -449,9 +569,12 @@ public sealed class NavigationSystem : ISimulationSystem
 
         SweepRemovedUnits(world);
 
-        NodesExpandedThisTick = 0;
+        GlobalExpansionsThisTick = 0;
+        LocalExpansionsThisTick = 0;
+        SmoothingRaycastsThisTick = 0;
+        AreaPrepCellsThisTick = 0;
 
-        // 1. Process pathfinding requests up to per-tick expansion budget
+        // 1. Process pathfinding requests across hierarchical stages
         ProcessPlanning(world);
 
         // 2. Follow established routes and advance unit positions
@@ -472,13 +595,17 @@ public sealed class NavigationSystem : ISimulationSystem
                 _queueHead = (_queueHead + 1) % _requestQueue.Length;
                 _queueCount--;
 
-                if (!StartActiveSearch(world, req))
+                if (!StartActivePlanning(world, req))
                 {
                     continue;
                 }
             }
 
-            ExpandActiveSearch(world);
+            bool stageExhausted = AdvanceActivePlanning(world);
+            if (stageExhausted)
+            {
+                break;
+            }
         }
     }
 
@@ -515,7 +642,7 @@ public sealed class NavigationSystem : ISimulationSystem
                 radius = profile.Radius;
             }
 
-            Vector2 start = unit.Position;
+            Vector2 start = req.IsChunkContinuation ? req.Start : unit.Position;
             Vector2 target = req.Target;
 
             if (!_grid.IsPointClear(target, radius))
@@ -536,6 +663,16 @@ public sealed class NavigationSystem : ISimulationSystem
 
             if (Vector2.DistanceSquared(start, target) <= 1e-4f)
             {
+                if (req.IsChunkContinuation)
+                {
+                    if (_slotGlobalPortalCounts[slot] > 0 && _slotGlobalPortalIndices[slot] < _slotGlobalPortalCounts[slot])
+                    {
+                        _slotGlobalPortalIndices[slot]++;
+                    }
+                    _unitChunkPending[slot] = false;
+                    continue;
+                }
+
                 _unitStatuses[slot] = PathRequestStatus.PathFound;
                 _unitHasActiveRoutes[slot] = false;
                 _routeCounts[slot] = 0;
@@ -548,11 +685,39 @@ public sealed class NavigationSystem : ISimulationSystem
 
             if (_grid.IsSegmentClear(start, target, radius))
             {
-                SetUnitSingleWaypointRoute(slot, target);
-                _unitFinalTargets[slot] = target;
-                _unitStatuses[slot] = PathRequestStatus.PathFound;
-                CompletedSearches++;
-                world.UpdateUnitNavigation(req.Unit, unit.Position, target, true);
+                if (req.IsChunkContinuation)
+                {
+                    int offset = slot * _tuning.MaxWaypointsPerRoute;
+                    if (_unitHasActiveRoutes[slot] && _routeIndices[slot] >= _routeCounts[slot])
+                    {
+                        _routeWaypoints[offset] = target;
+                        _routeCounts[slot] = 1;
+                        _routeIndices[slot] = 0;
+                        _unitChunkWaitTicks[slot] = 0;
+                        world.UpdateUnitNavigation(req.Unit, unit.Position, _unitFinalTargets[slot], true);
+                    }
+                    else
+                    {
+                        _slotNextChunkWaypoints[offset] = target;
+                        _slotNextChunkCounts[slot] = 1;
+                    }
+                    _unitChunkPending[slot] = false;
+                    _unitStatuses[slot] = PathRequestStatus.PathFound;
+                    ChunkRequestsCompleted++;
+                    if (_slotGlobalPortalCounts[slot] > 0 && _slotGlobalPortalIndices[slot] < _slotGlobalPortalCounts[slot])
+                    {
+                        _slotGlobalPortalIndices[slot]++;
+                    }
+                }
+                else
+                {
+                    SetUnitSingleWaypointRoute(slot, target);
+                    _unitFinalTargets[slot] = target;
+                    _unitStatuses[slot] = PathRequestStatus.PathFound;
+                    _unitChunkPending[slot] = false;
+                    CompletedSearches++;
+                    world.UpdateUnitNavigation(req.Unit, unit.Position, target, true);
+                }
                 continue;
             }
 
@@ -568,7 +733,7 @@ public sealed class NavigationSystem : ISimulationSystem
         _queueCount = remainingCount;
     }
 
-    private bool StartActiveSearch(WorldState world, PathRequest req)
+    private bool StartActivePlanning(WorldState world, PathRequest req)
     {
         if (!world.TryGetUnit(req.Unit, out UnitState unit))
         {
@@ -592,7 +757,7 @@ public sealed class NavigationSystem : ISimulationSystem
             radius = profile.Radius;
         }
 
-        Vector2 start = unit.Position;
+        Vector2 start = req.IsChunkContinuation ? req.Start : unit.Position;
         Vector2 target = req.Target;
 
         if (!_grid.IsPointClear(target, radius))
@@ -613,6 +778,16 @@ public sealed class NavigationSystem : ISimulationSystem
 
         if (Vector2.DistanceSquared(start, target) <= 1e-4f)
         {
+            if (req.IsChunkContinuation)
+            {
+                if (_slotGlobalPortalCounts[slot] > 0 && _slotGlobalPortalIndices[slot] < _slotGlobalPortalCounts[slot])
+                {
+                    _slotGlobalPortalIndices[slot]++;
+                }
+                _unitChunkPending[slot] = false;
+                return false;
+            }
+
             _unitStatuses[slot] = PathRequestStatus.PathFound;
             _unitHasActiveRoutes[slot] = false;
             _routeCounts[slot] = 0;
@@ -625,80 +800,312 @@ public sealed class NavigationSystem : ISimulationSystem
 
         if (_grid.IsSegmentClear(start, target, radius))
         {
-            SetUnitSingleWaypointRoute(slot, target);
-            _unitFinalTargets[slot] = target;
-            _unitStatuses[slot] = PathRequestStatus.PathFound;
-            CompletedSearches++;
-            world.UpdateUnitNavigation(req.Unit, unit.Position, target, true);
+            if (req.IsChunkContinuation)
+            {
+                int offset = slot * _tuning.MaxWaypointsPerRoute;
+                if (_unitHasActiveRoutes[slot] && _routeIndices[slot] >= _routeCounts[slot])
+                {
+                    _routeWaypoints[offset] = target;
+                    _routeCounts[slot] = 1;
+                    _routeIndices[slot] = 0;
+                    _unitChunkWaitTicks[slot] = 0;
+                    world.UpdateUnitNavigation(req.Unit, unit.Position, _unitFinalTargets[slot], true);
+                }
+                else
+                {
+                    _slotNextChunkWaypoints[offset] = target;
+                    _slotNextChunkCounts[slot] = 1;
+                }
+                _unitChunkPending[slot] = false;
+                _unitStatuses[slot] = PathRequestStatus.PathFound;
+                ChunkRequestsCompleted++;
+                if (_slotGlobalPortalCounts[slot] > 0 && _slotGlobalPortalIndices[slot] < _slotGlobalPortalCounts[slot])
+                {
+                    _slotGlobalPortalIndices[slot]++;
+                }
+            }
+            else
+            {
+                SetUnitSingleWaypointRoute(slot, target);
+                _unitFinalTargets[slot] = target;
+                _unitStatuses[slot] = PathRequestStatus.PathFound;
+                _unitChunkPending[slot] = false;
+                CompletedSearches++;
+                world.UpdateUnitNavigation(req.Unit, unit.Position, target, true);
+            }
             return false;
         }
 
-        _searchGeneration++;
-        _heapCount = 0;
-        _activeRequest = req with { Start = start, Radius = radius };
+        _activeRequest = req with { Start = start, Target = target, Radius = radius };
         _activeRadius = radius;
-
-        // 1. Identify goal anchor cells connecting to target
-        (int goalCol, int goalRow) = _grid.WorldToCell(target);
-        int goalWindow = Math.Clamp((int)MathF.Ceiling((radius + 1.5f * _grid.CellSize) / _grid.CellSize), 2, 5);
-        int goalAnchorCount = 0;
-
-        for (int dr = -goalWindow; dr <= goalWindow; dr++)
+        _activeTotalExpansions = 0;
+        _hasActiveSearch = true;
+        if (!req.IsChunkContinuation)
         {
-            int gr = goalRow + dr;
-            if (gr < 0 || gr >= _grid.Rows) continue;
-
-            for (int dc = -goalWindow; dc <= goalWindow; dc++)
-            {
-                int gc = goalCol + dc;
-                if (gc < 0 || gc >= _grid.Columns) continue;
-
-                if (!_grid.IsCellPassable(gc, gr, radius)) continue;
-
-                Vector2 center = _grid.CellCenter(gc, gr);
-                if (!_grid.IsSegmentClear(center, target, radius)) continue;
-
-                int cell = _grid.CellIndex(gc, gr);
-                _goalAnchorGen[cell] = _searchGeneration;
-                goalAnchorCount++;
-            }
+            _unitStatuses[slot] = PathRequestStatus.Searching;
         }
 
-        if (goalAnchorCount == 0)
+        if (_grid.IsFlatGrid)
+        {
+            // On bounded flat prototype grids, use full grid directly without intermediate portal approximation
+            _localWinMinX = 0f;
+            _localWinMinZ = 0f;
+            _localWinCols = _grid.Columns;
+            _localWinRows = _grid.Rows;
+            _localWinTotalCells = _grid.TotalCells;
+            _areaPrepCurrentRow = _localWinRows;
+            InitLocalSearch();
+            _activeStage = NavigationSearchStage.LocalPlanning;
+            return true;
+        }
+
+        if (req.IsChunkContinuation)
+        {
+            SetupLocalWindow(start, target);
+            _activeStage = NavigationSearchStage.AreaPreparation;
+            return true;
+        }
+
+        // On large hierarchical maps, start high-level Region-Portal Graph planning
+        HierarchicalNavGraph graph = _grid.GetHierarchicalGraph(radius);
+        int startSector = graph.GetSectorIndex(start);
+        int targetSector = graph.GetSectorIndex(target);
+        int startComp = graph.GetComponentId(start, radius);
+        int targetComp = graph.GetComponentId(target, radius);
+
+        if (startSector == targetSector && startComp == targetComp && startComp > 0)
+        {
+            _activeGlobalPortalCount = 0;
+            SetupLocalWindow(start, target);
+            _activeStage = NavigationSearchStage.AreaPreparation;
+            return true;
+        }
+
+        graph.StartGlobalSearch(start, target, radius);
+        _activeStage = NavigationSearchStage.GlobalPlanning;
+        return true;
+    }
+
+    private bool AdvanceActivePlanning(WorldState world)
+    {
+        EntityId unitId = _activeRequest.Unit;
+        if (!world.TryGetUnit(unitId, out UnitState unit))
+        {
+            CancelActiveSearch();
+            if (TryGetSlot(unitId, out int s)) ReleaseSlot(s);
+            return false;
+        }
+
+        if (!TryGetSlot(unitId, out int slot))
+        {
+            CancelActiveSearch();
+            return false;
+        }
+
+        switch (_activeStage)
+        {
+            case NavigationSearchStage.GlobalPlanning:
+                return AdvanceGlobalPlanning(world, slot, unit);
+
+            case NavigationSearchStage.AreaPreparation:
+                return AdvanceAreaPreparation(world, slot, unit);
+
+            case NavigationSearchStage.LocalPlanning:
+                return AdvanceLocalPlanning(world, slot, unit);
+
+            case NavigationSearchStage.PathSmoothing:
+                return AdvancePathSmoothing(world, slot, unit);
+
+            default:
+                CancelActiveSearch();
+                return false;
+        }
+    }
+
+    private bool AdvanceGlobalPlanning(WorldState world, int slot, UnitState unit)
+    {
+        int remainingGlobalBudget = Math.Max(0, _tuning.MaxGlobalExpansionsPerTick - GlobalExpansionsThisTick);
+        if (remainingGlobalBudget == 0) return true;
+
+        HierarchicalNavGraph graph = _grid.GetHierarchicalGraph(_activeRadius);
+        PathRequestStatus status = graph.ResumeGlobalSearch(
+            remainingGlobalBudget,
+            _tuning.MaxTotalExpansionsPerRequest,
+            out int used,
+            _activeGlobalPortals,
+            out _activeGlobalPortalCount);
+
+        GlobalExpansionsThisTick += used;
+        TotalGlobalExpansions += used;
+        _activeTotalExpansions += used;
+
+        if (status == PathRequestStatus.PathFound)
+        {
+            int portalOffset = slot * MaxGlobalPlanPortals;
+            for (int i = 0; i < _activeGlobalPortalCount; i++)
+            {
+                _slotGlobalPortals[portalOffset + i] = _activeGlobalPortals[i];
+            }
+            _slotGlobalPortalCounts[slot] = _activeGlobalPortalCount;
+            _slotGlobalPortalIndices[slot] = 0;
+
+            Vector2 chunkTarget = _activeGlobalPortalCount > 0 ? _activeGlobalPortals[0] : _activeRequest.Target;
+            SetupLocalWindow(_activeRequest.Start, chunkTarget);
+            _activeStage = NavigationSearchStage.AreaPreparation;
+            return false;
+        }
+        else if (status == PathRequestStatus.NoPath)
         {
             _unitStatuses[slot] = PathRequestStatus.NoPath;
             FailedSearches++;
             _unitHasActiveRoutes[slot] = false;
             _routeCounts[slot] = 0;
             _routeIndices[slot] = 0;
-            world.UpdateUnitNavigation(req.Unit, unit.Position, unit.Position, false);
+            world.UpdateUnitNavigation(_activeRequest.Unit, unit.Position, unit.Position, false);
+            CancelActiveSearch();
+            return false;
+        }
+        else if (status == PathRequestStatus.CapacityExceeded)
+        {
+            _unitStatuses[slot] = PathRequestStatus.CapacityExceeded;
+            CapacityExceeded++;
+            _unitHasActiveRoutes[slot] = false;
+            _routeCounts[slot] = 0;
+            _routeIndices[slot] = 0;
+            world.UpdateUnitNavigation(_activeRequest.Unit, unit.Position, unit.Position, false);
+            CancelActiveSearch();
             return false;
         }
 
-        // 2. Initialize virtual goal node
+        return true;
+    }
+
+    private void SetupLocalWindow(Vector2 start, Vector2 target)
+    {
+        float margin = 15f;
+        _localWinMinX = MathF.Max(0f, MathF.Min(start.X, target.X) - margin);
+        _localWinMinZ = MathF.Max(0f, MathF.Min(start.Y, target.Y) - margin);
+        float maxX = MathF.Min(_grid.MapWidth, MathF.Max(start.X, target.X) + margin);
+        float maxZ = MathF.Min(_grid.MapDepth, MathF.Max(start.Y, target.Y) + margin);
+
+        float maxDim = _tuning.MaxLocalWindowSize;
+        if (maxX - _localWinMinX > maxDim) maxX = _localWinMinX + maxDim;
+        if (maxZ - _localWinMinZ > maxDim) maxZ = _localWinMinZ + maxDim;
+
+        _localWinCols = Math.Max(1, (int)MathF.Ceiling((maxX - _localWinMinX) / _grid.CellSize));
+        _localWinRows = Math.Max(1, (int)MathF.Ceiling((maxZ - _localWinMinZ) / _grid.CellSize));
+        _localWinTotalCells = _localWinCols * _localWinRows;
+        _areaPrepCurrentRow = 0;
+        _areaPrepCurrentCol = 0;
+    }
+
+    private bool AdvanceAreaPreparation(WorldState world, int slot, UnitState unit)
+    {
+        if (_grid.IsFlatGrid)
+        {
+            InitLocalSearch();
+            _activeStage = NavigationSearchStage.LocalPlanning;
+            return false;
+        }
+
+        while (_areaPrepCurrentRow < _localWinRows && AreaPrepCellsThisTick < _tuning.MaxAreaPrepCellsPerTick)
+        {
+            float cz = _localWinMinZ + (_areaPrepCurrentRow + 0.5f) * _grid.CellSize;
+            int baseIdx = _areaPrepCurrentRow * _localWinCols;
+
+            while (_areaPrepCurrentCol < _localWinCols && AreaPrepCellsThisTick < _tuning.MaxAreaPrepCellsPerTick)
+            {
+                float cx = _localWinMinX + (_areaPrepCurrentCol + 0.5f) * _grid.CellSize;
+                _localClearance[baseIdx + _areaPrepCurrentCol] = _grid.ComputePointClearance(new Vector2(cx, cz));
+                _areaPrepCurrentCol++;
+                AreaPrepCellsThisTick++;
+                TotalAreaPrepCells++;
+            }
+
+            if (_areaPrepCurrentCol >= _localWinCols)
+            {
+                _areaPrepCurrentCol = 0;
+                _areaPrepCurrentRow++;
+            }
+        }
+
+        if (_areaPrepCurrentRow >= _localWinRows)
+        {
+            InitLocalSearch();
+            _activeStage = NavigationSearchStage.LocalPlanning;
+            return false;
+        }
+
+        return true;
+    }
+
+    private void InitLocalSearch()
+    {
+        _searchGeneration++;
+        _heapCount = 0;
+
+        Vector2 start = _activeRequest.Start;
+        Vector2 target = _activeRequest.Target;
+        float radius = _activeRadius;
+
+        if (!_grid.IsFlatGrid && !_activeRequest.IsChunkContinuation && _slotGlobalPortalCounts[TryGetSlot(_activeRequest.Unit, out int s) ? s : 0] > 0)
+        {
+            int pIdx = _slotGlobalPortalIndices[s];
+            if (pIdx < _slotGlobalPortalCounts[s])
+            {
+                target = _slotGlobalPortals[s * MaxGlobalPlanPortals + pIdx];
+            }
+        }
+
         _searchGen[_virtualGoalCell] = _searchGeneration;
         _gScore[_virtualGoalCell] = float.PositiveInfinity;
         _cameFrom[_virtualGoalCell] = -1;
         _heapPosition[_virtualGoalCell] = -1;
 
-        // 3. Identify start anchor cells connecting to start
-        (int startCol, int startRow) = _grid.WorldToCell(start);
-        int startCell = _grid.CellIndex(startCol, startRow);
+        // 1. Goal anchor cells in local window
+        (int goalCol, int goalRow) = LocalWorldToCell(target);
+        int goalWindow = Math.Clamp((int)MathF.Ceiling((radius + 1.5f * _grid.CellSize) / _grid.CellSize), 2, 5);
+        int goalAnchorCount = 0;
+
+        for (int dr = -goalWindow; dr <= goalWindow; dr++)
+        {
+            int gr = goalRow + dr;
+            if (gr < 0 || gr >= _localWinRows) continue;
+
+            for (int dc = -goalWindow; dc <= goalWindow; dc++)
+            {
+                int gc = goalCol + dc;
+                if (gc < 0 || gc >= _localWinCols) continue;
+
+                if (!IsLocalCellPassable(gc, gr, radius)) continue;
+
+                Vector2 center = LocalCellCenter(gc, gr);
+                if (!_grid.IsSegmentClear(center, target, radius)) continue;
+
+                int cell = gr * _localWinCols + gc;
+                _goalAnchorGen[cell] = _searchGeneration;
+                goalAnchorCount++;
+            }
+        }
+
+        // 2. Start anchor cells in local window
+        (int startCol, int startRow) = LocalWorldToCell(start);
+        int startCell = startRow * _localWinCols + startCol;
         int startAnchorCount = 0;
 
-        if (_grid.IsInBounds(startCol, startRow) &&
-            _grid.IsCellPassable(startCol, startRow, radius) &&
-            _grid.IsSegmentClear(start, _grid.CellCenter(startCell), radius))
+        if (IsInLocalBounds(startCol, startRow) &&
+            IsLocalCellPassable(startCol, startRow, radius) &&
+            _grid.IsSegmentClear(start, LocalCellCenter(startCol, startRow), radius))
         {
             _searchGen[startCell] = _searchGeneration;
-            _gScore[startCell] = Vector2.Distance(start, _grid.CellCenter(startCell));
+            _gScore[startCell] = Vector2.Distance(start, LocalCellCenter(startCol, startRow));
             _cameFrom[startCell] = -1;
             HeapPush(startCell);
             startAnchorCount++;
 
             if (_goalAnchorGen[startCell] == _searchGeneration)
             {
-                float distToTarget = Vector2.Distance(_grid.CellCenter(startCell), target);
+                float distToTarget = Vector2.Distance(LocalCellCenter(startCol, startRow), target);
                 _gScore[_virtualGoalCell] = _gScore[startCell] + distToTarget;
                 _cameFrom[_virtualGoalCell] = startCell;
                 HeapPush(_virtualGoalCell);
@@ -710,19 +1117,19 @@ public sealed class NavigationSystem : ISimulationSystem
             for (int dr = -startWindow; dr <= startWindow; dr++)
             {
                 int sr = startRow + dr;
-                if (sr < 0 || sr >= _grid.Rows) continue;
+                if (sr < 0 || sr >= _localWinRows) continue;
 
                 for (int dc = -startWindow; dc <= startWindow; dc++)
                 {
                     int sc = startCol + dc;
-                    if (sc < 0 || sc >= _grid.Columns) continue;
+                    if (sc < 0 || sc >= _localWinCols) continue;
 
-                    if (!_grid.IsCellPassable(sc, sr, radius)) continue;
+                    if (!IsLocalCellPassable(sc, sr, radius)) continue;
 
-                    Vector2 center = _grid.CellCenter(sc, sr);
+                    Vector2 center = LocalCellCenter(sc, sr);
                     if (!_grid.IsSegmentClear(start, center, radius)) continue;
 
-                    int cell = _grid.CellIndex(sc, sr);
+                    int cell = sr * _localWinCols + sc;
                     _searchGen[cell] = _searchGeneration;
                     _gScore[cell] = Vector2.Distance(start, center);
                     _cameFrom[cell] = -1;
@@ -747,78 +1154,52 @@ public sealed class NavigationSystem : ISimulationSystem
                 HeapPush(_virtualGoalCell);
             }
         }
-
-        if (startAnchorCount == 0)
-        {
-            _unitStatuses[slot] = PathRequestStatus.NoPath;
-            FailedSearches++;
-            _unitHasActiveRoutes[slot] = false;
-            _routeCounts[slot] = 0;
-            _routeIndices[slot] = 0;
-            world.UpdateUnitNavigation(req.Unit, unit.Position, unit.Position, false);
-            return false;
-        }
-
-        _unitStatuses[slot] = PathRequestStatus.Searching;
-        _hasActiveSearch = true;
-        return true;
     }
 
-    private void ExpandActiveSearch(WorldState world)
+    private bool AdvanceLocalPlanning(WorldState world, int slot, UnitState unit)
     {
-        EntityId unitId = _activeRequest.Unit;
-        if (!world.TryGetUnit(unitId, out UnitState unit))
-        {
-            _hasActiveSearch = false;
-            if (TryGetSlot(unitId, out int s)) ReleaseSlot(s);
-            return;
-        }
-
-        if (!TryGetSlot(unitId, out int slot))
-        {
-            _hasActiveSearch = false;
-            return;
-        }
-
         float radius = _activeRadius;
         Vector2 target = _activeRequest.Target;
-
-        while (_heapCount > 0 && NodesExpandedThisTick < _tuning.MaxNodeExpansionsPerTick)
+        if (!_grid.IsFlatGrid && !_activeRequest.IsChunkContinuation && _slotGlobalPortalCounts[slot] > 0 && _slotGlobalPortalIndices[slot] < _slotGlobalPortalCounts[slot])
         {
+            target = _slotGlobalPortals[slot * MaxGlobalPlanPortals + _slotGlobalPortalIndices[slot]];
+        }
+
+        int maxExpBudget = Math.Min(_tuning.MaxNodeExpansionsPerTick, _tuning.MaxLocalExpansionsPerTick);
+
+        while (_heapCount > 0 && LocalExpansionsThisTick < maxExpBudget)
+        {
+            if (_activeTotalExpansions >= _tuning.MaxTotalExpansionsPerRequest)
+            {
+                _unitStatuses[slot] = PathRequestStatus.CapacityExceeded;
+                CapacityExceeded++;
+                _unitHasActiveRoutes[slot] = false;
+                _routeCounts[slot] = 0;
+                _routeIndices[slot] = 0;
+                world.UpdateUnitNavigation(_activeRequest.Unit, unit.Position, unit.Position, false);
+                CancelActiveSearch();
+                return false;
+            }
+
             int current = HeapPop();
             if (_closedGen[current] == _searchGeneration) continue;
             _closedGen[current] = _searchGeneration;
 
-            NodesExpandedThisTick++;
-            TotalNodesExpanded++;
+            LocalExpansionsThisTick++;
+            TotalLocalExpansions++;
+            _activeTotalExpansions++;
 
             if (current == _virtualGoalCell)
             {
-                bool reached = ReconstructAndApplyRoute(slot, current, _activeRequest.Start, target, radius, unit.Position);
-
-                if (reached)
-                {
-                    _unitFinalTargets[slot] = target;
-                    _unitStatuses[slot] = PathRequestStatus.PathFound;
-                    CompletedSearches++;
-                    world.UpdateUnitNavigation(unitId, unit.Position, target, true);
-                }
-                else
-                {
-                    _unitStatuses[slot] = PathRequestStatus.CapacityExceeded;
-                    CapacityExceeded++;
-                    _unitHasActiveRoutes[slot] = false;
-                    _routeCounts[slot] = 0;
-                    _routeIndices[slot] = 0;
-                    world.UpdateUnitNavigation(unitId, unit.Position, unit.Position, false);
-                }
-                _hasActiveSearch = false;
-                return;
+                InitPathSmoothing(slot, current, target, unit.Position);
+                _activeStage = NavigationSearchStage.PathSmoothing;
+                return false;
             }
 
-            (int col, int row) = _grid.CellCoordinates(current);
-            Vector2 currentCenter = _grid.CellCenter(col, row);
-            float currentClearance = _grid.GetCellClearance(col, row);
+            int col = current % _localWinCols;
+            int row = current / _localWinCols;
+            Vector2 currentCenter = LocalCellCenter(col, row);
+            float currentClearance = GetLocalCellClearance(col, row);
             float currentG = _gScore[current];
 
             if (_goalAnchorGen[current] == _searchGeneration)
@@ -853,32 +1234,29 @@ public sealed class NavigationSystem : ISimulationSystem
                 int nextCol = col + n.dCol;
                 int nextRow = row + n.dRow;
 
-                if (!_grid.IsInBounds(nextCol, nextRow)) continue;
+                if (!IsInLocalBounds(nextCol, nextRow)) continue;
 
-                // Diagonal corner clearance: both adjacent cardinal neighbors must be passable
                 if (n.isDiagonal)
                 {
                     int c1Col = col + n.c1Col;
                     int c1Row = row + n.c1Row;
                     int c2Col = col + n.c2Col;
                     int c2Row = row + n.c2Row;
-                    if (!_grid.IsCellPassable(c1Col, c1Row, radius) || !_grid.IsCellPassable(c2Col, c2Row, radius))
+                    if (!IsLocalCellPassable(c1Col, c1Row, radius) || !IsLocalCellPassable(c2Col, c2Row, radius))
                         continue;
                 }
 
-                if (!_grid.IsCellPassable(nextCol, nextRow, radius)) continue;
+                if (!IsLocalCellPassable(nextCol, nextRow, radius)) continue;
 
-                int nextCell = _grid.CellIndex(nextCol, nextRow);
+                int nextCell = nextRow * _localWinCols + nextCol;
                 if (_closedGen[nextCell] == _searchGeneration) continue;
 
                 float stepCost = n.isDiagonal ? 1.41421356f * _grid.CellSize : _grid.CellSize;
-
-                // Swept-capsule edge clearance check
-                float nextClearance = _grid.GetCellClearance(nextCol, nextRow);
+                float nextClearance = GetLocalCellClearance(nextCol, nextRow);
                 float safeThreshold = radius + stepCost * 0.5f;
                 if (currentClearance < safeThreshold || nextClearance < safeThreshold)
                 {
-                    Vector2 nextCenter = _grid.CellCenter(nextCol, nextRow);
+                    Vector2 nextCenter = LocalCellCenter(nextCol, nextRow);
                     if (!_grid.IsSegmentClear(currentCenter, nextCenter, radius))
                         continue;
                 }
@@ -909,86 +1287,95 @@ public sealed class NavigationSystem : ISimulationSystem
 
         if (_heapCount == 0 && _hasActiveSearch)
         {
-            // Open set exhausted without finding a route
             _unitStatuses[slot] = PathRequestStatus.NoPath;
             FailedSearches++;
             _unitHasActiveRoutes[slot] = false;
             _routeCounts[slot] = 0;
             _routeIndices[slot] = 0;
-            world.UpdateUnitNavigation(unitId, unit.Position, unit.Position, false);
-            _hasActiveSearch = false;
-        }
-    }
-
-    private bool ReconstructAndApplyRoute(int slot, int endNode, Vector2 start, Vector2 target, float radius, Vector2 currentPos)
-    {
-        int count = 0;
-        int trace = (endNode == _virtualGoalCell) ? _cameFrom[_virtualGoalCell] : endNode;
-        while (trace != -1 && count < _rawPathBuffer.Length - 4)
-        {
-            _rawPathBuffer[count++] = _grid.CellCenter(trace);
-            trace = _cameFrom[trace];
-        }
-
-        if (count == 0)
-        {
-            _unitHasActiveRoutes[slot] = false;
-            _routeCounts[slot] = 0;
-            _routeIndices[slot] = 0;
+            world.UpdateUnitNavigation(_activeRequest.Unit, unit.Position, unit.Position, false);
+            CancelActiveSearch();
             return false;
         }
 
-        // Reverse raw path so it starts at start cell and finishes at goal cell
-        for (int i = 0; i < count / 2; i++)
+        return true;
+    }
+
+    private void InitPathSmoothing(int slot, int endNode, Vector2 target, Vector2 currentPos)
+    {
+        _rawPathCount = 0;
+        int trace = (endNode == _virtualGoalCell) ? _cameFrom[_virtualGoalCell] : endNode;
+        while (trace != -1 && _rawPathCount < _rawPathBuffer.Length - 4)
         {
-            (_rawPathBuffer[i], _rawPathBuffer[count - 1 - i]) = (_rawPathBuffer[count - 1 - i], _rawPathBuffer[i]);
+            int col = trace % _localWinCols;
+            int row = trace / _localWinCols;
+            _rawPathBuffer[_rawPathCount++] = LocalCellCenter(col, row);
+            trace = _cameFrom[trace];
         }
 
-        // Append target if target is not at goal cell center
-        if (Vector2.DistanceSquared(_rawPathBuffer[count - 1], target) > 1e-4f)
+        if (_rawPathCount == 0)
         {
-            _rawPathBuffer[count++] = target;
+            _smoothingAnchorIdx = -1;
+            return;
+        }
+
+        // Reverse raw path
+        for (int i = 0; i < _rawPathCount / 2; i++)
+        {
+            (_rawPathBuffer[i], _rawPathBuffer[_rawPathCount - 1 - i]) = (_rawPathBuffer[_rawPathCount - 1 - i], _rawPathBuffer[i]);
+        }
+
+        if (Vector2.DistanceSquared(_rawPathBuffer[_rawPathCount - 1], target) > 1e-4f)
+        {
+            _rawPathBuffer[_rawPathCount++] = target;
         }
         else
         {
-            _rawPathBuffer[count - 1] = target;
+            _rawPathBuffer[_rawPathCount - 1] = target;
         }
 
-        // Raycast string-pulling smoothing: skip intermediate collinear/visible waypoints
-        int smoothedCount = 0;
+        _smoothedCount = 0;
 
-        // Splice directly from currentPos if it can see any waypoint along raw path from goal downwards
+        // Splice directly from startPos if it can see any waypoint along raw path
+        Vector2 startPos = _activeRequest.IsChunkContinuation ? _activeRequest.Start : currentPos;
         int visibleFromCurrent = -1;
-        for (int k = count - 1; k >= 0; k--)
+        for (int k = _rawPathCount - 1; k >= 0; k--)
         {
-            if (_grid.IsSegmentClear(currentPos, _rawPathBuffer[k], radius))
+            SmoothingRaycastsThisTick++;
+            TotalSmoothingRaycasts++;
+            if (_grid.IsSegmentClear(startPos, _rawPathBuffer[k], _activeRadius))
             {
                 visibleFromCurrent = k;
                 break;
             }
         }
 
-        Vector2 currentAnchor;
-        int anchorIdx;
-
         if (visibleFromCurrent >= 0)
         {
-            currentAnchor = _rawPathBuffer[visibleFromCurrent];
-            _smoothedPathBuffer[smoothedCount++] = currentAnchor;
-            anchorIdx = visibleFromCurrent;
+            _smoothingCurrentAnchor = _rawPathBuffer[visibleFromCurrent];
+            _smoothedPathBuffer[_smoothedCount++] = _smoothingCurrentAnchor;
+            _smoothingAnchorIdx = visibleFromCurrent;
         }
         else
         {
-            currentAnchor = start;
-            anchorIdx = -1;
+            _smoothingCurrentAnchor = startPos;
+            _smoothingAnchorIdx = -1;
         }
 
-        while (anchorIdx < count - 1 && smoothedCount < _tuning.MaxWaypointsPerRoute)
+        _smoothingCandidateIdx = _rawPathCount - 1;
+    }
+
+    private bool AdvancePathSmoothing(WorldState world, int slot, UnitState unit)
+    {
+        while (_smoothingAnchorIdx < _rawPathCount - 1 &&
+               _smoothedCount < _tuning.MaxWaypointsPerRoute &&
+               SmoothingRaycastsThisTick < _tuning.MaxSmoothingRaycastsPerTick)
         {
             int farthest = -1;
-            for (int nextIdx = count - 1; nextIdx > anchorIdx; nextIdx--)
+            for (int nextIdx = _smoothingCandidateIdx; nextIdx > _smoothingAnchorIdx; nextIdx--)
             {
-                if (_grid.IsSegmentClear(currentAnchor, _rawPathBuffer[nextIdx], radius))
+                SmoothingRaycastsThisTick++;
+                TotalSmoothingRaycasts++;
+                if (_grid.IsSegmentClear(_smoothingCurrentAnchor, _rawPathBuffer[nextIdx], _activeRadius))
                 {
                     farthest = nextIdx;
                     break;
@@ -997,33 +1384,127 @@ public sealed class NavigationSystem : ISimulationSystem
 
             if (farthest == -1)
             {
-                break;
+                farthest = _smoothingAnchorIdx + 1;
             }
 
-            currentAnchor = _rawPathBuffer[farthest];
-            _smoothedPathBuffer[smoothedCount++] = currentAnchor;
-            anchorIdx = farthest;
+            _smoothingCurrentAnchor = _rawPathBuffer[farthest];
+            _smoothedPathBuffer[_smoothedCount++] = _smoothingCurrentAnchor;
+            _smoothingAnchorIdx = farthest;
+            _smoothingCandidateIdx = _rawPathCount - 1;
         }
 
-        bool reachedTarget = anchorIdx == count - 1 && smoothedCount > 0;
-        if (!reachedTarget)
+        if (SmoothingRaycastsThisTick >= _tuning.MaxSmoothingRaycastsPerTick && _smoothingAnchorIdx < _rawPathCount - 1)
         {
+            return true;
+        }
+
+        bool reachedChunkEnd = _smoothingAnchorIdx >= _rawPathCount - 1;
+
+        if (_grid.IsFlatGrid && !reachedChunkEnd)
+        {
+            // On flat prototype grid, overflowing MaxWaypointsPerRoute reports CapacityExceeded
+            _unitStatuses[slot] = PathRequestStatus.CapacityExceeded;
+            CapacityExceeded++;
             _unitHasActiveRoutes[slot] = false;
             _routeCounts[slot] = 0;
             _routeIndices[slot] = 0;
+            world.UpdateUnitNavigation(_activeRequest.Unit, unit.Position, unit.Position, false);
+            CancelActiveSearch();
             return false;
         }
 
-        // Copy smoothed waypoints into unit's route storage
-        int offset = slot * _tuning.MaxWaypointsPerRoute;
-        for (int i = 0; i < smoothedCount; i++)
+        if (_smoothedCount == 0 && _rawPathCount > 0)
         {
-            _routeWaypoints[offset + i] = _smoothedPathBuffer[i];
+            int countToCopy = Math.Min(_rawPathCount, _tuning.MaxWaypointsPerRoute);
+            for (int i = 0; i < countToCopy; i++)
+            {
+                _smoothedPathBuffer[i] = _rawPathBuffer[i];
+            }
+            _smoothedCount = countToCopy;
         }
-        _routeCounts[slot] = smoothedCount;
-        _routeIndices[slot] = 0;
-        _unitHasActiveRoutes[slot] = true;
-        return true;
+
+        if (_smoothedCount == 0)
+        {
+            _unitStatuses[slot] = PathRequestStatus.CapacityExceeded;
+            CapacityExceeded++;
+            _unitHasActiveRoutes[slot] = false;
+            _routeCounts[slot] = 0;
+            _routeIndices[slot] = 0;
+            world.UpdateUnitNavigation(_activeRequest.Unit, unit.Position, unit.Position, false);
+            CancelActiveSearch();
+            return false;
+        }
+
+        if (_activeRequest.IsChunkContinuation)
+        {
+            ChunkRequestsCompleted++;
+            _unitStatuses[slot] = PathRequestStatus.PathFound;
+            _unitChunkPending[slot] = false;
+
+            if (_slotGlobalPortalCounts[slot] > 0 && _slotGlobalPortalIndices[slot] < _slotGlobalPortalCounts[slot])
+            {
+                _slotGlobalPortalIndices[slot]++;
+            }
+
+            int offset = slot * _tuning.MaxWaypointsPerRoute;
+            if (_unitHasActiveRoutes[slot] && _routeIndices[slot] >= _routeCounts[slot])
+            {
+                for (int i = 0; i < _smoothedCount; i++)
+                {
+                    _routeWaypoints[offset + i] = _smoothedPathBuffer[i];
+                }
+                _routeCounts[slot] = _smoothedCount;
+                _routeIndices[slot] = 0;
+                _unitChunkWaitTicks[slot] = 0;
+                world.UpdateUnitNavigation(_activeRequest.Unit, unit.Position, _unitFinalTargets[slot], true);
+            }
+            else if (_unitHasActiveRoutes[slot])
+            {
+                for (int i = 0; i < _smoothedCount; i++)
+                {
+                    _slotNextChunkWaypoints[offset + i] = _smoothedPathBuffer[i];
+                }
+                _slotNextChunkCounts[slot] = _smoothedCount;
+            }
+            else
+            {
+                for (int i = 0; i < _smoothedCount; i++)
+                {
+                    _routeWaypoints[offset + i] = _smoothedPathBuffer[i];
+                }
+                _routeCounts[slot] = _smoothedCount;
+                _routeIndices[slot] = 0;
+                _unitHasActiveRoutes[slot] = true;
+                _unitChunkWaitTicks[slot] = 0;
+                world.UpdateUnitNavigation(_activeRequest.Unit, unit.Position, _unitFinalTargets[slot], true);
+            }
+        }
+        else
+        {
+            int offset = slot * _tuning.MaxWaypointsPerRoute;
+            for (int i = 0; i < _smoothedCount; i++)
+            {
+                _routeWaypoints[offset + i] = _smoothedPathBuffer[i];
+            }
+            _routeCounts[slot] = _smoothedCount;
+            _routeIndices[slot] = 0;
+            _unitHasActiveRoutes[slot] = true;
+            _unitChunkPending[slot] = false;
+            _unitChunkWaitTicks[slot] = 0;
+
+            if (_slotGlobalPortalCounts[slot] > 0 && _slotGlobalPortalIndices[slot] < _slotGlobalPortalCounts[slot])
+            {
+                _slotGlobalPortalIndices[slot]++;
+            }
+
+            CompletedSearches++;
+            _unitFinalTargets[slot] = _activeRequest.Target;
+            _unitStatuses[slot] = PathRequestStatus.PathFound;
+            world.UpdateUnitNavigation(_activeRequest.Unit, unit.Position, _unitFinalTargets[slot], true);
+        }
+
+        CancelActiveSearch();
+        return false;
     }
 
     private void SetUnitSingleWaypointRoute(int slot, Vector2 target)
@@ -1033,6 +1514,7 @@ public sealed class NavigationSystem : ISimulationSystem
         _routeCounts[slot] = 1;
         _routeIndices[slot] = 0;
         _unitHasActiveRoutes[slot] = true;
+        _unitChunkPending[slot] = false;
     }
 
     private bool TrySnapDestination(Vector2 start, Vector2 target, float radius, out Vector2 snapped)
@@ -1065,8 +1547,6 @@ public sealed class NavigationSystem : ISimulationSystem
 
                 if (!_grid.IsPointClear(candidate, radius)) continue;
 
-                // Candidates directly visible from unit or closer to unit receive a preference
-                // so clicking an obstacle snaps to the side of the wall facing the unit.
                 float score = distSq;
                 if (!_grid.IsSegmentClear(start, candidate, radius)) score += 4.0f;
                 score += 0.001f * Vector2.DistanceSquared(start, candidate);
@@ -1141,7 +1621,6 @@ public sealed class NavigationSystem : ISimulationSystem
                     }
                     else
                     {
-                        // Collision encountered along path: halt unit
                         idx = count;
                         remainingDistance = 0f;
                         _unitStatuses[slot] = PathRequestStatus.NoPath;
@@ -1149,7 +1628,6 @@ public sealed class NavigationSystem : ISimulationSystem
                 }
                 else
                 {
-                    // Waypoint reached: consume traveled distance and advance
                     if (_grid.IsSegmentClear(currentPos, targetWaypoint, radius))
                     {
                         currentPos = targetWaypoint;
@@ -1166,13 +1644,112 @@ public sealed class NavigationSystem : ISimulationSystem
             }
 
             _routeIndices[slot] = idx;
-            bool stillMoving = idx < count;
-            _unitHasActiveRoutes[slot] = stillMoving;
+            bool reachedEndOfChunk = idx >= count;
+
+            if (reachedEndOfChunk && _slotNextChunkCounts[slot] > 0)
+            {
+                // Seamlessly swap in staged next chunk
+                int nextCount = _slotNextChunkCounts[slot];
+                for (int w = 0; w < nextCount; w++)
+                {
+                    _routeWaypoints[offset + w] = _slotNextChunkWaypoints[offset + w];
+                }
+                _routeCounts[slot] = nextCount;
+                _routeIndices[slot] = 0;
+                _slotNextChunkCounts[slot] = 0;
+                _unitChunkPending[slot] = false;
+                reachedEndOfChunk = false;
+                idx = 0;
+                count = nextCount;
+            }
 
             Vector2 finalTarget = _unitFinalTargets[slot];
-            world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, stillMoving);
+            bool reachedFinalDestination = Vector2.Distance(currentPos, finalTarget) <= 0.05f;
+
+            if (reachedFinalDestination)
+            {
+                _unitHasActiveRoutes[slot] = false;
+                _routeCounts[slot] = 0;
+                _routeIndices[slot] = 0;
+                _unitStatuses[slot] = PathRequestStatus.PathFound;
+                world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, false);
+                continue;
+            }
+
+            // Only enqueue next chunk if current chunk does not already reach the final destination
+            Vector2 chunkEnd = _routeWaypoints[offset + Math.Max(0, count - 1)];
+            bool chunkReachesFinalTarget = Vector2.Distance(chunkEnd, finalTarget) <= 0.05f;
+
+            if (!chunkReachesFinalTarget && !reachedFinalDestination && !_unitChunkPending[slot] && _slotNextChunkCounts[slot] == 0 && idx >= Math.Max(0, count - _tuning.ChunkLookaheadWaypoints))
+            {
+                EnqueueNextChunkRequest(slot, unit, radius);
+            }
+
+            if (reachedEndOfChunk)
+            {
+                _unitChunkWaitTicks[slot]++;
+                ChunkWaitTicks++;
+                world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, false);
+            }
+            else
+            {
+                world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, true);
+            }
         }
     }
+
+    private void EnqueueNextChunkRequest(int slot, in UnitState unit, float radius)
+    {
+        if (_queueCount >= _requestQueue.Length) return;
+
+        Vector2 chunkStart = _routeWaypoints[slot * _tuning.MaxWaypointsPerRoute + Math.Max(0, _routeCounts[slot] - 1)];
+        Vector2 nextTarget = _unitFinalTargets[slot];
+
+        if (_slotGlobalPortalCounts[slot] > 0 && _slotGlobalPortalIndices[slot] < _slotGlobalPortalCounts[slot])
+        {
+            nextTarget = _slotGlobalPortals[slot * MaxGlobalPlanPortals + _slotGlobalPortalIndices[slot]];
+        }
+
+        uint orderGen = _unitOrderGenerations[slot];
+        _unitChunkPending[slot] = true;
+
+        _requestQueue[_queueTail] = new PathRequest(
+            unit.Owner, unit.Id, chunkStart, nextTarget, radius, orderGen, IsChunkContinuation: true);
+        _queueTail = (_queueTail + 1) % _requestQueue.Length;
+        _queueCount++;
+    }
+
+    // Local window coordinate calculations
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool IsInLocalBounds(int col, int row) =>
+        (uint)col < (uint)_localWinCols && (uint)row < (uint)_localWinRows;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private Vector2 LocalCellCenter(int col, int row) =>
+        new(_localWinMinX + (col + 0.5f) * _grid.CellSize, _localWinMinZ + (row + 0.5f) * _grid.CellSize);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private (int Col, int Row) LocalWorldToCell(Vector2 pos)
+    {
+        int col = Math.Clamp((int)((pos.X - _localWinMinX) / _grid.CellSize), 0, _localWinCols - 1);
+        int row = Math.Clamp((int)((pos.Y - _localWinMinZ) / _grid.CellSize), 0, _localWinRows - 1);
+        return (col, row);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private float GetLocalCellClearance(int col, int row)
+    {
+        if (!IsInLocalBounds(col, row)) return 0f;
+        if (_grid.IsFlatGrid)
+        {
+            return _grid.GetCellClearance(col, row);
+        }
+        return _localClearance[row * _localWinCols + col];
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool IsLocalCellPassable(int col, int row, float radius) =>
+        GetLocalCellClearance(col, row) >= radius;
 
     // Indexed min-heap operations
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1260,18 +1837,18 @@ public sealed class NavigationSystem : ISimulationSystem
         float fB = _gScore[cellB] + Heuristic(cellB);
         if (MathF.Abs(fA - fB) > 1e-4f) return fA < fB;
 
-        // Tie-break 1: higher gScore first
         float gA = _gScore[cellA];
         float gB = _gScore[cellB];
         if (MathF.Abs(gA - gB) > 1e-4f) return gA > gB;
 
-        // Tie-break 2: lower cellIndex
         return cellA < cellB;
     }
 
     private float Heuristic(int cell)
     {
         if (cell == _virtualGoalCell) return 0f;
-        return Vector2.Distance(_grid.CellCenter(cell), _activeRequest.Target);
+        int col = cell % _localWinCols;
+        int row = cell / _localWinCols;
+        return Vector2.Distance(LocalCellCenter(col, row), _activeRequest.Target);
     }
 }

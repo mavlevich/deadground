@@ -65,6 +65,11 @@ static void RunProbe()
         allPassed = false;
     }
 
+    if (!RunLargeNavigationProbe())
+    {
+        allPassed = false;
+    }
+
     if (!RunCombatProbe())
     {
         allPassed = false;
@@ -109,6 +114,10 @@ static bool RunSingleScenarioProbe(string scenarioName, StaticGeometry geo)
             WireProtocol.WriteSnapshot(b2, (uint)sim.Tick, sim.Tick, k2.OwnUnits, k2.Contacts);
         }
     }
+
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    GC.Collect();
 
     long totalLosQueries = 0;
     double[] times = new double[100];
@@ -450,6 +459,189 @@ static bool RunCombatProbe()
     Console.WriteLine($"  Max:               {max:F2} ms");
     Console.WriteLine($"  Allocations:       {totalAllocated} B");
     Console.WriteLine($"  Performance gate:  {(meetsBudget ? "PASS (p99 < 15 ms, median < 15 ms, 0 B, continuous combat)" : "FAIL")}");
+    Console.WriteLine();
+
+    return meetsBudget;
+}
+
+static bool RunLargeNavigationProbe()
+{
+    StaticGeometry geo = LargeNavigationScenario.CreateStaticGeometry();
+    UnitCatalog catalog = PrototypeScenario.LoadCatalog();
+
+    NavigationTuning navTuning = new(
+        MaxNodeExpansionsPerTick: 1000,
+        MaxPendingRequests: 1024,
+        MaxGlobalExpansionsPerTick: 400,
+        MaxLocalExpansionsPerTick: 800,
+        MaxAreaPrepCellsPerTick: 2500);
+
+    OpsRules rules = new(geo, new OpsPerceptionCatalog(catalog), new SlowMovementCatalog(), navTuning);
+    WorldState world = new(geo.HeightMap);
+    using Simulation sim = new(world, rules);
+
+    // 1000 units on 2x2 km map
+    // Side 1: 450 units in open area [100..400, 100..400] moving North
+    for (int i = 0; i < 450; i++)
+    {
+        float x = 100f + (i % 25) * 10f;
+        float y = 100f + (i / 25) * 15f;
+        EntityId id = world.CreateUnit(1, 1, new Vector2(x, y), 0.001f);
+        bool enqueued = sim.TryEnqueue(1, new MoveCommand((uint)(i + 1), 0, id, new Vector2(x, y + 60f)));
+        if (!enqueued) throw new InvalidOperationException($"Failed to enqueue unit {id.Value}");
+        if (i % 200 == 199) sim.Step();
+    }
+    sim.Step();
+
+    // Side 2: 450 units in open area [1600..1900, 1600..1900] moving South
+    for (int i = 0; i < 450; i++)
+    {
+        float x = 1600f + (i % 25) * 10f;
+        float y = 1900f - (i / 25) * 15f;
+        EntityId id = world.CreateUnit(2, 2, new Vector2(x, y), 0.001f);
+        bool enqueued = sim.TryEnqueue(2, new MoveCommand((uint)(450 + i + 1), 0, id, new Vector2(x, y - 60f)));
+        if (!enqueued) throw new InvalidOperationException($"Failed to enqueue unit {id.Value}");
+        if (i % 200 == 199) sim.Step();
+    }
+    sim.Step();
+
+    // 50 units near barrier [900, 350..550] moving east across the 500m barrier
+    for (int i = 0; i < 50; i++)
+    {
+        float x = 900f;
+        float y = 350f + i * 4f;
+        EntityId id = world.CreateUnit(1, 1, new Vector2(x, y), 0.001f);
+        bool enqueued = sim.TryEnqueue(1, new MoveCommand((uint)(900 + i + 1), 0, id, new Vector2(1050f, y)));
+        if (!enqueued) throw new InvalidOperationException($"Failed to enqueue barrier unit {id.Value}");
+    }
+    sim.Step();
+
+    // 50 units in [1300..1350, 1400..1480] targeting unreachable courtyard interior [1440, 1440]
+    for (int i = 0; i < 50; i++)
+    {
+        float x = 1300f + (i % 10) * 5f;
+        float y = 1400f + (i / 10) * 15f;
+        EntityId id = world.CreateUnit(2, 2, new Vector2(x, y), 0.001f);
+        bool enqueued = sim.TryEnqueue(2, new MoveCommand((uint)(950 + i + 1), 0, id, new Vector2(1440f, 1440f)));
+        if (!enqueued) throw new InvalidOperationException($"Failed to enqueue unreachable unit {id.Value}");
+    }
+    sim.Step();
+
+    // Step simulation until all reachable units establish routes
+    int prepTicks = 0;
+    while (prepTicks < 150)
+    {
+        sim.Step();
+        prepTicks++;
+        int moving = 0;
+        for (int u = 0; u < world.Count; u++) if (world.GetUnitAt(u).Moving) moving++;
+        if (moving >= 900) break;
+    }
+
+    PlayerKnowledge k1 = new(1);
+    PlayerKnowledge k2 = new(2);
+    byte[] b1 = new byte[WireProtocol.MaxMessageSize];
+    byte[] b2 = new byte[WireProtocol.MaxMessageSize];
+
+    uint commandSeq = 3001;
+
+    // Warm up for 20 ticks with representative workload
+    for (int m = 0; m < 5; m++)
+    {
+        EntityId uId = world.GetUnitAt(m).Id;
+        sim.TryEnqueue(1, new MoveCommand(commandSeq++, 0, uId, new Vector2(150f + (m * 4f), 200f)));
+    }
+    EntityId warmupUnreachableId = world.GetUnitAt(950).Id;
+    sim.TryEnqueue(2, new MoveCommand(commandSeq++, 0, warmupUnreachableId, new Vector2(1440f, 1440f)));
+
+    for (int i = 0; i < 20; i++)
+    {
+        sim.Step();
+        if (sim.Tick % 2 == 0)
+        {
+            sim.UpdateKnowledge(k1);
+            WireProtocol.WriteSnapshot(b1, (uint)sim.Tick, sim.Tick, k1.OwnUnits, k1.Contacts);
+            sim.UpdateKnowledge(k2);
+            WireProtocol.WriteSnapshot(b2, (uint)sim.Tick, sim.Tick, k2.OwnUnits, k2.Contacts);
+        }
+    }
+
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    GC.Collect();
+
+    double[] times = new double[100];
+    long totalAllocated = 0;
+    int minMoving = 1000;
+    int maxMoving = 0;
+
+    for (int i = 0; i < 100; i++)
+    {
+        // At tick 0, enqueue a burst of new orders across hierarchical sectors
+        if (i == 0)
+        {
+            for (int m = 0; m < 10; m++)
+            {
+                EntityId uId = world.GetUnitAt(10 + m).Id;
+                sim.TryEnqueue(1, new MoveCommand(commandSeq++, 0, uId, new Vector2(250f + (m * 5f), 300f)));
+            }
+            for (int u = 0; u < 3; u++)
+            {
+                EntityId uId = world.GetUnitAt(955 + u).Id;
+                sim.TryEnqueue(2, new MoveCommand(commandSeq++, 0, uId, new Vector2(1440f, 1440f)));
+            }
+        }
+
+        long startAlloc = GC.GetAllocatedBytesForCurrentThread();
+        long start = Stopwatch.GetTimestamp();
+
+        sim.Step();
+        if (sim.Tick % 2 == 0)
+        {
+            sim.UpdateKnowledge(k1);
+            WireProtocol.WriteSnapshot(b1, (uint)sim.Tick, sim.Tick, k1.OwnUnits, k1.Contacts);
+            sim.UpdateKnowledge(k2);
+            WireProtocol.WriteSnapshot(b2, (uint)sim.Tick, sim.Tick, k2.OwnUnits, k2.Contacts);
+        }
+
+        long elapsed = Stopwatch.GetTimestamp() - start;
+        long endAlloc = GC.GetAllocatedBytesForCurrentThread();
+
+        totalAllocated += (endAlloc - startAlloc);
+        times[i] = (double)elapsed / Stopwatch.Frequency * 1000.0;
+
+        int currentMoving = 0;
+        for (int n = 0; n < world.Count; n++) if (world.GetUnitAt(n).Moving) currentMoving++;
+        minMoving = Math.Min(minMoving, currentMoving);
+        maxMoving = Math.Max(maxMoving, currentMoving);
+    }
+
+    Array.Sort(times);
+    double median = times[50];
+    double p95 = times[94];
+    double p99 = times[98];
+    double max = times[99];
+
+    bool meetsBudget = totalAllocated == 0 && median < 15.0 && p99 < 15.0;
+
+    Console.WriteLine("Scenario: Hierarchical Navigation 1000 Units (2x2 km map) (100 measured ticks)");
+    Console.WriteLine($"  Moving units:      {minMoving}..{maxMoving}/1000");
+    Console.WriteLine($"  Pending queue:     {sim.Navigation?.PendingRequests ?? 0}");
+    Console.WriteLine($"  Median (p50):      {median:F2} ms");
+    Console.WriteLine($"  p95:               {p95:F2} ms");
+    Console.WriteLine($"  p99:               {p99:F2} ms");
+    Console.WriteLine($"  Max:               {max:F2} ms");
+    Console.WriteLine($"  Allocations:       {totalAllocated} B");
+    Console.WriteLine($"  Global nodes exp:  {sim.Navigation?.TotalGlobalExpansions ?? 0}");
+    Console.WriteLine($"  Local nodes exp:   {sim.Navigation?.TotalLocalExpansions ?? 0}");
+    Console.WriteLine($"  Area prep cells:   {sim.Navigation?.TotalAreaPrepCells ?? 0}");
+    Console.WriteLine($"  Smoothing casts:   {sim.Navigation?.TotalSmoothingRaycasts ?? 0}");
+    Console.WriteLine($"  Searches done:     {sim.Navigation?.CompletedSearches ?? 0}");
+    Console.WriteLine($"  NoPath searches:   {sim.Navigation?.FailedSearches ?? 0}");
+    Console.WriteLine($"  Capacity exceeded: {sim.Navigation?.CapacityExceeded ?? 0}");
+    Console.WriteLine($"  Chunk requests:    {sim.Navigation?.ChunkRequestsCompleted ?? 0}");
+    Console.WriteLine($"  Est. memory:       {sim.Navigation?.EstimatedMemoryBytes ?? 0} B");
+    Console.WriteLine($"  Performance gate:  {(meetsBudget ? "PASS (p99 < 15 ms, median < 15 ms, 0 B)" : "FAIL")}");
     Console.WriteLine();
 
     return meetsBudget;

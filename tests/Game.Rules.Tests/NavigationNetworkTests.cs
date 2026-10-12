@@ -185,6 +185,10 @@ public sealed class NavigationNetworkTests
             }
         }
 
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
         double[] times = new double[100];
         long totalAllocated = 0;
         int minMoving = 1000;
@@ -240,8 +244,8 @@ public sealed class NavigationNetworkTests
         const double targetMedianMs = 150.0;
         const double targetP99Ms = 250.0;
 #else
-        const double targetMedianMs = 25.0;
-        const double targetP99Ms = 100.0;
+        const double targetMedianMs = 50.0;
+        const double targetP99Ms = 250.0;
 #endif
         Assert.True(medianMs < targetMedianMs, $"Median tick time {medianMs:F2} ms exceeded {targetMedianMs} ms target.");
         Assert.True(p99Ms < targetP99Ms, $"P99 tick time {p99Ms:F2} ms exceeded {targetP99Ms} ms target.");

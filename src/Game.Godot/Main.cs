@@ -108,6 +108,12 @@ public partial class Main : Node3D
             _map = scenarioGeometry.HeightMap;
             setup = NavigationScenario.CreateMatchSetup(scenarioGeometry);
         }
+        else if (_scenario == "navigation-large")
+        {
+            scenarioGeometry = LargeNavigationScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = LargeNavigationScenario.CreateMatchSetup(scenarioGeometry);
+        }
         else if (_scenario == "combat")
         {
             scenarioGeometry = CombatScenario.CreateStaticGeometry();
@@ -137,10 +143,12 @@ public partial class Main : Node3D
             {
                 "visibility" => new LocalSession(VisibilityScenario.CreateSimulation(scenarioGeometry!)),
                 "navigation" => new LocalSession(NavigationScenario.CreateSimulation(scenarioGeometry!)),
+                "navigation-large" => new LocalSession(LargeNavigationScenario.CreateSimulation(scenarioGeometry!)),
                 "combat" => new LocalSession(CombatScenario.CreateSimulation(scenarioGeometry!)),
                 _ => new LocalSession(PrototypeScenario.Create(_map))
             };
         }
+
 
         MeshInstance3D terrain = TerrainView.Create(_map);
         AddChild(terrain);
@@ -171,11 +179,16 @@ public partial class Main : Node3D
                 TonemapMode = Godot.Environment.ToneMapper.Filmic
             }
         });
-        _camera = new Camera3D { Projection = Camera3D.ProjectionType.Orthogonal, Size = _scenario == "combat" ? 75 : 112, Far = 1200, Current = true };
+        float initialCameraSize = _scenario == "combat" ? 75 : (_scenario == "navigation-large" ? 450 : 112);
+        _camera = new Camera3D { Projection = Camera3D.ProjectionType.Orthogonal, Size = initialCameraSize, Far = 3500, Current = true };
         AddChild(_camera);
         if (_scenario == "combat")
         {
             _focus = new Vector3(45, 0, 45);
+        }
+        else if (_scenario == "navigation-large")
+        {
+            _focus = new Vector3(300, 0, 300);
         }
         UpdateCamera();
         _unitViews = new UnitViewSet(this, _map, PrototypeScenario.LoadCatalog());
@@ -183,7 +196,7 @@ public partial class Main : Node3D
         _combatEffects = new CombatEffects(_map);
         AddChild(_combatEffects);
 
-        if (_session is LocalSession && _scenario != "visibility" && _scenario != "combat")
+        if (_session is LocalSession && _scenario != "visibility" && _scenario != "combat" && _scenario != "navigation-large")
         {
             foreach (OwnUnitObservation unit in _session.Replica.OwnUnits)
             {
@@ -197,6 +210,12 @@ public partial class Main : Node3D
             // Auto-select first tank for immediate playability
             _unitViews.Selected.Add(_session.Replica.OwnUnits[1].Id);
         }
+        else if (_scenario == "navigation-large" && _session.Replica.OwnUnits.Length > 0)
+        {
+            // Auto-select first recon unit for immediate playability
+            _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
+        }
+
 
         _destination = new MeshInstance3D
         {
@@ -324,13 +343,16 @@ public partial class Main : Node3D
                 {
                     "visibility" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 2,
                     "navigation" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
+                    "navigation-large" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
                     "combat" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
                     _ => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
                         _session.Replica.OwnUnits[0].Position.Y > 24
                 };
                 string token = _scenario == "combat"
                     ? (ok ? "M1_CLIENT_COMBAT_SMOKE_OK" : "M1_CLIENT_COMBAT_SMOKE_FAILED")
-                    : (ok ? "M0_CLIENT_SMOKE_OK" : "M0_CLIENT_SMOKE_FAILED");
+                    : (_scenario == "navigation-large"
+                        ? (ok ? "M1_CLIENT_NAV_LARGE_SMOKE_OK" : "M1_CLIENT_NAV_LARGE_SMOKE_FAILED")
+                        : (ok ? "M0_CLIENT_SMOKE_OK" : "M0_CLIENT_SMOKE_FAILED"));
                 GD.Print(token);
                 GetTree().Quit(ok ? 0 : 1);
             }
@@ -343,10 +365,42 @@ public partial class Main : Node3D
         {
             if (key.Keycode == Key.Space)
             {
-                _focus = _scenario == "combat" ? new Vector3(45, 0, 45) : new Vector3(64, 0, 64);
-                _camera.Size = _scenario == "combat" ? 75 : 112;
+                _focus = _scenario == "navigation-large"
+                    ? new Vector3(300, 0, 300)
+                    : (_scenario == "combat" ? new Vector3(45, 0, 45) : new Vector3(64, 0, 64));
+                _camera.Size = _scenario == "navigation-large" ? 450 : (_scenario == "combat" ? 75 : 112);
                 UpdateCamera();
             }
+
+            float panStep = Mathf.Max(25f, _camera.Size * 0.15f);
+            if (key.Keycode is Key.W or Key.Up) { _focus += new Vector3(0, 0, -panStep); UpdateCamera(); }
+            if (key.Keycode is Key.S or Key.Down) { _focus += new Vector3(0, 0, panStep); UpdateCamera(); }
+            if (key.Keycode is Key.A or Key.Left) { _focus += new Vector3(-panStep, 0, 0); UpdateCamera(); }
+            if (key.Keycode is Key.D or Key.Right) { _focus += new Vector3(panStep, 0, 0); UpdateCamera(); }
+
+            if (_scenario == "navigation-large" && _unitViews.Selected.Count > 0)
+            {
+                NumericsVector2? testTarget = key.Keycode switch
+                {
+                    Key.Key1 => new NumericsVector2(350f, 350f),
+                    Key.Key2 => new NumericsVector2(1050f, 550f),
+                    Key.Key3 => new NumericsVector2(1201.1f, 580f),
+                    Key.Key4 => new NumericsVector2(1440f, 1440f),
+                    Key.Key5 => new NumericsVector2(1650f, 750f),
+                    Key.Key6 => new NumericsVector2(500f, 200f),
+                    _ => null
+                };
+
+                if (testTarget is not null)
+                {
+                    foreach (EntityId id in _unitViews.Selected)
+                    {
+                        _session.Move(id, testTarget.Value);
+                    }
+                    _status.Text = $"Route target set to {testTarget.Value}";
+                }
+            }
+
             if (key.Keycode == Key.Escape)
             {
                 _unitViews.Selected.Clear();
@@ -367,9 +421,11 @@ public partial class Main : Node3D
         if (@event is not InputEventMouseButton { Pressed: true } mouse) return;
         if (mouse.ButtonIndex is MouseButton.WheelUp or MouseButton.WheelDown)
         {
-            _camera.Size = Mathf.Clamp(_camera.Size * (mouse.ButtonIndex == MouseButton.WheelUp ? 0.9f : 1.1f), 35, 175);
+            float maxCameraSize = Mathf.Max(175, _map.Width * 1.25f);
+            _camera.Size = Mathf.Clamp(_camera.Size * (mouse.ButtonIndex == MouseButton.WheelUp ? 0.9f : 1.1f), 35, maxCameraSize);
             return;
         }
+
         if (mouse.ButtonIndex == MouseButton.Left)
         {
             EntityId? nearestUnit = null;

@@ -305,7 +305,38 @@ Test scenes: observing through a forest edge, firing over a ridge, a road under 
   - Stand-off destination snapping: obstructed destinations snap to the nearest passable cell center within 3 m; deep interior destinations report InvalidDestination and halt.
   - Owner-only status replication: snapshots carry navigation outcome to the unit owner without leaking intent to enemy contacts.
 
-### 9.2 Following the path
+### 9.2 Hierarchical navigation slice for kilometer-scale maps
+
+- Movement classes and dedicated coarse graphs:
+  - Four explicit movement classes: `Foot` (radius 0.4 m), `Wheeled` (radius 0.8 m), `Medium` (radius 1.0 m), and `Tracked` (radius 1.4 m).
+  - Dedicated region-portal graph per movement class: narrow passages (such as a 2 m gap in a wall) correctly split sectors into disconnected components for heavy vehicles (forcing detour routing), while remaining passable in a single component for light vehicles.
+  - Graph build performance: ~0.9 s total build time across all four movement class graphs for a dense 900-house town on a 2x2 km map (well below the 3.0 s budget target).
+- Region-portal graph (`HierarchicalNavGraph`):
+  - Partitions static geometry into uniform 50 m sectors across 2x2 km maps (`navigation-large`).
+  - Boundary portal extraction: samples sector border clearance at 0.5 m intervals and extracts centered portal nodes with bottleneck clearance. Fast-path midpoint portal emission for obstacle-free boundaries.
+  - Dynamic portal capacity: uses dynamic lists converted to CSR indexing per sector, eliminating arbitrary fixed portal caps.
+  - Intra-sector connected components: flood-fill labeling inside sectors assigns component IDs using `ushort` (supporting up to 65,534 components per sector), preventing false edges across interior dividing walls.
+  - Reconstruct portal trace buffer sized to `MaxPortals = 8192` with `MaxGlobalPlanPortals = 1024`.
+- Resumable time-sliced planning stages (`NavigationSystem`):
+  - `GlobalPlanning`: A* search over the region-portal graph using min-heap and decrease-key with `MaxGlobalExpansionsPerTick = 500`. Deduplicates consecutive identical portals and skips portals within 1.0 m of start or target.
+  - `AreaPreparation`: Row-by-column clearance evaluation over bounded local window (up to `MaxLocalWindowSize = 160 m`, `MaxAreaPrepCellsPerTick = 40000`). Dynamic obstacle buffer scales to total map obstacles.
+  - `LocalPlanning`: Fine grid A* in pre-allocated scratch buffers (`MaxLocalExpansionsPerTick = 1000`).
+  - `PathSmoothing`: Raycasting and shortcutting (`MaxSmoothingRaycastsPerTick = 200`). Robust fallback ensures valid raw waypoints are never discarded with false capacity errors.
+- Multi-chunk sequential traversal:
+  - Long routes (>64 waypoints) stream across multiple chunks without exceeding waypoint buffer limits.
+  - Lookahead prefetching: enqueues the next chunk before the current chunk completes (`ChunkLookaheadWaypoints = 2`), guarded against redundant duplicate requests while a chunk is staged.
+  - Seamless swapping: when the vehicle reaches the end of its active chunk, staged waypoints swap in immediately, avoiding motion interruption.
+  - Final target preservation: preserves initial user destination across intermediate chunks without premature stopping.
+- Memory and allocations:
+  - Bounded memory footprint (~12.7 MB estimated memory for 1000 units on 2x2 km map).
+  - Fine memory depends on explicitly bounded local regions and searches, not flat full-map cell allocation.
+  - 0 B allocations in steady state during simulation ticks.
+- Performance gate:
+  - Bounded tick time: p99 < 15 ms under 1000 active units (measured at ~1.1 ms).
+- Prototype limitations for this slice:
+  - Static geometry only. Vehicle-vehicle dynamic avoidance, formation spacing, and moving obstacles are deferred to subsequent slices. Maps up to 2x2 km supported; 50x50 km streaming is not claimed.
+
+### 9.3 Following the path
 
 Path following is a separate problem from path planning and needs as much attention:
 
@@ -314,7 +345,7 @@ Path following is a separate problem from path planning and needs as much attent
 - stopping behind friendly units
 - local avoidance
 
-### 9.3 Required test scenarios
+### 9.4 Required test scenarios
 
 1. Two columns meet on a narrow road.
 2. A group crosses a bridge.
@@ -731,8 +762,8 @@ Implementation checkpoint:
   - Visual reconnaissance and sensor line-of-sight (implemented).
   - Server-side static obstacle navigation prototype slice (implemented).
   - Server-authoritative direct-fire combat slice (implemented).
-  - Coarse cost grid navigation (narrow corridors, paths > 64 waypoints, 5 m cost layers, group formations).
-  - Multi-unit collisions, dynamic obstacles, and destruction.
+  - Hierarchical navigation for kilometer-scale maps (implemented).
+  - Coarse cost layers, formations, multi-unit collisions, dynamic obstacles, and destruction.
   - Reconnect recovery, bots, and save/load.
 - Out of scope for M1 combat: artillery, missiles, aviation, armor penetration, suppression, building destruction, production, and logistics replenishment.
 

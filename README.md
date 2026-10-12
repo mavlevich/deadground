@@ -185,6 +185,49 @@ The navigation scenario map includes five obstacle topologies:
   - Blocked for `prototype_tank` (radius 1.4 m, width clearance 2.8 m). Ordering the tank across the gap routes it around the exterior perimeter rather than through the choke point.
 - **Enclosed courtyard**: A 4-wall perimeter enclosing interior [92..108, 77..95]. Ordering a unit inside an unreachable enclosure fails pathfinding gracefully without stalling the tick budget or freezing the simulation.
 
+### Large navigation scenario (kilometer-scale)
+
+To run the playable hierarchical navigation scenario across a 2x2 km map with sector partitioning and multi-chunk routes:
+
+Start the dedicated server:
+
+```sh
+dotnet run --project src/Game.Server --configuration Release -- --scenario navigation-large --port 7777
+```
+
+In a second terminal, start the first client (Side 1: Western forces):
+
+```sh
+./tools/run-client.sh -- --scenario navigation-large --connect 127.0.0.1:7777
+```
+
+In a third terminal, start the second client (Side 2: Eastern forces):
+
+```sh
+./tools/run-client.sh -- --scenario navigation-large --connect 127.0.0.1:7777
+```
+
+For self-contained local inspection without a dedicated server:
+
+```sh
+./tools/run-client.sh -- --scenario navigation-large
+```
+
+On Windows, use `run-client.ps1`:
+
+```powershell
+./tools/run-client.ps1 -GodotArgs @("--", "--scenario", "navigation-large", "--connect", "127.0.0.1:7777")
+```
+
+#### Large map topologies
+
+The 2000 m x 2000 m scenario map (`navigation-large`) includes:
+- **Urban block district**: 3x3 layout of 50 m x 50 m city blocks around [500..800, 500..800].
+- **500 m barrier detour**: Continuous wall at X in [950..956], Z in [300..800]. Moving across the barrier plans an admissible global detour around the ends without false no-path failures.
+- **Narrow 2.2 m passage**: Gap at X=1200 between buildings at Z in [500..540]. Reconnaissance vehicles fit through the gap; tanks route around the perimeter.
+- **Enclosed unreachable courtyard**: 4-wall perimeter [1400..1480, 1400..1480]. Ordering a move into the interior fails gracefully without stalling the tick budget.
+- **Winding slalom course**: 8 alternating barrier walls at [1600..1900, 200..700] requiring >64 waypoints. Vehicles navigate seamlessly across multiple consecutive chunks.
+
 ### Line-of-sight sandbox
 
 To launch the standalone visual line-of-sight geometry sandbox:
@@ -230,6 +273,7 @@ dotnet test DeadGround.sln --configuration Release --no-build
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario visibility
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario navigation
+dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario navigation-large
 ./tools/run-client.sh --headless -- --smoke-test
 ```
 
