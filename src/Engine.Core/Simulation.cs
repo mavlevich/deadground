@@ -8,17 +8,33 @@ public sealed class Simulation : IDisposable
     private readonly WorldState _world;
     private readonly ISimulationRules _rules;
     private readonly DetectionSystem? _detection;
-    private readonly PendingMove[] _commands = new PendingMove[256];
+    private readonly NavigationSystem? _navigation;
+    private readonly CombatSystem? _combat;
+
+    private readonly QueuedCommand[] _commands = new QueuedCommand[256];
     private readonly uint[] _lastAccepted = new uint[MaxPlayers];
     private int _commandCount;
+
     public int Tick { get; private set; }
     public int Capacity => _world.Capacity;
     public WorldState World => _world;
     public ISimulationRules Rules => _rules;
     public DetectionSystem? Detection => _detection;
     public NavigationSystem? Navigation => _navigation;
-    private readonly NavigationSystem? _navigation;
-    private readonly record struct PendingMove(int Player, MoveCommand Command);
+    public CombatSystem? Combat => _combat;
+
+    private readonly record struct QueuedCommand(
+        int Player,
+        bool IsAttack,
+        MoveCommand Move,
+        AttackCommand Attack)
+    {
+        public static QueuedCommand CreateMove(int player, MoveCommand move) =>
+            new(player, false, move, default);
+
+        public static QueuedCommand CreateAttack(int player, AttackCommand attack) =>
+            new(player, true, default, attack);
+    }
 
     public Simulation(WorldState world, ISimulationRules rules)
     {
@@ -26,6 +42,7 @@ public sealed class Simulation : IDisposable
         _rules = rules ?? throw new ArgumentNullException(nameof(rules));
         _detection = (_rules as RuleSet)?.FindSystem<DetectionSystem>();
         _navigation = (_rules as RuleSet)?.FindSystem<NavigationSystem>();
+        _combat = (_rules as RuleSet)?.FindSystem<CombatSystem>();
     }
 
     // Player identity is supplied by the authenticated connection, never by packet data.
@@ -35,7 +52,31 @@ public sealed class Simulation : IDisposable
             command.Sequence <= _lastAccepted[player - 1] || _commandCount == _commands.Length ||
             !_world.Map.Contains(command.Target) || !_world.TryGetUnit(command.Unit, out UnitState unit) ||
             unit.Owner != player) return false;
-        _commands[_commandCount++] = new PendingMove(player, command);
+
+        _commands[_commandCount++] = QueuedCommand.CreateMove(player, command);
+        _lastAccepted[player - 1] = command.Sequence;
+        return true;
+    }
+
+    public bool TryEnqueue(int player, AttackCommand command)
+    {
+        if (player < 1 || player > _lastAccepted.Length || command.Sequence == 0 ||
+            command.Sequence <= _lastAccepted[player - 1] || _commandCount == _commands.Length ||
+            command.Target.Value == 0 || !_world.TryGetUnit(command.Unit, out UnitState unit) ||
+            unit.Owner != player) return false;
+
+        // Contact validation: target ContactId must be in sender's current contact knowledge
+        if (_detection is not null)
+        {
+            SideContactTracker tracker = _detection.GetTracker(player);
+            if (!tracker.TryGetContact(command.Target, out ContactObservation contact) ||
+                contact.State != ContactState.Current)
+            {
+                return false;
+            }
+        }
+
+        _commands[_commandCount++] = QueuedCommand.CreateAttack(player, command);
         _lastAccepted[player - 1] = command.Sequence;
         return true;
     }
@@ -44,19 +85,36 @@ public sealed class Simulation : IDisposable
     {
         Tick = checked(Tick + 1);
         _navigation?.SweepRemovedUnits(_world);
+
+        // Process queued orders: movement and attack commands
         for (int i = 0; i < _commandCount; i++)
         {
-            PendingMove pending = _commands[i];
-            if (_navigation is not null)
+            QueuedCommand queued = _commands[i];
+            if (queued.IsAttack)
             {
-                _navigation.EnqueueCommand(pending.Player, pending.Command);
+                _combat?.TryExecuteAttackOrder(queued.Player, queued.Attack, _world);
             }
             else
             {
-                _world.SetMoveTarget(pending.Player, pending.Command.Unit, pending.Command.Target);
+                // A valid accepted movement order cancels an active attack order on this unit
+                if (_navigation is not null)
+                {
+                    if (_navigation.EnqueueCommand(queued.Player, queued.Move, _world))
+                    {
+                        _world.ClearAttackOrder(queued.Move.Unit);
+                    }
+                }
+                else
+                {
+                    if (_world.SetMoveTarget(queued.Player, queued.Move.Unit, queued.Move.Target))
+                    {
+                        _world.ClearAttackOrder(queued.Move.Unit);
+                    }
+                }
             }
         }
         _commandCount = 0;
+
         _rules.Update(_world, Tick);
     }
 
@@ -64,7 +122,18 @@ public sealed class Simulation : IDisposable
     {
         if (player >= 1 && player <= _lastAccepted.Length)
             _lastAccepted[player - 1] = 0;
+
         _navigation?.ResetPlayer(player);
+        _combat?.ResetPlayer(player);
+
+        // Remove unexecuted queued commands for this player slot
+        int writeIdx = 0;
+        for (int i = 0; i < _commandCount; i++)
+        {
+            if (_commands[i].Player != player)
+                _commands[writeIdx++] = _commands[i];
+        }
+        _commandCount = writeIdx;
     }
 
     public void SetPlayerTeam(int player, int team) => _world.SetPlayerTeam(player, team);
@@ -77,7 +146,14 @@ public sealed class Simulation : IDisposable
         ReadOnlySpan<ContactObservation> contacts = _detection is not null
             ? _detection.GetContacts(knowledge.Player)
             : [];
-        knowledge.Refresh(_world, contacts, _navigation);
+        ReadOnlySpan<CombatEventObservation> events = _combat is not null
+            ? _combat.GetEvents(knowledge.Player)
+            : [];
+        knowledge.Refresh(_world, contacts, _navigation, events);
     }
+
+    public void AcknowledgeCombatEvents(int player, int count) => _combat?.AcknowledgeEvents(player, count);
+    public void SetPlayerAdmitted(int player, bool admitted) => _combat?.SetPlayerAdmitted(player, admitted);
+
     public void Dispose() => _world.Dispose();
 }

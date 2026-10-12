@@ -18,22 +18,49 @@ public sealed class OpsRules : RuleSet
         IUnitMovementCatalog movementCatalog,
         NavigationTuning? navTuning = null,
         DetectionTuning? detTuning = null)
-        : base(
-            new NavigationSystem(new NavigationGrid(geometry, navTuning?.CellSize ?? NavigationTuning.DefaultCellSize), movementCatalog, navTuning),
-            new DetectionSystem(geometry, perceptionCatalog, detTuning))
+        : this(geometry, perceptionCatalog, movementCatalog, null, navTuning, detTuning)
+    { }
+
+    public OpsRules(
+        StaticGeometry geometry,
+        IUnitPerceptionCatalog perceptionCatalog,
+        IUnitMovementCatalog movementCatalog,
+        IUnitCombatCatalog? combatCatalog,
+        NavigationTuning? navTuning = null,
+        DetectionTuning? detTuning = null)
+        : base(CreateSystems(geometry, perceptionCatalog, movementCatalog, combatCatalog, navTuning, detTuning))
     { }
 
     public OpsRules(StaticGeometry geometry, UnitCatalog catalog)
-        : this(geometry, new OpsPerceptionCatalog(catalog), PrototypeScenario.CreateDetectionTuning(catalog)) { }
+        : this(geometry, new OpsPerceptionCatalog(catalog), new OpsMovementCatalog(catalog), new OpsCombatCatalog(catalog), null, PrototypeScenario.CreateDetectionTuning(catalog)) { }
 
     public OpsRules(StaticGeometry geometry, UnitCatalog catalog, NavigationTuning? navTuning, DetectionTuning? detTuning = null)
         : this(
             geometry,
             new OpsPerceptionCatalog(catalog),
             new OpsMovementCatalog(catalog),
+            new OpsCombatCatalog(catalog),
             navTuning,
             detTuning ?? PrototypeScenario.CreateDetectionTuning(catalog))
     { }
+
+    private static ISimulationSystem[] CreateSystems(
+        StaticGeometry geometry,
+        IUnitPerceptionCatalog perceptionCatalog,
+        IUnitMovementCatalog movementCatalog,
+        IUnitCombatCatalog? combatCatalog,
+        NavigationTuning? navTuning,
+        DetectionTuning? detTuning)
+    {
+        NavigationSystem nav = new(new NavigationGrid(geometry, navTuning?.CellSize ?? NavigationTuning.DefaultCellSize), movementCatalog, navTuning);
+        DetectionSystem det = new(geometry, perceptionCatalog, detTuning);
+        if (combatCatalog is not null)
+        {
+            CombatSystem combat = new(geometry, combatCatalog, perceptionCatalog, det, nav);
+            return [nav, det, combat];
+        }
+        return [nav, det];
+    }
 }
 
 public sealed record DetectionSettings(
@@ -45,18 +72,31 @@ public sealed record DetectionSettings(
     float Slack = DetectionTuning.DefaultSlack,
     float MaxGate = DetectionTuning.DefaultMaxGate);
 
+public sealed record WeaponData(
+    string Id,
+    float Range,
+    int ReloadDurationTicks = 0,
+    float ReloadSeconds = 0f,
+    int Damage = 0,
+    int AmmoCapacity = 0,
+    float MuzzleHeight = 1.8f,
+    string? PresentationId = null);
+
 public sealed record UnitDefinition(
     string Id,
     float Speed,
     float SensorRange = 60.0f,
     float EyeHeight = 1.8f,
     float[]? TargetPoints = null,
-    float Radius = 1.0f);
+    float Radius = 1.0f,
+    int MaxHealth = 100,
+    string? Weapon = null);
 
 public sealed record UnitCatalog(
     int SchemaVersion,
     UnitDefinition[] Units,
-    DetectionSettings? Detection = null)
+    DetectionSettings? Detection = null,
+    WeaponData[]? Weapons = null)
 {
     public ulong ContentHash { get; init; }
 
@@ -151,11 +191,64 @@ public sealed class OpsMovementCatalog : IUnitMovementCatalog
     }
 }
 
+public sealed class OpsCombatCatalog : IUnitCombatCatalog
+{
+    private readonly UnitCombatProfile[] _profiles;
+
+    public OpsCombatCatalog(UnitCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        Dictionary<string, WeaponDefinition> weapons = new(StringComparer.Ordinal);
+        if (catalog.Weapons is not null)
+        {
+            ushort presIdCounter = 1;
+            foreach (WeaponData w in catalog.Weapons)
+            {
+                int reloadTicks = w.ReloadDurationTicks > 0
+                    ? w.ReloadDurationTicks
+                    : (int)MathF.Round(w.ReloadSeconds * Simulation.TickRate);
+
+                weapons[w.Id] = new WeaponDefinition(
+                    w.Id,
+                    w.Range,
+                    reloadTicks,
+                    w.Damage,
+                    w.AmmoCapacity,
+                    w.MuzzleHeight,
+                    presIdCounter++);
+            }
+        }
+
+        _profiles = new UnitCombatProfile[catalog.Units.Length];
+        for (int i = 0; i < catalog.Units.Length; i++)
+        {
+            UnitDefinition unit = catalog.Units[i];
+            WeaponDefinition? weapon = unit.Weapon is not null && weapons.TryGetValue(unit.Weapon, out WeaponDefinition? def)
+                ? def
+                : null;
+            _profiles[i] = new UnitCombatProfile(unit.MaxHealth, weapon);
+        }
+    }
+
+    public bool TryGetProfile(ushort definition, out UnitCombatProfile profile)
+    {
+        if (definition < _profiles.Length)
+        {
+            profile = _profiles[definition];
+            return true;
+        }
+        profile = default;
+        return false;
+    }
+}
+
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
     ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true)]
 [JsonSerializable(typeof(UnitCatalog))]
 [JsonSerializable(typeof(UnitDefinition))]
 [JsonSerializable(typeof(DetectionSettings))]
+[JsonSerializable(typeof(WeaponData))]
+[JsonSerializable(typeof(WeaponData[]))]
 [JsonSerializable(typeof(float[]))]
 internal partial class ContentJsonContext : JsonSerializerContext;
 
@@ -198,6 +291,33 @@ public static class PrototypeScenario
             }
         }
 
+        HashSet<string> weaponNames = new(StringComparer.Ordinal);
+        if (data.Weapons is not null)
+        {
+            foreach (WeaponData weapon in data.Weapons)
+            {
+                if (string.IsNullOrWhiteSpace(weapon.Id) || !weaponNames.Add(weapon.Id))
+                    throw new InvalidOperationException("Invalid weapon definition ID.");
+                if (!float.IsFinite(weapon.Range) || weapon.Range <= 0)
+                    throw new InvalidOperationException("Invalid weapon range.");
+                if (weapon.ReloadDurationTicks < 0 || weapon.ReloadDurationTicks > ushort.MaxValue)
+                    throw new InvalidOperationException("Invalid reload duration.");
+                if (!float.IsFinite(weapon.ReloadSeconds) || weapon.ReloadSeconds < 0)
+                    throw new InvalidOperationException("Invalid reload duration.");
+                int computedReloadTicks = weapon.ReloadDurationTicks > 0
+                    ? weapon.ReloadDurationTicks
+                    : (int)Math.Round(weapon.ReloadSeconds / Simulation.TickSeconds);
+                if (computedReloadTicks < 0 || computedReloadTicks > ushort.MaxValue)
+                    throw new InvalidOperationException("Computed reload duration ticks exceeds protocol field capacity.");
+                if (weapon.Damage <= 0)
+                    throw new InvalidOperationException("Invalid weapon damage.");
+                if (weapon.AmmoCapacity <= 0 || weapon.AmmoCapacity > ushort.MaxValue)
+                    throw new InvalidOperationException("Invalid ammo capacity.");
+                if (!float.IsFinite(weapon.MuzzleHeight) || weapon.MuzzleHeight <= 0)
+                    throw new InvalidOperationException("Invalid muzzle height.");
+            }
+        }
+
         HashSet<string> names = new(StringComparer.Ordinal);
         foreach (UnitDefinition unit in data.Units)
         {
@@ -211,6 +331,10 @@ public static class PrototypeScenario
                 throw new InvalidOperationException("Invalid sensor range.");
             if (!float.IsFinite(unit.EyeHeight) || unit.EyeHeight <= 0)
                 throw new InvalidOperationException("Invalid eye height.");
+            if (unit.MaxHealth <= 0 || unit.MaxHealth > ushort.MaxValue)
+                throw new InvalidOperationException("Invalid unit max health.");
+            if (unit.Weapon is not null && !weaponNames.Contains(unit.Weapon))
+                throw new InvalidOperationException("Unknown weapon referenced by unit.");
             if (unit.TargetPoints is null or { Length: < 1 or > 8 })
                 throw new InvalidOperationException("Invalid target points count.");
             foreach (float height in unit.TargetPoints)
@@ -502,6 +626,84 @@ public static class NavigationScenario
     }
 
     public static MatchSetup CreateMatchSetup(StaticGeometry? geometry = null, string ruleSetId = "Navigation", UnitCatalog? catalog = null)
+    {
+        geometry ??= CreateStaticGeometry();
+        catalog ??= PrototypeScenario.LoadCatalog();
+        return new MatchSetup(
+            MatchSetup.CurrentProtocolVersion,
+            catalog.ContentHash,
+            MatchSetup.ComputeMapHash(geometry),
+            ruleSetId);
+    }
+}
+
+public static class CombatScenario
+{
+    public static HeightMap CreateMap()
+    {
+        const int size = 65;
+        ushort[] heights = new ushort[size * size];
+        return new HeightMap(size, size, 2f, 0.01f, heights);
+    }
+
+    public static StaticGeometry CreateStaticGeometry()
+    {
+        HeightMap map = CreateMap();
+
+        // 1. High building at (45..55, 42..58), height 6.0m (blocks fire and line of sight)
+        OpaqueStructure building = new(
+            new StructureId(1),
+            minX: 45f, minY: 0f, minZ: 42f,
+            maxX: 55f, maxY: 6f, maxZ: 58f,
+            isGrounded: true);
+
+        // 2. Low wall at (30..31, 15..35), height 1.0m (partial hull-down cover)
+        OpaqueStructure lowWall = new(
+            new StructureId(2),
+            minX: 30f, minY: 0f, minZ: 15f,
+            maxX: 31f, maxY: 1.0f, maxZ: 35f,
+            isGrounded: true);
+
+        return new StaticGeometry(map, [building, lowWall]);
+    }
+
+    public static Simulation CreateSimulation(StaticGeometry? geometry = null, UnitCatalog? catalog = null, NavigationTuning? navTuning = null)
+    {
+        geometry ??= CreateStaticGeometry();
+        catalog ??= PrototypeScenario.LoadCatalog();
+
+        OpsRules rules = new(geometry, catalog, navTuning);
+        WorldState world = new(geometry.HeightMap);
+
+        UnitDefinition reconDef = catalog.RequireDefinition("recon_vehicle");
+        ushort reconIdx = catalog.RequireDefinitionIndex("recon_vehicle");
+        UnitDefinition tankDef = catalog.RequireDefinition("prototype_tank");
+        ushort tankIdx = catalog.RequireDefinitionIndex("prototype_tank");
+
+        int tankAmmo = 10;
+        if (catalog.Weapons is not null)
+        {
+            foreach (WeaponData w in catalog.Weapons)
+            {
+                if (string.Equals(w.Id, tankDef.Weapon, StringComparison.Ordinal))
+                    tankAmmo = w.AmmoCapacity;
+            }
+        }
+
+        // Side 1: 2 tanks and 1 recon vehicle
+        world.CreateUnit(1, reconIdx, new Vector2(15f, 25f), reconDef.Speed, reconDef.MaxHealth, 0);
+        world.CreateUnit(1, tankIdx, new Vector2(12f, 25f), tankDef.Speed, tankDef.MaxHealth, tankAmmo);
+        world.CreateUnit(1, tankIdx, new Vector2(15f, 50f), tankDef.Speed, tankDef.MaxHealth, tankAmmo);
+
+        // Side 2: 2 tanks and 1 recon vehicle
+        world.CreateUnit(2, tankIdx, new Vector2(33f, 25f), tankDef.Speed, tankDef.MaxHealth, tankAmmo); // behind low wall
+        world.CreateUnit(2, tankIdx, new Vector2(65f, 50f), tankDef.Speed, tankDef.MaxHealth, tankAmmo); // behind building
+        world.CreateUnit(2, reconIdx, new Vector2(65f, 80f), reconDef.Speed, reconDef.MaxHealth, 0);
+
+        return new Simulation(world, rules);
+    }
+
+    public static MatchSetup CreateMatchSetup(StaticGeometry? geometry = null, string ruleSetId = "Combat", UnitCatalog? catalog = null)
     {
         geometry ??= CreateStaticGeometry();
         catalog ??= PrototypeScenario.LoadCatalog();

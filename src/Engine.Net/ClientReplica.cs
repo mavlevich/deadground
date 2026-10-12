@@ -12,7 +12,20 @@ public sealed class ClientReplica
     public uint LatestSequence => _count == 0 ? 0 : Latest.Sequence;
     public ReadOnlySpan<OwnUnitObservation> OwnUnits => _count == 0 ? [] : Latest.Units.AsSpan(0, Latest.Count);
     public ReadOnlySpan<ContactObservation> Contacts => _count == 0 ? [] : Latest.Contacts.AsSpan(0, Latest.ContactCount);
+    public ReadOnlySpan<CombatEventObservation> Events => _count == 0 ? [] : Latest.Events.AsSpan(0, Latest.EventCount);
     public int ContactCount => _count == 0 ? 0 : Latest.ContactCount;
+    public int EventCount => _count == 0 ? 0 : Latest.EventCount;
+
+    public bool TryGetOwnUnit(EntityId id, out OwnUnitObservation unit)
+    {
+        if (_count == 0 || !Latest.Indices.TryGetValue(id, out int index))
+        {
+            unit = default;
+            return false;
+        }
+        unit = Latest.Units[index];
+        return true;
+    }
 
     public bool TryGetContact(ContactId id, out ContactObservation contact)
     {

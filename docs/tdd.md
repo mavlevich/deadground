@@ -344,15 +344,17 @@ Path following is a separate problem from path planning and needs as much attent
   - Expiration: `LastKnown` contacts age out and are permanently removed once unobserved for longer than `MemoryDurationTicks` (default 100 ticks / 5.0 s).
   - Overflow eviction policy: each side supports up to 256 contacts. If capacity is exceeded, the oldest `LastKnown` contact is evicted first. `Current` contacts are never evicted in favor of `LastKnown` markers.
   - Canonical export: exported contacts are sorted deterministically by `ContactId` for consistent network serialization.
-- Snapshot wire protocol v3:
-  - Protocol version incremented to 3.
-  - Header is 14 bytes (added `ushort ContactCount` at offset 12).
-  - Own unit record is 19 bytes: `uint Id` (4 bytes), `ushort Definition` (2 bytes), `Vector2 Position` (8 bytes), `uint SupportSurface` (4 bytes), `byte NavStatus` (1 byte).
+- Snapshot wire protocol v6:
+  - Protocol version incremented to 6.
+  - Header is 16 bytes: `Version` (1 byte), `SnapshotKind` (1 byte), `uint Sequence` (4 bytes), `int ServerTick` (4 bytes), `ushort UnitCount` (2 bytes), `ushort ContactCount` (2 bytes), `ushort EventCount` (2 bytes).
+  - Own unit record is 30 bytes: `uint Id` (4 bytes), `ushort Definition` (2 bytes), `Vector2 Position` (8 bytes), `uint SupportSurface` (4 bytes), `byte NavStatus` (1 byte), `ushort Health` (2 bytes), `ushort Ammunition` (2 bytes), `ushort ReloadTicksRemaining` (2 bytes), `byte AttackStatus` (1 byte), `uint TargetContactId` (4 bytes).
   - Contact record is 18 bytes: `uint ContactId` (4 bytes), `byte State` (1 byte), `byte Classification` (1 byte), `Vector2 Position` (8 bytes), `int LastSeenTick` (4 bytes).
-  - Maximum snapshot payload size is 24,078 bytes (`14 + 1024 * 19 + 256 * 18`).
-  - Information isolation: server-filtered snapshots only contain permitted observations for the recipient player. Foreign truth state is never transmitted.
+  - Combat event record is 39 bytes: `uint EventId` (4 bytes), `int ServerTick` (4 bytes), `byte Kind` (1 byte), `ushort PresentationId` (2 bytes), `Vector3 Origin` (12 bytes), `Vector3 Target` (12 bytes), `uint ShooterUnitId` (4 bytes).
+  - Commands: `MoveCommand` is 22 bytes (`MoveKind = 1`), `AttackCommand` is 18 bytes (`AttackKind = 7`: `Version` (1), `Kind` (1), `Sequence` (4), `ClientTick` (4), `Unit` (4), `TargetContactId` (4)). Both commands share a single sequence stream per player.
+  - Maximum snapshot payload size is 37,840 bytes (`16 + 1024 * 30 + 256 * 18 + 64 * 39`).
+  - Information isolation: server-filtered snapshots only contain permitted observations and knowledge-filtered events for the recipient player. Foreign truth state and hidden firing origins are never transmitted.
 
-Detection is a measured CPU hotspot that fits the per-tick simulation budget: steady-state detection and snapshot serialization execute with zero managed heap allocations.
+Detection is a measured CPU hotspot that fits the per-tick simulation budget: steady-state detection, combat resolution, and snapshot serialization execute with zero managed heap allocations.
 
 ## 11. Infantry and containers
 
@@ -405,7 +407,20 @@ reliable acknowledgement, retries and reconnect reconciliation remain M1 work.
 
 An attack order targets either a `ContactId` or a ground position. Never an enemy entity ID.
 
-When the target contact is lost, the unit acts by its stance:
+For the initial M1 direct-fire combat slice, attack orders follow a limited subset of the future stance system:
+- Explicit attack orders only, issued by a player targeting a currently observed `ContactId` (`State == ContactState.Current`).
+- Range validation at issuance: orders targeting contacts beyond weapon range plus margin (0.5 m) are rejected immediately; rejection preserves existing valid orders (ongoing movement continues, active attack orders on in-range targets are preserved and continue firing).
+- Stationary firing only: an accepted attack order targeting an in-range contact replaces the active movement order and immediately halts the attacker.
+- A new movement order cancels its active attack order.
+- The attacker does not automatically pursue or chase targets.
+- If the target moves out of weapon range during combat, the unit maintains the attack order but holds fire with status `OutOfRange`.
+- If the target contact transitions to `LastKnown`, the attacker maintains the attack order and holds fire with status `TargetLost`. When the target is re-observed and transitions back to `Current`, the attack order automatically re-resolves the bound entity and resumes firing.
+- The attack order is dropped when the target contact expires from the tracker (e.g. after `MemoryDurationTicks`) or when an observed target is destroyed. If a target is destroyed outside the attacker's line of sight, the attacker's `LastKnown` contact and `TargetLost` order are maintained without leaking the unobserved death until contact expiry.
+- Range and firing line of sight are strictly revalidated at each shot. A stale detection result does not permit shooting through a newly obstructed line.
+- Invalid commands are rejected and never cancel an existing valid order.
+- Prototype limitation: instantaneous shot resolution without ballistics simulation or dispersion. Visual tracers are presentation effects and do not determine damage.
+
+When full stances are implemented in later milestones, lost contacts will behave by stance:
 
 | Stance | Behavior |
 |---|---|
@@ -417,9 +432,16 @@ Area fire on a ground position (suppression, artillery) does not need a contact.
 
 ## 13. State and events
 
-- Anything that must survive reconnect, save or late join is state. Example: `Bridge.State = Destroyed`.
-- Events are hints for presentation. Example: `BridgeDestroyed` triggers the explosion effect.
-- Every event sent to a client passes the knowledge filter. The result can be the exact event, an approximate one (sound or flash near a position), or nothing.
+- Anything that must survive reconnect, save or late join is state. Example: `Bridge.State = Destroyed`, unit health, ammunition, reload timers.
+- Events are hints for presentation. Example: `BridgeDestroyed` triggers the explosion effect; `ShotFired` triggers muzzle flash and tracer; `TookFire` triggers target impact effect; `UnitDestroyed` triggers explosion and debris.
+- Presentation events are optional hints: dropped events never alter authoritative combat outcomes.
+- Duplicate events are ignored by clients using a ring buffer of processed event IDs.
+- Events have stable sequential identifiers and a server tick.
+- Every event sent to a client passes the recipient knowledge filter:
+  - `ShotFired`: sent to the attacker owner and to any opponent who currently observes the attacker (`State == ContactState.Current`). If the shooter is unobserved, the event is omitted entirely to prevent disclosing hidden firing coordinates.
+  - `TookFire`: sent to the victim owner when hit by an unobserved shooter. Carries the victim impact position and a coarse quantized 16-sector incoming bearing, without revealing the shooter ID or exact firing coordinates.
+  - `UnitDestroyed`: sent to the owner, and sent to opponents only if they currently observe the target when it is destroyed. Destroying an unobserved enemy never provides the opponent with a destruction event.
+  - Bounded ring buffers per player (capacity 64 events per snapshot) with documented overflow drop behavior.
 - Known leaks to avoid:
   - weapon fire from a hidden unit revealing its exact position
   - artillery impact point sent before impact
@@ -693,14 +715,26 @@ Implementation checkpoint:
   - Obstacle stand-off snapping: targets within 3 m of obstacles snap to the closest passable clearance point; deep interior destinations report InvalidDestination and halt.
   - Owner-only status reporting: snapshots convey navigation outcome to unit owner without leaking to enemy views.
   - Zero steady-state heap allocations during simulation ticks.
-- Navigation on the 2 km map requires the coarse cost grid (section 9.1).
-- Scope of the next PR (coarse cost grid):
-  - Narrow corridor passability per movement class (tracked, wheeled, foot, amphibious).
-  - Routes > 64 waypoints re-planning and hierarchical path chunking.
-  - Spatial candidate queries for segment checks and smoothing budget.
-  - Once-only direct check for queued requests.
-  - Coarse 5 m grid design with per-side overlays and group formation paths.
-- Reconnect recovery, combat, weapons, bots and save/load remain pending M1 work.
+- Server-authoritative direct-fire combat slice implemented in `Engine.Core`, `Engine.Net`, `Game.Rules.Ops`, and `Game.Godot`:
+  - Data-driven weapon and unit combat profiles loaded from `content/coldwar/units.json`.
+  - Explicit attack orders targeting perceived `ContactId`, using a unified sequence stream with movement commands.
+  - Stationary firing only: attack orders cancel movement, and movement orders cancel attacks.
+  - Tick-based reload durations, finite ammunition capacity, and single-application fixed damage.
+  - Per-shot revalidation of range and 3D line-of-sight clearance against terrain and opaque structures from weapon muzzle to vertical target points.
+  - Clean authoritative unit destruction: removed from world, navigation, combat, and perception, with deterministic destruction execution order.
+  - Recipient knowledge filtering: presentation events (`ShotFired`, `UnitDestroyed`) sent only to observers who perceive the event entities. Hidden shooters omit events to prevent leaking truth coordinates.
+  - Wire protocol v6 with 30-byte own unit records (health, ammo, reload progress, attack status, target contact), 39-byte combat events (with 3D endpoints, TookFire coarse bearing, and shooter attribution), and 18-byte attack commands.
+  - Presentation effects in Godot: muzzle flash, smoke burst, vehicle recoil, tracer beam, impact effect, and synthesized firing audio.
+  - Zero steady-state heap allocations during combat simulation ticks.
+  - Prototype limitations for this slice: instantaneous shot resolution without physical projectile simulation, stationary firing only, fixed damage without armor penetration or deflection, no accuracy dispersion, visual tracers are visual effects only, and no persistent wreck obstacles yet.
+- Revised M1 implementation order:
+  - Visual reconnaissance and sensor line-of-sight (implemented).
+  - Server-side static obstacle navigation prototype slice (implemented).
+  - Server-authoritative direct-fire combat slice (implemented).
+  - Coarse cost grid navigation (narrow corridors, paths > 64 waypoints, 5 m cost layers, group formations).
+  - Multi-unit collisions, dynamic obstacles, and destruction.
+  - Reconnect recovery, bots, and save/load.
+- Out of scope for M1 combat: artillery, missiles, aviation, armor penetration, suppression, building destruction, production, and logistics replenishment.
 
 Exit criteria (technical):
 

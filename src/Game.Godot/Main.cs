@@ -23,6 +23,7 @@ public partial class Main : Node3D
     private long _lastBytes;
     private uint _lastCommandResult;
     private string _scenario = "prototype";
+    private CombatEffects _combatEffects = null!;
 
     public override void _Ready()
     {
@@ -56,7 +57,7 @@ public partial class Main : Node3D
             return;
         }
 
-        _smokeTest = userArgs.Contains("--smoke-test");
+        _smokeTest = userArgs.Contains("--smoke-test") || allArgs.Contains("--smoke-test");
         if (_smokeTest && !ClientRegressionTests.Run(this))
         {
             SetProcess(false);
@@ -66,24 +67,31 @@ public partial class Main : Node3D
 
         string? connectTarget = null;
         int port = 7777;
-        for (int i = 0; i < userArgs.Length; i++)
+
+        void ParseArgs(string[] args)
         {
-            if (userArgs[i] == "--connect" && i + 1 < userArgs.Length)
+            for (int i = 0; i < args.Length; i++)
             {
-                connectTarget = userArgs[i + 1];
-                i++;
-            }
-            else if (userArgs[i] == "--port" && i + 1 < userArgs.Length && int.TryParse(userArgs[i + 1], out int p))
-            {
-                port = p;
-                i++;
-            }
-            else if (userArgs[i] == "--scenario" && i + 1 < userArgs.Length)
-            {
-                _scenario = userArgs[i + 1].ToLowerInvariant();
-                i++;
+                if (args[i] == "--connect" && i + 1 < args.Length)
+                {
+                    connectTarget = args[i + 1];
+                    i++;
+                }
+                else if (args[i] == "--port" && i + 1 < args.Length && int.TryParse(args[i + 1], out int p))
+                {
+                    port = p;
+                    i++;
+                }
+                else if (args[i] == "--scenario" && i + 1 < args.Length)
+                {
+                    _scenario = args[i + 1].ToLowerInvariant();
+                    i++;
+                }
             }
         }
+
+        ParseArgs(allArgs);
+        ParseArgs(userArgs);
 
         StaticGeometry? scenarioGeometry = null;
         MatchSetup setup;
@@ -99,6 +107,12 @@ public partial class Main : Node3D
             scenarioGeometry = NavigationScenario.CreateStaticGeometry();
             _map = scenarioGeometry.HeightMap;
             setup = NavigationScenario.CreateMatchSetup(scenarioGeometry);
+        }
+        else if (_scenario == "combat")
+        {
+            scenarioGeometry = CombatScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = CombatScenario.CreateMatchSetup(scenarioGeometry);
         }
         else
         {
@@ -123,6 +137,7 @@ public partial class Main : Node3D
             {
                 "visibility" => new LocalSession(VisibilityScenario.CreateSimulation(scenarioGeometry!)),
                 "navigation" => new LocalSession(NavigationScenario.CreateSimulation(scenarioGeometry!)),
+                "combat" => new LocalSession(CombatScenario.CreateSimulation(scenarioGeometry!)),
                 _ => new LocalSession(PrototypeScenario.Create(_map))
             };
         }
@@ -156,13 +171,19 @@ public partial class Main : Node3D
                 TonemapMode = Godot.Environment.ToneMapper.Filmic
             }
         });
-        _camera = new Camera3D { Projection = Camera3D.ProjectionType.Orthogonal, Size = 112, Far = 1200, Current = true };
+        _camera = new Camera3D { Projection = Camera3D.ProjectionType.Orthogonal, Size = _scenario == "combat" ? 75 : 112, Far = 1200, Current = true };
         AddChild(_camera);
+        if (_scenario == "combat")
+        {
+            _focus = new Vector3(45, 0, 45);
+        }
         UpdateCamera();
-        _unitViews = new UnitViewSet(this, _map);
+        _unitViews = new UnitViewSet(this, _map, PrototypeScenario.LoadCatalog());
         _contactViews = new ContactViewSet(this, _map);
+        _combatEffects = new CombatEffects(_map);
+        AddChild(_combatEffects);
 
-        if (_session is LocalSession && _scenario != "visibility")
+        if (_session is LocalSession && _scenario != "visibility" && _scenario != "combat")
         {
             foreach (OwnUnitObservation unit in _session.Replica.OwnUnits)
             {
@@ -170,6 +191,11 @@ public partial class Main : Node3D
                 _session.Move(unit.Id, unit.Position + new NumericsVector2(0, 60));
             }
             if (_session.Replica.OwnUnits.Length > 0) _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
+        }
+        else if (_scenario == "combat" && _session.Replica.OwnUnits.Length > 1)
+        {
+            // Auto-select first tank for immediate playability
+            _unitViews.Selected.Add(_session.Replica.OwnUnits[1].Id);
         }
 
         _destination = new MeshInstance3D
@@ -216,13 +242,36 @@ public partial class Main : Node3D
     {
         _session.Advance(delta);
         UpdateViews();
+        _unitViews.UpdateRecoil(delta);
+        _combatEffects.Update(delta);
+        _combatEffects.ProcessEvents(_session.Replica.Events, _unitViews);
+
         _subtitle.Text = _session.StatusDescription;
         if (_title is not null)
         {
             _title.Text = FormatTitle(_session.AssignedPlayerId, _scenario);
         }
 
-        if (_contactViews.Selected.Count > 0)
+        if (_unitViews.Selected.Count == 1)
+        {
+            EntityId selId = _unitViews.Selected.First();
+            if (_session.Replica.TryGetOwnUnit(selId, out OwnUnitObservation ownUnit))
+            {
+                string reloadStr = ownUnit.ReloadTicksRemaining == 0 ? "READY" : $"{ownUnit.ReloadTicksRemaining * 0.05f:F1}s";
+                string attackStr = ownUnit.AttackStatus switch
+                {
+                    AttackExecutionStatus.None => "Idle",
+                    AttackExecutionStatus.Aiming => $"Aiming/Firing -> Contact #{ownUnit.TargetContactId.Value}",
+                    AttackExecutionStatus.OutOfRange => $"Out of Range -> Contact #{ownUnit.TargetContactId.Value}",
+                    AttackExecutionStatus.Obstructed => $"Obstructed -> Contact #{ownUnit.TargetContactId.Value}",
+                    AttackExecutionStatus.TargetLost => "Target Lost",
+                    AttackExecutionStatus.NoAmmo => "Out of Ammo",
+                    _ => ownUnit.AttackStatus.ToString()
+                };
+                _status.Text = $"Unit #{ownUnit.Id.Value} | HP: {ownUnit.Health} | Ammo: {ownUnit.Ammunition} | Gun: {reloadStr} | {attackStr}";
+            }
+        }
+        else if (_contactViews.Selected.Count > 0)
         {
             ContactId firstSelected = _contactViews.Selected.First();
             if (_contactViews.Views.TryGetValue(firstSelected, out ContactView? cv))
@@ -230,14 +279,14 @@ public partial class Main : Node3D
                 string kind = cv.Observation.State == ContactState.Current ? "Current observation" : "Last-known marker";
                 int ageTicks = Math.Max(0, _session.Tick - cv.Observation.LastSeenTick);
                 float ageSeconds = ageTicks / (float)Simulation.TickRate;
-                _status.Text = $"Enemy Contact #{cv.Observation.Id.Value}: {kind} (age: {ageSeconds:F1}s) / cannot receive orders";
+                _status.Text = $"Enemy Contact #{cv.Observation.Id.Value}: {kind} (age: {ageSeconds:F1}s) / right-click with tank selected to attack";
             }
         }
 
         if (_session.LastCommandResult is { } result && result.Sequence != _lastCommandResult)
         {
             _lastCommandResult = result.Sequence;
-            _status.Text = result.Queued ? "Move order queued" : "Move order rejected / select a unit and try again";
+            _status.Text = result.Queued ? "Order queued" : "Order rejected / invalid target or unit";
             if (!result.Queued) _destination.Visible = false;
         }
 
@@ -275,10 +324,14 @@ public partial class Main : Node3D
                 {
                     "visibility" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 2,
                     "navigation" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
+                    "combat" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
                     _ => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
                         _session.Replica.OwnUnits[0].Position.Y > 24
                 };
-                GD.Print(ok ? "M0_CLIENT_SMOKE_OK" : "M0_CLIENT_SMOKE_FAILED");
+                string token = _scenario == "combat"
+                    ? (ok ? "M1_CLIENT_COMBAT_SMOKE_OK" : "M1_CLIENT_COMBAT_SMOKE_FAILED")
+                    : (ok ? "M0_CLIENT_SMOKE_OK" : "M0_CLIENT_SMOKE_FAILED");
+                GD.Print(token);
                 GetTree().Quit(ok ? 0 : 1);
             }
         }
@@ -288,12 +341,27 @@ public partial class Main : Node3D
     {
         if (@event is InputEventKey { Pressed: true, Echo: false } key)
         {
-            if (key.Keycode == Key.Space) { _focus = new Vector3(64, 0, 64); _camera.Size = 112; UpdateCamera(); }
+            if (key.Keycode == Key.Space)
+            {
+                _focus = _scenario == "combat" ? new Vector3(45, 0, 45) : new Vector3(64, 0, 64);
+                _camera.Size = _scenario == "combat" ? 75 : 112;
+                UpdateCamera();
+            }
             if (key.Keycode == Key.Escape)
             {
                 _unitViews.Selected.Clear();
                 _contactViews.Selected.Clear();
                 _status.Text = "No units selected";
+            }
+            if (key.Keycode == Key.F && _unitViews.Selected.Count > 0 && _contactViews.Selected.Count > 0)
+            {
+                ContactId target = _contactViews.Selected.First();
+                int sent = 0;
+                foreach (EntityId id in _unitViews.Selected)
+                {
+                    if (_session.Attack(id, target)) sent++;
+                }
+                _status.Text = $"Attack order sent / {sent} units -> Contact #{target.Value}";
             }
         }
         if (@event is not InputEventMouseButton { Pressed: true } mouse) return;
@@ -335,7 +403,7 @@ public partial class Main : Node3D
                     string kind = cv.Observation.State == ContactState.Current ? "Current observation" : "Last-known marker";
                     int ageTicks = Math.Max(0, _session.Tick - cv.Observation.LastSeenTick);
                     float ageSeconds = ageTicks / (float)Simulation.TickRate;
-                    _status.Text = $"Enemy Contact #{cv.Observation.Id.Value}: {kind} (age: {ageSeconds:F1}s) / cannot receive orders";
+                    _status.Text = $"Enemy Contact #{cv.Observation.Id.Value}: {kind} (age: {ageSeconds:F1}s) / right-click with tank selected to attack";
                 }
             }
             else if (nearestUnit is not null)
@@ -343,7 +411,7 @@ public partial class Main : Node3D
                 _contactViews.Selected.Clear();
                 if (!mouse.ShiftPressed) _unitViews.Selected.Clear();
                 _unitViews.Selected.Add(nearestUnit.Value);
-                _status.Text = $"{_unitViews.Selected.Count} selected / right-click terrain to move";
+                _status.Text = $"{_unitViews.Selected.Count} selected / RMB contact to attack, RMB terrain to move";
             }
             else
             {
@@ -359,20 +427,46 @@ public partial class Main : Node3D
         {
             if (_unitViews.Selected.Count > 0)
             {
+                ContactId? targetContact = null;
+                float nearestContactDistance = 28 * 28;
+                foreach ((ContactId id, ContactView view) in _contactViews.Views)
+                {
+                    Vector3 center = view.Root.Position + Vector3.Up * 1.5f;
+                    if (_camera.IsPositionBehind(center)) continue;
+                    float distance = _camera.UnprojectPosition(center).DistanceSquaredTo(mouse.Position);
+                    if (distance < nearestContactDistance)
+                    {
+                        nearestContactDistance = distance;
+                        targetContact = id;
+                    }
+                }
+
+                if (targetContact is not null)
+                {
+                    int sent = 0;
+                    foreach (EntityId id in _unitViews.Selected)
+                    {
+                        if (_session.Attack(id, targetContact.Value)) sent++;
+                    }
+                    _destination.Visible = false;
+                    _status.Text = $"Attack order sent / {sent} units -> Contact #{targetContact.Value.Value}";
+                    return;
+                }
+
                 Vector3 origin = _camera.ProjectRayOrigin(mouse.Position);
                 Vector3 direction = _camera.ProjectRayNormal(mouse.Position);
                 if (!_map.TryRaycast(new NumericsVector3(origin.X, origin.Y, origin.Z),
                     new NumericsVector3(direction.X, direction.Y, direction.Z), _camera.Far, out NumericsVector3 hit)) return;
-                int sent = 0;
+                int sentMove = 0;
                 foreach (EntityId id in _unitViews.Selected)
-                    if (_session.Move(id, new NumericsVector2(hit.X, hit.Z))) sent++;
+                    if (_session.Move(id, new NumericsVector2(hit.X, hit.Z))) sentMove++;
                 _destination.Position = new Vector3(hit.X, hit.Y + 0.12f, hit.Z);
-                _destination.Visible = sent > 0;
-                _status.Text = $"Move order sent / {sent} units / {hit.X:F0}, {hit.Z:F0} m";
+                _destination.Visible = sentMove > 0;
+                _status.Text = $"Move order sent / {sentMove} units / {hit.X:F0}, {hit.Z:F0} m";
             }
             else if (_contactViews.Selected.Count > 0)
             {
-                _status.Text = "Enemy contacts cannot receive move orders";
+                _status.Text = "Enemy contacts cannot receive orders";
             }
         }
     }
@@ -434,7 +528,7 @@ public partial class Main : Node3D
         VBoxContainer instructions = new() { MouseFilter = Control.MouseFilterEnum.Ignore };
         Label controls = new()
         {
-            Text = "  LMB select   /   Shift + LMB add   /   RMB move   /   WASD pan   /   Wheel zoom   /   Space overview",
+            Text = "  LMB select   /   Shift+LMB add   /   RMB contact to attack or terrain to move   /   F attack   /   WASD pan",
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
         controls.AddThemeFontSizeOverride("font_size", 15);
@@ -458,7 +552,7 @@ public partial class Main : Node3D
     };
 
     public static string FormatTitle(int assignedSide, string scenario) =>
-        $"DEAD GROUND   /   SIDE {assignedSide}   /   {(scenario == "visibility" ? "RECON SCENARIO" : "M0 NETWORK TEST")}";
+        $"DEAD GROUND   /   SIDE {assignedSide}   /   {(scenario == "visibility" ? "RECON SCENARIO" : scenario == "combat" ? "COMBAT SCENARIO" : "M0 NETWORK TEST")}";
 
     public string TitleText => _title?.Text ?? string.Empty;
 

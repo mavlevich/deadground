@@ -271,4 +271,40 @@ public sealed class DetectionSystem : ISimulationSystem
 
         return _trackers[index];
     }
+
+    public bool IsEntityObservedBy(int player, EntityId entityId)
+    {
+        int index = player - 1;
+        if (index < 0 || index >= _trackers.Length) return false;
+        return _trackers[index].IsEntityCurrentlyObserved(entityId);
+    }
+
+    public bool TryResolveContact(int player, ContactId contactId, out EntityId entityId)
+    {
+        int index = player - 1;
+        if (index < 0 || index >= _trackers.Length) { entityId = default; return false; }
+        return _trackers[index].TryGetBoundEntity(contactId, out entityId);
+    }
+
+    public bool TryGetContact(int player, ContactId contactId, out ContactObservation contact)
+    {
+        int index = player - 1;
+        if (index < 0 || index >= _trackers.Length) { contact = default; return false; }
+        return _trackers[index].TryGetContact(contactId, out contact);
+    }
+
+    public bool TryGetContactByEntity(int player, EntityId entityId, out ContactObservation contact)
+    {
+        int index = player - 1;
+        if (index < 0 || index >= _trackers.Length) { contact = default; return false; }
+        return _trackers[index].TryGetContactByEntity(entityId, out contact);
+    }
+
+    public void NotifyEntityDestroyed(EntityId victimId)
+    {
+        for (int i = 0; i < _trackers.Length; i++)
+        {
+            _trackers[i].NotifyEntityDestroyed(victimId);
+        }
+    }
 }

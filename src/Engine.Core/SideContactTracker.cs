@@ -450,4 +450,64 @@ public sealed class SideContactTracker
         contact = default;
         return false;
     }
+
+    public bool TryGetBoundEntity(ContactId id, out EntityId entityId)
+    {
+        for (int i = 0; i < _count; i++)
+        {
+            if (_entries[i].Id.Value == id.Value)
+            {
+                if (_entries[i].State == ContactState.Current && _entries[i].HasBoundEntity)
+                {
+                    entityId = _entries[i].BoundEntityId;
+                    return true;
+                }
+                break;
+            }
+        }
+        entityId = default;
+        return false;
+    }
+
+    public bool IsEntityCurrentlyObserved(EntityId entityId)
+    {
+        if (_entityToContactIndex.TryGetValue(entityId, out int contactIndex) &&
+            contactIndex >= 0 && contactIndex < _count)
+        {
+            return _entries[contactIndex].State == ContactState.Current;
+        }
+        return false;
+    }
+
+    public bool TryGetContactByEntity(EntityId entityId, out ContactObservation contact)
+    {
+        if (_entityToContactIndex.TryGetValue(entityId, out int contactIndex) &&
+            contactIndex >= 0 && contactIndex < _count)
+        {
+            ref Entry e = ref _entries[contactIndex];
+            contact = new ContactObservation(e.Id, e.State, e.Classification, e.Position, e.LastSeenTick);
+            return true;
+        }
+        contact = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Retires contact knowledge if this side was actively observing the destroyed entity.
+    /// Preserves uncertainty for sides that only had unobserved LastKnown markers or no contact.
+    /// </summary>
+    public void NotifyEntityDestroyed(EntityId victimId)
+    {
+        if (_entityToContactIndex.TryGetValue(victimId, out int contactIndex) &&
+            contactIndex >= 0 && contactIndex < _count)
+        {
+            ref Entry entry = ref _entries[contactIndex];
+            if (entry.State == ContactState.Current &&
+                entry.HasBoundEntity &&
+                entry.BoundEntityId.Value == victimId.Value)
+            {
+                RemoveAt(contactIndex);
+            }
+        }
+    }
 }

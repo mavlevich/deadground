@@ -15,5 +15,6 @@ public interface IGameSession : IDisposable
     int AssignedPlayerId { get; }
     string StatusDescription { get; }
     bool Move(EntityId unit, System.Numerics.Vector2 target);
+    bool Attack(EntityId unit, ContactId target);
     void Advance(double elapsedSeconds);
 }
