@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+echo "Running pre-push checks..."
+
+# 1. Verify C# code formatting
+echo "--> Checking code formatting (dotnet format)..."
+if ! dotnet format DeadGround.sln --verify-no-changes --no-restore; then
+    echo "" >&2
+    echo "ERROR: Code formatting check failed!" >&2
+    echo "Run 'dotnet format DeadGround.sln' to fix formatting before pushing." >&2
+    exit 1
+fi
+
+# 2. Check for forbidden en/em dashes in tracked source files
+echo "--> Checking for forbidden en/em dashes..."
+if python3 -c '
+import subprocess, sys
+try:
+    diff = subprocess.check_output(["git", "diff", "@{u}...HEAD"], stderr=subprocess.DEVNULL)
+except Exception:
+    diff = subprocess.check_output(["git", "diff", "HEAD~1...HEAD"], stderr=subprocess.DEVNULL)
+
+if b"\xe2\x80\x93" in diff or b"\xe2\x80\x94" in diff:
+    print("ERROR: Found forbidden en-dash (\u2013) or em-dash (\u2014) in commits to push!", file=sys.stderr)
+    print("Use standard ASCII hyphen (-) instead.", file=sys.stderr)
+    sys.exit(1)
+'; then
+    :
+else
+    exit 1
+fi
+
+# 3. Verify solution build
+echo "--> Checking solution build..."
+if ! dotnet build DeadGround.sln --no-restore -v q; then
+    echo "ERROR: Solution build failed!" >&2
+    exit 1
+fi
+
+# 4. Run fast core tests
+echo "--> Running core tests..."
+if ! dotnet test tests/Engine.Core.Tests/Engine.Core.Tests.csproj --no-build -v q; then
+    echo "ERROR: Core tests failed!" >&2
+    exit 1
+fi
+
+echo "Pre-push checks passed successfully."
+exit 0
