@@ -370,9 +370,9 @@ public sealed class VisibilityRulesTests
         replica = new();
         Assert.False(replica.TryApply(corrupted.AsSpan(0, len)));
 
-        // 4. Corrupt position to NaN
+        // 4. Corrupt position to NaN (at offset 7 in 19-byte contact record)
         corrupted = (byte[])buffer.Clone();
-        BinaryPrimitives.WriteSingleLittleEndian(corrupted.AsSpan(contactsOffset + 6), float.NaN);
+        BinaryPrimitives.WriteSingleLittleEndian(corrupted.AsSpan(contactsOffset + 7), float.NaN);
         replica = new();
         Assert.False(replica.TryApply(corrupted.AsSpan(0, len)));
 

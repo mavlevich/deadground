@@ -229,6 +229,56 @@ The 2000 m x 2000 m scenario map (`navigation-large`) includes:
 - **Enclosed unreachable courtyard**: 4-wall perimeter [1400..1480, 1400..1480]. Ordering a move into the interior fails gracefully without stalling the tick budget.
 - **Winding slalom course**: 8 alternating barrier walls at [1600..1900, 200..700] requiring >64 waypoints. Vehicles navigate seamlessly across multiple consecutive chunks.
 
+### Recon Raid mission (recon-raid)
+
+To run the playable reconnaissance raid mission with authoritative objectives, enemy AI bot, and complete attempt lifecycle:
+
+For self-contained local play with retry:
+
+```sh
+./tools/run-client.sh -- --scenario recon-raid
+```
+
+On Windows with PowerShell:
+
+```powershell
+./tools/run-client.ps1 -GodotArgs @("--", "--scenario", "recon-raid")
+```
+
+For dedicated server hosting (1 human player vs server bot):
+
+```sh
+dotnet run --project src/Game.Server --configuration Release -- --scenario recon-raid --port 7777
+```
+
+In a second terminal, connect the client:
+
+```sh
+./tools/run-client.sh -- --scenario recon-raid --connect 127.0.0.1:7777
+```
+
+#### Mission structure and rules
+
+- **Objective**: "Locate and destroy the enemy command vehicle. Preserve your reconnaissance vehicle."
+- **Forces**:
+  - Player (Side 1): 1 reconnaissance vehicle (`recon_vehicle`, 70 m sensor range) and 2 combat tanks (`prototype_tank`, 100 mm gun, 10 rounds).
+  - Enemy (Side 2, AI bot): 1 unarmed command vehicle (`prototype_vehicle`, 80 HP) inside a fortified compound, 1 stationary guard tank behind low cover, 1 patrol tank, and 1 patrol recon vehicle.
+- **Map (512 x 512 m)**:
+  - Southwest deployment for player forces.
+  - Northeast compound for enemy command post.
+  - Direct open route with central barriers vs northwest covered approach through ruins and village structures.
+- **Victory and defeat conditions**:
+  - Victory: Enemy command vehicle destroyed and player recon vehicle is alive.
+  - Defeat: Player recon vehicle destroyed, all player combat tanks destroyed, or 12:00 mission time limit expired.
+  - Precedence: Defeat strictly takes precedence over victory if both conditions occur simultaneously.
+  - Outcome immutability: The announced result is fixed once reached and cannot be altered.
+  - Cessation: Once the mission finishes, units halt, combat orders are cleared, and subsequent gameplay orders are rejected.
+- **Mission HUD**:
+  - Top-left briefing card displays objective, target identification status, squad roster, and mission timer.
+  - Approximate target search area is shown via a 3D ground ring until the target is spotted.
+  - Result card displays Victory/Defeat, specific reason, and attempt duration.
+  - In local play, clicking RETRY MISSION or pressing R starts a clean restart with fresh simulation state.
+
 ### Line-of-sight sandbox
 
 To launch the standalone visual line-of-sight geometry sandbox:
@@ -275,7 +325,9 @@ dotnet run --project src/Game.Server --configuration Release --no-build -- --smo
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario visibility
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario navigation
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario navigation-large
+dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario recon-raid
 ./tools/run-client.sh --headless -- --smoke-test
+./tools/run-client.sh --headless -- --smoke-test --scenario recon-raid
 ```
 
 To automatically format C# code according to the repository rules:

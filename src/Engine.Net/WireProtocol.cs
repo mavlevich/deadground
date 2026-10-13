@@ -17,14 +17,15 @@ public enum HandshakeReason : byte
 
 public static class WireProtocol
 {
-    public const byte Version = 6;
+    public const byte Version = MatchSetup.CurrentProtocolVersion;
     public const int MoveSize = 22;
     public const int AttackSize = 18;
     public const int CommandResultSize = 11;
-    public const int SnapshotHeaderSize = 16;
+    public const int MissionSize = 32;
+    public const int SnapshotHeaderSize = 16 + MissionSize;
     public const int UnitSize = 30;
     public const int MaxUnits = 1024;
-    public const int ContactSize = 18;
+    public const int ContactSize = 19;
     public const int MaxContacts = 256;
     public const int EventSize = 39;
     public const int MaxEvents = 64;
@@ -168,7 +169,8 @@ public static class WireProtocol
         int tick,
         ReadOnlySpan<OwnUnitObservation> units,
         ReadOnlySpan<ContactObservation> contacts = default,
-        ReadOnlySpan<CombatEventObservation> events = default)
+        ReadOnlySpan<CombatEventObservation> events = default,
+        MissionObservation mission = default)
     {
         int length = checked(SnapshotHeaderSize + units.Length * UnitSize + contacts.Length * ContactSize + events.Length * EventSize);
         if (units.Length > MaxUnits || contacts.Length > MaxContacts || events.Length > MaxEvents || bytes.Length < length)
@@ -180,6 +182,21 @@ public static class WireProtocol
         BinaryPrimitives.WriteUInt16LittleEndian(bytes[10..], (ushort)units.Length);
         BinaryPrimitives.WriteUInt16LittleEndian(bytes[12..], (ushort)contacts.Length);
         BinaryPrimitives.WriteUInt16LittleEndian(bytes[14..], (ushort)events.Length);
+
+        Span<byte> missionRecord = bytes.Slice(16, MissionSize);
+        BinaryPrimitives.WriteUInt16LittleEndian(missionRecord, mission.MissionId);
+        missionRecord[2] = (byte)mission.Status;
+        missionRecord[3] = (byte)mission.EndReason;
+        BinaryPrimitives.WriteInt32LittleEndian(missionRecord[4..], mission.TimeLimitTicks);
+        BinaryPrimitives.WriteInt32LittleEndian(missionRecord[8..], mission.FinishedTick);
+        BinaryPrimitives.WriteUInt32LittleEndian(missionRecord[12..], mission.TargetContactId.Value);
+        BinaryPrimitives.WriteSingleLittleEndian(missionRecord[16..], mission.SearchAreaCenter.X);
+        BinaryPrimitives.WriteSingleLittleEndian(missionRecord[20..], mission.SearchAreaCenter.Y);
+        BinaryPrimitives.WriteSingleLittleEndian(missionRecord[24..], mission.SearchAreaRadius);
+        missionRecord[28] = mission.Flags;
+        missionRecord[29] = 0;
+        missionRecord[30] = 0;
+        missionRecord[31] = 0;
 
         for (int i = 0; i < units.Length; i++)
         {
@@ -205,10 +222,11 @@ public static class WireProtocol
             Span<byte> record = bytes.Slice(contactsOffset + i * ContactSize, ContactSize);
             BinaryPrimitives.WriteUInt32LittleEndian(record, contact.Id.Value);
             record[4] = (byte)contact.State;
-            record[5] = (byte)contact.Classification;
-            BinaryPrimitives.WriteSingleLittleEndian(record[6..], contact.Position.X);
-            BinaryPrimitives.WriteSingleLittleEndian(record[10..], contact.Position.Y);
-            BinaryPrimitives.WriteInt32LittleEndian(record[14..], contact.LastSeenTick);
+            record[5] = (byte)contact.Level;
+            record[6] = (byte)contact.Classification;
+            BinaryPrimitives.WriteSingleLittleEndian(record[7..], contact.Position.X);
+            BinaryPrimitives.WriteSingleLittleEndian(record[11..], contact.Position.Y);
+            BinaryPrimitives.WriteInt32LittleEndian(record[15..], contact.LastSeenTick);
         }
 
         int eventsOffset = SnapshotHeaderSize + units.Length * UnitSize + contacts.Length * ContactSize;
@@ -301,6 +319,40 @@ public static class WireProtocol
         int expectedLength = checked(SnapshotHeaderSize + unitCount * UnitSize + contactCount * ContactSize + eventCount * EventSize);
         if (bytes.Length != expectedLength) return false;
 
+        ReadOnlySpan<byte> missionRecord = bytes.Slice(16, MissionSize);
+        ushort missionId = BinaryPrimitives.ReadUInt16LittleEndian(missionRecord);
+        byte statusByte = missionRecord[2];
+        byte endReasonByte = missionRecord[3];
+        int timeLimitTicks = BinaryPrimitives.ReadInt32LittleEndian(missionRecord[4..]);
+        int finishedTick = BinaryPrimitives.ReadInt32LittleEndian(missionRecord[8..]);
+        uint missionTargetContactVal = BinaryPrimitives.ReadUInt32LittleEndian(missionRecord[12..]);
+        Vector2 searchAreaCenter = new(
+            BinaryPrimitives.ReadSingleLittleEndian(missionRecord[16..]),
+            BinaryPrimitives.ReadSingleLittleEndian(missionRecord[20..]));
+        float searchAreaRadius = BinaryPrimitives.ReadSingleLittleEndian(missionRecord[24..]);
+        byte flags = missionRecord[28];
+
+        if (statusByte > (byte)MissionStatus.Defeat ||
+            endReasonByte > (byte)MissionEndReason.TimeLimitExpired ||
+            timeLimitTicks < 0 ||
+            finishedTick < 0 ||
+            !float.IsFinite(searchAreaCenter.X) || !float.IsFinite(searchAreaCenter.Y) ||
+            !float.IsFinite(searchAreaRadius) || searchAreaRadius < 0f)
+        {
+            return false;
+        }
+
+        frame.Mission = new MissionObservation(
+            missionId,
+            (MissionStatus)statusByte,
+            (MissionEndReason)endReasonByte,
+            timeLimitTicks,
+            finishedTick,
+            new ContactId(missionTargetContactVal),
+            searchAreaCenter,
+            searchAreaRadius,
+            flags);
+
         frame.Indices.Clear();
         for (int i = 0; i < unitCount; i++)
         {
@@ -342,14 +394,17 @@ public static class WireProtocol
             ReadOnlySpan<byte> record = bytes.Slice(contactsOffset + i * ContactSize, ContactSize);
             ContactId contactId = new(BinaryPrimitives.ReadUInt32LittleEndian(record));
             byte stateByte = record[4];
-            byte classByte = record[5];
-            Vector2 position = new(BinaryPrimitives.ReadSingleLittleEndian(record[6..]),
-                BinaryPrimitives.ReadSingleLittleEndian(record[10..]));
-            int lastSeenTick = BinaryPrimitives.ReadInt32LittleEndian(record[14..]);
+            byte levelByte = record[5];
+            byte classByte = record[6];
+            Vector2 position = new(BinaryPrimitives.ReadSingleLittleEndian(record[7..]),
+                BinaryPrimitives.ReadSingleLittleEndian(record[11..]));
+            int lastSeenTick = BinaryPrimitives.ReadInt32LittleEndian(record[15..]);
 
             if (contactId.Value == 0 ||
                 stateByte is not ((byte)ContactState.Current or (byte)ContactState.LastKnown) ||
-                classByte != (byte)ContactClassification.Unknown ||
+                levelByte is not ((byte)DetectionLevel.Detected or (byte)DetectionLevel.Identified) ||
+                classByte > (byte)ContactClassification.CommandVehicle ||
+                (levelByte == (byte)DetectionLevel.Detected && classByte != (byte)ContactClassification.Unknown) ||
                 !float.IsFinite(position.X) || !float.IsFinite(position.Y) ||
                 lastSeenTick < 0 || lastSeenTick > tick ||
                 !frame.ContactIndices.TryAdd(contactId, i))
@@ -360,6 +415,7 @@ public static class WireProtocol
             frame.Contacts[i] = new ContactObservation(
                 contactId,
                 (ContactState)stateByte,
+                (DetectionLevel)levelByte,
                 (ContactClassification)classByte,
                 position,
                 lastSeenTick);
@@ -474,6 +530,7 @@ internal sealed class SnapshotFrame
     public readonly Dictionary<ContactId, int> ContactIndices;
     public int Count, ContactCount, EventCount, Tick;
     public uint Sequence;
+    public MissionObservation Mission;
 
     public SnapshotFrame(
         int capacity,

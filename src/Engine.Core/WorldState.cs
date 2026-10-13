@@ -125,6 +125,14 @@ public sealed class WorldState : IDisposable
         return true;
     }
 
+    public bool SetPosition(EntityId id, Vector2 position)
+    {
+        if (!Map.Contains(position) || !_indices.TryGetValue(id, out int index)) return false;
+        Entity entity = _entities[index];
+        _storage.Get<Position>(entity).Value = position;
+        return true;
+    }
+
     internal bool UpdateUnitNavigation(EntityId id, Vector2 position, Vector2 target, bool active)
     {
         if (!_indices.TryGetValue(id, out int index)) return false;

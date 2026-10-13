@@ -3,6 +3,7 @@ namespace DeadGround.Engine.Net;
 public interface IGameSession : IDisposable
 {
     ClientReplica Replica { get; }
+    MissionObservation Mission { get; }
     double RenderTick { get; }
     int Tick { get; }
     double LastTickMilliseconds { get; }

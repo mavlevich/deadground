@@ -10,6 +10,7 @@ public sealed class Simulation : IDisposable
     private readonly DetectionSystem? _detection;
     private readonly NavigationSystem? _navigation;
     private readonly CombatSystem? _combat;
+    private readonly IMissionSystem? _mission;
 
     private readonly QueuedCommand[] _commands = new QueuedCommand[256];
     private readonly uint[] _lastAccepted = new uint[MaxPlayers];
@@ -22,6 +23,8 @@ public sealed class Simulation : IDisposable
     public DetectionSystem? Detection => _detection;
     public NavigationSystem? Navigation => _navigation;
     public CombatSystem? Combat => _combat;
+    public IMissionSystem? Mission => _mission;
+    public bool IsMissionFinished => _mission?.IsFinished == true;
 
     private readonly record struct QueuedCommand(
         int Player,
@@ -43,11 +46,13 @@ public sealed class Simulation : IDisposable
         _detection = (_rules as RuleSet)?.FindSystem<DetectionSystem>();
         _navigation = (_rules as RuleSet)?.FindSystem<NavigationSystem>();
         _combat = (_rules as RuleSet)?.FindSystem<CombatSystem>();
+        _mission = (_rules as RuleSet)?.FindSystem<IMissionSystem>();
     }
 
     // Player identity is supplied by the authenticated connection, never by packet data.
     public bool TryEnqueue(int player, MoveCommand command)
     {
+        if (IsMissionFinished) return false;
         if (player < 1 || player > _lastAccepted.Length || command.Sequence == 0 ||
             command.Sequence <= _lastAccepted[player - 1] || _commandCount == _commands.Length ||
             !_world.Map.Contains(command.Target) || !_world.TryGetUnit(command.Unit, out UnitState unit) ||
@@ -60,6 +65,7 @@ public sealed class Simulation : IDisposable
 
     public bool TryEnqueue(int player, AttackCommand command)
     {
+        if (IsMissionFinished) return false;
         if (player < 1 || player > _lastAccepted.Length || command.Sequence == 0 ||
             command.Sequence <= _lastAccepted[player - 1] || _commandCount == _commands.Length ||
             command.Target.Value == 0 || !_world.TryGetUnit(command.Unit, out UnitState unit) ||
@@ -81,9 +87,29 @@ public sealed class Simulation : IDisposable
         return true;
     }
 
+    private bool _missionCleanupPerformed;
+
     public void Step()
     {
         Tick = checked(Tick + 1);
+
+        if (IsMissionFinished)
+        {
+            if (!_missionCleanupPerformed)
+            {
+                _missionCleanupPerformed = true;
+                _commandCount = 0;
+                for (int i = 0; i < _world.Count; i++)
+                {
+                    UnitState u = _world.GetUnitAt(i);
+                    _world.ClearAttackOrder(u.Id);
+                    _navigation?.ClearUnit(u.Id);
+                    _world.UpdateUnitNavigation(u.Id, u.Position, u.Position, false);
+                }
+            }
+            return;
+        }
+
         _navigation?.SweepRemovedUnits(_world);
 
         // Process queued orders: movement and attack commands
@@ -149,11 +175,30 @@ public sealed class Simulation : IDisposable
         ReadOnlySpan<CombatEventObservation> events = _combat is not null
             ? _combat.GetEvents(knowledge.Player)
             : [];
-        knowledge.Refresh(_world, contacts, _navigation, events);
+        MissionObservation mission = _mission is not null
+            ? _mission.GetObservation(knowledge.Player)
+            : default;
+        knowledge.Refresh(_world, contacts, _navigation, events, mission);
     }
 
+    private readonly bool[] _admittedPlayers = new bool[MaxPlayers];
+
     public void AcknowledgeCombatEvents(int player, int count) => _combat?.AcknowledgeEvents(player, count);
-    public void SetPlayerAdmitted(int player, bool admitted) => _combat?.SetPlayerAdmitted(player, admitted);
+    public void SetPlayerAdmitted(int player, bool admitted)
+    {
+        if (player >= 1 && player <= _admittedPlayers.Length)
+        {
+            _admittedPlayers[player - 1] = admitted;
+        }
+        _combat?.SetPlayerAdmitted(player, admitted);
+    }
+
+    public bool IsPlayerAdmitted(int player)
+    {
+        if (player >= 1 && player <= _admittedPlayers.Length)
+            return _admittedPlayers[player - 1];
+        return false;
+    }
 
     public void Dispose() => _world.Dispose();
 }

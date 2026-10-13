@@ -44,4 +44,17 @@ internal sealed class ContactViewSet(Node3D parent, HeightMap map)
             Selected.Remove(id);
         }
     }
+
+    internal void Clear()
+    {
+        foreach (ContactView view in Views.Values)
+        {
+            parent.RemoveChild(view.Root);
+            view.Root.QueueFree();
+        }
+        Views.Clear();
+        Selected.Clear();
+        _present.Clear();
+        _removed.Clear();
+    }
 }

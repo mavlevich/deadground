@@ -61,4 +61,17 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
         foreach (UnitView view in Views.Values)
             view.UpdateRecoil(delta);
     }
+
+    internal void Clear()
+    {
+        foreach (UnitView view in Views.Values)
+        {
+            parent.RemoveChild(view.Root);
+            view.Root.QueueFree();
+        }
+        Views.Clear();
+        Selected.Clear();
+        _present.Clear();
+        _removed.Clear();
+    }
 }

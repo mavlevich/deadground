@@ -159,7 +159,7 @@ public sealed class NetworkIntegrationTests
     {
         HeightMap map = HeightMap.CreatePrototype();
         MatchSetup serverSetup = PrototypeScenario.CreateMatchSetup(map);
-        Assert.Equal(6, serverSetup.ProtocolVersion);
+        Assert.Equal(MatchSetup.CurrentProtocolVersion, serverSetup.ProtocolVersion);
 
         using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
         int port = serverTransport.Port;

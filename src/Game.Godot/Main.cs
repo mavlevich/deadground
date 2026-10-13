@@ -30,6 +30,8 @@ public partial class Main : Node3D
     private uint _lastCommandResult;
     private string _scenario = "prototype";
     private CombatEffects _combatEffects = null!;
+    private MissionPanel? _missionPanel;
+    private StaticGeometry? _scenarioGeometry;
 
     internal CameraRig CameraRig => _cameraRig;
     internal SettingsPanel SettingsPanel => _settingsPanel;
@@ -129,11 +131,18 @@ public partial class Main : Node3D
             _map = scenarioGeometry.HeightMap;
             setup = CombatScenario.CreateMatchSetup(scenarioGeometry);
         }
+        else if (_scenario == "recon-raid")
+        {
+            scenarioGeometry = ReconRaidScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = ReconRaidScenario.CreateMatchSetup(scenarioGeometry);
+        }
         else
         {
             _map = HeightMap.CreatePrototype();
             setup = PrototypeScenario.CreateMatchSetup(_map);
         }
+        _scenarioGeometry = scenarioGeometry;
 
         if (connectTarget is not null)
         {
@@ -154,6 +163,7 @@ public partial class Main : Node3D
                 "navigation" => new LocalSession(NavigationScenario.CreateSimulation(scenarioGeometry!)),
                 "navigation-large" => new LocalSession(LargeNavigationScenario.CreateSimulation(scenarioGeometry!)),
                 "combat" => new LocalSession(CombatScenario.CreateSimulation(scenarioGeometry!)),
+                "recon-raid" => new LocalSession(ReconRaidScenario.CreateSimulation(scenarioGeometry!)),
                 _ => new LocalSession(PrototypeScenario.Create(_map))
             };
         }
@@ -204,12 +214,12 @@ public partial class Main : Node3D
             _benchmarkTargetFrames = activeSettings.BenchmarkFrames;
         }
 
-        float initialCameraSize = _scenario == "combat" ? 75 : (_scenario == "navigation-large" ? 450 : 112);
+        float initialCameraSize = _scenario == "combat" ? 75 : (_scenario == "navigation-large" ? 450 : (_scenario == "recon-raid" ? 160 : 112));
         _camera = new Camera3D { Projection = Camera3D.ProjectionType.Orthogonal, Size = initialCameraSize, Far = 3500, Current = true };
         AddChild(_camera);
         Vector3 initialFocus = _scenario == "combat"
             ? new Vector3(45, 0, 45)
-            : (_scenario == "navigation-large" ? new Vector3(300, 0, 300) : new Vector3(64, 0, 64));
+            : (_scenario == "navigation-large" ? new Vector3(300, 0, 300) : (_scenario == "recon-raid" ? new Vector3(100, 0, 100) : new Vector3(64, 0, 64)));
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
         _cameraRig.SetDefaultView(initialFocus, initialCameraSize);
 
@@ -218,7 +228,7 @@ public partial class Main : Node3D
         _combatEffects = new CombatEffects(_map);
         AddChild(_combatEffects);
 
-        if (_session is LocalSession && _scenario != "visibility" && _scenario != "combat" && _scenario != "navigation-large")
+        if (_session is LocalSession && _scenario != "visibility" && _scenario != "combat" && _scenario != "navigation-large" && _scenario != "recon-raid")
         {
             foreach (OwnUnitObservation unit in _session.Replica.OwnUnits)
             {
@@ -235,6 +245,11 @@ public partial class Main : Node3D
         else if (_scenario == "navigation-large" && _session.Replica.OwnUnits.Length > 0)
         {
             // Auto-select first recon unit for immediate playability
+            _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
+        }
+        else if (_scenario == "recon-raid" && _session.Replica.OwnUnits.Length > 0)
+        {
+            // Auto-select player recon unit for immediate playability
             _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
         }
 
@@ -294,6 +309,7 @@ public partial class Main : Node3D
         _unitViews.UpdateRecoil(delta);
         _combatEffects.Update(delta);
         _combatEffects.ProcessEvents(_session.Replica.Events, _unitViews);
+        _missionPanel?.UpdateMission(_session.Mission, _session.Tick);
 
         _subtitle.Text = _session.StatusDescription;
         if (_title is not null)
@@ -389,6 +405,7 @@ public partial class Main : Node3D
                     "navigation" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
                     "navigation-large" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
                     "combat" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
+                    "recon-raid" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
                     _ => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
                         _session.Replica.OwnUnits[0].Position.Y > 24
                 };
@@ -396,7 +413,9 @@ public partial class Main : Node3D
                     ? (ok ? "M1_CLIENT_COMBAT_SMOKE_OK" : "M1_CLIENT_COMBAT_SMOKE_FAILED")
                     : (_scenario == "navigation-large"
                         ? (ok ? "M1_CLIENT_NAV_LARGE_SMOKE_OK" : "M1_CLIENT_NAV_LARGE_SMOKE_FAILED")
-                        : (ok ? "M0_CLIENT_SMOKE_OK" : "M0_CLIENT_SMOKE_FAILED"));
+                        : (_scenario == "recon-raid"
+                            ? (ok ? "M1_CLIENT_RECON_RAID_SMOKE_OK" : "M1_CLIENT_RECON_RAID_SMOKE_FAILED")
+                            : (ok ? "M0_CLIENT_SMOKE_OK" : "M0_CLIENT_SMOKE_FAILED")));
                 GD.Print(token);
                 GetTree().Quit(ok ? 0 : 1);
             }
@@ -427,6 +446,30 @@ public partial class Main : Node3D
             // Centrally block all gameplay input while settings overlay is open
             GetViewport().SetInputAsHandled();
             return;
+        }
+
+        if (_missionPanel?.IsMissionFinished == true)
+        {
+            if (@event is InputEventKey { Pressed: true, Echo: false, Keycode: Key.R } && _session is LocalSession)
+            {
+                OnRetryMission();
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if (@event is InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Right })
+            {
+                _status.Text = "Mission ended. Orders are disabled.";
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if (@event is InputEventKey { Pressed: true, Echo: false, Keycode: Key.F })
+            {
+                _status.Text = "Mission ended. Orders are disabled.";
+                GetViewport().SetInputAsHandled();
+                return;
+            }
         }
 
         if (@event is InputEventKey { Pressed: true, Echo: false } key)
@@ -685,6 +728,39 @@ public partial class Main : Node3D
         _status = new Label { Text = "  Select a unit to issue orders", MouseFilter = Control.MouseFilterEnum.Ignore };
         _status.AddThemeColorOverride("font_color", new Color("edc76b"));
         instructions.AddChild(footer); instructions.AddChild(_status); bottom.AddChild(instructions);
+
+        if (_scenario == "recon-raid")
+        {
+            _missionPanel = new MissionPanel(this, _map);
+            canvas.AddChild(_missionPanel);
+            _missionPanel.SetLocalMode(_session is LocalSession);
+            _missionPanel.RetryRequested += OnRetryMission;
+        }
+    }
+
+    private void OnRetryMission()
+    {
+        if (_session is not LocalSession || _scenarioGeometry is null) return;
+
+        _unitViews.Clear();
+        _contactViews.Clear();
+        _destination.Visible = false;
+        _combatEffects.Clear();
+        _session.Dispose();
+
+        Simulation newSim = ReconRaidScenario.CreateSimulation(_scenarioGeometry);
+        _session = new LocalSession(newSim);
+        _lastCommandResult = 0;
+
+        _cameraRig.ResetToDefault();
+        _missionPanel?.ResetUi();
+        UpdateViews();
+
+        if (_session.Replica.OwnUnits.Length > 0)
+        {
+            _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
+        }
+        _status.Text = "Mission restarted. Objective: Destroy enemy command vehicle. Preserve recon vehicle.";
     }
 
     private static StyleBoxFlat PanelStyle() => new()
@@ -702,9 +778,13 @@ public partial class Main : Node3D
     };
 
     public static string FormatTitle(int assignedSide, string scenario) =>
-        $"DEAD GROUND   /   SIDE {assignedSide}   /   {(scenario == "visibility" ? "RECON SCENARIO" : scenario == "combat" ? "COMBAT SCENARIO" : "M0 NETWORK TEST")}";
+        $"DEAD GROUND   /   SIDE {assignedSide}   /   {(scenario == "visibility" ? "RECON SCENARIO" : scenario == "combat" ? "COMBAT SCENARIO" : scenario == "recon-raid" ? "RECON RAID MISSION" : "M0 NETWORK TEST")}";
 
     public string TitleText => _title?.Text ?? string.Empty;
 
-    public override void _ExitTree() => _session?.Dispose();
+    public override void _ExitTree()
+    {
+        _missionPanel?.Cleanup();
+        _session?.Dispose();
+    }
 }

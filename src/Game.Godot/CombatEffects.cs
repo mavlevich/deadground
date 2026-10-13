@@ -412,6 +412,35 @@ internal partial class CombatEffects : Node3D
         }
     }
 
+    public void Clear()
+    {
+        System.Array.Clear(_recentEventIds, 0, _recentEventIds.Length);
+        _recentEventIndex = 0;
+        ResetPool(_tracers);
+        ResetPool(_muzzleFlashes);
+        ResetPool(_smokePuffs);
+        ResetPool(_impacts);
+        ResetPool(_explosions);
+        for (int i = 0; i < _audioPlayers.Length; i++)
+        {
+            if (_audioPlayers[i].Playing)
+            {
+                _audioPlayers[i].Stop();
+            }
+        }
+    }
+
+    private static void ResetPool(TimedMesh[] pool)
+    {
+        for (int i = 0; i < pool.Length; i++)
+        {
+            pool[i].Active = false;
+            pool[i].Mesh.Visible = false;
+            pool[i].InitialScaleVector = Vector3.Zero;
+            pool[i].Velocity = Vector3.Zero;
+        }
+    }
+
     public void Update(double delta)
     {
         float dt = (float)delta;

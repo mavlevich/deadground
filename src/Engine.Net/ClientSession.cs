@@ -31,6 +31,7 @@ public sealed class ClientSession : IGameSession
     private bool _clockInitialized;
 
     public ClientReplica Replica { get; }
+    public MissionObservation Mission => Replica.LatestMission;
     public double RenderTick => _renderTick;
     public int Tick => Replica.LatestTick;
     public double LastTickMilliseconds => 0;

@@ -6,7 +6,8 @@ namespace DeadGround.Engine;
 /// </summary>
 public readonly record struct UnitPerceptionProfile(
     VisualSensorProfile? Sensor,
-    TargetObservationPoints? TargetPoints);
+    TargetObservationPoints? TargetPoints,
+    ContactClassification Classification = ContactClassification.Vehicle);
 
 /// <summary>
 /// Catalog interface providing perception parameters for unit definition indices.
