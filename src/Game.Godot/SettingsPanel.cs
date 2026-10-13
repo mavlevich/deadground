@@ -23,6 +23,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
     public DisplaySettings CurrentSettings => _effectiveSettings;
     public DisplaySettings SavedConfig => _savedConfig;
     public bool IsOpen => _container.Visible;
+    public Rect2 GetContainerRect() => _container.Visible ? _container.GetGlobalRect() : default;
 
     public SettingsPanel()
     {

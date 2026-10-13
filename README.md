@@ -478,7 +478,11 @@ Follow this checklist to verify an exported client interactively:
    - Press F10, O, or click SETTINGS in the HUD to open the settings panel.
    - Toggle VSync and select frame rate limits (Unlimited, 30, 60, 120, 144 FPS).
    - Press Escape to close the settings panel before clearing unit selections.
-   - Launch with `--benchmark-frames <N>` to record and display frame pacing percentiles.
+8. Unit and contact readability:
+   - Floating role badges: confirm role badges appear above units (`TANK`, `RECON`, `CMD`) and contacts (`[ ? ]`, `TANK`, `RECON`, `CMD`). Left-clicking a badge selects the unit or contact; right-clicking an enemy badge issues an attack order. Badges smoothly fade when zooming in close and hide when occluded by HUD cards or off-screen.
+   - Contact representation: unknown contacts appear as neutral red diamonds without health bars; identified contacts display generic vehicle models with hostile ground brackets; last-known contacts hide live models and display frozen ghost markers with observation age.
+   - Tactical selection card: bottom-left card displays unit health, armament status (distinguishing unarmed recon from empty tanks), reload countdown, and server attack execution status. Inspecting contacts shows state, classification, and age in seconds without leaking health or ammo.
+   - Order notifications: persistent notifications (3.0s) show queued or rejected order results without being overwritten by selection card updates.
 
 ## Platforms
 

@@ -618,6 +618,28 @@ The AI sends normal commands and reads only its side's knowledge. Headless bot v
 - Wheels, tracks, gun pitch, dedicated barrel recoil and destruction models remain future work.
   These assets are a first playable visual prototype, not a validated large-battle rendering budget.
 
+### 18.4 Unit, contact, and combat readability
+
+- Visual contact classification and identity isolation:
+  - Unknown enemy contacts (`DetectionLevel.Detected` or `ContactClassification.Unknown`) display a neutral 45-degree rotated diamond marker (`BoxMesh`) without 3D vehicle geometry or health bars.
+  - Confirmed enemy contacts (`DetectionLevel.Identified`) display generic vehicle 3D models (`tank.glb`, `recon.glb`, or dedicated command vehicle chassis with radio shelter and communication mast) mapped strictly from `ContactClassification`, never from truth unit definitions.
+  - To prevent sharing or mutating shared material instances, enemy vehicle models are distinguished with hostile affiliation ground markers (`HostileAffiliationMarker`) and distinct badge themes.
+  - Lost contacts (`ContactState.LastKnown`) immediately hide live 3D models and display stationary uncertainty ghost markers at frozen coordinates with observation age.
+  - State transitions strictly clear stale models: `Identified` -> `LastKnown` -> `Detected Unknown` (destroys old vehicle model and resets classification) -> re-identification as a different classification instantiates the new generic model.
+- Screen-space role badges:
+  - Role indicators (`TANK`, `RECON`, `CMD`, `[ ? ]`) anchored in screen space above units and contacts.
+  - Text and badge shapes distinguish units without relying solely on color tinting.
+  - Dynamic culling hides badges that are behind the camera, off-screen, or occluded by main UI panels (`_topHud`, `_bottomHud`, `_selectionCard`, `_settingsPanel`, `_missionPanel`).
+  - Opacity scales smoothly with camera zoom to prevent popping.
+  - Direct interaction: left-clicking a visible badge selects the unit or contact; right-clicking an enemy badge issues an attack order.
+- Tactical selection card and order feedback:
+  - Persistent bottom-left `SelectionCard` details current selection:
+    - Single friendly unit: HP bar with percentage, weapon readiness distinguishing unarmed scouts (`Armament: Unarmed`) from tanks with depleted ammo (`0 / 10 (Depleted)`), reload timer in seconds (`0.8s`), and server attack execution status (`Aiming`, `OutOfRange`, `Obstructed`, `NoAmmo`, `TargetLost`, `None`).
+    - Multiple friendly units: composition breakdown (`2 Tanks, 1 Recon`) without aggregated weapon readiness.
+    - Enemy contact: ContactId, observation state (`Current` vs `Last Known`), classification, and age in seconds without leaking health or ammunition.
+  - Independent `OrderNotification` displays queued or rejected orders for 3.0 seconds, independent of selection card updates.
+- Cached presentation state minimizes heap allocations during badge updates, refreshing label strings and styles only when contact state, role, or integer seconds elapsed change.
+
 ## 19. Rule sets and modularity
 
 A rule set is a list of systems plus data. Replaceable points:

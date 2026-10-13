@@ -25,7 +25,8 @@ internal static class ClientRegressionTests
             CheckDisplaySettings(scene);
             CheckCombatEffectsFramePacing(scene);
             CheckMissionPanelLifecycle(scene);
-            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel");
+            CheckCombatReadability(scene);
+            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability");
             return true;
         }
         catch (Exception exception)
@@ -601,6 +602,383 @@ internal static class ClientRegressionTests
 
             // 5. Cleanup
             panel.Cleanup();
+        }
+        finally
+        {
+            parent.QueueFree();
+        }
+    }
+
+    private static void CheckCombatReadability(Node3D scene)
+    {
+        Node3D parent = new();
+        scene.AddChild(parent);
+        try
+        {
+            HeightMap map = HeightMap.CreatePrototype();
+            DeadGround.Rules.Ops.UnitCatalog catalog = DeadGround.Rules.Ops.PrototypeScenario.LoadCatalog();
+            ContactViewSet contactViews = new(parent, map);
+            UnitViewSet unitViews = new(parent, map, catalog);
+            ClientReplica replica = new();
+            byte[] bytes = new byte[WireProtocol.MaxMessageSize];
+
+            // 1. Unknown contact representation
+            ContactObservation unknownContact = new(
+                new ContactId(101),
+                ContactState.Current,
+                DetectionLevel.Detected,
+                ContactClassification.Unknown,
+                new NumericsVector2(30, 40),
+                5);
+
+            ApplyWithContacts(replica, bytes, 1, 5, [], [unknownContact]);
+            contactViews.Sync(replica);
+
+            Require(contactViews.Views.TryGetValue(unknownContact.Id, out ContactView? cv), "Unknown contact view not created.");
+            Require(!cv!.HasEnemyModel, "Unknown contact must not have a 3D vehicle model.");
+            Require(cv.Marker.Visible, "Unknown contact must display the neutral diamond marker.");
+            Require(!cv.GhostBase.Visible, "Current unknown contact must not display ghost base marker.");
+            Require(cv.CurrentModelClassification == ContactClassification.Unknown, "Current classification should be Unknown.");
+
+            // 2. Identified contact models (Tank, Recon, CommandVehicle)
+            ContactObservation tankContact = unknownContact with
+            {
+                Classification = ContactClassification.Tank,
+                Level = DetectionLevel.Identified
+            };
+            ApplyWithContacts(replica, bytes, 2, 6, [], [tankContact]);
+            contactViews.Sync(replica);
+
+            Require(cv.HasEnemyModel, "Identified tank must instantiate a vehicle model.");
+            Require(cv.CurrentModelClassification == ContactClassification.Tank, "Classification should be Tank.");
+            Require(!cv.Marker.Visible, "Diamond marker should be hidden when identified.");
+            Require(cv.EnemyModel!.FindChild("HostileAffiliationMarker", true, false) is not null,
+                "Identified enemy model must attach HostileAffiliationMarker.");
+
+            // Switch to Recon
+            ContactObservation reconContact = tankContact with
+            {
+                Classification = ContactClassification.Recon
+            };
+            ApplyWithContacts(replica, bytes, 3, 7, [], [reconContact]);
+            contactViews.Sync(replica);
+
+            Require(cv.HasEnemyModel, "Identified recon must have enemy model.");
+            Require(cv.CurrentModelClassification == ContactClassification.Recon, "Classification should be Recon.");
+            Require(cv.EnemyModel!.Name == "EnemyReconModel", "Model should be enemy recon.");
+
+            // Switch to CommandVehicle
+            ContactObservation cmdContact = tankContact with
+            {
+                Classification = ContactClassification.CommandVehicle
+            };
+            ApplyWithContacts(replica, bytes, 4, 8, [], [cmdContact]);
+            contactViews.Sync(replica);
+
+            Require(cv.HasEnemyModel, "Identified command vehicle must have model.");
+            Require(cv.CurrentModelClassification == ContactClassification.CommandVehicle, "Classification should be CommandVehicle.");
+            Require(cv.EnemyModel!.Name == "EnemyCommandVehicleModel", "Model should be enemy command vehicle.");
+
+            // 3. Transition to LastKnown hides live model and displays ghost marker
+            ContactObservation lastKnownContact = cmdContact with
+            {
+                State = ContactState.LastKnown,
+                Position = new NumericsVector2(32, 42)
+            };
+            ApplyWithContacts(replica, bytes, 5, 9, [], [lastKnownContact]);
+            contactViews.Sync(replica);
+
+            Require(!cv.HasEnemyModel, "LastKnown contact must hide live model.");
+            Require(cv.Marker.Visible, "LastKnown contact must display marker.");
+            Require(cv.GhostBase.Visible, "LastKnown contact must display ghost base marker.");
+            Require(cv.Root.Position.X == 32 && cv.Root.Position.Z == 42, "Position must match last known coordinates.");
+
+            // 4. Re-appearance as Detected Unknown under same ContactId clears model and identity
+            ContactObservation reacquiredUnknown = new(
+                cmdContact.Id,
+                ContactState.Current,
+                DetectionLevel.Detected,
+                ContactClassification.Unknown,
+                new NumericsVector2(35, 45),
+                10);
+            ApplyWithContacts(replica, bytes, 6, 10, [], [reacquiredUnknown]);
+            contactViews.Sync(replica);
+
+            Require(!cv.HasEnemyModel, "Reacquired unknown contact must not have model.");
+            Require(cv.EnemyModel is null, "Previous enemy model must be destroyed and freed.");
+            Require(cv.CurrentModelClassification == ContactClassification.Unknown, "Classification must reset to Unknown.");
+            Require(cv.Marker.Visible, "Marker diamond must be visible.");
+            Require(!cv.GhostBase.Visible, "Ghost base must be hidden.");
+
+            // Subsequent re-identification as Tank creates tank model, not old command vehicle
+            ContactObservation reIdentifiedTank = reacquiredUnknown with
+            {
+                Classification = ContactClassification.Tank,
+                Level = DetectionLevel.Identified
+            };
+            ApplyWithContacts(replica, bytes, 7, 11, [], [reIdentifiedTank]);
+            contactViews.Sync(replica);
+            Require(cv.HasEnemyModel, "Re-identified contact must create model.");
+            Require(cv.CurrentModelClassification == ContactClassification.Tank, "Classification should be Tank.");
+            Require(cv.EnemyModel!.Name == "EnemyTankModel", "Model should be enemy tank.");
+
+            // Generic Vehicle classification
+            ContactObservation vehicleContact = reIdentifiedTank with
+            {
+                Classification = ContactClassification.Vehicle
+            };
+            ApplyWithContacts(replica, bytes, 8, 12, [], [vehicleContact]);
+            contactViews.Sync(replica);
+            Require(cv.HasEnemyModel, "Identified generic vehicle must instantiate a model.");
+            Require(cv.CurrentModelClassification == ContactClassification.Vehicle, "Classification should be Vehicle.");
+            Require(cv.EnemyModel!.Name == "EnemyGenericVehicleModel", "Model should be enemy generic vehicle.");
+            Require(cv.EnemyModel.FindChild("HostileAffiliationMarker", true, false) is not null,
+                "Enemy generic vehicle model must attach HostileAffiliationMarker.");
+            Require(!cv.Marker.Visible, "Diamond marker should be hidden when generic vehicle model is active.");
+
+            // Unsupported classification fallback retains world representation
+            ContactObservation unsupportedContact = vehicleContact with
+            {
+                Classification = (ContactClassification)99
+            };
+            cv.Update(unsupportedContact, groundY: 0f, isSelected: false);
+            Require(!cv.HasEnemyModel, "Unsupported classification must not have an enemy model.");
+            Require(cv.EnemyModel is null, "Previous vehicle model must be cleared.");
+            Require(cv.Marker.Visible, "Unsupported classification must retain generic marker diamond.");
+            Require(!cv.GhostBase.Visible, "Live unsupported contact must not show ghost base.");
+
+            // Transition from unsupported back to modeled class (Tank)
+            cv.Update(reIdentifiedTank, groundY: 0f, isSelected: false);
+            Require(cv.HasEnemyModel, "Re-identifying as tank after unsupported class must create tank model.");
+            Require(!cv.Marker.Visible, "Diamond marker should be hidden when tank model is restored.");
+
+            // 5. SelectionCard unit, multiple units, contact, empty
+            SelectionCard card = new(catalog);
+            parent.AddChild(card);
+
+            card.UpdateEmpty();
+            Require(card.TitleText.Contains("No Selection"), "Empty card should say No Selection.");
+
+            // Unarmed recon
+            OwnUnitObservation reconUnit = new(
+                new EntityId(101),
+                catalog.RequireDefinitionIndex("recon_vehicle"),
+                new NumericsVector2(10, 10),
+                0,
+                Health: 60);
+            card.UpdateSingleOwnUnit(reconUnit);
+            Require(card.Line2Text.Contains("Armament: Unarmed"), "Recon must be formatted as Unarmed.");
+            Require(card.Line1Text.Contains("60 / 60 HP"), "Health should be accurately formatted.");
+
+            // Tank with 0 ammo
+            OwnUnitObservation tankZeroAmmo = new(
+                new EntityId(102),
+                catalog.RequireDefinitionIndex("prototype_tank"),
+                new NumericsVector2(12, 12),
+                0,
+                Health: 120,
+                Ammunition: 0,
+                ReloadTicksRemaining: 16,
+                AttackStatus: AttackExecutionStatus.NoAmmo);
+            card.UpdateSingleOwnUnit(tankZeroAmmo);
+            Require(card.Line2Text.Contains("Depleted"), "Tank with 0 ammo must be formatted as Depleted.");
+            Require(card.Line2Text.Contains("0.8s"), "Reload timer in ticks must convert to seconds.");
+            Require(card.Line3Text.Contains("Out of Ammo"), "Status should show out of ammunition.");
+
+            // Moving unit with No attack order (AttackExecutionStatus.None must not say Idle)
+            OwnUnitObservation movingUnitNoAttack = new(
+                new EntityId(103),
+                catalog.RequireDefinitionIndex("prototype_tank"),
+                new NumericsVector2(14, 14),
+                0,
+                NavStatus: PathRequestStatus.PathFound,
+                Health: 120,
+                Ammunition: 10,
+                ReloadTicksRemaining: 0,
+                AttackStatus: AttackExecutionStatus.None);
+            card.UpdateSingleOwnUnit(movingUnitNoAttack);
+            Require(card.Line3Text.Contains("No attack order"), "Moving unit with None attack status must display No attack order.");
+            Require(!card.Line3Text.Contains("Idle"), "Attack status must not say Idle.");
+
+            // Multiple units
+            card.UpdateMultipleOwnUnits(3, 2, 1, 0);
+            Require(card.TitleText.Contains("3 Units Selected"), "Multi-unit title mismatch.");
+            Require(card.Line1Text.Contains("2 Tanks, 1 Recon"), "Multi-unit breakdown mismatch.");
+
+            // Enemy contact inspection
+            card.UpdateContact(cmdContact with { LastSeenTick = 8 }, serverTick: 28);
+            Require(card.TitleText.Contains("Enemy Contact #101"), "Contact card should show contact ID.");
+            Require(card.Line2Text.Contains("Command Vehicle"), "Contact card should show classification.");
+            Require(card.Line3Text.Contains("Seen 1.0s ago"), "Contact card should show observation age.");
+            Require(!card.Line1Text.Contains("HP") && !card.Line2Text.Contains("HP"), "Contact card must not show HP.");
+
+            // 6. OrderNotification persistence, timeout, and submission reporting
+            OrderNotification notification = new();
+            parent.AddChild(notification);
+
+            notification.ShowNotification("Server queued order #42");
+            Require(notification.Visible, "Notification should be visible after ShowNotification.");
+            Require(notification.CurrentText == "Server queued order #42", "Notification text mismatch.");
+
+            // Local submission reporting verification (zero, partial, full)
+            int totalSelected = 2;
+            string failAttack = $"Failed to submit attack order / 0 of {totalSelected} units -> Contact #101";
+            notification.ShowNotification(failAttack);
+            Require(notification.CurrentText == failAttack, "Zero-submission attack message mismatch.");
+
+            string partialAttack = $"Attack order submitted for 1 of {totalSelected} units -> Contact #101";
+            notification.ShowNotification(partialAttack);
+            Require(notification.CurrentText == partialAttack, "Partial-submission attack message mismatch.");
+
+            string fullAttack = $"Attack order submitted / 2 units -> Contact #101";
+            notification.ShowNotification(fullAttack);
+            Require(notification.CurrentText == fullAttack, "Full-submission attack message mismatch.");
+
+            string failMove = $"Failed to submit move order / 0 of {totalSelected} units / 72, 92 m";
+            notification.ShowNotification(failMove);
+            Require(notification.CurrentText == failMove, "Zero-submission move message mismatch.");
+
+            string partialMove = $"Move order submitted for 1 of {totalSelected} units / 72, 92 m";
+            notification.ShowNotification(partialMove);
+            Require(notification.CurrentText == partialMove, "Partial-submission move message mismatch.");
+
+            string fullMove = $"Move order submitted / 2 units / 72, 92 m";
+            notification.ShowNotification(fullMove);
+            Require(notification.CurrentText == fullMove, "Full-submission move message mismatch.");
+
+            // Authoritative server results
+            string serverQueued = "Server queued order #42";
+            notification.ShowNotification(serverQueued);
+            Require(notification.CurrentText == serverQueued, "Server queued message mismatch.");
+
+            string serverRejected = "Order #42 rejected by server";
+            notification.ShowNotification(serverRejected);
+            Require(notification.CurrentText == serverRejected, "Server rejected message mismatch.");
+
+            // Selection card updates do NOT wipe out order notification
+            card.UpdateEmpty();
+            Require(notification.Visible && notification.CurrentText == serverRejected,
+                "SelectionCard update must not affect persistent OrderNotification.");
+
+            // Advance notification time
+            notification.Update(2.0);
+            Require(notification.Visible, "Notification should still be visible after 2.0s.");
+            notification.Update(1.2);
+            Require(!notification.Visible, "Notification should expire after 3.2s total.");
+
+            // 7. RoleBadge presentation state caching
+            RoleBadge cacheTestBadge = new();
+            parent.AddChild(cacheTestBadge);
+            cacheTestBadge.BindUnit(new EntityId(9001), "TANK");
+            cacheTestBadge.BindUnit(new EntityId(9001), "TANK");
+
+            cacheTestBadge.BindContact(new ContactId(801), ContactState.Current, DetectionLevel.Identified, ContactClassification.Tank, 0.2f);
+            cacheTestBadge.BindContact(new ContactId(801), ContactState.LastKnown, DetectionLevel.Identified, ContactClassification.Tank, 1.2f);
+            cacheTestBadge.BindContact(new ContactId(801), ContactState.LastKnown, DetectionLevel.Identified, ContactClassification.Tank, 1.4f);
+            cacheTestBadge.BindContact(new ContactId(801), ContactState.LastKnown, DetectionLevel.Identified, ContactClassification.Tank, 2.1f);
+            parent.RemoveChild(cacheTestBadge);
+            cacheTestBadge.QueueFree();
+
+            // 8. RoleBadgeOverlay and hit testing
+            Camera3D camera = new()
+            {
+                Projection = Camera3D.ProjectionType.Orthogonal,
+                Size = 100,
+                Far = 1000,
+                Position = new Vector3(0, 50, 50)
+            };
+            parent.AddChild(camera);
+            camera.LookAt(Vector3.Zero, Vector3.Up);
+
+            RoleBadgeOverlay overlay = new(catalog);
+            parent.AddChild(overlay);
+
+            ApplyWithContacts(replica, bytes, 11, 15, [reconUnit, tankZeroAmmo], [tankContact]);
+            unitViews.Sync(replica, 15);
+            contactViews.Sync(replica);
+
+            Rect2[] occludingPanels = [];
+            overlay.UpdateBadges(camera, camera.Size, unitViews, contactViews, replica, 15, occludingPanels);
+
+            Require(overlay.GetChildCount() >= 3, "Badges should be created for units and contacts.");
+
+            // 9. Overlapping badges hit testing in reverse actual draw order
+            overlay.Clear();
+            RoleBadge badgeTank = new();
+            badgeTank.BindUnit(new EntityId(9001), "TANK");
+            badgeTank.UpdateScreenPosition(new Vector2(200, 200));
+            badgeTank.Visible = true;
+            overlay.AddChild(badgeTank);
+
+            RoleBadge badgeRecon = new();
+            badgeRecon.BindUnit(new EntityId(9002), "RECON");
+            badgeRecon.UpdateScreenPosition(new Vector2(200, 200));
+            badgeRecon.Visible = true;
+            overlay.AddChild(badgeRecon);
+
+            // In Godot, badgeRecon is child 1 and draws over badgeTank (child 0).
+            // Clicking (200, 200) must return the topmost child (Recon 9002), not Tank 9001.
+            Require(overlay.TryHitBadge(new Vector2(200, 200), out EntityId? hitUnit, out ContactId? hitContact),
+                "Overlapping badge click should hit.");
+            Require(hitUnit == new EntityId(9002),
+                $"Overlapping badge should hit topmost child (Recon 9002), but got {hitUnit?.Value}.");
+            Require(hitContact is null, "Hit contact should be null for unit badge.");
+
+            // Mixed unit and contact: add contact badge on top of both
+            RoleBadge badgeEnemy = new();
+            badgeEnemy.BindContact(new ContactId(7001), ContactState.Current, DetectionLevel.Identified, ContactClassification.Tank, 0f);
+            badgeEnemy.UpdateScreenPosition(new Vector2(200, 200));
+            badgeEnemy.Visible = true;
+            overlay.AddChild(badgeEnemy);
+
+            // badgeEnemy is child 2 (drawn on top). Clicking (200, 200) must return Contact 7001.
+            Require(overlay.TryHitBadge(new Vector2(200, 200), out hitUnit, out hitContact),
+                "Overlapping mixed badge click should hit.");
+            Require(hitContact == new ContactId(7001),
+                $"Overlapping mixed badge should hit topmost child (Contact 7001), but got contact {hitContact?.Value}.");
+            Require(hitUnit is null, "Hit unit should be null for contact badge.");
+
+            // 10. Badge partially occluded by HUD panel and click rejection inside panels
+            Rect2 badgeRect = new(700f, 423.1809f, 40f, 18f);
+            Rect2 panel = new(316f, 382.1809f, 400f, 100f);
+            Vector2 viewportSize = new(1280f, 720f);
+            Require(RoleBadgeOverlay.IsOffscreenOrOccluded(badgeRect, viewportSize, [panel]),
+                "Partially occluded badge rectangle must be detected as occluded.");
+            Require(!RoleBadgeOverlay.IsOffscreenOrOccluded(new Rect2(750f, 423.1809f, 40f, 18f), viewportSize, [panel]),
+                "Unoccluded badge must not be detected as occluded.");
+
+            overlay.Clear();
+            overlay.UpdateBadges(camera, camera.Size, unitViews, contactViews, replica, 15, [panel]);
+
+            RoleBadge partiallyOccludedBadge = new();
+            partiallyOccludedBadge.BindUnit(new EntityId(9005), "TANK");
+            partiallyOccludedBadge.UpdateScreenPosition(new Vector2(720f, 432.18f));
+            partiallyOccludedBadge.Visible = true;
+            overlay.AddChild(partiallyOccludedBadge);
+
+            // Click at (712, 432.18f) is inside panel rectangle (712 <= 716). Must be rejected!
+            Require(!overlay.TryHitBadge(new Vector2(712f, 432.18f), out _, out _),
+                "Click inside occluding panel rectangle must be rejected.");
+
+            // Unoccluded badge outside panel is selectable
+            RoleBadge unoccludedBadge = new();
+            unoccludedBadge.BindUnit(new EntityId(9006), "RECON");
+            unoccludedBadge.UpdateScreenPosition(new Vector2(800f, 432.18f));
+            unoccludedBadge.Visible = true;
+            overlay.AddChild(unoccludedBadge);
+
+            Require(overlay.TryHitBadge(new Vector2(800f, 432.18f), out EntityId? hitUnoccluded, out _),
+                "Click on unoccluded badge must succeed.");
+            Require(hitUnoccluded == new EntityId(9006), "Unoccluded badge hit mismatch.");
+
+            // Occluded badge (Visible = false) must not be selectable even on exposed portion
+            partiallyOccludedBadge.Visible = false;
+            Require(!overlay.TryHitBadge(new Vector2(725f, 432.18f), out _, out _),
+                "Occluded badge must not be selectable.");
+
+            // Clear overlay
+            overlay.Clear();
+            Require(overlay.GetChildCount() == 0, "Overlay Clear() should remove all badge nodes.");
         }
         finally
         {

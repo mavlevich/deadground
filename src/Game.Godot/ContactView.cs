@@ -14,6 +14,15 @@ internal sealed class ContactView
     private readonly StandardMaterial3D _currentMaterial;
     private readonly StandardMaterial3D _lastKnownMaterial;
 
+    private Node3D? _enemyModel;
+    private ContactClassification _currentModelClassification = ContactClassification.Unknown;
+
+    internal Node3D? EnemyModel => _enemyModel;
+    internal bool HasEnemyModel => _enemyModel is not null && _enemyModel.Visible;
+    internal MeshInstance3D Marker => _marker;
+    internal MeshInstance3D GhostBase => _ghostBase;
+    internal ContactClassification CurrentModelClassification => _currentModelClassification;
+
     public ContactView()
     {
         _currentMaterial = new StandardMaterial3D
@@ -32,9 +41,10 @@ internal sealed class ContactView
             Transparency = BaseMaterial3D.TransparencyEnum.Alpha
         };
 
-        // Marker diamond shape (box rotated 45 degrees)
+        // Marker diamond shape (box rotated 45 degrees) for unknown contacts
         _marker = new MeshInstance3D
         {
+            Name = "NeutralContactMarker",
             Mesh = new BoxMesh { Size = new Vector3(1.4f, 1.4f, 1.4f) },
             Position = new Vector3(0, 1.8f, 0),
             Rotation = new Vector3(Mathf.DegToRad(45), Mathf.DegToRad(45), 0),
@@ -45,6 +55,7 @@ internal sealed class ContactView
         // Ground-level base marker for last-known contacts
         _ghostBase = new MeshInstance3D
         {
+            Name = "GhostBaseMarker",
             Mesh = new TorusMesh { InnerRadius = 1.3f, OuterRadius = 1.6f, Rings = 16, RingSegments = 8 },
             Scale = new Vector3(1, 0.15f, 1),
             Position = new Vector3(0, 0.1f, 0),
@@ -60,6 +71,7 @@ internal sealed class ContactView
         // Selection ring (distinct red color)
         _selection = new MeshInstance3D
         {
+            Name = "SelectionRing",
             Mesh = new TorusMesh { InnerRadius = 2.4f, OuterRadius = 2.7f, Rings = 24, RingSegments = 8 },
             Scale = new Vector3(1, 0.15f, 1),
             Position = new Vector3(0, 0.15f, 0),
@@ -84,17 +96,67 @@ internal sealed class ContactView
 
         if (contact.State == ContactState.Current)
         {
-            _marker.MaterialOverride = _currentMaterial;
-            _marker.Scale = Vector3.One;
             _ghostBase.Visible = false;
+
+            if (contact.Level == DetectionLevel.Identified && contact.Classification != ContactClassification.Unknown)
+            {
+                // Identified enemy: switch to generic 3D model
+                if (_currentModelClassification != contact.Classification)
+                {
+                    ClearEnemyModel();
+                    _enemyModel = ContactVisualCatalog.InstantiateEnemyModel(contact.Classification);
+                    _currentModelClassification = contact.Classification;
+                    if (_enemyModel is not null)
+                    {
+                        Root.AddChild(_enemyModel);
+                    }
+                }
+
+                if (_enemyModel is not null)
+                {
+                    _enemyModel.Visible = true;
+                    _marker.Visible = false;
+                }
+                else
+                {
+                    _marker.Visible = true;
+                    _marker.MaterialOverride = _currentMaterial;
+                    _marker.Scale = Vector3.One;
+                }
+            }
+            else
+            {
+                // Unknown or unconfirmed enemy: clean up any previously identified model
+                ClearEnemyModel();
+                _marker.Visible = true;
+                _marker.MaterialOverride = _currentMaterial;
+                _marker.Scale = Vector3.One;
+            }
         }
         else
         {
+            // Last-known contact: hide live model, display uncertainty ghost marker
+            if (_enemyModel is not null)
+            {
+                _enemyModel.Visible = false;
+            }
+            _marker.Visible = true;
             _marker.MaterialOverride = _lastKnownMaterial;
             _marker.Scale = new Vector3(0.85f, 0.85f, 0.85f);
             _ghostBase.Visible = true;
         }
 
         _selection.Visible = isSelected;
+    }
+
+    private void ClearEnemyModel()
+    {
+        if (_enemyModel is not null)
+        {
+            Root.RemoveChild(_enemyModel);
+            _enemyModel.QueueFree();
+            _enemyModel = null;
+        }
+        _currentModelClassification = ContactClassification.Unknown;
     }
 }
