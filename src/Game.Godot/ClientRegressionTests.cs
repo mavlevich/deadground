@@ -20,11 +20,12 @@ internal static class ClientRegressionTests
             CheckRectangularGrid(3, 5);
             CheckCombatEffectsAndLifecycle(scene);
             CheckConfiguredUnitHealthBars(scene);
+            CheckVehicleModels(scene);
             CheckCameraRig(scene);
             CheckDisplaySettings(scene);
             CheckCombatEffectsFramePacing(scene);
             CheckMissionPanelLifecycle(scene);
-            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health camera_rig display_settings combat_frame_pacing mission_panel");
+            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel");
             return true;
         }
         catch (Exception exception)
@@ -65,6 +66,60 @@ internal static class ClientRegressionTests
             Require(views.Views.Count == 0 && parent.GetChildCount() == 0, "Empty snapshot did not clear views.");
         }
         finally { parent.QueueFree(); }
+    }
+
+    private static void CheckVehicleModels(Node3D scene)
+    {
+        Node3D parent = new();
+        scene.AddChild(parent);
+        UnitViewSet? views = null;
+        try
+        {
+            // Catalog order must not select the wrong vehicle scene.
+            DeadGround.Rules.Ops.UnitCatalog source = DeadGround.Rules.Ops.PrototypeScenario.LoadCatalog();
+            DeadGround.Rules.Ops.UnitCatalog reordered = source with
+            {
+                Units = [source.RequireDefinition("prototype_tank"), source.RequireDefinition("recon_vehicle"),
+                    source.RequireDefinition("prototype_vehicle")]
+            };
+            views = new UnitViewSet(parent, HeightMap.CreatePrototype(), reordered);
+            ClientReplica replica = new();
+            byte[] bytes = new byte[WireProtocol.MaxMessageSize];
+            OwnUnitObservation tank = new(new EntityId(301), 0, new NumericsVector2(10, 10), 0, Health: 120);
+            OwnUnitObservation recon = new(new EntityId(302), 1, new NumericsVector2(20, 10), 0, Health: 60);
+            OwnUnitObservation otherTank = new(new EntityId(303), 0, new NumericsVector2(20, 20), 0, Health: 120);
+            Apply(replica, bytes, 1, 0, [tank, recon, otherTank]);
+            views.Sync(replica, 0);
+            UnitView tankView = views.Views[tank.Id];
+            UnitView reconView = views.Views[recon.Id];
+            Require(tankView.HasVehicleModel && reconView.HasVehicleModel, "Vehicle assets did not load.");
+            Node3D? turret = tankView.Model.FindChild("TurretYaw", true, false) as Node3D;
+            Require(turret is not null, "Reordered tank definition did not instantiate the tank scene.");
+            Require(reconView.Model.FindChild("SensorYaw", true, false) is not null,
+                "Reordered recon definition did not instantiate the recon scene.");
+            Require(!ReferenceEquals(tankView.Model, views.Views[otherTank.Id].Model), "Vehicle instances share a node.");
+
+            ContactObservation target = new(new ContactId(801), ContactState.Current, ContactClassification.Unknown,
+                new NumericsVector2(12, 0), 2);
+            tank = tank with { Position = new NumericsVector2(12, 10), TargetContactId = target.Id };
+            ApplyWithContacts(replica, bytes, 2, 2, [tank, recon, otherTank], [target]);
+            views.Sync(replica, 2);
+            Require((-tankView.Model.GlobalBasis.Z.Normalized()).Dot(Vector3.Right) > 0.99f,
+                "Tank did not face its observed movement direction.");
+            Require((-turret!.GlobalBasis.Z.Normalized()).Dot(Vector3.Forward) > 0.99f,
+                "Turret did not face the permitted target independently of the hull.");
+            Require(views.Views[otherTank.Id].Model.Rotation == Vector3.Zero, "Turning one tank rotated another instance.");
+            Vector3 aim = turret.Rotation;
+            target = target with { State = ContactState.LastKnown, Position = new NumericsVector2(30, 30) };
+            ApplyWithContacts(replica, bytes, 3, 4, [tank, recon, otherTank], [target]);
+            views.Sync(replica, 4);
+            Require(turret.Rotation == aim, "Turret tracked a last-known contact as a live target.");
+        }
+        finally
+        {
+            views?.Clear();
+            parent.QueueFree();
+        }
     }
 
     private static void CheckContactViewLifecycle(Node3D scene)

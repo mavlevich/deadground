@@ -593,6 +593,7 @@ The AI sends normal commands and reads only its side's knowledge. Headless bot v
 
 ### 18.2 Display settings and frame pacing
 
+- 4x MSAA is the default for 3D geometry edges. It is a rendering setting and does not affect simulation ticks.
 - VSync toggle (On/Off) and Max FPS cap (0 = Unlimited, 30, 60, 120, 144 FPS).
 - Display settings persisted to `user://display_settings.cfg`.
 - Command line overrides: `--vsync <on|off>`, `--max-fps <fps>`, `--benchmark-frames <N>`.
@@ -601,6 +602,21 @@ The AI sends normal commands and reads only its side's knowledge. Headless bot v
 - Clamped delta (max 0.1 s) on window focus return and long frame hitches to prevent camera teleportation.
 - Simulation invariance: simulation runs at fixed 20 Hz, snapshots at 10 Hz; rendering at 30, 60, 120, 144 FPS only interpolates client replicas (`ClientReplica.SamplePosition`), with `LastKnown` contact markers strictly motionless.
 - Zero steady-state heap allocations during active camera model updates and frame pacing metric collection.
+
+### 18.3 Prototype vehicle presentation
+
+- Own tanks and reconnaissance vehicles load original GLB assets through the client-only
+  `Assets/Vehicles/visuals.json` mapping, keyed by content unit ID rather than numeric catalog order.
+- Imported scenes are cached and instantiated per unit. Static parts are combined by material
+  within each functional pivot. The tank has 14 mesh surfaces and the recon vehicle has 10.
+- Presentation derives hull facing from interpolated own-unit displacement. The tank turret
+  faces only a currently observed target contact. This does not change server movement or combat.
+- Selection, health bars, event recoil and view cleanup remain independent of imported meshes.
+- Enemy contacts retain their existing knowledge-filtered markers. Unknown enemy types are
+  never resolved through the own-unit visual mapping.
+- The client launchers import Godot assets before running. Export presets include the visual mapping.
+- Wheels, tracks, gun pitch, dedicated barrel recoil and destruction models remain future work.
+  These assets are a first playable visual prototype, not a validated large-battle rendering budget.
 
 ## 19. Rule sets and modularity
 

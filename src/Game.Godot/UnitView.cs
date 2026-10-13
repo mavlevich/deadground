@@ -6,46 +6,34 @@ internal sealed class UnitView
 {
     public Node3D Root { get; } = new();
     private readonly MeshInstance3D _selection;
+    private readonly Node3D? _turret;
+    private Vector3 _previousPosition;
+    private bool _hasPosition;
+    internal Node3D Model { get; }
+    internal bool HasVehicleModel { get; }
 
-    public UnitView(ushort definition = 0)
+    public UnitView(ushort definition = 0) : this(UnitViewSet.GetDefaultUnitId(definition)) { }
+
+    public UnitView(string? unitId)
     {
-        Root.AddChild(new MeshInstance3D
+        Node3D? imported = VehicleVisualCatalog.Instantiate(unitId);
+        HasVehicleModel = imported is not null;
+        Model = imported ?? new Node3D { Name = "PlaceholderModel" };
+        Root.AddChild(Model);
+        _turret = Model.FindChild("TurretYaw", recursive: true, owned: false) as Node3D;
+        if (imported is null)
         {
-            Mesh = new BoxMesh { Size = new Vector3(3, 2, 4) },
-            Position = new Vector3(0, 1.1f, 0),
-            MaterialOverride = new StandardMaterial3D { AlbedoColor = new Color("b8c5a0"), Roughness = 0.85f }
-        });
-        Root.AddChild(new MeshInstance3D
-        {
-            Mesh = new BoxMesh { Size = new Vector3(1.6f, 0.5f, 1.8f) },
-            Position = new Vector3(0, 2.35f, 0),
-            MaterialOverride = new StandardMaterial3D { AlbedoColor = new Color("485c45"), Roughness = 1 }
-        });
-
-        if (definition == 1)
-        {
-            // Recon vehicle: communication and sensor antenna
-            Root.AddChild(new MeshInstance3D
+            Model.AddChild(new MeshInstance3D
             {
-                Mesh = new CylinderMesh { TopRadius = 0.04f, BottomRadius = 0.08f, Height = 1.6f },
-                Position = new Vector3(0.5f, 3.2f, -0.4f),
-                MaterialOverride = new StandardMaterial3D { AlbedoColor = new Color("d5ded0"), Roughness = 0.4f }
+                Mesh = new BoxMesh { Size = new Vector3(3, 2, 4) },
+                Position = new Vector3(0, 1.1f, 0),
+                MaterialOverride = new StandardMaterial3D { AlbedoColor = new Color("b8c5a0"), Roughness = 0.85f }
             });
-        }
-        else if (definition == 2)
-        {
-            // Tank: turret and main gun barrel
-            Root.AddChild(new MeshInstance3D
+            Model.AddChild(new MeshInstance3D
             {
-                Mesh = new BoxMesh { Size = new Vector3(2.0f, 0.7f, 2.2f) },
-                Position = new Vector3(0, 2.4f, 0),
-                MaterialOverride = new StandardMaterial3D { AlbedoColor = new Color("3b4d38"), Roughness = 0.9f }
-            });
-            Root.AddChild(new MeshInstance3D
-            {
-                Mesh = new BoxMesh { Size = new Vector3(0.24f, 0.24f, 2.4f) },
-                Position = new Vector3(0, 2.4f, 1.8f),
-                MaterialOverride = new StandardMaterial3D { AlbedoColor = new Color("252b24"), Roughness = 0.7f }
+                Mesh = new BoxMesh { Size = new Vector3(1.6f, 0.5f, 1.8f) },
+                Position = new Vector3(0, 2.35f, 0),
+                MaterialOverride = new StandardMaterial3D { AlbedoColor = new Color("485c45"), Roughness = 1 }
             });
         }
 
@@ -95,6 +83,29 @@ internal sealed class UnitView
     private readonly MeshInstance3D _healthBarFg;
     private Vector3 _recoilOffset = Vector3.Zero;
     public Vector3 RecoilOffset => _recoilOffset;
+
+    public void UpdatePosition(Vector3 position)
+    {
+        if (_hasPosition)
+        {
+            Vector3 movement = position - _previousPosition;
+            movement.Y = 0;
+            if (movement.LengthSquared() > 0.000001f)
+                Model.Rotation = new Vector3(0, Mathf.Atan2(-movement.X, -movement.Z), 0);
+        }
+        _previousPosition = position;
+        _hasPosition = true;
+        Root.Position = position + _recoilOffset;
+    }
+
+    public void AimAt(Vector3 observedPosition)
+    {
+        if (_turret is null) return;
+        Vector3 direction = observedPosition - _previousPosition;
+        if (direction.X * direction.X + direction.Z * direction.Z <= 0.000001f) return;
+        float worldYaw = Mathf.Atan2(-direction.X, -direction.Z);
+        _turret.Rotation = new Vector3(0, Mathf.Wrap(worldYaw - Model.Rotation.Y, -Mathf.Pi, Mathf.Pi), 0);
+    }
 
     public void ApplyRecoil(Vector3 shotDirection)
     {

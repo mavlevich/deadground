@@ -279,6 +279,29 @@ In a second terminal, connect the client:
   - Result card displays Victory/Defeat, specific reason, and attempt duration.
   - In local play, clicking RETRY MISSION or pressing R starts a clean restart with fresh simulation state.
 
+### Prototype vehicle models
+
+Own tanks and reconnaissance vehicles use distinct original GLB models. Run the mission:
+
+```sh
+./tools/run-client.sh -- --scenario recon-raid
+```
+
+The launcher builds the client and imports the assets automatically. Use the mouse wheel to
+zoom in on the starting squad. Hulls face their movement direction, and tank turrets face
+currently observed attack targets. Selection, health bars and existing shot effects remain active.
+Enemy contacts keep their knowledge-filtered markers. Wheels and tracks are not animated yet.
+The client uses 4x MSAA to smooth diagonal model edges.
+
+The client-only `src/Game.Godot/Assets/Vehicles/visuals.json` maps content IDs to scenes and scale.
+The original mesh source is reproducible without external packages:
+
+```sh
+python3 tools/model-authoring/build_vehicles.py
+```
+
+See `src/Game.Godot/Assets/Vehicles/README.md` for geometry and presentation details.
+
 ### Line-of-sight sandbox
 
 To launch the standalone visual line-of-sight geometry sandbox:

@@ -5,17 +5,20 @@ using Godot;
 
 namespace DeadGround.Client;
 
-internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int>? maxHealthProvider = null)
+internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int>? maxHealthProvider = null,
+    Func<ushort, string?>? unitIdProvider = null)
 {
     internal Dictionary<EntityId, UnitView> Views { get; } = new();
     internal HashSet<EntityId> Selected { get; } = new();
     private readonly HashSet<EntityId> _present = new(WireProtocol.MaxUnits);
     private readonly List<EntityId> _removed = new(WireProtocol.MaxUnits);
     private readonly Func<ushort, int>? _maxHealthProvider = maxHealthProvider;
+    private readonly Func<ushort, string?>? _unitIdProvider = unitIdProvider;
     private static readonly Lazy<UnitCatalog> DefaultCatalog = new(() => PrototypeScenario.LoadCatalog());
 
     public UnitViewSet(Node3D parent, HeightMap map, UnitCatalog catalog)
-        : this(parent, map, def => def < catalog.Units.Length ? catalog.Units[def].MaxHealth : 100)
+        : this(parent, map, def => def < catalog.Units.Length ? catalog.Units[def].MaxHealth : 100,
+            def => def < catalog.Units.Length ? catalog.Units[def].Id : null)
     {
     }
 
@@ -23,6 +26,12 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
     {
         UnitCatalog catalog = DefaultCatalog.Value;
         return definition < catalog.Units.Length ? catalog.Units[definition].MaxHealth : 100;
+    }
+
+    internal static string? GetDefaultUnitId(ushort definition)
+    {
+        UnitCatalog catalog = DefaultCatalog.Value;
+        return definition < catalog.Units.Length ? catalog.Units[definition].Id : null;
     }
 
     internal void Sync(ClientReplica replica, double renderTick)
@@ -33,12 +42,18 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
             _present.Add(unit.Id);
             if (!Views.TryGetValue(unit.Id, out UnitView? view))
             {
-                view = new UnitView(unit.Definition);
+                string? unitId = _unitIdProvider is null ? GetDefaultUnitId(unit.Definition) : _unitIdProvider(unit.Definition);
+                view = new UnitView(unitId);
                 Views.Add(unit.Id, view);
                 parent.AddChild(view.Root);
             }
             System.Numerics.Vector2 position = replica.SamplePosition(unit.Id, renderTick);
-            view.Root.Position = new Vector3(position.X, map.GetHeight(position.X, position.Y), position.Y) + view.RecoilOffset;
+            view.UpdatePosition(new Vector3(position.X, map.GetHeight(position.X, position.Y), position.Y));
+            if (replica.TryGetContact(unit.TargetContactId, out ContactObservation target) && target.IsCurrent)
+            {
+                System.Numerics.Vector2 targetPosition = replica.SampleContactPosition(target.Id, renderTick);
+                view.AimAt(new Vector3(targetPosition.X, 0, targetPosition.Y));
+            }
             int maxHealth = _maxHealthProvider?.Invoke(unit.Definition) ?? GetDefaultMaxHealth(unit.Definition);
             view.UpdateHealth(unit.Health, maxHealth);
             view.SetSelected(Selected.Contains(unit.Id));

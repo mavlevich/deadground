@@ -1,0 +1,10 @@
+{
+  "prototype_tank": {
+    "scene": "res://Assets/Vehicles/tank.glb",
+    "scale": 0.75
+  },
+  "recon_vehicle": {
+    "scene": "res://Assets/Vehicles/recon.glb",
+    "scale": 0.75
+  }
+}
