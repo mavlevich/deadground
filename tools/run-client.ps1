@@ -10,6 +10,8 @@ Push-Location $repoRoot
 try {
     dotnet build src/Game.Godot/Game.Godot.csproj
     if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
+    & $GodotBin --headless --editor --path (Join-Path $repoRoot 'src/Game.Godot') --import
+    if ($LASTEXITCODE -ne 0) { throw 'Asset import failed.' }
     & $GodotBin --path (Join-Path $repoRoot 'src/Game.Godot') @GodotArgs
     if ($LASTEXITCODE -ne 0) { throw "Godot exited with code $LASTEXITCODE." }
 } finally {

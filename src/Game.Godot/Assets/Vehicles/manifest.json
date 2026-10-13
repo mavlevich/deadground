@@ -1,0 +1,19 @@
+{
+  "units": "meters",
+  "up": "+Y",
+  "forward": "-Z",
+  "models": [
+    {
+      "file": "tank.glb",
+      "triangles": 1936,
+      "mesh_parts": 14,
+      "bytes": 117804
+    },
+    {
+      "file": "recon.glb",
+      "triangles": 920,
+      "mesh_parts": 10,
+      "bytes": 57832
+    }
+  ]
+}

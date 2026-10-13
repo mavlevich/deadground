@@ -18,4 +18,5 @@ if [[ "$("$godot_bin" --version)" != 4.7.2.*.mono.* ]]; then
 fi
 cd "$repo_root"
 dotnet build src/Game.Godot/Game.Godot.csproj
+"$godot_bin" --headless --editor --path "$repo_root/src/Game.Godot" --import
 exec "$godot_bin" --path "$repo_root/src/Game.Godot" "$@"
