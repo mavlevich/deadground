@@ -31,12 +31,18 @@ for (int i = 0; i < args.Length; i++)
     }
 }
 
+if (scenario == "recon-raid")
+{
+    maxClients = 1;
+}
+
 HeightMap map = scenario switch
 {
     "visibility" => VisibilityScenario.CreateMap(),
     "navigation" => NavigationScenario.CreateMap(),
     "navigation-large" => LargeNavigationScenario.CreateMap(),
     "combat" => CombatScenario.CreateMap(),
+    "recon-raid" => ReconRaidScenario.CreateMap(),
     _ => HeightMap.CreatePrototype()
 };
 
@@ -46,6 +52,7 @@ StaticGeometry? scenarioGeometry = scenario switch
     "navigation" => NavigationScenario.CreateStaticGeometry(),
     "navigation-large" => LargeNavigationScenario.CreateStaticGeometry(),
     "combat" => CombatScenario.CreateStaticGeometry(),
+    "recon-raid" => ReconRaidScenario.CreateStaticGeometry(),
     _ => null
 };
 
@@ -55,6 +62,7 @@ MatchSetup setup = scenario switch
     "navigation" => NavigationScenario.CreateMatchSetup(scenarioGeometry!),
     "navigation-large" => LargeNavigationScenario.CreateMatchSetup(scenarioGeometry!),
     "combat" => CombatScenario.CreateMatchSetup(scenarioGeometry!),
+    "recon-raid" => ReconRaidScenario.CreateMatchSetup(scenarioGeometry!),
     _ => PrototypeScenario.CreateMatchSetup(map)
 };
 
@@ -64,6 +72,7 @@ Simulation CreateSimulation() => scenario switch
     "navigation" => NavigationScenario.CreateSimulation(scenarioGeometry!),
     "navigation-large" => LargeNavigationScenario.CreateSimulation(scenarioGeometry!),
     "combat" => CombatScenario.CreateSimulation(scenarioGeometry!),
+    "recon-raid" => ReconRaidScenario.CreateSimulation(scenarioGeometry!),
     _ => PrototypeScenario.Create(map)
 };
 
@@ -133,6 +142,18 @@ if (smokeTest)
         return;
     }
 
+    if (scenario == "recon-raid")
+    {
+        for (int i = 0; i < 40; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.Tick != 40 || session.Replica.OwnUnits.Length != 3)
+            throw new InvalidOperationException("Recon-raid smoke test initial units check failed.");
+        if (session.Mission.Status != MissionStatus.InProgress)
+            throw new InvalidOperationException("Recon-raid smoke test initial mission status mismatch.");
+
+        Console.WriteLine($"RECON_RAID_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} mission_status={session.Mission.Status}");
+        return;
+    }
+
     EntityId first = session.Replica.OwnUnits[0].Id;
     Vector2 start = session.Replica.OwnUnits[0].Position;
     for (int i = 0; i < session.Replica.OwnUnits.Length; i++)
@@ -149,7 +170,8 @@ if (smokeTest)
 }
 
 using LiteNetLibServerTransport transport = LiteNetLibTransport.CreateServer(port, maxClients);
-using SimulationHost host = new(CreateSimulation(), transport, setup);
+int reservedBotPlayer = scenario == "recon-raid" ? 2 : 0;
+using SimulationHost host = new(CreateSimulation(), transport, setup, reservedBotPlayer);
 
 using CancellationTokenSource cancellation = new();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };

@@ -13,12 +13,26 @@ public enum ContactState : byte
 }
 
 /// <summary>
+/// Recognition fidelity level of a perceived enemy contact.
+/// </summary>
+public enum DetectionLevel : byte
+{
+    None = 0,
+    Detected = 1,
+    Identified = 2
+}
+
+/// <summary>
 /// Perceived classification of a contact.
-/// Full recognition is deferred in this slice; detected enemies remain Unknown.
 /// </summary>
 public enum ContactClassification : byte
 {
-    Unknown = 0
+    Unknown = 0,
+    Vehicle = 1,
+    Tank = 2,
+    Recon = 3,
+    CommandVehicle = 4,
+    Command = 4
 }
 
 /// <summary>
@@ -28,10 +42,28 @@ public enum ContactClassification : byte
 public readonly record struct ContactObservation(
     ContactId Id,
     ContactState State,
+    DetectionLevel Level,
     ContactClassification Classification,
     Vector2 Position,
     int LastSeenTick)
 {
     public bool IsCurrent => State == ContactState.Current;
     public bool IsLastKnown => State == ContactState.LastKnown;
+    public bool IsIdentified => Level == DetectionLevel.Identified;
+
+    public ContactObservation(
+        ContactId id,
+        ContactState state,
+        ContactClassification classification,
+        Vector2 position,
+        int lastSeenTick)
+        : this(
+            id,
+            state,
+            classification == ContactClassification.Unknown ? DetectionLevel.Detected : DetectionLevel.Identified,
+            classification,
+            position,
+            lastSeenTick)
+    {
+    }
 }

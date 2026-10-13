@@ -15,6 +15,8 @@ public sealed class ClientReplica
     public ReadOnlySpan<CombatEventObservation> Events => _count == 0 ? [] : Latest.Events.AsSpan(0, Latest.EventCount);
     public int ContactCount => _count == 0 ? 0 : Latest.ContactCount;
     public int EventCount => _count == 0 ? 0 : Latest.EventCount;
+    public MissionObservation LatestMission => _count == 0 ? default : Latest.Mission;
+    public MissionObservation Mission => LatestMission;
 
     public bool TryGetOwnUnit(EntityId id, out OwnUnitObservation unit)
     {

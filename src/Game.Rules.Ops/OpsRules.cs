@@ -8,6 +8,7 @@ namespace DeadGround.Rules.Ops;
 public sealed class OpsRules : RuleSet
 {
     public OpsRules() : base(new MovementSystem()) { }
+    public OpsRules(params ISimulationSystem[] systems) : base(systems) { }
 
     public OpsRules(StaticGeometry geometry, IUnitPerceptionCatalog catalog, DetectionTuning? tuning = null)
         : base(new MovementSystem(), new DetectionSystem(geometry, catalog, tuning)) { }
@@ -90,7 +91,10 @@ public sealed record UnitDefinition(
     float[]? TargetPoints = null,
     float Radius = 1.0f,
     int MaxHealth = 100,
-    string? Weapon = null);
+    string? Weapon = null,
+    float IdentifyRange = 0f,
+    int IdentifyTicks = 80,
+    string? Classification = null);
 
 public sealed record UnitCatalog(
     int SchemaVersion,
@@ -142,14 +146,41 @@ public sealed class OpsPerceptionCatalog : IUnitPerceptionCatalog
         for (int i = 0; i < catalog.Units.Length; i++)
         {
             UnitDefinition unit = catalog.Units[i];
+            float idRange = unit.IdentifyRange > 0 ? unit.IdentifyRange : unit.SensorRange * 0.4f;
+            int idTicks = unit.IdentifyTicks > 0 ? unit.IdentifyTicks : 80;
             VisualSensorProfile? sensor = unit.SensorRange > 0 && unit.EyeHeight > 0
-                ? new VisualSensorProfile(unit.SensorRange, unit.EyeHeight)
+                ? new VisualSensorProfile(unit.SensorRange, unit.EyeHeight, idRange, idTicks)
                 : null;
             TargetObservationPoints? points = unit.TargetPoints is { Length: > 0 }
                 ? new TargetObservationPoints(unit.TargetPoints)
                 : null;
-            _profiles[i] = new UnitPerceptionProfile(sensor, points);
+            ContactClassification classification = ParseClassification(unit.Classification, unit.Id);
+            _profiles[i] = new UnitPerceptionProfile(sensor, points, classification);
         }
+    }
+
+    private static ContactClassification ParseClassification(string? classification, string id)
+    {
+        if (!string.IsNullOrWhiteSpace(classification))
+        {
+            return classification.ToLowerInvariant() switch
+            {
+                "command" or "command_vehicle" or "commandvehicle" => ContactClassification.CommandVehicle,
+                "tank" => ContactClassification.Tank,
+                "recon" or "recon_vehicle" => ContactClassification.Recon,
+                "vehicle" => ContactClassification.Vehicle,
+                _ => ContactClassification.Vehicle
+            };
+        }
+
+        string lowerId = id.ToLowerInvariant();
+        if (lowerId.Contains("cmd") || lowerId.Contains("command"))
+            return ContactClassification.CommandVehicle;
+        if (lowerId.Contains("tank"))
+            return ContactClassification.Tank;
+        if (lowerId.Contains("recon"))
+            return ContactClassification.Recon;
+        return ContactClassification.Vehicle;
     }
 
     public bool TryGetProfile(ushort definition, out UnitPerceptionProfile profile)
@@ -342,6 +373,10 @@ public static class PrototypeScenario
                 if (!float.IsFinite(height) || height < 0)
                     throw new InvalidOperationException("Invalid target observation height.");
             }
+            if (!float.IsFinite(unit.IdentifyRange) || unit.IdentifyRange < 0)
+                throw new InvalidOperationException("Invalid identify range.");
+            if (unit.IdentifyTicks <= 0)
+                throw new InvalidOperationException("Invalid identify ticks.");
         }
         return data;
     }

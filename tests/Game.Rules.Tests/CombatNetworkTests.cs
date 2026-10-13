@@ -477,10 +477,13 @@ public sealed class CombatNetworkTests
     }
 
     [Fact]
-    public void WireProtocol_Version6_Preserves3DEndpointsAndShooterIdentity()
+    public void WireProtocol_Version8_Preserves3DEndpointsAndShooterIdentity()
     {
-        Assert.Equal(6, WireProtocol.Version);
+        Assert.Equal(8, WireProtocol.Version);
+        Assert.Equal(32, WireProtocol.MissionSize);
+        Assert.Equal(48, WireProtocol.SnapshotHeaderSize);
         Assert.Equal(30, WireProtocol.UnitSize);
+        Assert.Equal(19, WireProtocol.ContactSize);
         Assert.Equal(39, WireProtocol.EventSize);
 
         ClientReplica replica = new();
@@ -735,10 +738,8 @@ public sealed class CombatNetworkTests
         // 3. Undefined/invalid event kind (e.g. 99) must be rejected by TryReadSnapshot
         byte[] invalidBuffer = new byte[size];
         buffer.AsSpan(0, size).CopyTo(invalidBuffer);
-        // Find event kind byte offset:
-        // SnapshotHeaderSize = 16, 1 unit (30 bytes), 0 contacts (0 bytes), event offset: 16 + 30 = 46.
-        // Event record: EventId (4), ServerTick (4), Kind (1 at offset 8 of record) -> byte index 46 + 8 = 54.
-        invalidBuffer[54] = 99; // Invalid kind
+        int eventKindOffset = WireProtocol.SnapshotHeaderSize + WireProtocol.UnitSize + 8;
+        invalidBuffer[eventKindOffset] = 99; // Invalid kind
         ClientReplica badReplica = new();
         Assert.False(badReplica.TryApply(invalidBuffer));
     }

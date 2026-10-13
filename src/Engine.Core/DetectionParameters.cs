@@ -32,16 +32,24 @@ public sealed class VisualSensorProfile
 {
     public float Range { get; }
     public float EyeHeight { get; }
+    public float IdentifyRange { get; }
+    public int IdentifyTicks { get; }
 
-    public VisualSensorProfile(float range, float eyeHeight)
+    public VisualSensorProfile(float range, float eyeHeight, float identifyRange = 0f, int identifyTicks = 80)
     {
         if (!float.IsFinite(range) || range <= 0)
             throw new ArgumentOutOfRangeException(nameof(range), "Visual range must be positive and finite.");
         if (!float.IsFinite(eyeHeight) || eyeHeight <= 0)
             throw new ArgumentOutOfRangeException(nameof(eyeHeight), "Eye height must be positive and finite.");
+        if (!float.IsFinite(identifyRange) || identifyRange < 0)
+            throw new ArgumentOutOfRangeException(nameof(identifyRange), "Identify range must be non-negative and finite.");
+        if (identifyTicks <= 0)
+            throw new ArgumentOutOfRangeException(nameof(identifyTicks), "Identify ticks must be positive.");
 
         Range = range;
         EyeHeight = eyeHeight;
+        IdentifyRange = identifyRange;
+        IdentifyTicks = identifyTicks;
     }
 }
 

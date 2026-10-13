@@ -12,6 +12,7 @@ public sealed class PlayerKnowledge
     public int Count { get; private set; }
     public int ContactCount { get; private set; }
     public int EventCount { get; private set; }
+    public MissionObservation Mission { get; set; }
 
     public ReadOnlySpan<OwnUnitObservation> OwnUnits => _ownUnits.AsSpan(0, Count);
     public ReadOnlySpan<ContactObservation> Contacts => _contacts.AsSpan(0, ContactCount);
@@ -41,7 +42,8 @@ public sealed class PlayerKnowledge
         WorldState world,
         ReadOnlySpan<ContactObservation> contacts,
         NavigationSystem? navigation,
-        ReadOnlySpan<CombatEventObservation> events)
+        ReadOnlySpan<CombatEventObservation> events,
+        MissionObservation mission = default)
     {
         int count = 0;
         for (int i = 0; i < world.Count; i++)
@@ -82,5 +84,7 @@ public sealed class PlayerKnowledge
 
         events.CopyTo(_events.AsSpan(0, events.Length));
         EventCount = events.Length;
+
+        Mission = mission;
     }
 }

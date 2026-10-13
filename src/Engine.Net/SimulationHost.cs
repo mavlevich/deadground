@@ -8,6 +8,7 @@ public sealed class SimulationHost : IDisposable
     private readonly Simulation _simulation;
     private readonly IServerTransport _transport;
     private readonly MatchSetup? _matchSetup;
+    private readonly int _reservedBotPlayer;
     private readonly PlayerKnowledge[] _knowledge;
     private readonly long[] _admittedConnectionIds = new long[Simulation.MaxPlayers];
     private readonly long[] _peerConnectionIds = new long[Simulation.MaxPlayers];
@@ -26,7 +27,7 @@ public sealed class SimulationHost : IDisposable
     public long DroppedCommandResults { get; private set; }
     public int ConnectedPlayerCount => _transport.ConnectedPlayerCount;
 
-    public SimulationHost(Simulation simulation, IServerTransport transport, MatchSetup? matchSetup = null)
+    public SimulationHost(Simulation simulation, IServerTransport transport, MatchSetup? matchSetup = null, int reservedBotPlayer = 0)
     {
         ArgumentNullException.ThrowIfNull(simulation);
         ArgumentNullException.ThrowIfNull(transport);
@@ -37,6 +38,7 @@ public sealed class SimulationHost : IDisposable
         _simulation = simulation;
         _transport = transport;
         _matchSetup = matchSetup;
+        _reservedBotPlayer = reservedBotPlayer;
         if (matchSetup?.PlayerTeams is { Length: > 0 } teams)
         {
             for (int p = 1; p <= teams.Length; p++)
@@ -59,11 +61,16 @@ public sealed class SimulationHost : IDisposable
             _simulation.SetPlayerAdmitted(initial, true);
         }
 
+        if (_reservedBotPlayer >= 1 && _reservedBotPlayer <= Simulation.MaxPlayers)
+        {
+            _simulation.SetPlayerAdmitted(_reservedBotPlayer, true);
+        }
+
         PublishAll();
     }
 
-    public SimulationHost(Simulation simulation, ITransport transport, int player = 1)
-        : this(simulation, CreateSingleTransport(simulation, transport, player), matchSetup: null)
+    public SimulationHost(Simulation simulation, ITransport transport, int player = 1, int reservedBotPlayer = 0)
+        : this(simulation, CreateSingleTransport(simulation, transport, player), matchSetup: null, reservedBotPlayer: reservedBotPlayer)
     {
     }
 
@@ -108,6 +115,7 @@ public sealed class SimulationHost : IDisposable
         while (_transport.TryReceive(out int player, out long connectionId, _receive, out int length))
         {
             if (length < 2 || player < 1 || player > Simulation.MaxPlayers) continue;
+            if (_reservedBotPlayer != 0 && player == _reservedBotPlayer) continue;
 
             byte kind = _receive[1];
             if (kind == WireProtocol.HandshakeRequestKind)
@@ -166,6 +174,12 @@ public sealed class SimulationHost : IDisposable
 
     private void HandleHandshake(int player, long connectionId, ReadOnlySpan<byte> message)
     {
+        if (_reservedBotPlayer != 0 && player == _reservedBotPlayer)
+        {
+            RejectHandshake(player, HandshakeReason.ServerFull);
+            return;
+        }
+
         if (!WireProtocol.TryReadHandshakeRequest(message, out MatchSetup clientSetup))
         {
             RejectHandshake(player, HandshakeReason.ProtocolVersionMismatch);
@@ -249,7 +263,8 @@ public sealed class SimulationHost : IDisposable
             Tick,
             knowledge.OwnUnits,
             knowledge.Contacts,
-            knowledge.Events);
+            knowledge.Events,
+            knowledge.Mission);
 
         bool sentSuccessfully = false;
         if (_transport is SinglePlayerServerTransport || length <= WireProtocol.MaxFragmentPayloadSize)

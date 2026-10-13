@@ -9,7 +9,7 @@ public sealed record MatchSetup(
     string RuleSetId,
     int[]? PlayerTeams = null)
 {
-    public const byte CurrentProtocolVersion = 6;
+    public const byte CurrentProtocolVersion = 8;
 
     public bool Matches(MatchSetup other)
     {

@@ -9,6 +9,7 @@ public sealed class LocalSession : IGameSession
     private readonly ClientSession _client;
 
     public ClientReplica Replica => _client.Replica;
+    public MissionObservation Mission => _client.Mission;
     public double RenderTick => _client.RenderTick;
     public int Tick => _host.Tick;
     public double LastTickMilliseconds => _host.LastTickMilliseconds;
@@ -21,12 +22,13 @@ public sealed class LocalSession : IGameSession
     public int AssignedPlayerId { get; }
     public string StatusDescription => "Local authoritative simulation / prototype terrain";
 
-    public LocalSession(Simulation simulation, int player = 1)
+    public LocalSession(Simulation simulation, int player = 1, int reservedBotPlayer = 0)
     {
         SimulationHost.ValidateConfiguration(simulation, player);
         AssignedPlayerId = player;
         (ITransport client, ITransport server) = InMemoryTransport.CreatePair(maxMessageSize: WireProtocol.MaxMessageSize);
-        _host = new SimulationHost(simulation, server, player);
+        int resolvedBot = reservedBotPlayer != 0 ? reservedBotPlayer : (simulation.IsPlayerAdmitted(2) ? 2 : 0);
+        _host = new SimulationHost(simulation, server, player, resolvedBot);
         _client = new ClientSession(client, replicaCapacity: simulation.Capacity);
     }
 

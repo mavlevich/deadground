@@ -23,7 +23,8 @@ internal static class ClientRegressionTests
             CheckCameraRig(scene);
             CheckDisplaySettings(scene);
             CheckCombatEffectsFramePacing(scene);
-            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health camera_rig display_settings combat_frame_pacing");
+            CheckMissionPanelLifecycle(scene);
+            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health camera_rig display_settings combat_frame_pacing mission_panel");
             return true;
         }
         catch (Exception exception)
@@ -487,6 +488,64 @@ internal static class ClientRegressionTests
 
             Require(MathF.Abs(effects.Tracers[0].Mesh.Scale.Z - initialDistance) < 0.05f,
                 "Tracer longitudinal scale Z deviated after low-fps update.");
+        }
+        finally
+        {
+            parent.QueueFree();
+        }
+    }
+
+    private static void CheckMissionPanelLifecycle(Node3D scene)
+    {
+        Node3D parent = new();
+        scene.AddChild(parent);
+        try
+        {
+            HeightMap map = HeightMap.CreatePrototype();
+            MissionPanel panel = new(parent, map);
+            parent.AddChild(panel);
+            panel.SetLocalMode(true);
+
+            // 1. Initial observation: InProgress
+            MissionObservation inProgress = new(
+                MissionId: 1,
+                Status: MissionStatus.InProgress,
+                EndReason: MissionEndReason.None,
+                TimeLimitTicks: 14400,
+                FinishedTick: 0,
+                TargetContactId: default,
+                SearchAreaCenter: new System.Numerics.Vector2(420f, 420f),
+                SearchAreaRadius: 70f,
+                Flags: 0);
+
+            panel.UpdateMission(inProgress, 100);
+            Require(!panel.IsMissionFinished, "Mission should not be marked finished while in progress.");
+
+            // 2. Target identified
+            MissionObservation identified = inProgress with
+            {
+                TargetContactId = new ContactId(501),
+                Flags = MissionObservation.FlagTargetIdentified
+            };
+            panel.UpdateMission(identified, 200);
+            Require(!panel.IsMissionFinished, "Mission should not be finished when target is only identified.");
+
+            // 3. Victory
+            MissionObservation victory = identified with
+            {
+                Status = MissionStatus.Victory,
+                EndReason = MissionEndReason.TargetDestroyed,
+                Flags = MissionObservation.FlagTargetIdentified | MissionObservation.FlagTargetDestroyed
+            };
+            panel.UpdateMission(victory, 300);
+            Require(panel.IsMissionFinished, "Mission should be marked finished on victory.");
+
+            // 4. Reset UI
+            panel.ResetUi();
+            Require(!panel.IsMissionFinished, "ResetUi should clear finished state.");
+
+            // 5. Cleanup
+            panel.Cleanup();
         }
         finally
         {

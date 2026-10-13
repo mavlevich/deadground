@@ -212,7 +212,15 @@ Rules:
 
 Clients see enemies only as contacts. A contact has its own `ContactId`, issued per side. Enemy `EntityId` values never reach a client, even for a fully identified unit. Otherwise a modified client could follow an identified tank by its ID after it hides again.
 
-A contact holds: detection level (detected, identified), estimated type and strength, last known position, last seen tick, and what the side may know about its state (for example "damaged", never exact health).
+A contact holds: detection level (`Detected`, `Identified`), classification (`Unknown`, `Vehicle`, `Tank`, `Recon`, `CommandVehicle`), last known position, last seen tick, and what the side may know about its state (for example "damaged", never exact health).
+
+Two-stage detection and identification:
+
+- A hostile unit entering visual line-of-sight within sensor range starts at `DetectionLevel.Detected` with `ContactClassification.Unknown`.
+- To reach `DetectionLevel.Identified`, an observer must maintain continuous line-of-sight to the unit within the observer unit's `identify_range` for at least `identify_ticks`.
+- Continuous line-of-sight requirement: if visual contact is broken, or if the unit leaves `identify_range` before the required duration is reached, the identification progress counter resets to zero.
+- Once identified, the contact classification is revealed (`Recon`, `Tank`, `CommandVehicle`).
+- When an identified contact is lost (`Current` becomes `LastKnown`) and subsequently re-correlated, its detection level resets to `Detected` and its classification resets to `Unknown`. A new period of continuous observation within identify range is required to confirm identity again.
 
 Contact lifecycle:
 
@@ -778,11 +786,22 @@ Implementation checkpoint:
   - Presentation effects in Godot: muzzle flash, smoke burst, vehicle recoil, tracer beam, impact effect, and synthesized firing audio.
   - Zero steady-state heap allocations during combat simulation ticks.
   - Prototype limitations for this slice: instantaneous shot resolution without physical projectile simulation, stationary firing only, fixed damage without armor penetration or deflection, no accuracy dispersion, visual tracers are visual effects only, and no persistent wreck obstacles yet.
+- Playable reconnaissance raid mission slice implemented in `Engine.Core`, `Engine.Net`, `Game.Rules.Ops`, and `Game.Godot`:
+  - Mission observation model (`IMissionSystem`, `MissionObservation`, `MissionStatus`, `MissionEndReason`) with privacy-preserving target representation.
+  - Termination rules: Victory upon destroying enemy command vehicle with recon vehicle preserved; Defeat on recon vehicle destroyed, all combat tanks destroyed, or 12:00 time limit expired. Defeat strictly takes precedence on simultaneous conditions. Immutability of announced results.
+  - Simulation command gating and halting: game systems halt movement and clear combat orders upon finish; subsequent client orders rejected.
+  - Server-side bot (`ReconRaidBot`) executing only through `PlayerKnowledge` and standard commands, rate-limited to 10 ticks (2 Hz), with deterministic target acquisition, stationary firing, approach, and bounded patrol retries. Reacts to unseen `TookFire` combat events and acknowledges events without leaking opponent state.
+  - Dedicated server hosting with reserved bot slot rejecting unauthorized clients (`HandshakeReason.ServerFull`).
+  - Wire protocol v8: 32-byte `MissionObservation` header in snapshots (status, end reason, time limit, finished tick, search area, detected contact id, flags) and 19-byte contact records (with `DetectionLevel` and `ContactClassification`). Target contact identity is resolved strictly via earned classification without truth links.
+  - Client UI in Godot: `MissionPanel` with briefing card, dynamic objective status, 3D search ring, end-game modal, and retry button.
+  - Complete local retry cycle (`LocalSession`) re-creating fresh simulation state and clearing visual effects without leaking memory or carrying over old contacts.
+  - Zero steady-state heap allocations during simulation ticks.
 - Revised M1 implementation order:
   - Visual reconnaissance and sensor line-of-sight (implemented).
   - Server-side static obstacle navigation prototype slice (implemented).
   - Server-authoritative direct-fire combat slice (implemented).
   - Hierarchical navigation for kilometer-scale maps (implemented).
+  - Playable reconnaissance raid mission (implemented).
   - Coarse cost layers, formations, multi-unit collisions, dynamic obstacles, and destruction.
   - Reconnect recovery, bots, and save/load.
 - Out of scope for M1 combat: artillery, missiles, aviation, armor penetration, suppression, building destruction, production, and logistics replenishment.
