@@ -27,6 +27,8 @@ internal sealed partial class MissionPanel : Control
 
     public event System.Action? RetryRequested;
     public bool IsMissionFinished => _hasFinished;
+    public Rect2 GetBriefingRect() => _briefingCard.Visible ? _briefingCard.GetGlobalRect() : default;
+    public Rect2 GetResultRect() => _resultCard.Visible ? _resultCard.GetGlobalRect() : default;
 
     public MissionPanel(Node3D parent3D, HeightMap map)
     {
