@@ -640,6 +640,32 @@ The AI sends normal commands and reads only its side's knowledge. Headless bot v
   - Independent `OrderNotification` displays queued or rejected orders for 3.0 seconds, independent of selection card updates.
 - Cached presentation state minimizes heap allocations during badge updates, refreshing label strings and styles only when contact state, role, or integer seconds elapsed change.
 
+### 18.5 Weapon and impact feedback
+
+- Event presentation semantics and information privacy:
+  - `ShotFired`: Presentation effect attached to firing unit only when observed by client. Queries shooter view for muzzle transform (`TryGetMuzzleTransform`); if present, spawns directional muzzle flash and expanding smoke puff aligned with weapon bore, and triggers local barrel recoil. If shooter is not in client view, effect begins from server-provided event origin without revealing hidden unit node.
+  - `TookFire`: Target hit feedback only (impact flash, spark burst, rising dust puff, metallic strike sound). Does not display synthetic muzzle flash or trace line from unseen firer, preserving shooter location secrecy.
+  - `UnitDestroyed`: Triggers distinct destruction explosion, temporary ground scorch residue, and destruction rumble. Cancels any pending in-flight cosmetic impacts within 3.0 m to avoid double-hitting dead vehicles. Live views are removed authoritatively via snapshots and never recreated or revived by visual effects.
+- Visual feedback components:
+  - Barrel recoil: Dedicated `BarrelRecoil` node translates along local +Z axis into turret mantlet (-0.35 m max displacement) and smoothly interpolates back to bind pose over ~0.10 s at 3.5 m/s. Fallback models displace `Model` node only. The `Root` node remains completely stationary, ensuring health bars, role badges, and selection rings never jolt.
+  - Directional muzzle flash: Unshaded bright yellow sphere scaled along firing vector (0.08 s lifetime, shrinks to zero).
+  - Muzzle smoke puff: Semi-transparent expanding smoke (0.40 s lifetime, drifts upward at 0.7 m/s, scales from 0.55 m to 1.7 m, fades alpha).
+  - Moving shell streak: Timed transient tracer mesh traveling along flight path at 160 m/s with compact 3.2 m streak length and bounded duration [0.08 s, 0.22 s]. Avoids full-length static laser lines across the map.
+  - Impact flash and sparks: Unshaded orange flash (0.16 s lifetime) and spark burst (0.20 s lifetime, 2.0 m/s upward velocity, 0.70 m radius).
+  - Impact dust and smoke: Expanding dust cloud (0.40 s lifetime, rises at 1.2 m/s, expands to 2.2 m).
+  - Destruction fireball: Large unshaded orange explosion sphere (0.60 s lifetime, rises at 0.9 m/s, scales up to 3.6 m radius).
+  - Ground scorch residue: Dark circular scorch disk (`CylinderMesh`, radius 1.9 m, height 0.02 m) clamped to terrain surface +0.03 m. Persists for 15.0 s, smoothly fading out over its final 4.0 s.
+- Dedicated object pooling and memory budget:
+  - Fixed pre-allocated pools: 16 Tracers, 16 Muzzle Flashes, 24 Smoke Puffs, 16 Sparks, 16 Impacts, 8 Explosions, 16 Ground Residues, 16 Pending Impacts, 6 Audio Players.
+  - Over-budget handling: Oldest active instance is reclaimed gracefully without visual pops or log errors.
+  - Zero heap allocations: All pool elements use pre-allocated node arrays and value-type struct slots (`TimedMesh`, `TimedTracer`, `PendingImpact`, `ActiveVoice`). The warmed update loop produces strictly 0 bytes of managed heap allocations.
+- Spatial audio and voice stealing:
+  - `AudioListener3D` is positioned at the camera ground focus point (`CameraRig.Focus`), completely eliminating volume loss from RTS camera altitude offset (~140 m) while maintaining horizontal stereo panning.
+  - Priority-based voice stealing: `Explosion (3) > Cannon (2) > TookFire (1)`. When all 6 audio channels are occupied, incoming requests can only preempt active voices of strictly lower priority; equal or lower priority requests are dropped cleanly without disrupting playing voices.
+  - Procedural sound synthesis: Synthesizes low-frequency cannon report, high-frequency metallic impact snap, and low rumble explosion, with random pitch variation (+-4%).
+- Frame pacing and stall resilience:
+  - Frame delta clamping and elapsed overshoot compensation prevent stuck effects or visual artifacts after large frame stalls or backgrounding. If overshoot exceeds effect lifetime during stalls, mesh instances are discarded immediately without spawning.
+
 ## 19. Rule sets and modularity
 
 A rule set is a list of systems plus data. Replaceable points:

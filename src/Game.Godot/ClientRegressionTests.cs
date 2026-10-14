@@ -26,7 +26,8 @@ internal static class ClientRegressionTests
             CheckCombatEffectsFramePacing(scene);
             CheckMissionPanelLifecycle(scene);
             CheckCombatReadability(scene);
-            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability");
+            CombatFeedbackRegressionTests.Run(scene);
+            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability combat_feedback");
             return true;
         }
         catch (Exception exception)
@@ -289,18 +290,20 @@ internal static class ClientRegressionTests
             Require(unitViews.Views[tank.Id].RecoilOffset != Vector3.Zero, "Shooter tank did not receive recoil.");
             Require(unitViews.Views[recon.Id].RecoilOffset == Vector3.Zero, "Adjacent recon vehicle wrongly received recoil.");
 
-            // Finding 6: Tracer longitudinal Z scale preserved during animation
-            float shotDist = new Vector3(20, 1.9f, 20).DistanceTo(new Vector3(40, 1.5f, 20));
-            Require(MathF.Abs(effects.Tracers[0].Mesh.Scale.Z - shotDist) < 0.05f,
-                $"Tracer initial scale Z was {effects.Tracers[0].Mesh.Scale.Z}, expected {shotDist}");
+            // Tracer shell streak preserves intended streak length, shot direction, and compact transverse scale
+            float streakLen = effects.Tracers[0].StreakLength;
+            Vector3 expectedDir = (new Vector3(40, 1.5f, 20) - effects.Tracers[0].Origin).Normalized();
+            Require(effects.Tracers[0].Direction.Dot(expectedDir) > 0.99f, "Tracer did not follow shot direction.");
+            Require(effects.Tracers[0].Mesh.Scale.Z > 0f && effects.Tracers[0].Mesh.Scale.Z <= streakLen,
+                $"Tracer initial scale Z was {effects.Tracers[0].Mesh.Scale.Z}, expected <= {streakLen}");
 
             effects.Update(0.05);
             unitViews.UpdateRecoil(0.05);
 
-            Require(MathF.Abs(effects.Tracers[0].Mesh.Scale.Z - shotDist) < 0.05f,
-                $"Tracer longitudinal scale Z collapsed to {effects.Tracers[0].Mesh.Scale.Z} after update, expected {shotDist}");
-            Require(effects.Tracers[0].Mesh.Scale.X < 1.0f,
-                "Tracer transverse scale was not scaled down during animation.");
+            Require(MathF.Abs(effects.Tracers[0].Mesh.Scale.Z - streakLen) < 0.05f,
+                $"Tracer longitudinal scale Z collapsed to {effects.Tracers[0].Mesh.Scale.Z} after update, expected {streakLen}");
+            Require(MathF.Abs(effects.Tracers[0].Mesh.Scale.X - CombatEffects.TracerThickness) < 0.01f,
+                $"Tracer transverse scale was {effects.Tracers[0].Mesh.Scale.X}, expected {CombatEffects.TracerThickness}");
 
             // Re-processing same event should deduplicate (no duplicate recoil)
             Vector3 tankRecoilBefore = unitViews.Views[tank.Id].RecoilOffset;
@@ -526,7 +529,7 @@ internal static class ClientRegressionTests
             effects.ProcessEvents(replica.Events, unitViews);
             Require(effects.Tracers[0].Active, "Tracer was not activated.");
 
-            float initialDistance = new Vector3(20, 1.9f, 20).DistanceTo(new Vector3(40, 1.5f, 20));
+            float expectedStreakLength = effects.Tracers[0].StreakLength;
 
             // Run updates at high frame rate (144 FPS -> dt = 1/144s)
             for (int i = 0; i < 5; i++)
@@ -535,14 +538,14 @@ internal static class ClientRegressionTests
                 unitViews.UpdateRecoil(1.0 / 144.0);
             }
 
-            Require(MathF.Abs(effects.Tracers[0].Mesh.Scale.Z - initialDistance) < 0.05f,
+            Require(MathF.Abs(effects.Tracers[0].Mesh.Scale.Z - expectedStreakLength) < 0.05f,
                 "Tracer longitudinal scale Z deviated during high-fps updates.");
 
             // Run update at low frame rate (30 FPS -> dt = 1/30s)
             effects.Update(1.0 / 30.0);
             unitViews.UpdateRecoil(1.0 / 30.0);
 
-            Require(MathF.Abs(effects.Tracers[0].Mesh.Scale.Z - initialDistance) < 0.05f,
+            Require(MathF.Abs(effects.Tracers[0].Mesh.Scale.Z - expectedStreakLength) < 0.05f,
                 "Tracer longitudinal scale Z deviated after low-fps update.");
         }
         finally

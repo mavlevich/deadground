@@ -21,6 +21,11 @@ internal sealed class UnitView
         Model = imported ?? new Node3D { Name = "PlaceholderModel" };
         Root.AddChild(Model);
         _turret = Model.FindChild("TurretYaw", recursive: true, owned: false) as Node3D;
+        _gunPitch = Model.FindChild("GunPitch", recursive: true, owned: false) as Node3D;
+        _barrelRecoil = Model.FindChild("BarrelRecoil", recursive: true, owned: false) as Node3D;
+        _muzzle = Model.FindChild("Muzzle", recursive: true, owned: false) as Node3D;
+        _barrelBindPosition = _barrelRecoil?.Position ?? Vector3.Zero;
+        _modelBindPosition = Model.Position;
         if (imported is null)
         {
             Model.AddChild(new MeshInstance3D
@@ -81,8 +86,39 @@ internal sealed class UnitView
 
     private readonly MeshInstance3D _healthBarBg;
     private readonly MeshInstance3D _healthBarFg;
-    private Vector3 _recoilOffset = Vector3.Zero;
-    public Vector3 RecoilOffset => _recoilOffset;
+    private readonly Node3D? _gunPitch;
+    private readonly Node3D? _barrelRecoil;
+    private readonly Node3D? _muzzle;
+    private readonly Vector3 _barrelBindPosition;
+    private readonly Vector3 _modelBindPosition;
+    private float _recoilAmount;
+    private Vector3 _fallbackRecoilOffset = Vector3.Zero;
+
+    public Vector3 RecoilOffset => _barrelRecoil is not null
+        ? new Vector3(0, 0, _recoilAmount)
+        : _fallbackRecoilOffset;
+
+    public bool TryGetMuzzleTransform(out Transform3D transform)
+    {
+        if (_muzzle is not null)
+        {
+            transform = _muzzle.GlobalTransform;
+            return true;
+        }
+        transform = default;
+        return false;
+    }
+
+    public bool TryGetMuzzlePosition(out Vector3 position)
+    {
+        if (_muzzle is not null)
+        {
+            position = _muzzle.GlobalPosition;
+            return true;
+        }
+        position = default;
+        return false;
+    }
 
     public void UpdatePosition(Vector3 position)
     {
@@ -95,7 +131,7 @@ internal sealed class UnitView
         }
         _previousPosition = position;
         _hasPosition = true;
-        Root.Position = position + _recoilOffset;
+        Root.Position = position;
     }
 
     public void AimAt(Vector3 observedPosition)
@@ -107,14 +143,49 @@ internal sealed class UnitView
         _turret.Rotation = new Vector3(0, Mathf.Wrap(worldYaw - Model.Rotation.Y, -Mathf.Pi, Mathf.Pi), 0);
     }
 
+    internal Vector3 TurretRotation => _turret?.Rotation ?? Vector3.Zero;
+
     public void ApplyRecoil(Vector3 shotDirection)
     {
-        _recoilOffset = -shotDirection.Normalized() * 0.35f;
+        if (_barrelRecoil is not null)
+        {
+            _recoilAmount = 0.35f;
+            _barrelRecoil.Position = _barrelBindPosition + new Vector3(0, 0, _recoilAmount);
+        }
+        else
+        {
+            _fallbackRecoilOffset = -shotDirection.Normalized() * 0.35f;
+            Model.Position = _modelBindPosition + _fallbackRecoilOffset;
+        }
     }
 
     public void UpdateRecoil(double delta)
     {
-        _recoilOffset = _recoilOffset.MoveToward(Vector3.Zero, (float)delta * 3.5f);
+        float dt = (float)delta;
+        if (_barrelRecoil is not null)
+        {
+            if (_recoilAmount > 0f)
+            {
+                _recoilAmount = Mathf.MoveToward(_recoilAmount, 0f, dt * 3.5f);
+                _barrelRecoil.Position = _barrelBindPosition + new Vector3(0, 0, _recoilAmount);
+            }
+        }
+        else if (_fallbackRecoilOffset != Vector3.Zero)
+        {
+            _fallbackRecoilOffset = _fallbackRecoilOffset.MoveToward(Vector3.Zero, dt * 3.5f);
+            Model.Position = _modelBindPosition + _fallbackRecoilOffset;
+        }
+    }
+
+    public void ResetRecoil()
+    {
+        _recoilAmount = 0f;
+        if (_barrelRecoil is not null)
+        {
+            _barrelRecoil.Position = _barrelBindPosition;
+        }
+        _fallbackRecoilOffset = Vector3.Zero;
+        Model.Position = _modelBindPosition;
     }
 
     public void UpdateHealth(int health, int maxHealth)
