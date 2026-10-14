@@ -4,7 +4,12 @@ namespace DeadGround.Engine.Net;
 
 public sealed class ClientReplica
 {
+    public const int EventCapacity = 128;
+
     private readonly SnapshotFrame[] _frames = new SnapshotFrame[8];
+    private readonly CombatEventObservation[] _eventBuffer = new CombatEventObservation[EventCapacity * 2];
+    private int _eventHead;
+    private int _eventCount;
     private SnapshotFrame _incoming;
     private int _next, _count;
     private SnapshotFrame Latest => _frames[(_next + _frames.Length - 1) % _frames.Length];
@@ -12,9 +17,19 @@ public sealed class ClientReplica
     public uint LatestSequence => _count == 0 ? 0 : Latest.Sequence;
     public ReadOnlySpan<OwnUnitObservation> OwnUnits => _count == 0 ? [] : Latest.Units.AsSpan(0, Latest.Count);
     public ReadOnlySpan<ContactObservation> Contacts => _count == 0 ? [] : Latest.Contacts.AsSpan(0, Latest.ContactCount);
-    public ReadOnlySpan<CombatEventObservation> Events => _count == 0 ? [] : Latest.Events.AsSpan(0, Latest.EventCount);
+    public ReadOnlySpan<CombatEventObservation> Events
+    {
+        get
+        {
+            if (_eventCount == 0) return [];
+            int start = _eventCount == EventCapacity ? _eventHead : 0;
+            return _eventBuffer.AsSpan(start, _eventCount);
+        }
+    }
     public int ContactCount => _count == 0 ? 0 : Latest.ContactCount;
-    public int EventCount => _count == 0 ? 0 : Latest.EventCount;
+    public int EventCount => _eventCount;
+    public ReadOnlySpan<CombatEventObservation> LatestSnapshotEvents => _count == 0 ? [] : Latest.Events.AsSpan(0, Latest.EventCount);
+    public int LatestSnapshotEventCount => _count == 0 ? 0 : Latest.EventCount;
     public MissionObservation LatestMission => _count == 0 ? default : Latest.Mission;
     public MissionObservation Mission => LatestMission;
 
@@ -57,7 +72,47 @@ public sealed class ClientReplica
         _incoming = spare;
         _next = (_next + 1) % _frames.Length;
         _count = Math.Min(_count + 1, _frames.Length);
+
+        SnapshotFrame applied = Latest;
+        for (int i = 0; i < applied.EventCount; i++)
+        {
+            AddEvent(applied.Events[i]);
+        }
         return true;
+    }
+
+    public void ClearEvents()
+    {
+        _eventCount = 0;
+        _eventHead = 0;
+    }
+
+    private void AddEvent(in CombatEventObservation ev)
+    {
+        if (ev.EventId != 0 && ContainsEvent(ev.EventId))
+        {
+            return;
+        }
+
+        int slot = _eventHead;
+        _eventBuffer[slot] = ev;
+        _eventBuffer[slot + EventCapacity] = ev;
+
+        _eventHead = (_eventHead + 1) % EventCapacity;
+        if (_eventCount < EventCapacity)
+        {
+            _eventCount++;
+        }
+    }
+
+    private bool ContainsEvent(uint id)
+    {
+        ReadOnlySpan<CombatEventObservation> span = Events;
+        for (int i = 0; i < span.Length; i++)
+        {
+            if (span[i].EventId == id) return true;
+        }
+        return false;
     }
 
     public Vector2 SamplePosition(EntityId id, double renderTick)

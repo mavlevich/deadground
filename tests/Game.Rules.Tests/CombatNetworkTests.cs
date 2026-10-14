@@ -332,7 +332,61 @@ public sealed class CombatNetworkTests
         int size3 = WireProtocol.WriteSnapshot(bytes, 3, 3, [ownUpdated], [], []);
         Assert.True(replica.TryApply(bytes.AsSpan(0, size3)));
         Assert.Equal(37, replica.OwnUnits[0].ReloadTicksRemaining);
-        Assert.Equal(0, replica.EventCount);
+        // Events accumulated in ring buffer are preserved across subsequent snapshots
+        Assert.Equal(1, replica.EventCount);
+        Assert.Equal(10u, replica.Events[0].EventId);
+        Assert.Equal(0, replica.LatestSnapshotEventCount);
+    }
+
+    [Fact]
+    public void CombatEvents_AccumulatedAcrossMultipleSnapshots_WithDeduplicationAndRingBuffer()
+    {
+        ClientReplica replica = new();
+        byte[] bytes = new byte[WireProtocol.MaxMessageSize];
+
+        CombatEventObservation ev1 = new(
+            EventId: 101, ServerTick: 1, Kind: CombatEventKind.ShotFired, PresentationId: 1,
+            Origin: new Vector3(10f, 0f, 10f), Target: new Vector3(30f, 0f, 10f));
+        CombatEventObservation ev2 = new(
+            EventId: 102, ServerTick: 1, Kind: CombatEventKind.TookFire, PresentationId: 1,
+            Origin: new Vector3(10f, 0f, 10f), Target: new Vector3(30f, 0f, 10f));
+        CombatEventObservation ev3 = new(
+            EventId: 103, ServerTick: 2, Kind: CombatEventKind.UnitDestroyed, PresentationId: 1,
+            Origin: default, Target: new Vector3(30f, 0f, 10f));
+        CombatEventObservation ev4 = new(
+            EventId: 104, ServerTick: 3, Kind: CombatEventKind.ShotFired, PresentationId: 1,
+            Origin: new Vector3(12f, 0f, 10f), Target: new Vector3(32f, 0f, 10f));
+
+        // Snapshot 1: ev1 and ev2
+        int size1 = WireProtocol.WriteSnapshot(bytes, 1, 1, [], [], [ev1, ev2]);
+        Assert.True(replica.TryApply(bytes.AsSpan(0, size1)));
+        Assert.Equal(2, replica.EventCount);
+        Assert.Equal(101u, replica.Events[0].EventId);
+        Assert.Equal(102u, replica.Events[1].EventId);
+
+        // Snapshot 2: ev3 only (e.g. frame stall or network burst delivers second snapshot before client frame processes events)
+        int size2 = WireProtocol.WriteSnapshot(bytes, 2, 2, [], [], [ev3]);
+        Assert.True(replica.TryApply(bytes.AsSpan(0, size2)));
+        Assert.Equal(3, replica.EventCount);
+        Assert.Equal(101u, replica.Events[0].EventId);
+        Assert.Equal(102u, replica.Events[1].EventId);
+        Assert.Equal(103u, replica.Events[2].EventId);
+
+        // Snapshot 3: duplicate ev2 and new ev4
+        int size3 = WireProtocol.WriteSnapshot(bytes, 3, 3, [], [], [ev2, ev4]);
+        Assert.True(replica.TryApply(bytes.AsSpan(0, size3)));
+        // ev2 is deduplicated, only ev4 added -> total 4 events
+        Assert.Equal(4, replica.EventCount);
+        Assert.Equal(101u, replica.Events[0].EventId);
+        Assert.Equal(102u, replica.Events[1].EventId);
+        Assert.Equal(103u, replica.Events[2].EventId);
+        Assert.Equal(104u, replica.Events[3].EventId);
+
+        // Snapshot 4: empty events does not discard accumulated events
+        int size4 = WireProtocol.WriteSnapshot(bytes, 4, 4, [], [], []);
+        Assert.True(replica.TryApply(bytes.AsSpan(0, size4)));
+        Assert.Equal(4, replica.EventCount);
+        Assert.Equal(0, replica.LatestSnapshotEventCount);
     }
 
     [Fact]

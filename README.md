@@ -302,6 +302,26 @@ python3 tools/model-authoring/build_vehicles.py
 
 See `src/Game.Godot/Assets/Vehicles/README.md` for geometry and presentation details.
 
+### Combat scenario and combat feedback
+
+To run the direct-fire combat scenario with tank and reconnaissance firefights:
+
+```sh
+./tools/run-client.sh -- --scenario combat
+```
+
+To run the automated combat feedback performance probe (measuring pool limits, steady 20 shots/sec load, 100-shot saturation burst, CPU work, and 0 warmed heap allocations):
+
+```sh
+./tools/run-client.sh -- --headless --combat-feedback-probe
+```
+
+To capture the high-resolution frame-by-frame combat feedback visual sequence (neutral aim, shot/recoil, shell flight, impact sparks, destruction fireball, ground residue):
+
+```sh
+./tools/run-client.sh -- --scenario combat --combat-feedback-capture <output_directory>
+```
+
 ### Line-of-sight sandbox
 
 To launch the standalone visual line-of-sight geometry sandbox:
@@ -483,6 +503,11 @@ Follow this checklist to verify an exported client interactively:
    - Contact representation: unknown contacts appear as neutral red diamonds without health bars; identified contacts display generic vehicle models with hostile ground brackets; last-known contacts hide live models and display frozen ghost markers with observation age.
    - Tactical selection card: bottom-left card displays unit health, armament status (distinguishing unarmed recon from empty tanks), reload countdown, and server attack execution status. Inspecting contacts shows state, classification, and age in seconds without leaking health or ammo.
    - Order notifications: persistent notifications (3.0s) show queued or rejected order results without being overwritten by selection card updates.
+9. Weapon and combat feedback:
+   - Firing presentation: select an armed tank and right-click an identified enemy contact. Confirm directional muzzle flash aligned with the gun barrel, localized barrel recoil into the turret mantlet returning smoothly to bind pose without displacing health bars or selection rings, and an expanding smoke puff.
+   - Shell streak: observe a transient moving shell streak (160 m/s, 3.2 m length, bounded flight duration [0.08s, 0.22s]) traveling from the muzzle to target, rather than a permanent laser beam.
+   - Impact feedback: hits against targets produce a brief orange impact flash, sparks rising upward, and an expanding dust/smoke cloud accompanied by distinct metallic impact audio.
+   - Destruction effect: destroyed vehicles produce a distinct large spherical explosion fireball and lingering ground scorch mark clamped to the terrain surface.
 
 ## Platforms
 

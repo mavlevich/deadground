@@ -48,7 +48,9 @@ public partial class Main : Node3D
     internal RoleBadgeOverlay RoleBadgeOverlay => _roleBadgeOverlay;
     internal UnitViewSet UnitViews => _unitViews;
     internal ContactViewSet ContactViews => _contactViews;
+    internal IGameSession Session => _session;
     internal UnitCatalog Catalog => _catalog;
+    internal CombatEffects CombatEffects => _combatEffects;
 
     public override void _Ready()
     {
@@ -90,7 +92,23 @@ public partial class Main : Node3D
             return;
         }
 
+        bool isCombatProbe = userArgs.Contains("--combat-feedback-probe") || allArgs.Contains("--combat-feedback-probe");
+        if (isCombatProbe)
+        {
+            SetProcess(false);
+            _ = CombatFeedbackProbe.Run(this).ContinueWith(task =>
+            {
+                if (task.IsFaulted)
+                {
+                    GD.PushError($"COMBAT_FEEDBACK_PROBE_FAULT: {task.Exception}");
+                    GetTree().Quit(1);
+                }
+            }, System.Threading.Tasks.TaskScheduler.Default);
+            return;
+        }
+
         string? connectTarget = null;
+        string? captureDir = null;
         int port = 7777;
 
         void ParseArgs(string[] args)
@@ -115,6 +133,16 @@ public partial class Main : Node3D
                 else if (args[i] == "--screenshot" && i + 1 < args.Length)
                 {
                     _screenshotPath = args[i + 1];
+                    i++;
+                }
+                else if (args[i] == "--screenshot-delay" && i + 1 < args.Length && double.TryParse(args[i + 1], System.Globalization.CultureInfo.InvariantCulture, out double delay))
+                {
+                    _screenshotTimer = delay;
+                    i++;
+                }
+                else if (args[i] == "--combat-feedback-capture" && i + 1 < args.Length)
+                {
+                    captureDir = args[i + 1];
                     i++;
                 }
             }
@@ -289,6 +317,18 @@ public partial class Main : Node3D
         BuildHud();
         UpdateViews();
         GD.Print($"M0_CLIENT_READY runtime={System.Environment.Version} own_units={_session.Replica.OwnUnits.Length}");
+
+        if (captureDir is not null)
+        {
+            _ = CombatFeedbackProbe.RunVisualCapture(this, captureDir).ContinueWith(task =>
+            {
+                if (task.IsFaulted)
+                {
+                    GD.PushError($"COMBAT_FEEDBACK_CAPTURE_FAULT: {task.Exception}");
+                    GetTree().Quit(1);
+                }
+            }, System.Threading.Tasks.TaskScheduler.Default);
+        }
     }
 
     private void SetupStructures(StaticGeometry geometry)
@@ -328,7 +368,8 @@ public partial class Main : Node3D
         UpdateViews();
         _unitViews.UpdateRecoil(delta);
         _combatEffects.Update(delta);
-        _combatEffects.ProcessEvents(_session.Replica.Events, _unitViews);
+        _combatEffects.ProcessEvents(_session.Replica.Events, _unitViews, _session.Tick);
+        _combatEffects.UpdateListener(_cameraRig.Focus);
         _missionPanel?.UpdateMission(_session.Mission, _session.Tick);
 
         _subtitle.Text = _session.StatusDescription;
