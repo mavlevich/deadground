@@ -1,0 +1,51 @@
+{
+  "asset": "T-62 alternative RTS visual study",
+  "configuration": "Basic T-62 with L-2G searchlight, rear drums and right fender fuel cells, no roof AA machine gun",
+  "units": "meters",
+  "up": "+Y",
+  "forward": "-Z",
+  "color_authoring": "sRGB hex converted to linear glTF factors",
+  "vertex_colors": "rgb: tint x baked ambient occlusion, a: dirt mask",
+  "reference_anchors": {
+    "hull_length_meters": 6.63,
+    "overall_length_gun_fwd_meters": 9.335,
+    "width_over_fenders_meters": 3.3,
+    "height_to_cupola_meters": 2.395,
+    "ground_clearance_meters": 0.43,
+    "road_wheels_per_side": 5
+  },
+  "lods": [
+    {
+      "file": "t62alt.glb",
+      "triangles": 24316,
+      "vertices": 32368,
+      "mesh_parts": 30,
+      "materials": 9,
+      "bytes": 2044488,
+      "lod": 0,
+      "track_pattern_cycle": 0.27581503187827555,
+      "role": "close"
+    },
+    {
+      "file": "t62alt_lod1.glb",
+      "triangles": 6705,
+      "vertices": 6380,
+      "mesh_parts": 28,
+      "materials": 9,
+      "bytes": 406072,
+      "lod": 1,
+      "role": "rts"
+    },
+    {
+      "file": "t62alt_lod2.glb",
+      "triangles": 1838,
+      "vertices": 2525,
+      "mesh_parts": 19,
+      "materials": 7,
+      "bytes": 151112,
+      "lod": 2,
+      "role": "distant"
+    }
+  ],
+  "track_wrap_meters": 956.8023455857378
+}
