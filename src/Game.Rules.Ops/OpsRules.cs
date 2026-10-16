@@ -96,13 +96,27 @@ public sealed record UnitDefinition(
     int IdentifyTicks = 80,
     string? Classification = null);
 
+public sealed record FactionData(string Id, string? Name = null);
+
 public sealed record UnitCatalog(
     int SchemaVersion,
     UnitDefinition[] Units,
     DetectionSettings? Detection = null,
-    WeaponData[]? Weapons = null)
+    WeaponData[]? Weapons = null,
+    FactionData[]? Factions = null)
 {
     public ulong ContentHash { get; init; }
+
+    public bool HasFaction(string id)
+    {
+        if (Factions is null) return false;
+        for (int i = 0; i < Factions.Length; i++)
+        {
+            if (string.Equals(Factions[i].Id, id, StringComparison.Ordinal))
+                return true;
+        }
+        return false;
+    }
 
     public UnitDefinition RequireDefinition(string id)
     {
@@ -280,6 +294,8 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
 [JsonSerializable(typeof(DetectionSettings))]
 [JsonSerializable(typeof(WeaponData))]
 [JsonSerializable(typeof(WeaponData[]))]
+[JsonSerializable(typeof(FactionData))]
+[JsonSerializable(typeof(FactionData[]))]
 [JsonSerializable(typeof(float[]))]
 internal partial class ContentJsonContext : JsonSerializerContext;
 
@@ -319,6 +335,16 @@ public static class PrototypeScenario
                 data.Detection.MaxGate <= 0)
             {
                 throw new InvalidOperationException("Invalid detection tuning parameters.");
+            }
+        }
+
+        if (data.Factions is not null)
+        {
+            HashSet<string> factionNames = new(StringComparer.Ordinal);
+            foreach (FactionData faction in data.Factions)
+            {
+                if (string.IsNullOrWhiteSpace(faction.Id) || !factionNames.Add(faction.Id))
+                    throw new InvalidOperationException("Invalid faction definition ID.");
             }
         }
 
@@ -438,6 +464,24 @@ public static class PrototypeScenario
 
     public static ulong ComputeCatalogHash() => LoadCatalog().ContentHash;
 
+    // Two-player scenarios: player 1 fields Soviet forces, player 2 US forces.
+    private static readonly string[] DefaultFactions = ["soviet", "us"];
+
+    public static IReadOnlyList<string> DefaultPlayerFactionIds => DefaultFactions;
+
+    // Per-player faction IDs for MatchSetup, or null for catalogs that define no factions.
+    public static string[]? CreatePlayerFactions(UnitCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        if (catalog.Factions is null) return null;
+        foreach (string id in DefaultFactions)
+        {
+            if (!catalog.HasFaction(id))
+                throw new InvalidOperationException($"Faction '{id}' is not defined in the unit catalog.");
+        }
+        return (string[])DefaultFactions.Clone();
+    }
+
     public static MatchSetup CreateMatchSetup(HeightMap map, string ruleSetId = "Ops", UnitCatalog? catalog = null)
     {
         catalog ??= LoadCatalog();
@@ -445,7 +489,8 @@ public static class PrototypeScenario
             MatchSetup.CurrentProtocolVersion,
             catalog.ContentHash,
             MatchSetup.ComputeMapHash(map),
-            ruleSetId);
+            ruleSetId,
+            PlayerFactions: PrototypeScenario.CreatePlayerFactions(catalog));
     }
 }
 
@@ -535,7 +580,8 @@ public static class VisibilityScenario
             MatchSetup.CurrentProtocolVersion,
             catalog.ContentHash,
             MatchSetup.ComputeMapHash(geometry),
-            ruleSetId);
+            ruleSetId,
+            PlayerFactions: PrototypeScenario.CreatePlayerFactions(catalog));
     }
 }
 
@@ -668,7 +714,8 @@ public static class NavigationScenario
             MatchSetup.CurrentProtocolVersion,
             catalog.ContentHash,
             MatchSetup.ComputeMapHash(geometry),
-            ruleSetId);
+            ruleSetId,
+            PlayerFactions: PrototypeScenario.CreatePlayerFactions(catalog));
     }
 }
 
@@ -799,7 +846,8 @@ public static class LargeNavigationScenario
             MatchSetup.CurrentProtocolVersion,
             catalog.ContentHash,
             MatchSetup.ComputeMapHash(geometry),
-            ruleSetId);
+            ruleSetId,
+            PlayerFactions: PrototypeScenario.CreatePlayerFactions(catalog));
     }
 }
 
@@ -878,6 +926,7 @@ public static class CombatScenario
             MatchSetup.CurrentProtocolVersion,
             catalog.ContentHash,
             MatchSetup.ComputeMapHash(geometry),
-            ruleSetId);
+            ruleSetId,
+            PlayerFactions: PrototypeScenario.CreatePlayerFactions(catalog));
     }
 }

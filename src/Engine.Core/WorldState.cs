@@ -31,7 +31,7 @@ public sealed class WorldState : IDisposable
         _playerTeams = new int[Simulation.MaxPlayers];
         for (int i = 0; i < _playerTeams.Length; i++)
         {
-            _playerTeams[i] = (i < playerTeams.Length && playerTeams[i] > 0) ? playerTeams[i] : i + 1;
+            _playerTeams[i] = MatchSetup.ResolveTeam(playerTeams, i + 1);
         }
     }
 

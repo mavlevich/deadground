@@ -405,6 +405,7 @@ public static class ReconRaidScenario
             MatchSetup.CurrentProtocolVersion,
             catalog.ContentHash,
             MatchSetup.ComputeMapHash(geometry),
-            ruleSetId);
+            ruleSetId,
+            PlayerFactions: PrototypeScenario.CreatePlayerFactions(catalog));
     }
 }
