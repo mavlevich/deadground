@@ -6,6 +6,11 @@ They are blockouts for testing silhouette readability, not historical replicas o
 - `tank.glb`: 1,936 triangles, 14 mesh surfaces, tracked hull and separate turret/gun pivots.
 - `recon.glb`: 920 triangles, 10 mesh surfaces, wheeled hull and separate optical head.
 - `visuals.json`: client presentation mapping keyed by the content unit ID, with initial visual scale 0.75.
+  An entry may override its scene per faction ID from the match setup under `factions.<id>`:
+  `scene`, `lods` (authored LOD1 and LOD2 scenes), `scale`, `track_gauge` (distance between track
+  centers in model meters; 0 or missing means static running gear) and `track_wrap` (the travel
+  wrap period from the asset manifest). `contact_tank` is the model for an identified enemy tank of
+  the hostile faction; it is not a unit ID and is never looked up through own-unit definitions.
 - `manifest.json`: generated geometry statistics and coordinate conventions.
 
 Regenerate the GLB files from the repository root with `python3 tools/model-authoring/build_vehicles.py`.
