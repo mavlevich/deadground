@@ -6,7 +6,7 @@ using Godot;
 namespace DeadGround.Client;
 
 internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int>? maxHealthProvider = null,
-    Func<ushort, string?>? unitIdProvider = null)
+    Func<ushort, string?>? unitIdProvider = null, Func<string?>? factionProvider = null)
 {
     internal Dictionary<EntityId, UnitView> Views { get; } = new();
     internal HashSet<EntityId> Selected { get; } = new();
@@ -14,11 +14,14 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
     private readonly List<EntityId> _removed = new(WireProtocol.MaxUnits);
     private readonly Func<ushort, int>? _maxHealthProvider = maxHealthProvider;
     private readonly Func<ushort, string?>? _unitIdProvider = unitIdProvider;
+    // Own faction from the match setup; read when a view is created, after the side is assigned.
+    private readonly Func<string?>? _factionProvider = factionProvider;
+    private float _cameraSize;
     private static readonly Lazy<UnitCatalog> DefaultCatalog = new(() => PrototypeScenario.LoadCatalog());
 
-    public UnitViewSet(Node3D parent, HeightMap map, UnitCatalog catalog)
+    public UnitViewSet(Node3D parent, HeightMap map, UnitCatalog catalog, Func<string?>? factionProvider = null)
         : this(parent, map, def => def < catalog.Units.Length ? catalog.Units[def].MaxHealth : 100,
-            def => def < catalog.Units.Length ? catalog.Units[def].Id : null)
+            def => def < catalog.Units.Length ? catalog.Units[def].Id : null, factionProvider)
     {
     }
 
@@ -43,7 +46,8 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
             if (!Views.TryGetValue(unit.Id, out UnitView? view))
             {
                 string? unitId = _unitIdProvider is null ? GetDefaultUnitId(unit.Definition) : _unitIdProvider(unit.Definition);
-                view = new UnitView(unitId);
+                view = new UnitView(unitId, _factionProvider?.Invoke());
+                view.UpdateLod(_cameraSize);
                 Views.Add(unit.Id, view);
                 parent.AddChild(view.Root);
             }
@@ -69,6 +73,13 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
             Views.Remove(id);
             Selected.Remove(id);
         }
+    }
+
+    internal void UpdateLod(float cameraSize)
+    {
+        _cameraSize = cameraSize;
+        foreach (UnitView view in Views.Values)
+            view.UpdateLod(cameraSize);
     }
 
     internal void UpdateRecoil(double delta)

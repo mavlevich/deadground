@@ -271,8 +271,10 @@ public partial class Main : Node3D
         _cameraRig.SetDefaultView(initialFocus, initialCameraSize);
 
         _catalog = PrototypeScenario.LoadCatalog();
-        _unitViews = new UnitViewSet(this, _map, _catalog);
-        _contactViews = new ContactViewSet(this, _map);
+        // Factions are part of the public match setup; the side is known once the session assigns it.
+        MatchSetup matchSetup = setup;
+        _unitViews = new UnitViewSet(this, _map, _catalog, () => matchSetup.GetPlayerFaction(_session.AssignedPlayerId));
+        _contactViews = new ContactViewSet(this, _map, () => matchSetup.GetHostileFaction(_session.AssignedPlayerId));
         _combatEffects = new CombatEffects(_map);
         AddChild(_combatEffects);
 
@@ -366,6 +368,7 @@ public partial class Main : Node3D
 
         _session.Advance(delta);
         UpdateViews();
+        _unitViews.UpdateLod(_cameraRig.Size);
         _unitViews.UpdateRecoil(delta);
         _combatEffects.Update(delta);
         _combatEffects.ProcessEvents(_session.Replica.Events, _unitViews, _session.Tick);

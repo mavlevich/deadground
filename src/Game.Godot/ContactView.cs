@@ -23,8 +23,11 @@ internal sealed class ContactView
     internal MeshInstance3D GhostBase => _ghostBase;
     internal ContactClassification CurrentModelClassification => _currentModelClassification;
 
-    public ContactView()
+    private readonly Func<string?>? _hostileFaction;
+
+    public ContactView(Func<string?>? hostileFaction = null)
     {
+        _hostileFaction = hostileFaction;
         _currentMaterial = new StandardMaterial3D
         {
             AlbedoColor = new Color("e04b36"),
@@ -104,7 +107,7 @@ internal sealed class ContactView
                 if (_currentModelClassification != contact.Classification)
                 {
                     ClearEnemyModel();
-                    _enemyModel = ContactVisualCatalog.InstantiateEnemyModel(contact.Classification);
+                    _enemyModel = ContactVisualCatalog.InstantiateEnemyModel(contact.Classification, _hostileFaction?.Invoke());
                     _currentModelClassification = contact.Classification;
                     if (_enemyModel is not null)
                     {

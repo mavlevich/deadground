@@ -7,14 +7,14 @@ namespace DeadGround.Client;
 // It is intentionally decoupled from own-unit definition IDs to prevent information leaks.
 internal static class ContactVisualCatalog
 {
-    private static PackedScene? _tankScene;
     private static PackedScene? _reconScene;
 
-    internal static Node3D? InstantiateEnemyModel(ContactClassification classification)
+    // hostileFaction comes from the public match setup, never from the contact itself.
+    internal static Node3D? InstantiateEnemyModel(ContactClassification classification, string? hostileFaction = null)
     {
         return classification switch
         {
-            ContactClassification.Tank => CreateEnemyTankModel(),
+            ContactClassification.Tank => CreateEnemyTankModel(hostileFaction),
             ContactClassification.Recon => CreateEnemyReconModel(),
             ContactClassification.CommandVehicle => CreateEnemyCommandVehicleModel(),
             ContactClassification.Vehicle => CreateEnemyGenericVehicleModel(),
@@ -22,16 +22,13 @@ internal static class ContactVisualCatalog
         };
     }
 
-    private static Node3D CreateEnemyTankModel()
+    private static Node3D CreateEnemyTankModel(string? hostileFaction)
     {
-        _tankScene ??= GD.Load<PackedScene>("res://Assets/Vehicles/tank.glb")
-            ?? throw new InvalidOperationException("Tank asset could not be loaded for enemy contact presentation.");
-
-        Node3D model = _tankScene.Instantiate<Node3D>();
-        model.Name = "EnemyTankModel";
-        model.Scale = Vector3.One * 0.75f;
-        AttachHostileAffiliationMarker(model);
-        return model;
+        VehicleVisual visual = VehicleVisualCatalog.InstantiateVisual("contact_tank", hostileFaction)
+            ?? throw new InvalidOperationException("visuals.json has no contact_tank entry for enemy tank presentation.");
+        visual.Root.Name = "EnemyTankModel";
+        AttachHostileAffiliationMarker(visual.Root);
+        return visual.Root;
     }
 
     private static Node3D CreateEnemyReconModel()
