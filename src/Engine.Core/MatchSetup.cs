@@ -7,7 +7,8 @@ public sealed record MatchSetup(
     ulong ContentHash,
     ulong MapHash,
     string RuleSetId,
-    int[]? PlayerTeams = null)
+    int[]? PlayerTeams = null,
+    string[]? PlayerFactions = null)
 {
     public const byte CurrentProtocolVersion = 8;
 
@@ -27,8 +28,51 @@ public sealed record MatchSetup(
                 return false;
         }
 
+        if (PlayerFactions is not null && other.PlayerFactions is not null)
+        {
+            if (PlayerFactions.Length != other.PlayerFactions.Length)
+                return false;
+            for (int i = 0; i < PlayerFactions.Length; i++)
+            {
+                if (!string.Equals(PlayerFactions[i], other.PlayerFactions[i], StringComparison.Ordinal))
+                    return false;
+            }
+        }
+
         return true;
     }
+
+    // Faction content ID for a player (1-based), or null when the match does not assign factions.
+    public string? GetPlayerFaction(int player) =>
+        PlayerFactions is not null && player >= 1 && player <= PlayerFactions.Length ? PlayerFactions[player - 1] : null;
+
+    // The single faction fielded by every hostile player, or null when there is none or more than one.
+    // Factions are public match information, so this reveals nothing beyond the setup header.
+    public string? GetHostileFaction(int player)
+    {
+        if (PlayerFactions is null || player < 1 || player > PlayerFactions.Length)
+            return null;
+        int ownTeam = GetTeam(player);
+        string? hostile = null;
+        for (int other = 1; other <= PlayerFactions.Length; other++)
+        {
+            if (other == player || GetTeam(other) == ownTeam)
+                continue;
+            string faction = PlayerFactions[other - 1];
+            if (hostile is null)
+                hostile = faction;
+            else if (!string.Equals(hostile, faction, StringComparison.Ordinal))
+                return null;
+        }
+        return hostile;
+    }
+
+    private int GetTeam(int player) => ResolveTeam(PlayerTeams, player);
+
+    // Team of a player (1-based): the assigned team when positive, otherwise the player's own team.
+    // WorldState uses the same rule, so client presentation and server hostility always agree.
+    public static int ResolveTeam(ReadOnlySpan<int> teams, int player) =>
+        player >= 1 && player <= teams.Length && teams[player - 1] > 0 ? teams[player - 1] : player;
 
     public static ulong ComputeMapHash(HeightMap map) => ComputeMapHash(map, ReadOnlySpan<OpaqueStructure>.Empty);
 

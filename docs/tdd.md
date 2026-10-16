@@ -542,6 +542,8 @@ Every save, replay and command log starts with the same header:
 
 Loading checks the header first. A mismatch is an explicit error, never a silent load with different rules or data. The network handshake uses the same header.
 
+Implemented now: `MatchSetup.PlayerFactions` holds one faction content ID per player, next to `PlayerTeams`. Scenarios assign `soviet` to player 1 and `us` to player 2, and fail if the catalog lacks either faction. Like teams, factions are compared when both setups carry them, but the network handshake does not send them yet. Factions are public match information: a client may use the enemy faction for presentation without learning anything a contact does not already reveal.
+
 ## 16. AI
 
 Three levels, each with its own rate:
@@ -557,6 +559,7 @@ The AI sends normal commands and reads only its side's knowledge. Headless bot v
 - Simulation definitions live in `content/` as JSON files, read with `System.Text.Json` source generators. Comments and trailing commas are allowed. Data: speed, armor, weapons, sensors, crew, capacity.
 - Presentation definitions live in the Godot project: model, materials, sounds, icon. They link to simulation definitions by `def_id`.
 - Roles and types are strings or tags from data, never engine enums.
+- Factions are data: `content/coldwar/units.json` lists them under `factions` (ID and display name). The catalog rejects blank or duplicate IDs.
 - Resource types (fuel, ammo) are defined in data.
 - Every data file has `schema_version`.
 - A test loads and validates all content.
