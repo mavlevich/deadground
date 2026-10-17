@@ -4,7 +4,7 @@ using Godot;
 
 namespace DeadGround.Client;
 
-internal sealed class ContactViewSet(Node3D parent, HeightMap map)
+internal sealed class ContactViewSet(Node3D parent, HeightMap map, Func<string?>? hostileFactionProvider = null)
 {
     internal Dictionary<ContactId, ContactView> Views { get; } = new();
     internal HashSet<ContactId> Selected { get; } = new();
@@ -19,7 +19,7 @@ internal sealed class ContactViewSet(Node3D parent, HeightMap map)
             _present.Add(contact.Id);
             if (!Views.TryGetValue(contact.Id, out ContactView? view))
             {
-                view = new ContactView();
+                view = new ContactView(hostileFactionProvider);
                 Views.Add(contact.Id, view);
                 parent.AddChild(view.Root);
             }

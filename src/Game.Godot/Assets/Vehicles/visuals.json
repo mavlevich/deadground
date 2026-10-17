@@ -1,10 +1,46 @@
 {
   "prototype_tank": {
     "scene": "res://Assets/Vehicles/tank.glb",
-    "scale": 0.75
+    "scale": 0.75,
+    "factions": {
+      "soviet": {
+        "scene": "res://Assets/Vehicles/T62Alt/t62alt.glb",
+        "lods": [
+          "res://Assets/Vehicles/T62Alt/t62alt_lod1.glb",
+          "res://Assets/Vehicles/T62Alt/t62alt_lod2.glb"
+        ],
+        "scale": 0.75,
+        "track_gauge": 2.72,
+        "track_wrap": 956.8023455857378
+      },
+      "us": {
+        "scene": "res://Assets/Vehicles/M60/m60.glb",
+        "lods": [
+          "res://Assets/Vehicles/M60/m60_lod1.glb",
+          "res://Assets/Vehicles/M60/m60_lod2.glb"
+        ],
+        "scale": 0.75,
+        "track_gauge": 2.92,
+        "track_wrap": 993.182877105738
+      }
+    }
   },
   "recon_vehicle": {
     "scene": "res://Assets/Vehicles/recon.glb",
     "scale": 0.75
+  },
+  "contact_tank": {
+    "scene": "res://Assets/Vehicles/tank.glb",
+    "scale": 0.75,
+    "factions": {
+      "soviet": {
+        "scene": "res://Assets/Vehicles/T62Alt/t62alt_lod1.glb",
+        "scale": 0.75
+      },
+      "us": {
+        "scene": "res://Assets/Vehicles/M60/m60_lod1.glb",
+        "scale": 0.75
+      }
+    }
   }
 }

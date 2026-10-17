@@ -42,7 +42,7 @@ public sealed class SimulationHost : IDisposable
         if (matchSetup?.PlayerTeams is { Length: > 0 } teams)
         {
             for (int p = 1; p <= teams.Length; p++)
-                simulation.SetPlayerTeam(p, teams[p - 1]);
+                simulation.SetPlayerTeam(p, MatchSetup.ResolveTeam(teams, p));
         }
         _knowledge = new PlayerKnowledge[Simulation.MaxPlayers];
 

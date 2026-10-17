@@ -542,6 +542,8 @@ Every save, replay and command log starts with the same header:
 
 Loading checks the header first. A mismatch is an explicit error, never a silent load with different rules or data. The network handshake uses the same header.
 
+Implemented now: `MatchSetup.PlayerFactions` holds one faction content ID per player, next to `PlayerTeams`. Scenarios assign `soviet` to player 1 and `us` to player 2, and fail if the catalog lacks either faction. Like teams, factions are compared when both setups carry them, but the network handshake does not send them yet. Factions are public match information: a client may use the enemy faction for presentation without learning anything a contact does not already reveal.
+
 ## 16. AI
 
 Three levels, each with its own rate:
@@ -557,6 +559,7 @@ The AI sends normal commands and reads only its side's knowledge. Headless bot v
 - Simulation definitions live in `content/` as JSON files, read with `System.Text.Json` source generators. Comments and trailing commas are allowed. Data: speed, armor, weapons, sensors, crew, capacity.
 - Presentation definitions live in the Godot project: model, materials, sounds, icon. They link to simulation definitions by `def_id`.
 - Roles and types are strings or tags from data, never engine enums.
+- Factions are data: `content/coldwar/units.json` lists them under `factions` (ID and display name). The catalog rejects blank or duplicate IDs.
 - Resource types (fuel, ammo) are defined in data.
 - Every data file has `schema_version`.
 - A test loads and validates all content.
@@ -572,7 +575,7 @@ The AI sends normal commands and reads only its side's knowledge. Headless bot v
 | Level | Distance | Rendering |
 |---|---|---|
 | LOD0 | up to about 150 m | Light `Node3D` per unit with parts (hull, turret, gun), visuals and audio only |
-| LOD1 | about 150 to 600 m | Simplified meshes, no wheel or track animation |
+| LOD1 | about 150 to 600 m | Simplified meshes, wheels turn in the vertex shader, no individual track links |
 | LOD2 | beyond about 600 m | `MultiMesh`, one mesh per unit type |
 | Strategic zoom | camera height | NATO-style symbols as instanced billboards |
 
@@ -615,7 +618,8 @@ The AI sends normal commands and reads only its side's knowledge. Headless bot v
 - Enemy contacts retain their existing knowledge-filtered markers. Unknown enemy types are
   never resolved through the own-unit visual mapping.
 - The client launchers import Godot assets before running. Export presets include the visual mapping.
-- Wheels, tracks, gun pitch, dedicated barrel recoil and destruction models remain future work.
+- Gun pitch, dedicated barrel recoil and destruction models remain future work. Faction tanks
+  turn their wheels and run their tracks (section 18.7); the prototype assets stay static.
   These assets are a first playable visual prototype, not a validated large-battle rendering budget.
 
 ### 18.4 Unit, contact, and combat readability
@@ -693,6 +697,32 @@ The isolated preview uses fitted orthographic cameras, gameplay camera sizes 38/
 optional scale/grid/comparison views, articulation and shot feedback. Normal mission
 visual mappings and authoritative simulation data are unchanged. These asset studies
 still require large-battle render validation before setting production GPU budgets.
+
+### 18.7 Faction tank presentation
+
+- Own tanks use the faction of their player from `MatchSetup`: player 1 (Soviet) gets the T-62,
+  player 2 (US) the M60A1. `visuals.json` holds per-faction overrides of a unit's scene, LODs and
+  track gauge. A match without factions, or an unknown faction, keeps the base prototype scene.
+- Identified enemy tank contacts use the RTS model of the single hostile faction from the setup
+  (`contact_tank` in `visuals.json`). The contact classification decides whether a model is shown at
+  all, as before; with mixed hostile factions the generic model is used.
+- Both tanks come from `tools/model-authoring` (`build_t62_alt.py`, `build_m60.py`, shared
+  `vehicle_kit.py`). Proportions were checked by overlaying orthographic renders on published 1:35
+  and dimensioned drawings. Vertex colors carry baked ambient occlusion and a dirt mask; markings are
+  textured decals projected onto the armor.
+- `Assets/Vehicles/Shared/vehicle_import.gd` puts the shared `vehicle_weathering.gdshader` on these
+  assets at import: procedural mottling, dirt, streaks, sun fade and, for the M60, MERDC Winter Verdant
+  camouflage, all without UVs. Import compression, automatic LODs and shadow meshes are disabled for
+  them because running gear meshes carry motion data in UV and UV2.
+- Each unit view holds the three authored LODs and switches by orthographic camera size: LOD0 below
+  45, LOD1 below 95, LOD2 beyond. Turret aim and barrel recoil are applied to every LOD.
+- Track motion is presentation only. The view accumulates travel per side from interpolated
+  displacement, with a turn differential from the change in inferred heading, clamped so heading snaps
+  do not spin the tracks. The travel goes to the shader as a per-instance parameter. Wheels rotate
+  about their axles; LOD0 track links move along the run and repeat seamlessly after one pattern cycle.
+  No nodes or draw calls are added for this.
+- LOD0 is about 24k triangles per tank and is visible at the close RTS zoom. A large-battle render
+  budget has not been measured yet.
 
 ## 19. Rule sets and modularity
 

@@ -1,0 +1,51 @@
+{
+  "asset": "M60A1 RTS visual study",
+  "configuration": "M60A1 with M19 cupola, AN/VSS-1 searchlight and bustle rack, no ERA or smoke dischargers",
+  "units": "meters",
+  "up": "+Y",
+  "forward": "-Z",
+  "color_authoring": "sRGB hex converted to linear glTF factors",
+  "reference_anchors": {
+    "hull_length_meters": 6.946,
+    "overall_length_gun_fwd_meters": 9.436,
+    "width_over_tracks_meters": 3.631,
+    "height_to_cupola_meters": 3.27,
+    "ground_clearance_meters": 0.46,
+    "road_wheels_per_side": 6,
+    "return_rollers_per_side": 3
+  },
+  "lods": [
+    {
+      "file": "m60.glb",
+      "triangles": 24194,
+      "vertices": 29491,
+      "mesh_parts": 29,
+      "materials": 8,
+      "bytes": 1861504,
+      "lod": 0,
+      "track_pattern_cycle": 0.1758156978413415,
+      "role": "close"
+    },
+    {
+      "file": "m60_lod1.glb",
+      "triangles": 7686,
+      "vertices": 6878,
+      "mesh_parts": 25,
+      "materials": 7,
+      "bytes": 432160,
+      "lod": 1,
+      "role": "rts"
+    },
+    {
+      "file": "m60_lod2.glb",
+      "triangles": 1906,
+      "vertices": 2853,
+      "mesh_parts": 19,
+      "materials": 6,
+      "bytes": 166384,
+      "lod": 2,
+      "role": "distant"
+    }
+  ],
+  "track_wrap_meters": 993.182877105738
+}
