@@ -346,6 +346,12 @@ To capture the high-resolution frame-by-frame combat feedback visual sequence (n
 ./tools/run-client.sh -- --scenario combat --combat-feedback-capture <output_directory>
 ```
 
+To capture vehicle effects (movement dust, muzzle blast dust, barrel smoke and hull rock):
+
+```sh
+./tools/run-client.sh -- --scenario combat --vehicle-effects-capture <output_directory>
+```
+
 ### Line-of-sight sandbox
 
 To launch the standalone visual line-of-sight geometry sandbox:

@@ -139,6 +139,12 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
             view.SetSelected(Selected.Contains(id));
     }
 
+    internal void UpdateEffects(double delta)
+    {
+        foreach (UnitView view in Views.Values)
+            view.UpdateEffects(delta);
+    }
+
     internal void UpdateRecoil(double delta)
     {
         foreach (UnitView view in Views.Values)

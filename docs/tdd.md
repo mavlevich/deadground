@@ -898,6 +898,36 @@ still require large-battle render validation before setting production GPU budge
 - Wheels use the same motion data as track wheels: they turn with the travel of their side, and the
   wrap period is a whole number of wheel turns.
 
+### 18.8 Vehicle effects
+
+- All vehicle effects are presentation only. They read the same events and interpolated positions
+  as the rest of the view and never feed back into the simulation.
+- Particles are `GpuParticles3D` emitters built in code (`ParticleEffects`): one procedural soft
+  round sprite, a color ramp and a size curve per effect, unshaded billboards that keep the
+  per-particle scale, soft edges against the ground, world-space emission and no shadows.
+- Muzzle blast dust: a `ShotFired` event raises a low fan of brown dust in front of the muzzle,
+  starting on the ground just behind it. Strength falls with muzzle height above the terrain and the dust
+  is skipped above 3.5 m. It starts at the same event origin as the muzzle flash, so it shows nothing
+  the flash does not already show.
+- Barrel smoke: gray gun gas drifts up from the muzzle for about 1.5 s after each shot.
+- Both shot effects use fixed pools of 6 emitters each in `CombatEffects`; the oldest is restarted
+  when all are busy. `Clear` stops them. Shot events older than 0.2 s skip them; younger events
+  fast-forward the particles by their age, like the muzzle flash.
+- All emitters share one draw pass (quad and material), and the shot effects share their process
+  materials. Movement dust only has its own emission box per vehicle type.
+- Hull rock: barrel recoil also starts a damped spring (1.8 Hz, damping ratio 0.28) that tilts the
+  model about the axis across the shot direction, so a shot over the front lifts the nose. The spring
+  runs in fixed 1/120 s substeps with a frame cap and settles back to the pure heading pose. `Root`
+  stays still, as with barrel recoil.
+- Movement dust: tracked vehicle models get one continuous emitter per side, sized from the bounds of
+  that side's running gear in LOD0. The emission rate follows the smoothed ground speed (full at
+  6 m/s), stops when the vehicle halts and is off at LOD2. A step longer than 2 m between two
+  position updates is a correction, not driving, and raises no dust.
+- `--vehicle-effects-capture <directory>` drives one tank, fires it and saves frames of the dust,
+  shot, blast and smoke for visual review.
+- Open rules questions, not implemented: whether a shot briefly reveals the shooter, and whether
+  muzzle dust briefly blinds the shooter on dry ground. Both need a TDD rules change first.
+
 ## 19. Rule sets and modularity
 
 A rule set is a list of systems plus data. Replaceable points:

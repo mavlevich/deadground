@@ -449,7 +449,7 @@ internal static class CombatFeedbackProbe
         }
     }
 
-    private static void SaveViewport(Main main, string path)
+    internal static void SaveViewport(Main main, string path)
     {
         Image? img = main.GetViewport().GetTexture().GetImage();
         if (img is null)

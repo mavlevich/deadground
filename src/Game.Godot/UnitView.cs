@@ -9,6 +9,14 @@ internal sealed class UnitView
     internal const float Lod2CameraSize = 95f;
     // A heading snap must not spin the tracks by more than this, in model meters.
     private const float MaxTurnTrackTravel = 0.5f;
+    // Hull rock after a shot: a damped spring about the axis across the shot direction.
+    private const float RockFrequencyHz = 1.8f;
+    private const float RockDamping = 0.28f;
+    private const float RockImpulse = 0.22f;
+    // Movement dust reaches full strength at this speed in world meters per second.
+    internal const float FullDustSpeed = 6f;
+    // A longer step between two position updates is a snap or correction, not driving.
+    internal const float MaxDustStep = 2f;
     private static readonly StringName TrackTravelParameter = "track_travel";
 
     // Animated nodes of one LOD. Every LOD follows the same turret, gun and recoil state.
@@ -37,6 +45,15 @@ internal sealed class UnitView
     private float _leftTrackTravel;
     private float _rightTrackTravel;
     private bool _hasHeading;
+    // Hull heading kept apart from Model.Rotation, which also carries the shot rock.
+    private float _heading;
+    private float _rockAngle;
+    private float _rockVelocity;
+    private Vector3 _rockAxis = Vector3.Right;
+    private readonly Vector3 _modelScale;
+    private readonly GpuParticles3D?[] _dust = new GpuParticles3D?[2];
+    private float _distanceSinceEffects;
+    private float _dustSpeed;
     private Vector3 _previousPosition;
     private bool _hasPosition;
     internal Node3D Model { get; }
@@ -46,6 +63,9 @@ internal sealed class UnitView
     internal int LodCount => _rigs.Length;
     internal float LeftTrackTravel => _leftTrackTravel;
     internal float RightTrackTravel => _rightTrackTravel;
+    internal float RockAngle => _rockAngle;
+    internal GpuParticles3D? LeftDust => _dust[0];
+    internal float DustSpeed => _dustSpeed;
 
     public UnitView(ushort definition = 0) : this(UnitViewSet.GetDefaultUnitId(definition)) { }
 
@@ -68,6 +88,8 @@ internal sealed class UnitView
         _muzzle = lod0.Muzzle;
         _barrelBindPosition = lod0.BarrelBindPosition;
         _modelBindPosition = Model.Position;
+        _modelScale = Model.Scale;
+        CreateDust(lod0);
         if (visual is null)
         {
             Model.AddChild(new MeshInstance3D
@@ -266,10 +288,13 @@ internal sealed class UnitView
             if (movement.LengthSquared() > 0.000001f)
             {
                 float heading = Mathf.Atan2(-movement.X, -movement.Z);
-                float turn = _hasHeading ? Mathf.Wrap(heading - Model.Rotation.Y, -Mathf.Pi, Mathf.Pi) : 0f;
-                Model.Rotation = new Vector3(0, heading, 0);
+                float turn = _hasHeading ? Mathf.Wrap(heading - _heading, -Mathf.Pi, Mathf.Pi) : 0f;
+                _heading = heading;
+                ApplyHullPose();
                 _hasHeading = true;
                 AdvanceTracks(movement.Length(), turn);
+                if (movement.Length() <= MaxDustStep)
+                    _distanceSinceEffects += movement.Length();
             }
         }
         _previousPosition = position;
@@ -283,7 +308,7 @@ internal sealed class UnitView
         Vector3 direction = observedPosition - _previousPosition;
         if (direction.X * direction.X + direction.Z * direction.Z <= 0.000001f) return;
         float worldYaw = Mathf.Atan2(-direction.X, -direction.Z);
-        _turretRotation = new Vector3(0, Mathf.Wrap(worldYaw - Model.Rotation.Y, -Mathf.Pi, Mathf.Pi), 0);
+        _turretRotation = new Vector3(0, Mathf.Wrap(worldYaw - _heading, -Mathf.Pi, Mathf.Pi), 0);
         _hasAim = true;
         foreach (Rig? rig in _rigs)
         {
@@ -300,6 +325,7 @@ internal sealed class UnitView
         {
             _recoilAmount = 0.35f;
             SetBarrelRecoil(_recoilAmount);
+            StartRock(shotDirection);
         }
         else
         {
@@ -324,10 +350,113 @@ internal sealed class UnitView
             _fallbackRecoilOffset = _fallbackRecoilOffset.MoveToward(Vector3.Zero, dt * 3.5f);
             Model.Position = _modelBindPosition + _fallbackRecoilOffset;
         }
+        UpdateRock(dt);
+    }
+
+    // The recoil pushes the trunnions back above the centre of mass, so the nose lifts and the
+    // hull rocks a few times on its suspension. Presentation only.
+    private void StartRock(Vector3 shotDirection)
+    {
+        Vector3 flat = new(shotDirection.X, 0f, shotDirection.Z);
+        if (flat.LengthSquared() < 0.0001f) return;
+        Vector3 local = flat.Normalized().Rotated(Vector3.Up, -_heading);
+        _rockAxis = local.Cross(Vector3.Up).Normalized();
+        _rockVelocity += RockImpulse;
+    }
+
+    private void UpdateRock(float dt)
+    {
+        if (_rockAngle == 0f && _rockVelocity == 0f) return;
+        float omega = Mathf.Tau * RockFrequencyHz;
+        // Small fixed substeps keep the spring stable after long frames.
+        float remaining = Mathf.Min(dt, 0.25f);
+        while (remaining > 0f)
+        {
+            float step = Mathf.Min(remaining, 1f / 120f);
+            _rockVelocity += (-omega * omega * _rockAngle - 2f * RockDamping * omega * _rockVelocity) * step;
+            _rockAngle += _rockVelocity * step;
+            remaining -= step;
+        }
+        if (Mathf.Abs(_rockAngle) < 0.0002f && Mathf.Abs(_rockVelocity) < 0.002f)
+        {
+            _rockAngle = 0f;
+            _rockVelocity = 0f;
+        }
+        ApplyHullPose();
+    }
+
+    private void ApplyHullPose()
+    {
+        if (_rockAngle == 0f)
+        {
+            Model.Rotation = new Vector3(0, _heading, 0);
+            return;
+        }
+        Model.Basis = new Basis(Vector3.Up, _heading) * new Basis(_rockAxis, _rockAngle);
+        Model.Scale = _modelScale;
+    }
+
+    // One dust emitter per side along the running gear, in world space so the dust stays behind.
+    private void CreateDust(Rig lod0)
+    {
+        for (int side = 0; side < 2; side++)
+        {
+            GeometryInstance3D[] meshes = side == 0 ? lod0.LeftMotion : lod0.RightMotion;
+            if (meshes.Length == 0) continue;
+            Aabb bounds = default;
+            bool first = true;
+            foreach (GeometryInstance3D mesh in meshes)
+            {
+                Aabb box = TransformTo(mesh, Model) * mesh.GetAabb();
+                bounds = first ? box : bounds.Merge(box);
+                first = false;
+            }
+            Vector3 center = bounds.GetCenter();
+            GpuParticles3D dust = ParticleEffects.CreateMovementDust(new Vector3(bounds.Size.X * 0.5f, 0.05f, bounds.Size.Z * 0.5f));
+            dust.Position = new Vector3(center.X, bounds.Position.Y + 0.4f, center.Z);
+            Model.AddChild(dust);
+            _dust[side] = dust;
+        }
+    }
+
+    private static Transform3D TransformTo(Node3D node, Node3D ancestor)
+    {
+        Transform3D result = Transform3D.Identity;
+        Node? current = node;
+        while (current is Node3D spatial && current != ancestor)
+        {
+            result = spatial.Transform * result;
+            current = current.GetParent();
+        }
+        return result;
+    }
+
+    // Dust follows the smoothed speed from position updates; it stops on the distant zoom.
+    internal void UpdateEffects(double delta)
+    {
+        float dt = (float)delta;
+        if (dt <= 0f) return;
+        float speed = _distanceSinceEffects / dt;
+        _distanceSinceEffects = 0f;
+        _dustSpeed = Mathf.Lerp(_dustSpeed, speed, 1f - Mathf.Exp(-6f * dt));
+        float ratio = Mathf.Clamp(_dustSpeed / FullDustSpeed, 0f, 1f);
+        bool show = ratio > 0.05f && _activeLod < 2;
+        foreach (GpuParticles3D? dust in _dust)
+        {
+            if (dust is null) continue;
+            // Each write is a RenderingServer call, so skip unchanged values.
+            if (show && Mathf.Abs(dust.AmountRatio - ratio) > 0.02f)
+                dust.AmountRatio = ratio;
+            if (dust.Emitting != show)
+                dust.Emitting = show;
+        }
     }
 
     public void ResetRecoil()
     {
+        _rockAngle = 0f;
+        _rockVelocity = 0f;
+        ApplyHullPose();
         _recoilAmount = 0f;
         if (_barrelRecoil is not null)
         {
