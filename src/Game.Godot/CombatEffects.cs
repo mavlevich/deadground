@@ -120,7 +120,10 @@ internal partial class CombatEffects : Node3D
     private readonly AudioStreamPlayer3D[] _audioPlayers = new AudioStreamPlayer3D[MaxAudioPlayers];
     private readonly ActiveVoice[] _activeVoices = new ActiveVoice[MaxAudioPlayers];
     private readonly AudioListener3D _audioListener;
-    private AudioStreamWav? _cannonAudio;
+    // A few seeds of the same gun report, so a series of shots does not repeat one sample.
+    public const int CannonVariantCount = 3;
+    private readonly AudioStreamWav[] _cannonVariants = new AudioStreamWav[CannonVariantCount];
+    internal AudioStreamWav[] CannonVariants => _cannonVariants;
     private AudioStreamWav? _tookFireAudio;
     private AudioStreamWav? _explosionAudio;
 
@@ -336,7 +339,8 @@ internal partial class CombatEffects : Node3D
 
     private void InitAudio()
     {
-        _cannonAudio = SynthesizeCannonSound();
+        for (int i = 0; i < CannonVariantCount; i++)
+            _cannonVariants[i] = CannonSound.CreateStream(1337 + i);
         _tookFireAudio = SynthesizeTookFireSound();
         _explosionAudio = SynthesizeExplosionSound();
 
@@ -350,65 +354,6 @@ internal partial class CombatEffects : Node3D
             AddChild(player);
             _audioPlayers[i] = player;
         }
-    }
-
-    private static AudioStreamWav SynthesizeCannonSound()
-    {
-        const int sampleRate = 44100;
-        const float duration = 1.4f;
-        int count = (int)(sampleRate * duration);
-        byte[] data = new byte[count * 2];
-        Random rand = new(1337);
-
-        float lpState = 0f;
-        float lpState2 = 0f;
-
-        for (int i = 0; i < count; i++)
-        {
-            float t = (float)i / sampleRate;
-
-            // 1. Initial supersonic crack & blast front (0-20ms)
-            float crackEnv = MathF.Exp(-t * 160.0f);
-            float crack = (((float)rand.NextDouble() * 2f - 1f) * 0.75f + MathF.Sin(2f * MathF.PI * 320.0f * MathF.Exp(-t * 90.0f) * t) * 0.6f) * crackEnv;
-
-            // 2. Main muzzle blast & breech pressure body (15-300ms)
-            float bodyEnv = MathF.Exp(-t * 9.5f);
-            float bodyFreq = 36.0f + 48.0f * MathF.Exp(-t * 22.0f);
-            float subBody = MathF.Sin(2f * MathF.PI * bodyFreq * t);
-            float punch = MathF.Sin(2f * MathF.PI * (bodyFreq * 1.5f) * t) * 0.4f;
-            float body = (subBody + punch) * bodyEnv;
-
-            // 3. Metallic gun mechanism / recoil clank (0-80ms)
-            float metalEnv = MathF.Exp(-t * 32.0f);
-            float metal = (MathF.Sin(2f * MathF.PI * 210.0f * t) * 0.4f +
-                           MathF.Sin(2f * MathF.PI * 540.0f * t) * 0.35f +
-                           MathF.Sin(2f * MathF.PI * 1120.0f * t) * 0.25f) * metalEnv;
-
-            // 4. Low-frequency rolling terrain thunder / tail (50ms - 1.4s)
-            float white = (float)rand.NextDouble() * 2f - 1f;
-            float cutoff = MathF.Max(0.015f, 0.14f * MathF.Exp(-t * 2.5f));
-            lpState += (white - lpState) * cutoff;
-            lpState2 += (lpState - lpState2) * cutoff;
-
-            float tailEnv = MathF.Pow(MathF.Sin(MathF.Min(1.0f, t / 0.08f) * (MathF.PI * 0.5f)), 2f) * MathF.Exp(-t * 3.4f) * 0.65f;
-            float tail = lpState2 * tailEnv;
-
-            // Sum layers with soft acoustic saturation
-            float raw = crack * 0.9f + body * 1.2f + metal * 0.45f + tail * 0.9f;
-            float sat = MathF.Tanh(raw * 1.6f) * 0.92f;
-
-            short pcm = (short)(sat * 30000);
-            data[i * 2] = (byte)(pcm & 0xFF);
-            data[i * 2 + 1] = (byte)((pcm >> 8) & 0xFF);
-        }
-
-        return new AudioStreamWav
-        {
-            Format = AudioStreamWav.FormatEnum.Format16Bits,
-            MixRate = sampleRate,
-            Stereo = false,
-            Data = data
-        };
     }
 
     private static AudioStreamWav SynthesizeTookFireSound()
@@ -656,7 +601,7 @@ internal partial class CombatEffects : Node3D
 
                 if (ageSeconds < 0.15f)
                 {
-                    PlaySound(_cannonAudio, origin, SoundPriority.Cannon);
+                    PlaySound(_cannonVariants[_presentationRng.Next(CannonVariantCount)], origin, SoundPriority.Cannon);
                 }
             }
             else if (ev.Kind == CombatEventKind.UnitDestroyed)
@@ -704,7 +649,7 @@ internal partial class CombatEffects : Node3D
         SpawnGunParticles(origin, shotDir);
         SpawnTracer(origin, target, flightDuration);
         QueuePendingImpact(target, flightDuration);
-        PlaySound(_cannonAudio, origin, SoundPriority.Cannon);
+        PlaySound(_cannonVariants[_presentationRng.Next(CannonVariantCount)], origin, SoundPriority.Cannon);
     }
 
     // Ground dust from the muzzle blast and gun gas drifting from the barrel. Presentation only.

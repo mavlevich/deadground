@@ -829,7 +829,7 @@ Planned controls (client only unless a section is named):
 - Spatial audio and voice stealing:
   - `AudioListener3D` is positioned at the camera ground focus point (`CameraRig.Focus`), completely eliminating volume loss from RTS camera altitude offset (~140 m) while maintaining horizontal stereo panning.
   - Priority-based voice stealing: `Explosion (3) > Cannon (2) > TookFire (1)`. When all 6 audio channels are occupied, incoming requests can only preempt active voices of strictly lower priority; equal or lower priority requests are dropped cleanly without disrupting playing voices.
-  - Procedural sound synthesis: Synthesizes low-frequency cannon report, high-frequency metallic impact snap, and low rumble explosion, with random pitch variation (+-4%).
+  - Procedural sound synthesis: `CannonSound` builds the cannon report from filtered noise: a blast wave, a short crack, a boom that sweeps from bright to dull, a short low thump, two quiet dull echoes and a rolling rumble over 3 s. There are no sine beeps, and most energy sits above 60 Hz so small speakers can play it. Three seeds give three variants, picked at random per shot. Metallic impact snap and explosion rumble are synthesized in `CombatEffects`. All sounds get random pitch variation (+-4%), and Godot's default distance filter on `AudioStreamPlayer3D` makes far shots duller.
 - Frame pacing and stall resilience:
   - Frame delta clamping and elapsed overshoot compensation prevent stuck effects or visual artifacts after large frame stalls or backgrounding. If overshoot exceeds effect lifetime during stalls, mesh instances are discarded immediately without spawning.
 
