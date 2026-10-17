@@ -40,6 +40,7 @@ internal sealed class UnitView
     private Vector3 _previousPosition;
     private bool _hasPosition;
     internal Node3D Model { get; }
+    internal string? UnitId { get; }
     internal bool HasVehicleModel { get; }
     internal int ActiveLod => _activeLod;
     internal int LodCount => _rigs.Length;
@@ -50,6 +51,7 @@ internal sealed class UnitView
 
     public UnitView(string? unitId, string? faction = null)
     {
+        UnitId = unitId;
         VehicleVisual? visual = VehicleVisualCatalog.InstantiateVisual(unitId, faction);
         HasVehicleModel = visual is not null;
         Model = visual?.Root ?? new Node3D { Name = "PlaceholderModel" };

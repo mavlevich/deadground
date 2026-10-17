@@ -21,7 +21,7 @@ internal sealed partial class SelectionCard : PanelContainer
     public SelectionCard(UnitCatalog catalog)
     {
         _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
-        MouseFilter = MouseFilterEnum.Ignore;
+        MouseFilter = MouseFilterEnum.Stop;
         CustomMinimumSize = new Vector2(360, 96);
 
         StyleBoxFlat style = new()
@@ -67,8 +67,52 @@ internal sealed partial class SelectionCard : PanelContainer
         UpdateEmpty();
     }
 
+    private static readonly string[] SingleUnitGroupTexts =
+    [
+        " (1 Unit)",
+        " (1 Unit, Group 1)",
+        " (1 Unit, Group 2)",
+        " (1 Unit, Group 3)",
+        " (1 Unit, Group 4)",
+        " (1 Unit, Group 5)",
+        " (1 Unit, Group 6)",
+        " (1 Unit, Group 7)",
+        " (1 Unit, Group 8)",
+        " (1 Unit, Group 9)"
+    ];
+
+    private enum DisplayMode { None, Empty, SingleUnit, MultipleUnits, Contact }
+    private DisplayMode _mode = DisplayMode.None;
+
+    // Single unit cached state
+    private EntityId _cachedSingleId;
+    private ushort _cachedSingleDef;
+    private ushort _cachedSingleHealth;
+    private ushort _cachedSingleAmmo;
+    private ushort _cachedSingleReloadTicks;
+    private AttackExecutionStatus _cachedSingleAttackStatus;
+    private ContactId _cachedSingleTargetContact;
+    private int _cachedSingleControlGroup = -1;
+
+    // Multiple units cached state
+    private int _cachedMultiTotal = -1;
+    private int _cachedMultiTanks = -1;
+    private int _cachedMultiRecons = -1;
+    private int _cachedMultiOthers = -1;
+    private int _cachedMultiGroup = -1;
+
+    // Contact cached state
+    private ContactId _cachedContactId;
+    private ContactState _cachedContactState;
+    private DetectionLevel _cachedContactLevel;
+    private ContactClassification _cachedContactClassification;
+    private int _cachedContactAgeKey = -1;
+
     public void UpdateEmpty()
     {
+        if (_mode == DisplayMode.Empty) return;
+        _mode = DisplayMode.Empty;
+
         _titleLabel.Text = "No Selection";
         _titleLabel.Modulate = new Color("a0a8b0");
         _line1Label.Text = "Left-click a friendly unit or enemy contact to inspect.";
@@ -76,13 +120,39 @@ internal sealed partial class SelectionCard : PanelContainer
         _line3Label.Text = string.Empty;
     }
 
-    public void UpdateSingleOwnUnit(OwnUnitObservation ownUnit)
+    public void UpdateSingleOwnUnit(OwnUnitObservation ownUnit, int controlGroup = 0)
     {
+        if (_mode == DisplayMode.SingleUnit &&
+            _cachedSingleId == ownUnit.Id &&
+            _cachedSingleDef == ownUnit.Definition &&
+            _cachedSingleHealth == ownUnit.Health &&
+            _cachedSingleAmmo == ownUnit.Ammunition &&
+            _cachedSingleReloadTicks == ownUnit.ReloadTicksRemaining &&
+            _cachedSingleAttackStatus == ownUnit.AttackStatus &&
+            _cachedSingleTargetContact == ownUnit.TargetContactId &&
+            _cachedSingleControlGroup == controlGroup)
+        {
+            return;
+        }
+
+        _mode = DisplayMode.SingleUnit;
+        _cachedSingleId = ownUnit.Id;
+        _cachedSingleDef = ownUnit.Definition;
+        _cachedSingleHealth = ownUnit.Health;
+        _cachedSingleAmmo = ownUnit.Ammunition;
+        _cachedSingleReloadTicks = ownUnit.ReloadTicksRemaining;
+        _cachedSingleAttackStatus = ownUnit.AttackStatus;
+        _cachedSingleTargetContact = ownUnit.TargetContactId;
+        _cachedSingleControlGroup = controlGroup;
+
         UnitDefinition? def = ownUnit.Definition < _catalog.Units.Length ? _catalog.Units[ownUnit.Definition] : null;
         string name = def is not null ? FormatUnitName(def.Id) : $"Unit #{ownUnit.Id.Value}";
         string role = def is not null ? GetRoleName(def) : "Combat Unit";
 
-        _titleLabel.Text = $"Friendly Unit #{ownUnit.Id.Value} - {name} [{role}]";
+        string groupText = (controlGroup >= 0 && controlGroup < SingleUnitGroupTexts.Length)
+            ? SingleUnitGroupTexts[controlGroup]
+            : (controlGroup > 0 ? $" (1 Unit, Group {controlGroup})" : " (1 Unit)");
+        _titleLabel.Text = $"Friendly Unit #{ownUnit.Id.Value} - {name} [{role}]{groupText}";
         _titleLabel.Modulate = new Color("5cd65c");
 
         int maxHealth = def?.MaxHealth ?? 100;
@@ -132,17 +202,47 @@ internal sealed partial class SelectionCard : PanelContainer
         };
     }
 
-    public void UpdateMultipleOwnUnits(int totalCount, int tankCount, int reconCount, int otherCount)
+    public void UpdateMultipleOwnUnits(int totalCount, int tankCount, int reconCount, int otherCount, int controlGroup = 0)
     {
-        _titleLabel.Text = $"Friendly Group - {totalCount} Units Selected";
+        if (_mode == DisplayMode.MultipleUnits &&
+            _cachedMultiTotal == totalCount &&
+            _cachedMultiTanks == tankCount &&
+            _cachedMultiRecons == reconCount &&
+            _cachedMultiOthers == otherCount &&
+            _cachedMultiGroup == controlGroup)
+        {
+            return;
+        }
+
+        _mode = DisplayMode.MultipleUnits;
+        _cachedMultiTotal = totalCount;
+        _cachedMultiTanks = tankCount;
+        _cachedMultiRecons = reconCount;
+        _cachedMultiOthers = otherCount;
+        _cachedMultiGroup = controlGroup;
+
+        _titleLabel.Text = controlGroup > 0
+            ? $"Friendly Group (Group {controlGroup}) - {totalCount} Units Selected"
+            : $"Friendly Group - {totalCount} Units Selected";
         _titleLabel.Modulate = new Color("5cd65c");
 
-        List<string> parts = new();
-        if (tankCount > 0) parts.Add($"{tankCount} {(tankCount == 1 ? "Tank" : "Tanks")}");
-        if (reconCount > 0) parts.Add($"{reconCount} Recon");
-        if (otherCount > 0) parts.Add($"{otherCount} Other");
+        string tankPart = tankCount > 0 ? $"{tankCount} {(tankCount == 1 ? "Tank" : "Tanks")}" : string.Empty;
+        string reconPart = reconCount > 0 ? $"{reconCount} Recon" : string.Empty;
+        string otherPart = otherCount > 0 ? $"{otherCount} Other" : string.Empty;
 
-        _line1Label.Text = $"Composition: {string.Join(", ", parts)}";
+        string composition;
+        if (tankPart.Length > 0 && reconPart.Length > 0 && otherPart.Length > 0)
+            composition = $"{tankPart}, {reconPart}, {otherPart}";
+        else if (tankPart.Length > 0 && reconPart.Length > 0)
+            composition = $"{tankPart}, {reconPart}";
+        else if (tankPart.Length > 0 && otherPart.Length > 0)
+            composition = $"{tankPart}, {otherPart}";
+        else if (reconPart.Length > 0 && otherPart.Length > 0)
+            composition = $"{reconPart}, {otherPart}";
+        else
+            composition = tankPart.Length > 0 ? tankPart : (reconPart.Length > 0 ? reconPart : otherPart);
+
+        _line1Label.Text = $"Composition: {composition}";
         _line2Label.Text = "Group selection active. Individual weapon readiness not aggregated.";
         _line2Label.Modulate = new Color("a0a8b0");
         _line3Label.Text = "Right-click terrain to move group, right-click enemy contact to attack.";
@@ -151,6 +251,25 @@ internal sealed partial class SelectionCard : PanelContainer
 
     public void UpdateContact(ContactObservation contact, int serverTick)
     {
+        int ageTicks = Math.Max(0, serverTick - contact.LastSeenTick);
+        int ageKey = ageTicks / 2;
+        if (_mode == DisplayMode.Contact &&
+            _cachedContactId == contact.Id &&
+            _cachedContactState == contact.State &&
+            _cachedContactLevel == contact.Level &&
+            _cachedContactClassification == contact.Classification &&
+            _cachedContactAgeKey == ageKey)
+        {
+            return;
+        }
+
+        _mode = DisplayMode.Contact;
+        _cachedContactId = contact.Id;
+        _cachedContactState = contact.State;
+        _cachedContactLevel = contact.Level;
+        _cachedContactClassification = contact.Classification;
+        _cachedContactAgeKey = ageKey;
+
         _titleLabel.Text = $"Enemy Contact #{contact.Id.Value}";
         _titleLabel.Modulate = new Color("ff4020");
 
@@ -163,7 +282,6 @@ internal sealed partial class SelectionCard : PanelContainer
         _line2Label.Text = $"Classification: {classStr}";
         _line2Label.Modulate = contact.Level == DetectionLevel.Identified ? new Color("ff8060") : new Color("e0a080");
 
-        int ageTicks = Math.Max(0, serverTick - contact.LastSeenTick);
         float ageSeconds = ageTicks / (float)Simulation.TickRate;
         string ageFormatted = ageSeconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
         string tacticalHint = contact.State == ContactState.Current

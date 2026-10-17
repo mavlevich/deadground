@@ -68,7 +68,8 @@ internal sealed partial class RoleBadgeOverlay : Control
             }
 
             string roleText = GetOwnUnitRoleText(obs.Definition);
-            badge.BindUnit(id, roleText);
+            int groupNumber = unitViews.GetLowestControlGroup(id);
+            badge.BindUnit(id, roleText, groupNumber);
 
             Vector3 worldPos = view.Root.Position + Vector3.Up * 2.8f;
             if (camera.IsPositionBehind(worldPos))
@@ -176,6 +177,9 @@ internal sealed partial class RoleBadgeOverlay : Control
 
         return false;
     }
+
+    internal RoleBadge? TryGetUnitBadge(EntityId id) =>
+        _unitBadges.GetValueOrDefault(id);
 
     public void Clear()
     {

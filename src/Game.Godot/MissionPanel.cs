@@ -40,7 +40,7 @@ internal sealed partial class MissionPanel : Control
         _briefingCard = new PanelContainer
         {
             Position = new Vector2(24, 156),
-            MouseFilter = MouseFilterEnum.Ignore
+            MouseFilter = MouseFilterEnum.Stop
         };
         _briefingCard.AddThemeStyleboxOverride("panel", HudCardStyle());
 

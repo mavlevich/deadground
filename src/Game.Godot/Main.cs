@@ -36,8 +36,11 @@ public partial class Main : Node3D
     private SelectionCard _selectionCard = null!;
     private OrderNotification _orderNotification = null!;
     private RoleBadgeOverlay _roleBadgeOverlay = null!;
+    private SelectionBoxOverlay _selectionBoxOverlay = null!;
+    private readonly SelectionController _selectionController = new();
     private PanelContainer _topHud = null!, _bottomHud = null!;
-    private readonly Rect2[] _occludingPanels = new Rect2[6];
+    private readonly Rect2[] _badgeOccludingPanels = new Rect2[6];
+    private readonly Rect2[] _inputOccludingPanels = new Rect2[5];
     private string? _screenshotPath;
     private double _screenshotTimer = 0.5;
 
@@ -46,6 +49,10 @@ public partial class Main : Node3D
     internal SelectionCard SelectionCard => _selectionCard;
     internal OrderNotification OrderNotification => _orderNotification;
     internal RoleBadgeOverlay RoleBadgeOverlay => _roleBadgeOverlay;
+    internal SelectionBoxOverlay SelectionBoxOverlay => _selectionBoxOverlay;
+    internal SelectionController SelectionController => _selectionController;
+    internal ReadOnlySpan<Rect2> InputOccludingPanels => _inputOccludingPanels;
+    internal ReadOnlySpan<Rect2> BadgeOccludingPanels => _badgeOccludingPanels;
     internal UnitViewSet UnitViews => _unitViews;
     internal ContactViewSet ContactViews => _contactViews;
     internal IGameSession Session => _session;
@@ -103,12 +110,6 @@ public partial class Main : Node3D
         }
 
         _smokeTest = userArgs.Contains("--smoke-test") || allArgs.Contains("--smoke-test");
-        if (_smokeTest && !ClientRegressionTests.Run(this))
-        {
-            SetProcess(false);
-            GetTree().Quit(1);
-            return;
-        }
 
         bool isCombatProbe = userArgs.Contains("--combat-feedback-probe") || allArgs.Contains("--combat-feedback-probe");
         if (isCombatProbe)
@@ -336,6 +337,14 @@ public partial class Main : Node3D
         AddChild(_destination);
         BuildHud();
         UpdateViews();
+
+        if (_smokeTest && !ClientRegressionTests.Run(this))
+        {
+            SetProcess(false);
+            GetTree().Quit(1);
+            return;
+        }
+
         GD.Print($"M0_CLIENT_READY runtime={System.Environment.Version} own_units={_session.Replica.OwnUnits.Length}");
 
         if (captureDir is not null)
@@ -395,57 +404,19 @@ public partial class Main : Node3D
         _combatEffects.UpdateListener(_cameraRig.Focus);
         _missionPanel?.UpdateMission(_session.Mission, _session.Tick);
 
-        _subtitle.Text = _session.StatusDescription;
-        if (_title is not null)
+        if (!string.Equals(_subtitle.Text, _session.StatusDescription, StringComparison.Ordinal))
         {
+            _subtitle.Text = _session.StatusDescription;
+        }
+        if (_title is not null && (_session.AssignedPlayerId != _lastTitlePlayerId || _scenario != _lastTitleScenario))
+        {
+            _lastTitlePlayerId = _session.AssignedPlayerId;
+            _lastTitleScenario = _scenario;
             _title.Text = FormatTitle(_session.AssignedPlayerId, _scenario);
         }
 
         _orderNotification?.Update(delta);
-
-        if (_unitViews.Selected.Count == 1)
-        {
-            EntityId selId = _unitViews.Selected.First();
-            if (_session.Replica.TryGetOwnUnit(selId, out OwnUnitObservation ownUnit))
-            {
-                _selectionCard?.UpdateSingleOwnUnit(ownUnit);
-                _status.Text = $"Unit #{ownUnit.Id.Value} selected / RMB terrain to move, RMB enemy to attack";
-            }
-        }
-        else if (_unitViews.Selected.Count > 1)
-        {
-            int tanks = 0, recons = 0, others = 0;
-            foreach (EntityId id in _unitViews.Selected)
-            {
-                if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation u))
-                {
-                    if (u.Definition < _catalog.Units.Length)
-                    {
-                        string cls = _catalog.Units[u.Definition].Classification ?? string.Empty;
-                        if (cls.Equals("tank", StringComparison.OrdinalIgnoreCase)) tanks++;
-                        else if (cls.Equals("recon", StringComparison.OrdinalIgnoreCase)) recons++;
-                        else others++;
-                    }
-                    else others++;
-                }
-            }
-            _selectionCard?.UpdateMultipleOwnUnits(_unitViews.Selected.Count, tanks, recons, others);
-            _status.Text = $"{_unitViews.Selected.Count} units selected / RMB terrain to move, RMB enemy to attack";
-        }
-        else if (_contactViews.Selected.Count > 0)
-        {
-            ContactId firstSelected = _contactViews.Selected.First();
-            if (_contactViews.Views.TryGetValue(firstSelected, out ContactView? cv))
-            {
-                _selectionCard?.UpdateContact(cv.Observation, _session.Tick);
-                _status.Text = $"Contact #{cv.Observation.Id.Value} selected / Right-click with armed tank to attack";
-            }
-        }
-        else
-        {
-            _selectionCard?.UpdateEmpty();
-            _status.Text = "No units selected / Left-click unit or contact to inspect";
-        }
+        UpdateSelectionPresentation();
 
         if (_session.LastCommandResult is { } result && result.Sequence != _lastCommandResult)
         {
@@ -461,13 +432,8 @@ public partial class Main : Node3D
 
         if (_roleBadgeOverlay is not null && _topHud is not null && _bottomHud is not null && _selectionCard is not null)
         {
-            _occludingPanels[0] = _topHud.GetGlobalRect();
-            _occludingPanels[1] = _bottomHud.GetGlobalRect();
-            _occludingPanels[2] = _selectionCard.GetGlobalRect();
-            _occludingPanels[3] = _orderNotification is { Visible: true } ? _orderNotification.GetGlobalRect() : default;
-            _occludingPanels[4] = _settingsPanel.IsOpen ? _settingsPanel.GetContainerRect() : default;
-            _occludingPanels[5] = _missionPanel is not null ? (_missionPanel.IsMissionFinished ? _missionPanel.GetResultRect() : _missionPanel.GetBriefingRect()) : default;
-            _roleBadgeOverlay.UpdateBadges(_camera, _camera.Size, _unitViews, _contactViews, _session.Replica, _session.Tick, _occludingPanels);
+            RefreshOccludingPanels();
+            _roleBadgeOverlay.UpdateBadges(_camera, _camera.Size, _unitViews, _contactViews, _session.Replica, _session.Tick, _badgeOccludingPanels);
         }
 
         long frameEndTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -550,10 +516,33 @@ public partial class Main : Node3D
         }
     }
 
+    public override void _Input(InputEvent @event)
+    {
+        if (!_selectionController.IsPointerDown)
+            return;
+
+        if (_settingsPanel.IsOpen)
+        {
+            CancelActiveDrag();
+            return;
+        }
+
+        if (@event is InputEventMouseMotion motion)
+        {
+            HandleLeftMouseMotion(motion.Position);
+        }
+        else if (@event is InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: false } release)
+        {
+            HandleLeftMouseRelease(release.Position, release.ShiftPressed);
+            GetViewport().SetInputAsHandled();
+        }
+    }
+
     public override void _UnhandledInput(InputEvent @event)
     {
         if (_settingsPanel.IsOpen)
         {
+            CancelActiveDrag();
             if (@event is InputEventKey { Pressed: true, Echo: false } openKey)
             {
                 if (openKey.Keycode == Key.Escape)
@@ -604,6 +593,7 @@ public partial class Main : Node3D
         {
             if (key.Keycode is Key.F10 or Key.O)
             {
+                CancelActiveDrag();
                 _settingsPanel.Toggle();
                 GetViewport().SetInputAsHandled();
                 return;
@@ -611,8 +601,10 @@ public partial class Main : Node3D
 
             if (key.Keycode == Key.Escape)
             {
+                CancelActiveDrag();
                 _unitViews.Selected.Clear();
                 _contactViews.Selected.Clear();
+                _unitViews.UpdateSelectionVisuals();
                 _status.Text = "No units selected";
                 return;
             }
@@ -623,32 +615,45 @@ public partial class Main : Node3D
                 return;
             }
 
-            if (_scenario == "navigation-large" && _unitViews.Selected.Count > 0)
+            if (_scenario == "navigation-large" && _unitViews.Selected.Count > 0 &&
+                TryGetNavigationLargeDebugTarget(key.Keycode, key.AltPressed, key.CtrlPressed || key.MetaPressed, key.ShiftPressed, out NumericsVector2 testTarget))
             {
-                NumericsVector2? testTarget = key.Keycode switch
+                foreach (EntityId id in _unitViews.Selected)
                 {
-                    Key.Key1 => new NumericsVector2(350f, 350f),
-                    Key.Key2 => new NumericsVector2(1050f, 550f),
-                    Key.Key3 => new NumericsVector2(1201.1f, 580f),
-                    Key.Key4 => new NumericsVector2(1440f, 1440f),
-                    Key.Key5 => new NumericsVector2(1650f, 750f),
-                    Key.Key6 => new NumericsVector2(500f, 200f),
-                    _ => null
-                };
-
-                if (testTarget is not null)
-                {
-                    foreach (EntityId id in _unitViews.Selected)
-                    {
-                        _session.Move(id, testTarget.Value);
-                    }
-                    _status.Text = $"Route target set to {testTarget.Value}";
+                    _session.Move(id, testTarget);
                 }
+                _status.Text = $"Route target set to {testTarget}";
+                return;
             }
 
-            if (key.Keycode == Key.F && _unitViews.Selected.Count > 0 && _contactViews.Selected.Count > 0)
+            GroupKeyAction groupAction = SelectionController.ClassifyGroupKey(
+                key.Keycode, key.CtrlPressed, key.MetaPressed, key.ShiftPressed, key.AltPressed, out int groupNumber);
+            if (groupAction != GroupKeyAction.None)
             {
-                ContactId target = _contactViews.Selected.First();
+                switch (groupAction)
+                {
+                    case GroupKeyAction.Store:
+                        _selectionController.StoreControlGroup(_unitViews, groupNumber);
+                        UpdateSelectionPresentation();
+                        break;
+                    case GroupKeyAction.Add:
+                        _selectionController.AddToControlGroup(_unitViews, groupNumber);
+                        UpdateSelectionPresentation();
+                        break;
+                    case GroupKeyAction.Recall:
+                        double nowSeconds = Time.GetTicksUsec() / 1_000_000.0;
+                        if (_selectionController.RecallControlGroup(_unitViews, _contactViews, _cameraRig, groupNumber, nowSeconds, out _))
+                        {
+                            _unitViews.UpdateSelectionVisuals();
+                            UpdateSelectionPresentation();
+                        }
+                        break;
+                }
+                return;
+            }
+
+            if (key.Keycode == Key.F && _unitViews.Selected.Count > 0 && TryGetFirstSelectedContact(out ContactId target))
+            {
                 int totalUnits = _unitViews.Selected.Count;
                 int sent = 0;
                 foreach (EntityId id in _unitViews.Selected)
@@ -663,9 +668,22 @@ public partial class Main : Node3D
                 _orderNotification?.ShowNotification(attackMsg);
                 _status.Text = attackMsg;
             }
+            return;
         }
 
-        if (@event is not InputEventMouseButton { Pressed: true } mouse) return;
+        if (@event is not InputEventMouseButton mouse) return;
+
+        if (mouse.ButtonIndex == MouseButton.Left && !mouse.Pressed)
+        {
+            if (_selectionController.IsPointerDown)
+            {
+                HandleLeftMouseRelease(mouse.Position, mouse.ShiftPressed);
+            }
+            return;
+        }
+
+        if (!mouse.Pressed) return;
+
         if (mouse.ButtonIndex is MouseButton.WheelUp or MouseButton.WheelDown)
         {
             if (mouse.ButtonIndex == MouseButton.WheelUp) _cameraRig.ZoomIn();
@@ -675,74 +693,20 @@ public partial class Main : Node3D
 
         if (mouse.ButtonIndex == MouseButton.Left)
         {
-            EntityId? nearestUnit = null;
-            ContactId? nearestContact = null;
-
-            if (_roleBadgeOverlay.TryHitBadge(mouse.Position, out EntityId? badgeUnit, out ContactId? badgeContact))
+            RefreshOccludingPanels();
+            if (_selectionController.BeginPress(mouse.Position, mouse.ShiftPressed, mouse.DoubleClick, _inputOccludingPanels))
             {
-                if (badgeContact is not null) nearestContact = badgeContact;
-                else if (badgeUnit is not null) nearestUnit = badgeUnit;
+                _selectionBoxOverlay?.HideBox();
             }
-
-            if (nearestUnit is null && nearestContact is null)
-            {
-                float nearestUnitDistance = 24 * 24;
-                foreach ((EntityId id, UnitView view) in _unitViews.Views)
-                {
-                    Vector3 center = view.Root.Position + Vector3.Up;
-                    if (_camera.IsPositionBehind(center)) continue;
-                    float distance = _camera.UnprojectPosition(center).DistanceSquaredTo(mouse.Position);
-                    if (distance < nearestUnitDistance) { nearestUnitDistance = distance; nearestUnit = id; }
-                }
-
-                float nearestContactDistance = 24 * 24;
-                foreach ((ContactId id, ContactView view) in _contactViews.Views)
-                {
-                    Vector3 center = view.Root.Position + Vector3.Up * 1.5f;
-                    if (_camera.IsPositionBehind(center)) continue;
-                    float distance = _camera.UnprojectPosition(center).DistanceSquaredTo(mouse.Position);
-                    if (distance < nearestContactDistance) { nearestContactDistance = distance; nearestContact = id; }
-                }
-
-                if (nearestContact is not null && nearestUnit is not null && nearestContactDistance > nearestUnitDistance)
-                {
-                    nearestContact = null;
-                }
-            }
-
-            if (nearestContact is not null)
-            {
-                _unitViews.Selected.Clear();
-                if (!mouse.ShiftPressed) _contactViews.Selected.Clear();
-                _contactViews.Selected.Add(nearestContact.Value);
-
-                if (_contactViews.Views.TryGetValue(nearestContact.Value, out ContactView? cv))
-                {
-                    string kind = cv.Observation.State == ContactState.Current ? "Current observation" : "Last-known marker";
-                    int ageTicks = Math.Max(0, _session.Tick - cv.Observation.LastSeenTick);
-                    float ageSeconds = ageTicks / (float)Simulation.TickRate;
-                    _status.Text = $"Enemy Contact #{cv.Observation.Id.Value}: {kind} (age: {ageSeconds:F1}s) / right-click with tank selected to attack";
-                }
-            }
-            else if (nearestUnit is not null)
-            {
-                _contactViews.Selected.Clear();
-                if (!mouse.ShiftPressed) _unitViews.Selected.Clear();
-                _unitViews.Selected.Add(nearestUnit.Value);
-                _status.Text = $"{_unitViews.Selected.Count} selected / RMB contact to attack, RMB terrain to move";
-            }
-            else
-            {
-                if (!mouse.ShiftPressed)
-                {
-                    _unitViews.Selected.Clear();
-                    _contactViews.Selected.Clear();
-                    _status.Text = "No units selected";
-                }
-            }
+            return;
         }
+
         if (mouse.ButtonIndex == MouseButton.Right)
         {
+            RefreshOccludingPanels();
+            if (SelectionController.IsPointOccluded(mouse.Position, _inputOccludingPanels))
+                return;
+
             if (_unitViews.Selected.Count > 0)
             {
                 ContactId? targetContact = null;
@@ -811,6 +775,242 @@ public partial class Main : Node3D
         }
     }
 
+    private void HandleLeftMouseMotion(Vector2 position)
+    {
+        if (_selectionController.UpdateDrag(position))
+        {
+            _selectionBoxOverlay?.ShowBox(_selectionController.CurrentBoxRect);
+        }
+        else
+        {
+            _selectionBoxOverlay?.HideBox();
+        }
+    }
+
+    private void HandleLeftMouseRelease(Vector2 position, bool shiftPressed)
+    {
+        _selectionBoxOverlay?.HideBox();
+        Vector2 viewportSize = GetViewport().GetVisibleRect().Size;
+        SelectionReleaseKind kind = _selectionController.CompleteRelease(
+            _camera,
+            _unitViews,
+            _contactViews,
+            _roleBadgeOverlay,
+            position,
+            viewportSize,
+            shiftPressed,
+            out _,
+            out _);
+
+        if (kind is SelectionReleaseKind.BoxSelect or SelectionReleaseKind.ClickSelect or SelectionReleaseKind.DoubleClickSelect)
+        {
+            _unitViews.UpdateSelectionVisuals();
+            UpdateSelectionPresentation();
+        }
+    }
+
+    internal void CancelActiveDrag()
+    {
+        _selectionController.CancelDrag();
+        _selectionBoxOverlay?.HideBox();
+    }
+
+    internal void RefreshOccludingPanels()
+    {
+        if (_topHud is null || _bottomHud is null || _selectionCard is null)
+            return;
+
+        Rect2 topRect = _topHud.GetGlobalRect();
+        Rect2 bottomRect = _bottomHud.GetGlobalRect();
+        Rect2 cardRect = _selectionCard.GetGlobalRect();
+        Rect2 settingsRect = _settingsPanel.IsOpen ? _settingsPanel.GetContainerRect() : default;
+        Rect2 missionRect = _missionPanel is not null ? (_missionPanel.IsMissionFinished ? _missionPanel.GetResultRect() : _missionPanel.GetBriefingRect()) : default;
+
+        _inputOccludingPanels[0] = topRect;
+        _inputOccludingPanels[1] = bottomRect;
+        _inputOccludingPanels[2] = cardRect;
+        _inputOccludingPanels[3] = settingsRect;
+        _inputOccludingPanels[4] = missionRect;
+
+        _badgeOccludingPanels[0] = topRect;
+        _badgeOccludingPanels[1] = bottomRect;
+        _badgeOccludingPanels[2] = cardRect;
+        _badgeOccludingPanels[3] = _orderNotification is { Visible: true } ? _orderNotification.GetGlobalRect() : default;
+        _badgeOccludingPanels[4] = settingsRect;
+        _badgeOccludingPanels[5] = missionRect;
+    }
+
+    internal static bool TryGetNavigationLargeDebugTarget(
+        Key keycode,
+        bool altPressed,
+        bool ctrlOrCmdPressed,
+        bool shiftPressed,
+        out NumericsVector2 target)
+    {
+        if (!altPressed || ctrlOrCmdPressed || shiftPressed)
+        {
+            target = default;
+            return false;
+        }
+
+        target = keycode switch
+        {
+            Key.Key1 => new NumericsVector2(300, 480),
+            Key.Key2 => new NumericsVector2(450, 480),
+            Key.Key3 => new NumericsVector2(150, 320),
+            Key.Key4 => new NumericsVector2(500, 150),
+            Key.Key5 => new NumericsVector2(560, 560),
+            Key.Key6 => new NumericsVector2(80, 520),
+            _ => default
+        };
+        return target.X > 0f;
+    }
+
+    private static readonly string[] ControlGroupSuffixes =
+    [
+        string.Empty,
+        " (Group 1)",
+        " (Group 2)",
+        " (Group 3)",
+        " (Group 4)",
+        " (Group 5)",
+        " (Group 6)",
+        " (Group 7)",
+        " (Group 8)",
+        " (Group 9)"
+    ];
+
+    internal static string GetControlGroupSuffix(int groupNumber) =>
+        groupNumber >= 1 && groupNumber <= 9 ? ControlGroupSuffixes[groupNumber] : string.Empty;
+
+    private int _lastTitlePlayerId = -1;
+    private string? _lastTitleScenario;
+
+    private enum SelectionPresentationKind { None, SingleUnit, MultipleUnits, Contact }
+    private SelectionPresentationKind _presentedKind = SelectionPresentationKind.None;
+    private EntityId _presentedSingleUnitId;
+    private int _presentedActiveGroup = -1;
+    private uint _presentedMultiHash;
+    private int _presentedMultiCount = -1;
+    private ContactId _presentedContactId;
+    private string _cachedStatusText = string.Empty;
+
+    internal void UpdateSelectionPresentation()
+    {
+        int activeGroup = _unitViews.GetSelectedControlGroup();
+
+        if (_unitViews.Selected.Count == 1 && TryGetFirstSelectedUnit(out EntityId selId))
+        {
+            if (_session.Replica.TryGetOwnUnit(selId, out OwnUnitObservation ownUnit))
+            {
+                _selectionCard?.UpdateSingleOwnUnit(ownUnit, activeGroup);
+                if (_presentedKind != SelectionPresentationKind.SingleUnit ||
+                    _presentedSingleUnitId != selId ||
+                    _presentedActiveGroup != activeGroup)
+                {
+                    _presentedKind = SelectionPresentationKind.SingleUnit;
+                    _presentedSingleUnitId = selId;
+                    _presentedActiveGroup = activeGroup;
+                    string groupSuffix = GetControlGroupSuffix(activeGroup);
+                    _cachedStatusText = $"1 unit selected{groupSuffix} / Unit #{ownUnit.Id.Value} / RMB terrain to move, RMB enemy to attack";
+                    _status.Text = _cachedStatusText;
+                }
+            }
+        }
+        else if (_unitViews.Selected.Count > 1)
+        {
+            uint hash = ComputeSelectionHash(_unitViews.Selected);
+            if (_presentedKind != SelectionPresentationKind.MultipleUnits ||
+                _presentedMultiCount != _unitViews.Selected.Count ||
+                _presentedActiveGroup != activeGroup ||
+                _presentedMultiHash != hash)
+            {
+                _presentedKind = SelectionPresentationKind.MultipleUnits;
+                _presentedMultiCount = _unitViews.Selected.Count;
+                _presentedActiveGroup = activeGroup;
+                _presentedMultiHash = hash;
+
+                int tanks = 0, recons = 0, others = 0;
+                foreach (EntityId id in _unitViews.Selected)
+                {
+                    if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation u))
+                    {
+                        if (u.Definition < _catalog.Units.Length)
+                        {
+                            string cls = _catalog.Units[u.Definition].Classification ?? string.Empty;
+                            if (cls.Equals("tank", StringComparison.OrdinalIgnoreCase)) tanks++;
+                            else if (cls.Equals("recon", StringComparison.OrdinalIgnoreCase)) recons++;
+                            else others++;
+                        }
+                        else others++;
+                    }
+                }
+
+                _selectionCard?.UpdateMultipleOwnUnits(_unitViews.Selected.Count, tanks, recons, others, activeGroup);
+                string groupSuffix = GetControlGroupSuffix(activeGroup);
+                _cachedStatusText = $"{_unitViews.Selected.Count} units selected{groupSuffix} / RMB terrain to move, RMB enemy to attack";
+                _status.Text = _cachedStatusText;
+            }
+        }
+        else if (_contactViews.Selected.Count > 0 && TryGetFirstSelectedContact(out ContactId firstSelected))
+        {
+            if (_contactViews.Views.TryGetValue(firstSelected, out ContactView? cv))
+            {
+                _selectionCard?.UpdateContact(cv.Observation, _session.Tick);
+                if (_presentedKind != SelectionPresentationKind.Contact ||
+                    _presentedContactId != firstSelected)
+                {
+                    _presentedKind = SelectionPresentationKind.Contact;
+                    _presentedContactId = firstSelected;
+                    _cachedStatusText = $"Contact #{cv.Observation.Id.Value} selected / Right-click with armed tank to attack";
+                    _status.Text = _cachedStatusText;
+                }
+            }
+        }
+        else
+        {
+            _selectionCard?.UpdateEmpty();
+            if (_presentedKind != SelectionPresentationKind.None)
+            {
+                _presentedKind = SelectionPresentationKind.None;
+                _cachedStatusText = "No units selected / Left-click unit or contact to inspect";
+                _status.Text = _cachedStatusText;
+            }
+        }
+    }
+
+    private static uint ComputeSelectionHash(HashSet<EntityId> set)
+    {
+        uint hash = 17;
+        foreach (EntityId id in set)
+        {
+            hash = hash * 31 + id.Value;
+        }
+        return hash;
+    }
+
+    private bool TryGetFirstSelectedUnit(out EntityId first)
+    {
+        foreach (EntityId id in _unitViews.Selected)
+        {
+            first = id;
+            return true;
+        }
+        first = default;
+        return false;
+    }
+
+    private bool TryGetFirstSelectedContact(out ContactId first)
+    {
+        foreach (ContactId id in _contactViews.Selected)
+        {
+            first = id;
+            return true;
+        }
+        first = default;
+        return false;
+    }
+
     private void UpdateViews()
     {
         int selectedUnits = _unitViews.Selected.Count;
@@ -820,7 +1020,11 @@ public partial class Main : Node3D
         if (selectedUnits != _unitViews.Selected.Count || selectedContacts != _contactViews.Selected.Count)
         {
             if (_unitViews.Selected.Count > 0)
-                _status.Text = $"{_unitViews.Selected.Count} selected / right-click terrain to move";
+            {
+                int groupNum = _unitViews.GetSelectedControlGroup();
+                string groupSuffix = groupNum > 0 ? $" (Group {groupNum})" : string.Empty;
+                _status.Text = $"{_unitViews.Selected.Count} selected{groupSuffix} / right-click terrain to move";
+            }
             else if (_contactViews.Selected.Count > 0)
                 _status.Text = $"{_contactViews.Selected.Count} contacts selected / cannot receive orders";
             else
@@ -834,6 +1038,7 @@ public partial class Main : Node3D
 
         if (what is (int)NotificationApplicationFocusOut or (int)NotificationWMWindowFocusOut)
         {
+            CancelActiveDrag();
             _cameraRig?.ClearInput();
             Godot.Engine.MaxFps = 30;
         }
@@ -844,6 +1049,19 @@ public partial class Main : Node3D
                 SettingsPanel.ApplyToEngine(_settingsPanel.CurrentSettings);
             }
         }
+        else if (what == (int)NotificationWMMouseEnter)
+        {
+            if (_selectionController.IsPointerDown && !Input.IsMouseButtonPressed(MouseButton.Left))
+            {
+                CancelActiveDrag();
+            }
+        }
+    }
+
+    private void OnSettingsButtonPressed()
+    {
+        CancelActiveDrag();
+        _settingsPanel.Toggle();
     }
 
     private void BuildHud()
@@ -854,7 +1072,10 @@ public partial class Main : Node3D
         _roleBadgeOverlay = new RoleBadgeOverlay(_catalog);
         canvas.AddChild(_roleBadgeOverlay);
 
-        PanelContainer top = new() { Position = new Vector2(24, 24), MouseFilter = Control.MouseFilterEnum.Ignore };
+        _selectionBoxOverlay = new SelectionBoxOverlay();
+        canvas.AddChild(_selectionBoxOverlay);
+
+        PanelContainer top = new() { Position = new Vector2(24, 24), MouseFilter = Control.MouseFilterEnum.Stop };
         top.AddThemeStyleboxOverride("panel", PanelStyle());
         MarginContainer margin = new() { MouseFilter = Control.MouseFilterEnum.Ignore };
         foreach (string side in new[] { "left", "right", "top", "bottom" }) margin.AddThemeConstantOverride("margin_" + side, 18);
@@ -877,7 +1098,7 @@ public partial class Main : Node3D
         margin.AddChild(stack); top.AddChild(margin); canvas.AddChild(top);
         _topHud = top;
 
-        PanelContainer bottom = new() { MouseFilter = Control.MouseFilterEnum.Ignore };
+        PanelContainer bottom = new() { MouseFilter = Control.MouseFilterEnum.Stop };
         canvas.AddChild(bottom);
         bottom.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.BottomWide);
         bottom.OffsetLeft = 24; bottom.OffsetRight = -24; bottom.OffsetTop = -88; bottom.OffsetBottom = -24;
@@ -888,17 +1109,17 @@ public partial class Main : Node3D
         footer.AddThemeConstantOverride("separation", 16);
         Label controls = new()
         {
-            Text = "  LMB select   /   Shift+LMB add   /   RMB order   /   F attack   /   WASD pan   /   Wheel zoom",
+            Text = FormatControlsHelpText(OS.GetName() == "macOS"),
             MouseFilter = Control.MouseFilterEnum.Ignore,
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
         };
-        controls.AddThemeFontSizeOverride("font_size", 15);
+        controls.AddThemeFontSizeOverride("font_size", 14);
         Button settingsBtn = new()
         {
             Text = "SETTINGS [F10]",
             MouseFilter = Control.MouseFilterEnum.Stop
         };
-        settingsBtn.Pressed += () => _settingsPanel.Toggle();
+        settingsBtn.Pressed += OnSettingsButtonPressed;
         footer.AddChild(controls);
         footer.AddChild(settingsBtn);
 
@@ -936,6 +1157,8 @@ public partial class Main : Node3D
     {
         if (_session is not LocalSession || _scenarioGeometry is null) return;
 
+        CancelActiveDrag();
+        _selectionController.Reset();
         _unitViews.Clear();
         _contactViews.Clear();
         _roleBadgeOverlay?.Clear();
@@ -944,6 +1167,13 @@ public partial class Main : Node3D
         _destination.Visible = false;
         _combatEffects.Clear();
         _session.Dispose();
+
+        _presentedKind = SelectionPresentationKind.None;
+        _presentedActiveGroup = -1;
+        _presentedSingleUnitId = default;
+        _presentedMultiCount = -1;
+        _presentedMultiHash = 0;
+        _presentedContactId = default;
 
         Simulation newSim = ReconRaidScenario.CreateSimulation(_scenarioGeometry);
         _session = new LocalSession(newSim);
@@ -977,6 +1207,11 @@ public partial class Main : Node3D
 
     public static string FormatTitle(int assignedSide, string scenario) =>
         $"DEAD GROUND   /   SIDE {assignedSide}   /   {(scenario == "visibility" ? "RECON SCENARIO" : scenario == "combat" ? "COMBAT SCENARIO" : scenario == "recon-raid" ? "RECON RAID MISSION" : "M0 NETWORK TEST")}";
+
+    internal static string FormatControlsHelpText(bool isMacOs) =>
+        isMacOs
+            ? "  LMB click/box  /  2xLMB type  /  Cmd/Ctrl+1-9 set  /  Shift+1-9 add  /  1-9 select (twice: center)  /  RMB order  /  WASD pan"
+            : "  LMB click/box  /  2xLMB type  /  Ctrl/Cmd+1-9 set  /  Shift+1-9 add  /  1-9 select (twice: center)  /  RMB order  /  WASD pan";
 
     public string TitleText => _title?.Text ?? string.Empty;
 

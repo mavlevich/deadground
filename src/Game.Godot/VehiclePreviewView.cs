@@ -376,8 +376,8 @@ public partial class VehiclePreviewView : Node3D
     {
         if (_camera is null) return 0;
         float distance = _camera.Projection == Camera3D.ProjectionType.Orthogonal ? _camera.Size : _camera.Position.DistanceTo(Vector3.Zero);
-        if (distance < 45f) return 0;
-        if (distance < 95f) return 1;
+        if (distance < UnitView.Lod1CameraSize) return 0;
+        if (distance < UnitView.Lod2CameraSize) return 1;
         return 2;
     }
 

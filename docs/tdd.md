@@ -63,6 +63,9 @@ Non-goals for now:
 | Allied intel in 2v2 | Full sharing, or delayed or limited sharing | Game design decision. Hostility is evaluated by team mapping (allies on the same team are never tracked as enemy contacts), but how contact intelligence is shared or grouped across allied players is deferred to 2v2. |
 | Contact correlation tuning | Time window and dynamic speed-based distance gate for keeping the same contact ID | Play testing in M1 (section 7.1). |
 | Save format | MemoryPack in version-tolerant mode, or our own binary writer | Decided in M1 when the first save is implemented. |
+| Automatic reverse | Reverse only on explicit order, or also when the destination is close behind the vehicle | Play testing after heading lands (section 9.5). |
+| Direct fire numbers | Hit probability curves, movement penalties, ranging bonus, armor values per side | First values from period sources, then play testing (section 12.3). |
+| Blind fire feedback | What the shooter learns from area fire at an unseen target | Must never reveal an unobserved hit; decided with section 12.3. |
 
 ## 5. Architecture overview
 
@@ -361,6 +364,78 @@ Path following is a separate problem from path planning and needs as much attent
 4. A bridge is destroyed after the move order is given.
 5. A group turns around and retreats.
 
+### 9.5 Vehicle heading and steering
+
+Status: planned, next movement change. Today the simulation has no hull heading: a unit moves in a
+straight line toward its next waypoint, and the client infers facing from displacement. Facing at the
+end of a move, reversing and armor by side all need heading as authoritative state.
+
+State and convention:
+
+- Vehicles get a `HullHeading` component: an angle in radians, wrapped to (-pi, pi]. Heading 0 faces
+  -Z (map north); positive angles turn counterclockwise seen from above. The forward vector on the
+  (X, Z) plane is `(-sin h, -cos h)`. This matches Godot `rotation.y`, so the client applies it as is.
+- Spawns set an initial heading. Scenarios state it explicitly instead of relying on a default.
+- Infantry squads do not use hull heading.
+
+Unit data (section 17):
+
+- `turn_rate`: degrees per second for a turn in place.
+- `reverse_speed`: meters per second, lower than `speed`.
+
+Stages:
+
+- Stage 1 (first heading change): every vehicle turns in place at its `turn_rate`, wheeled ones
+  included. This is a known simplification for wheeled vehicles, accepted so that final facing,
+  reverse and armor by side work for all units. Collision stays the current circle model.
+- Stage 2 (later): wheeled kinematics. A vehicle without pivot steering gets `pivot_steer = false`
+  and a minimum `turning_radius` R, and turns only while moving, with `|omega| <= |v| / R`. Slowing
+  down never tightens the radius below R. Final facing then needs a planned maneuver ending on the
+  required heading, not a turn in place. The current planner builds polyline routes, so this stage
+  needs its own path following tests: a corner next to a wall, a destination directly behind the
+  vehicle, and reversing through a turn. Rectangular hull collision and track physics are separate
+  later steps.
+
+Steering, each tick (stage 1):
+
+- The desired direction points to the next waypoint, or away from it when reversing.
+- If the heading error is above a threshold from data (start value 60 degrees), a pivot steer vehicle
+  stops and turns in place at `turn_rate`. Below it, it drives and turns at the same time, with speed
+  scaled down by the heading error. Turning never exceeds `turn_rate * TickSeconds` per tick.
+- On arrival, if the order has a final facing, the vehicle turns in place to it before the order
+  completes. In stage 2 a vehicle without pivot steering reaches it by a planned maneuver instead.
+- Reversing keeps the hull facing away from the travel direction and caps speed at `reverse_speed`.
+  Path planning is the same; only the steering target flips.
+- Following the path, stopping and local avoidance (section 9.3) work on the steered motion, not on
+  instant direction changes.
+
+Replication (sections 7.1, 14.1):
+
+- Own units carry heading in every snapshot, quantized to 16 bits (about 0.0055 degrees).
+- Contacts carry heading only while `Current`; a real observer sees which way a visible hull points.
+  The heading is copied into the side's contact tracker together with the position, at the moment of
+  an observation. The snapshot builder reads contact heading only from the tracker, never from the
+  world, even while the contact is `Current`. A `LastKnown` contact keeps the last observed heading.
+  This adds no knowledge beyond what the observer saw.
+- About 2 bytes per unit or contact record. The protocol version increases by one.
+
+Client:
+
+- Uses the replicated heading, interpolated along the shorter arc, instead of inferring it from
+  movement. The turret yaw stays relative to the hull.
+- Track motion (section 18.7) uses the real heading change for the turn differential, so a pivot
+  turn runs the tracks in opposite directions.
+
+Determinism: heading is server-authoritative state like position. It is saved, replayed and restored
+on reconnect with the rest of the unit state.
+
+Required tests: turn rate is never exceeded; a large heading error stops and pivots before moving;
+reversing keeps the hull opposite to travel and respects `reverse_speed`; final facing is reached
+before the order completes; angles wrap correctly across pi; snapshot round trip and quantization
+error; contacts expose heading only while `Current` and freeze it as `LastKnown`; contact heading
+comes from the tracker even when the world heading changes after the last observation; replay of the
+same commands gives the same headings. Stage 2 adds the wheeled tests listed above.
+
 ## 10. Detection and fog of war
 
 - Sensors and signatures, not `canSee()`. Start with visual only. Radar, thermal and SIGINT are new sensor types later.
@@ -468,6 +543,79 @@ When full stances are implemented in later milestones, lost contacts will behave
 | Fire at will | Drop the target and pick a new one |
 
 Area fire on a ground position (suppression, artillery) does not need a contact. When a lost contact is linked again (section 7.1), the order continues.
+
+### 12.2 Move orders
+
+Status: planned, together with or after section 9.5.
+
+- Final facing: a move order may carry a facing angle. The unit turns to it on arrival. The server
+  validates that the value is finite.
+- Reverse: a move order may ask the unit to drive in reverse (section 9.5).
+- Waypoint queue: a move order may append to the unit's order queue instead of replacing it. A plain
+  order clears the queue. The queue length is capped in data (start value 16); longer queues are
+  rejected without cancelling the current orders.
+- The order queue and the navigation route are different things. Each queued move order is one user
+  destination. Navigation plans its own internal waypoints and chunks toward the current destination
+  (section 9). Reaching an internal waypoint or finishing a navigation chunk never completes a user
+  order; only arriving at the destination (and the final facing, if any) does, and then the next
+  queued order starts.
+- Group moves keep the existing per-unit commands. Formation spreading of group destinations is later
+  work (M3).
+
+### 12.3 Direct fire accuracy and armor
+
+Status: planned, replaces the instant hit and fixed damage of the M1 combat slice. Until it lands,
+the section 12.1 contract stays as written.
+
+- Hit probability depends on range, shooter movement, target movement, the visible share of the
+  target and a ranging bonus for repeated shots at the same target. Values live in weapon data.
+- The visible share is computed from the firing vehicle's own sight, not from the side's detection
+  result: a recon unit may see the whole tank while the shooter sees only the turret. It reuses the
+  target points of the unit data, tested from the shooter's eye height. It is the share of visible
+  points weighted by data, not a claim that the visible area is fully known; two visible points do not
+  mean the whole target is exposed.
+- Rolls use the combat random stream (section 6.5), so a replay gives the same result.
+- A miss still produces an impact: the round lands at a dispersed point, and observers see it.
+- Fire on the move is allowed with a large accuracy penalty. A "short halt" behavior stops, fires and
+  continues, as period crews did with weak stabilizers.
+- Moving and firing changes the section 12.1 contract, so the new rules replace these points of it:
+  - A new "move and engage" order carries a destination and a target contact. The unit follows its
+    route and fires at the target whenever it is in range and in its own line of sight.
+  - A per-unit fire mode chooses between firing on the move (with the penalty) and short halts. A short
+    halt stops for at most a data-set number of ticks to fire one round, then resumes the same route;
+    the route and the queued orders are kept.
+  - The plain attack order keeps the 12.1 behavior: it halts the unit and fires from the spot.
+  - A plain move order cancels the target of a move and engage order, as it cancels an attack order
+    today. A new move and engage order replaces both route and target.
+  - Target loss follows 12.1: `OutOfRange` and `TargetLost` hold fire without stopping the move, and
+    the target is dropped when the contact expires or the observed target is destroyed.
+- Armor by side: front, side and rear values per unit. The side is chosen from the angle between the
+  shot direction and the target's hull heading (section 9.5). Penetration versus armor decides the
+  damage. This lifts the M1 exclusion of armor penetration for direct fire only.
+- Blind fire: area fire at a ground point or at a `LastKnown` position has a low hit chance and needs
+  no contact. The shooter sees only impacts it can observe. It never learns that an unseen target was
+  hit or destroyed (sections 7 and 12.1).
+
+### 12.4 Smoke
+
+Status: planned, part of the M1 scope.
+
+- Smoke is an observed area effect (section 7.2) with position, extent and lifetime, and a dynamic
+  blocker for line of sight (section 10).
+- Sources from data: the T-62 engine smoke system lays a screen while driving; early M60A1 tanks had
+  no smoke dischargers. Grenade launchers and artillery smoke come with the units that carry them.
+- Smoke blocks sight both ways, so it hides the layer as well as the target.
+
+### 12.5 Weapon slots
+
+Status: planned for M2. M1 units keep one weapon each, so the M1 exit does not depend on this.
+
+- A unit has several weapons, each with its own target, allowed target classes, ammunition and
+  reload. The main gun takes vehicles; machine guns take infantry and soft targets.
+- Period fits: T-62 with a coaxial PKT (the 1972 model adds a DShK on the loader's hatch); M60A1 with
+  a coaxial M73 and an M85 .50 in the commander's cupola.
+- Anti-aircraft fire waits for aviation (section 22, Later). Heavy machine guns would then get a small
+  chance against helicopters at short range.
 
 ## 13. State and events
 
@@ -593,6 +741,20 @@ The AI sends normal commands and reads only its side's knowledge. Headless bot v
 - Exponential zoom smoothing: `1 - exp(-12 * delta)`, frame-rate independent over arbitrary frame rates.
 - Space key restores default focus and zoom size.
 - Panning and zooming remain active while issuing move/attack orders and selecting units.
+
+Selection and control groups (client presentation only):
+
+- Click selection on release: releasing the left mouse button without dragging selects a hit role badge, or the nearest own unit or enemy contact within 24 px of its projected center. Shift adds to the selection; clicking empty ground without Shift clears the selection.
+- Box selection: dragging the left mouse button more than 6 px draws a translucent rectangle and selects all own units whose projected centers (Root + 1 m up, in front of the camera) lie inside the rectangle on release. Shift adds to the current selection; without Shift it replaces it. Contacts are never box selected, and box selection clears contact selection.
+- Same-type selection: double-clicking an own unit selects all on-screen own units with the same `UnitId` (Shift adds). Double-clicking a contact or empty ground behaves like a normal click.
+- Control groups: `Ctrl+1..9` or `Cmd+1..9` on every platform stores the current own selection in group 1..9, `Shift+1..9` adds to the group, and `1..9` recalls it. Pressing the same group number again within 0.35 s centers the camera on the group's average position (`CameraRig.CenterOn`) without changing zoom. Disappearing units are removed from all groups in `UnitViewSet.Sync`.
+- Selection display: each unit's role badge shows its lowest control group number, and the selection card and status line show the selected count and `"Group N"` when the selection matches a group.
+
+Planned controls (client only unless a section is named):
+
+- Right drag sets the final facing of a move, with an arrow preview (sections 9.5, 12.2).
+- A modifier with right click orders a reverse move (section 12.2).
+- Shift with right click appends a waypoint, with markers along the queued route (section 12.2).
 
 ### 18.2 Display settings and frame pacing
 
@@ -926,7 +1088,15 @@ Implementation checkpoint:
   - Playable reconnaissance raid mission (implemented).
   - Coarse cost layers, formations, multi-unit collisions, dynamic obstacles, and destruction.
   - Reconnect recovery, bots, and save/load.
-- Out of scope for M1 combat: artillery, missiles, aviation, armor penetration, suppression, building destruction, production, and logistics replenishment.
+- Out of scope for M1 combat: artillery, missiles, aviation, armor penetration beyond direct fire armor by side (section 12.3), suppression, building destruction, production, and logistics replenishment.
+- Planned order of the next M1 work:
+  1. Box selection, control groups and same-type selection (section 18.1, implemented).
+  2. Hull heading stage 1: steering, reverse and final facing, with the current circle collision
+     (sections 9.5, 12.2).
+  3. Order queue for user waypoints (section 12.2).
+  4. Play the existing missions, then order the rest by what combat lacks most: hit probability and
+     fire on the move, armor by side (section 12.3), smoke (section 12.4), area and blind fire
+     (section 12.3).
 
 Exit criteria (technical):
 
@@ -946,7 +1116,7 @@ Exit criteria (gameplay):
 
 ### M2. Logistics and fire support
 
-Fuel, ammo, supply trucks with supply radius, artillery fire missions with dispersion and observers, counter-battery, infantry in buildings, repair.
+Fuel, ammo, supply trucks with supply radius, artillery fire missions with dispersion and observers, counter-battery, infantry in buildings, repair. Weapon slots and vehicle machine guns (section 12.5). Wheeled vehicle kinematics (section 9.5, stage 2) if M1 play testing does not pull it earlier.
 
 ### M3. Operational scale
 

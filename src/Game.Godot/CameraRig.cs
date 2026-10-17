@@ -45,6 +45,14 @@ internal sealed class CameraRig
         SyncCamera();
     }
 
+    public void CenterOn(Vector3 focus)
+    {
+        float x = Mathf.Clamp(focus.X, _model.MinX, _model.MaxX);
+        float z = Mathf.Clamp(focus.Z, _model.MinZ, _model.MaxZ);
+        _model.Focus = new NumericsVector3(x, focus.Y, z);
+        SyncCamera();
+    }
+
     public void ClearInput()
     {
         _model.ClearInput();
