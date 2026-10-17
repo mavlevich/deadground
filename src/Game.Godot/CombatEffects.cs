@@ -662,6 +662,22 @@ internal partial class CombatEffects : Node3D
         }
     }
 
+    internal void SpawnDirectShot(Vector3 origin, Vector3 target)
+    {
+        Vector3 shotDir = (target - origin).LengthSquared() > 0.0001f
+            ? (target - origin).Normalized()
+            : Vector3.Forward;
+
+        float distance = origin.DistanceTo(target);
+        float flightDuration = Mathf.Clamp(distance / TracerSpeed, MinTracerDuration, MaxTracerDuration);
+
+        SpawnMuzzleFlash(origin, shotDir);
+        SpawnSmokePuff(origin, isImpactSmoke: false);
+        SpawnTracer(origin, target, flightDuration);
+        QueuePendingImpact(target, flightDuration);
+        PlaySound(_cannonAudio, origin, SoundPriority.Cannon);
+    }
+
     private void TriggerImpactFeedback(Vector3 position, float elapsedOffset = 0f)
     {
         if (elapsedOffset >= SmokePuffLifetime)

@@ -57,11 +57,13 @@ public partial class Main : Node3D
         string[] userArgs = OS.GetCmdlineUserArgs();
         string[] allArgs = OS.GetCmdlineArgs();
         bool isLosSandbox = userArgs.Contains("--los-sandbox") || allArgs.Contains("--los-sandbox");
+        bool isVehiclePreview = userArgs.Contains("--vehicle-preview") || allArgs.Contains("--vehicle-preview");
         bool hasConnect = userArgs.Contains("--connect") || allArgs.Contains("--connect");
 
-        if (isLosSandbox && hasConnect)
+        if ((isLosSandbox || isVehiclePreview) && hasConnect)
         {
-            GD.PushError("Invalid arguments: --los-sandbox cannot be combined with --connect.");
+            string flag = isVehiclePreview ? "--vehicle-preview" : "--los-sandbox";
+            GD.PushError($"Invalid arguments: {flag} cannot be combined with --connect.");
             SetProcess(false);
             GetTree().Quit(1);
             return;
@@ -81,6 +83,22 @@ public partial class Main : Node3D
             SetProcess(false);
             SetProcessUnhandledInput(false);
             AddChild(new LosSandboxView());
+            return;
+        }
+
+        if (isVehiclePreview)
+        {
+            SetProcess(false);
+            SetProcessUnhandledInput(false);
+            bool isSmoke = userArgs.Contains("--smoke-test") || allArgs.Contains("--smoke-test");
+            if (isSmoke)
+            {
+                bool ok = VehiclePreviewRegressionTests.Run(this);
+                GetTree().Quit(ok ? 0 : 1);
+                return;
+            }
+
+            AddChild(new VehiclePreviewView());
             return;
         }
 
@@ -358,6 +376,8 @@ public partial class Main : Node3D
 
     public override void _Process(double delta)
     {
+        if (_session is null) return;
+
         long frameStartTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
         float wallClockIntervalMs = 0f;
         if (_lastFrameTimestamp > 0)

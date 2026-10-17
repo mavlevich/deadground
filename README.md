@@ -302,6 +302,24 @@ python3 tools/model-authoring/build_vehicles.py
 
 See `src/Game.Godot/Assets/Vehicles/README.md` for geometry and presentation details.
 
+### T-62 model preview
+
+The T-62 asset study uses restrained stylized realism, meter scale, rounded cast-armor profiles
+and three explicit detail levels. Inspect it independently of mission unit mappings:
+
+```sh
+python3 tools/model-authoring/build_t62.py
+./tools/run-client.sh -- --vehicle-preview --vehicle-preview-variant close
+./tools/run-client.sh -- --vehicle-preview --vehicle-preview-variant rts
+./tools/run-client.sh --headless -- --vehicle-preview --smoke-test
+```
+
+Press C for orthographic inspection/RTS camera presets, A/D for turret yaw, W/S for
+gun pitch, Space for a test shot and R to reset. Keys 1/2/3 select close/RTS/distant detail; 4 enables
+automatic preview LOD. Tab toggles comparison vehicles and human scale reference;
+G toggles the measured grid. Add `--vehicle-preview-capture <directory>` for screenshots.
+See `src/Game.Godot/Assets/Vehicles/T62/README.md` for generation, palette and limits.
+
 ### Combat scenario and combat feedback
 
 To run the direct-fire combat scenario with tank and reconnaissance firefights:
