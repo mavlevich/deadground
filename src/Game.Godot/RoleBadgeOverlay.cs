@@ -207,6 +207,7 @@ internal sealed partial class RoleBadgeOverlay : Control
                 {
                     "tank" => "TANK",
                     "recon" => "RECON",
+                    "apc" => "APC",
                     "command_vehicle" => "CMD",
                     _ => def.Classification.ToUpperInvariant()
                 };

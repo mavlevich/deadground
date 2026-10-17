@@ -7,15 +7,14 @@ namespace DeadGround.Client;
 // It is intentionally decoupled from own-unit definition IDs to prevent information leaks.
 internal static class ContactVisualCatalog
 {
-    private static PackedScene? _reconScene;
-
     // hostileFaction comes from the public match setup, never from the contact itself.
     internal static Node3D? InstantiateEnemyModel(ContactClassification classification, string? hostileFaction = null)
     {
         return classification switch
         {
             ContactClassification.Tank => CreateEnemyTankModel(hostileFaction),
-            ContactClassification.Recon => CreateEnemyReconModel(),
+            ContactClassification.Recon => CreateEnemyModel("contact_recon", "EnemyReconModel", hostileFaction),
+            ContactClassification.Apc => CreateEnemyModel("contact_apc", "EnemyApcModel", hostileFaction),
             ContactClassification.CommandVehicle => CreateEnemyCommandVehicleModel(),
             ContactClassification.Vehicle => CreateEnemyGenericVehicleModel(),
             _ => null
@@ -31,16 +30,13 @@ internal static class ContactVisualCatalog
         return visual.Root;
     }
 
-    private static Node3D CreateEnemyReconModel()
+    private static Node3D CreateEnemyModel(string visualId, string name, string? hostileFaction)
     {
-        _reconScene ??= GD.Load<PackedScene>("res://Assets/Vehicles/recon.glb")
-            ?? throw new InvalidOperationException("Recon asset could not be loaded for enemy contact presentation.");
-
-        Node3D model = _reconScene.Instantiate<Node3D>();
-        model.Name = "EnemyReconModel";
-        model.Scale = Vector3.One * 0.75f;
-        AttachHostileAffiliationMarker(model);
-        return model;
+        VehicleVisual visual = VehicleVisualCatalog.InstantiateVisual(visualId, hostileFaction)
+            ?? throw new InvalidOperationException($"visuals.json has no {visualId} entry for enemy contact presentation.");
+        visual.Root.Name = name;
+        AttachHostileAffiliationMarker(visual.Root);
+        return visual.Root;
     }
 
     private static Node3D CreateEnemyCommandVehicleModel()

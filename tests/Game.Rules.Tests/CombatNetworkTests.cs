@@ -44,7 +44,7 @@ public sealed class CombatNetworkTests
 
         // Wait for both to connect and receive initial snapshots
         WaitFor(() => client1.IsConnected && client2.IsConnected &&
-            client1.Replica.OwnUnits.Length == 3 && client2.Replica.OwnUnits.Length == 3, host, client1, client2);
+            client1.Replica.OwnUnits.Length == 4 && client2.Replica.OwnUnits.Length == 4, host, client1, client2);
 
         Assert.Equal(1, client1.AssignedPlayerId);
         Assert.Equal(2, client2.AssignedPlayerId);
@@ -95,10 +95,10 @@ public sealed class CombatNetworkTests
         }, host, client1, client2);
 
         // Wait for reload (40 ticks = 2.0s) and second shot to destroy target
-        WaitFor(() => client2.Replica.OwnUnits.Length == 2, host, client1, client2, maxAttempts: 200);
+        WaitFor(() => client2.Replica.OwnUnits.Length == 3, host, client1, client2, maxAttempts: 200);
 
-        // Victim was cleanly removed and client 2 count decreased to 2
-        Assert.Equal(2, client2.Replica.OwnUnits.Length);
+        // Victim was cleanly removed and client 2 count decreased to 3
+        Assert.Equal(3, client2.Replica.OwnUnits.Length);
     }
 
     [Fact]
@@ -115,7 +115,7 @@ public sealed class CombatNetworkTests
         using ClientSession client2 = ClientSession.Connect("127.0.0.1", port, setup);
 
         WaitFor(() => client1.IsConnected && client2.IsConnected &&
-            client1.Replica.OwnUnits.Length == 3 && client2.Replica.OwnUnits.Length == 3, host, client1, client2);
+            client1.Replica.OwnUnits.Length == 4 && client2.Replica.OwnUnits.Length == 4, host, client1, client2);
 
         // Client 1 tries to issue an attack command using Client 2's unit ID
         EntityId foreignUnit = client2.Replica.OwnUnits[0].Id;
@@ -143,7 +143,7 @@ public sealed class CombatNetworkTests
         using ClientSession client2 = ClientSession.Connect("127.0.0.1", port, setup);
 
         WaitFor(() => client1.IsConnected && client2.IsConnected &&
-            client1.Replica.OwnUnits.Length == 3, host, client1, client2);
+            client1.Replica.OwnUnits.Length == 4, host, client1, client2);
 
         EntityId ownUnit = client1.Replica.OwnUnits[0].Id;
 
@@ -234,7 +234,7 @@ public sealed class CombatNetworkTests
         using ClientSession client2 = ClientSession.Connect("127.0.0.1", port, setup);
 
         WaitFor(() => client1.IsConnected && client2.IsConnected &&
-            client1.Replica.OwnUnits.Length == 3, host, client1, client2);
+            client1.Replica.OwnUnits.Length == 4, host, client1, client2);
 
         // Client 1 disconnects
         client1.Dispose();
@@ -247,7 +247,7 @@ public sealed class CombatNetworkTests
 
         // Reconnect new client in slot 1
         using ClientSession client1Reconnected = ClientSession.Connect("127.0.0.1", port, setup);
-        WaitFor(() => client1Reconnected.IsConnected && client1Reconnected.Replica.OwnUnits.Length == 3,
+        WaitFor(() => client1Reconnected.IsConnected && client1Reconnected.Replica.OwnUnits.Length == 4,
             host, client1Reconnected, client2);
 
         Assert.Equal(1, client1Reconnected.AssignedPlayerId);
@@ -531,9 +531,9 @@ public sealed class CombatNetworkTests
     }
 
     [Fact]
-    public void WireProtocol_Version8_Preserves3DEndpointsAndShooterIdentity()
+    public void WireProtocol_Version9_Preserves3DEndpointsAndShooterIdentity()
     {
-        Assert.Equal(8, WireProtocol.Version);
+        Assert.Equal(9, WireProtocol.Version);
         Assert.Equal(32, WireProtocol.MissionSize);
         Assert.Equal(48, WireProtocol.SnapshotHeaderSize);
         Assert.Equal(30, WireProtocol.UnitSize);
@@ -660,7 +660,7 @@ public sealed class CombatNetworkTests
         using ClientSession client2 = ClientSession.Connect("127.0.0.1", port, setup);
 
         WaitFor(() => client1.IsConnected && client2.IsConnected &&
-            client1.Replica.OwnUnits.Length == 3 && client2.Replica.OwnUnits.Length == 3, host, client1, client2);
+            client1.Replica.OwnUnits.Length == 4 && client2.Replica.OwnUnits.Length == 4, host, client1, client2);
 
         WaitFor(() => client1.Replica.ContactCount > 0, host, client1, client2);
 
@@ -711,7 +711,7 @@ public sealed class CombatNetworkTests
         ClientSession? client2 = ClientSession.Connect("127.0.0.1", port, setup);
 
         WaitFor(() => client1.IsConnected && client2.IsConnected &&
-            client1.Replica.OwnUnits.Length == 3 && client2.Replica.OwnUnits.Length == 3, host, client1, client2);
+            client1.Replica.OwnUnits.Length == 4 && client2.Replica.OwnUnits.Length == 4, host, client1, client2);
 
         // Client 2 disconnects
         client2.Dispose();

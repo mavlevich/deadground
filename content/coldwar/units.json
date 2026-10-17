@@ -61,6 +61,18 @@
       "max_health": 120,
       "weapon": "tank_gun_100mm",
       "classification": "tank"
+    },
+    {
+      "id": "apc",
+      "speed": 6.5,
+      "sensor_range": 50.0,
+      "identify_range": 20.0,
+      "identify_ticks": 80,
+      "eye_height": 2.0,
+      "target_points": [0.7, 1.7],
+      "radius": 1.4,
+      "max_health": 80,
+      "classification": "apc"
     }
   ]
 }

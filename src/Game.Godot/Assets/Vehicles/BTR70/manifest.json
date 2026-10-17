@@ -1,0 +1,54 @@
+{
+  "asset": "BTR-70 (GAZ-4905) 8x8 APC RTS visual study",
+  "configuration": "BTR-70 with exact 8x8 axle stations, wheel-arch V-struts, boarding steps, toroidal 13.00-18 chevron tires, clean engine deck louvres, BPU-1 turret with OU-3GA2 searchlight, and 14.5 mm KPVT gun",
+  "units": "meters",
+  "up": "+Y",
+  "forward": "-Z",
+  "color_authoring": "sRGB hex converted to linear glTF factors",
+  "vertex_colors": "rgb: tint x baked ambient occlusion x edge wear, a: dirt mask",
+  "reference_anchors": {
+    "hull_length_meters": 7.42,
+    "overall_length_meters": 7.54,
+    "width_over_hull_meters": 2.8,
+    "height_to_turret_top_meters": 2.235,
+    "ground_clearance_meters": 0.475,
+    "wheelbase_meters": 4.470000000000001,
+    "track_gauge_meters": 2.4,
+    "wheel_radius_meters": 0.56,
+    "wheels_per_side": 4
+  },
+  "lods": [
+    {
+      "file": "btr70.glb",
+      "triangles": 11499,
+      "vertices": 15274,
+      "mesh_parts": 27,
+      "materials": 8,
+      "bytes": 932408,
+      "lod": 0,
+      "role": "close"
+    },
+    {
+      "file": "btr70_lod1.glb",
+      "triangles": 5196,
+      "vertices": 6149,
+      "mesh_parts": 26,
+      "materials": 8,
+      "bytes": 386940,
+      "lod": 1,
+      "role": "rts"
+    },
+    {
+      "file": "btr70_lod2.glb",
+      "triangles": 1662,
+      "vertices": 2533,
+      "mesh_parts": 13,
+      "materials": 4,
+      "bytes": 143316,
+      "lod": 2,
+      "role": "distant"
+    }
+  ],
+  "track_gauge_meters": 2.4,
+  "track_wrap_meters": 999.2777912538415
+}

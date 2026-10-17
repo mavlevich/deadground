@@ -137,6 +137,7 @@ internal sealed partial class RoleBadge : PanelContainer
     {
         ContactClassification.Tank => "TANK",
         ContactClassification.Recon => "RECON",
+        ContactClassification.Apc => "APC",
         ContactClassification.CommandVehicle => "CMD",
         ContactClassification.Vehicle => "VEH",
         _ => "UNKNOWN"

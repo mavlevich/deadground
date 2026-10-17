@@ -29,6 +29,22 @@
     "scene": "res://Assets/Vehicles/recon.glb",
     "scale": 0.75
   },
+  "apc": {
+    "scene": "res://Assets/Vehicles/recon.glb",
+    "scale": 0.75,
+    "factions": {
+      "soviet": {
+        "scene": "res://Assets/Vehicles/BTR70/btr70.glb",
+        "lods": [
+          "res://Assets/Vehicles/BTR70/btr70_lod1.glb",
+          "res://Assets/Vehicles/BTR70/btr70_lod2.glb"
+        ],
+        "scale": 0.75,
+        "track_gauge": 2.4,
+        "track_wrap": 999.2777912538415
+      }
+    }
+  },
   "contact_tank": {
     "scene": "res://Assets/Vehicles/tank.glb",
     "scale": 0.75,
@@ -39,6 +55,20 @@
       },
       "us": {
         "scene": "res://Assets/Vehicles/M60/m60_lod1.glb",
+        "scale": 0.75
+      }
+    }
+  },
+  "contact_recon": {
+    "scene": "res://Assets/Vehicles/recon.glb",
+    "scale": 0.75
+  },
+  "contact_apc": {
+    "scene": "res://Assets/Vehicles/recon.glb",
+    "scale": 0.75,
+    "factions": {
+      "soviet": {
+        "scene": "res://Assets/Vehicles/BTR70/btr70_lod1.glb",
         "scale": 0.75
       }
     }

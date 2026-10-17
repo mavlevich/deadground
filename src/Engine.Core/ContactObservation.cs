@@ -32,7 +32,8 @@ public enum ContactClassification : byte
     Tank = 2,
     Recon = 3,
     CommandVehicle = 4,
-    Command = 4
+    Command = 4,
+    Apc = 5
 }
 
 /// <summary>

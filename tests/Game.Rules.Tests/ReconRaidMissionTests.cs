@@ -521,7 +521,7 @@ public sealed class ReconRaidMissionTests
     [Fact]
     public void Review_HandshakeAndWireProtocol_AgreeOnCurrentVersion()
     {
-        Assert.Equal(8, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(9, MatchSetup.CurrentProtocolVersion);
         Assert.Equal(MatchSetup.CurrentProtocolVersion, WireProtocol.Version);
     }
 
@@ -530,14 +530,14 @@ public sealed class ReconRaidMissionTests
     {
         HeightMap map = HeightMap.CreatePrototype();
         MatchSetup serverSetup = PrototypeScenario.CreateMatchSetup(map);
-        Assert.Equal(8, serverSetup.ProtocolVersion);
+        Assert.Equal(9, serverSetup.ProtocolVersion);
 
         using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
         int port = serverTransport.Port;
         using SimulationHost host = new(PrototypeScenario.Create(map), serverTransport, serverSetup);
 
-        MatchSetup v8ClientSetup = serverSetup with { ProtocolVersion = WireProtocol.Version };
-        using ClientSession client = ClientSession.Connect("127.0.0.1", port, v8ClientSetup);
+        MatchSetup currentClientSetup = serverSetup with { ProtocolVersion = WireProtocol.Version };
+        using ClientSession client = ClientSession.Connect("127.0.0.1", port, currentClientSetup);
 
         for (int i = 0; i < 50 && !client.IsConnected; i++)
         {

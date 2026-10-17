@@ -215,14 +215,15 @@ Rules:
 
 Clients see enemies only as contacts. A contact has its own `ContactId`, issued per side. Enemy `EntityId` values never reach a client, even for a fully identified unit. Otherwise a modified client could follow an identified tank by its ID after it hides again.
 
-A contact holds: detection level (`Detected`, `Identified`), classification (`Unknown`, `Vehicle`, `Tank`, `Recon`, `CommandVehicle`), last known position, last seen tick, and what the side may know about its state (for example "damaged", never exact health).
+A contact holds: detection level (`Detected`, `Identified`), classification (`Unknown`, `Vehicle`, `Tank`, `Recon`, `CommandVehicle`, `Apc`), last known position, last seen tick, and what the side may know about its state (for example "damaged", never exact health).
 
 Two-stage detection and identification:
 
 - A hostile unit entering visual line-of-sight within sensor range starts at `DetectionLevel.Detected` with `ContactClassification.Unknown`.
 - To reach `DetectionLevel.Identified`, an observer must maintain continuous line-of-sight to the unit within the observer unit's `identify_range` for at least `identify_ticks`.
 - Continuous line-of-sight requirement: if visual contact is broken, or if the unit leaves `identify_range` before the required duration is reached, the identification progress counter resets to zero.
-- Once identified, the contact classification is revealed (`Recon`, `Tank`, `CommandVehicle`).
+- Once identified, the contact classification is revealed (`Recon`, `Tank`, `CommandVehicle`, `Apc`).
+  `Apc` was added in protocol version 9.
 - When an identified contact is lost (`Current` becomes `LastKnown`) and subsequently re-correlated, its detection level resets to `Detected` and its classification resets to `Unknown`. A new period of continuous observation within identify range is required to confirm identity again.
 
 Contact lifecycle:
@@ -860,7 +861,7 @@ optional scale/grid/comparison views, articulation and shot feedback. Normal mis
 visual mappings and authoritative simulation data are unchanged. These asset studies
 still require large-battle render validation before setting production GPU budgets.
 
-### 18.7 Faction tank presentation
+### 18.7 Faction vehicle presentation
 
 - Own tanks use the faction of their player from `MatchSetup`: player 1 (Soviet) gets the T-62,
   player 2 (US) the M60A1. `visuals.json` holds per-faction overrides of a unit's scene, LODs and
@@ -885,6 +886,17 @@ still require large-battle render validation before setting production GPU budge
   No nodes or draw calls are added for this.
 - LOD0 is about 24k triangles per tank and is visible at the close RTS zoom. A large-battle render
   budget has not been measured yet.
+- The `apc` unit is an armored personnel carrier. Soviet APCs use the BTR-70 from `build_btr70.py`,
+  with three LODs (LOD0 about 11.5k triangles). Its bow, roof and turret were checked against the
+  V. Brovkin 1:35 drawing in side, front and top views. US APCs keep a placeholder until the M113A1
+  exists. Identified enemy APC contacts use `contact_apc` in the same way as tanks.
+- The APC carries no weapon yet; its 14.5 mm KPVT comes with machine guns in M2. Troop capacity
+  comes with infantry and containers (section 11.2). Its speed and sensor values use the same
+  prototype scale as the other units.
+- Reconnaissance vehicles keep the prototype model until the BRDM-2 exists. `contact_recon` already
+  takes faction overrides for it.
+- Wheels use the same motion data as track wheels: they turn with the travel of their side, and the
+  wrap period is a whole number of wheel turns.
 
 ## 19. Rule sets and modularity
 

@@ -403,7 +403,7 @@ public static class WireProtocol
             if (contactId.Value == 0 ||
                 stateByte is not ((byte)ContactState.Current or (byte)ContactState.LastKnown) ||
                 levelByte is not ((byte)DetectionLevel.Detected or (byte)DetectionLevel.Identified) ||
-                classByte > (byte)ContactClassification.CommandVehicle ||
+                classByte > (byte)ContactClassification.Apc ||
                 (levelByte == (byte)DetectionLevel.Detected && classByte != (byte)ContactClassification.Unknown) ||
                 !float.IsFinite(position.X) || !float.IsFinite(position.Y) ||
                 lastSeenTick < 0 || lastSeenTick > tick ||

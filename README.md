@@ -327,7 +327,8 @@ See `src/Game.Godot/Assets/Vehicles/T62/README.md` for generation, palette and l
 
 ### Combat scenario and combat feedback
 
-To run the direct-fire combat scenario with tank and reconnaissance firefights:
+To run the direct-fire combat scenario with tank and reconnaissance firefights. Each side also has
+one unarmed armored personnel carrier; the Soviet one is the BTR-70:
 
 ```sh
 ./tools/run-client.sh -- --scenario combat
