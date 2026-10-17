@@ -20,31 +20,31 @@
   "lods": [
     {
       "file": "btr70.glb",
-      "triangles": 11298,
-      "vertices": 15011,
+      "triangles": 11499,
+      "vertices": 15274,
       "mesh_parts": 27,
       "materials": 8,
-      "bytes": 919600,
+      "bytes": 932408,
       "lod": 0,
       "role": "close"
     },
     {
       "file": "btr70_lod1.glb",
-      "triangles": 5181,
-      "vertices": 6049,
+      "triangles": 5196,
+      "vertices": 6149,
       "mesh_parts": 26,
       "materials": 8,
-      "bytes": 382760,
+      "bytes": 386940,
       "lod": 1,
       "role": "rts"
     },
     {
       "file": "btr70_lod2.glb",
-      "triangles": 1622,
-      "vertices": 2453,
+      "triangles": 1662,
+      "vertices": 2533,
       "mesh_parts": 13,
       "materials": 4,
-      "bytes": 139584,
+      "bytes": 143316,
       "lod": 2,
       "role": "distant"
     }

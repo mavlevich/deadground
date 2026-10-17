@@ -51,6 +51,66 @@ def read_accessor(m, index):
     return np.frombuffer(raw, dtype=dtype).reshape(-1, width) if width > 1 else np.frombuffer(raw, dtype=dtype)
 
 
+class Btr70DrawingTests(unittest.TestCase):
+    """Heights and stations checked against the 1:35 drawing; the first model had a hull 0.2 m low."""
+
+    def test_hull_roof_and_chine_heights(self):
+        m, hull, _ = build_parts()
+        (body,) = part_points(m, "HullBody", hull)
+        mid = body[(body[:, 2] >= btr70.CAB_ROOF_Z - 0.01) & (body[:, 2] <= btr70.FIGHTING_REAR_Z + 0.01)]
+        self.assertAlmostEqual(float(mid[:, 1].max()), 1.855, delta=0.02, msg="Roof must sit at about 1.855 m")
+        self.assertAlmostEqual(btr70.hull_y(btr70.CHINE_Y), 1.367, delta=0.02, msg="Chine must sit at about 1.37 m")
+
+    def test_turret_top_matches_published_height(self):
+        m, _, turret = build_parts()
+        (cone,) = part_points(m, "TurretCone", turret)
+        top = btr70.TURRET_RING[1] + float(cone[:, 1].max())
+        self.assertAlmostEqual(top, 2.235, delta=0.01, msg=f"Turret top is {top:.3f} m")
+
+    def test_turret_and_muzzle_stations(self):
+        self.assertAlmostEqual(btr70.TURRET_RING[2] - btr70.WHEEL_Z[0], 1.25, delta=0.03, msg="Turret centre about 1.25 m behind axle 1")
+        muzzle_z = btr70.TURRET_RING[2] + btr70.GUN_TRUNNION_LOCAL[2] + btr70.MUZZLE_LOCAL_Z
+        self.assertAlmostEqual(muzzle_z, -2.53, delta=0.05, msg=f"KPVT muzzle at z {muzzle_z:.2f}")
+        gun_axis = btr70.TURRET_RING[1] + btr70.GUN_TRUNNION_LOCAL[1]
+        self.assertAlmostEqual(gun_axis, 2.07, delta=0.05, msg=f"Gun axis at {gun_axis:.2f} m")
+
+    def test_bow_plates_follow_the_drawing(self):
+        # The first bow was one full-width ramp from a low prow straight to the roof.
+        m, hull, _ = build_parts()
+        (body,) = part_points(m, "HullBody", hull)
+        prow = body[np.abs(body[:, 2] - btr70.HULL_FRONT_Z) < 0.01]
+        self.assertAlmostEqual(float(prow[:, 1].max()), 1.38, delta=0.03, msg="Prow edge must sit at about 1.38 m")
+        self.assertLess(float(np.abs(prow[:, 0]).max()), 0.95, "Prow must be narrower than the hull")
+
+        crease = body[np.abs(body[:, 2] - btr70.WINDSHIELD_BASE_Z) < 0.01]
+        self.assertAlmostEqual(float(crease[:, 1].max()), 1.57, delta=0.03, msg="Nose plate must meet the windshield plate at about 1.57 m")
+
+        roof_y = float(body[:, 1].max())
+        front_roof = body[(np.abs(body[:, 2] - btr70.CAB_ROOF_Z) < 0.01) & (body[:, 1] > roof_y - 0.03)]
+        self.assertLess(float(np.abs(front_roof[:, 0]).max()), 0.88, "Roof front edge must be about 1.7 m wide")
+        mid_roof = body[(np.abs(body[:, 2] - btr70.CHEEK_REAR_Z) < 0.01) & (body[:, 1] > roof_y - 0.03)]
+        self.assertGreater(float(np.abs(mid_roof[:, 0]).max()), 0.95, "Roof must reach full width behind the cheek plates")
+
+    def test_bow_fittings_sit_on_the_hull(self):
+        m, hull, _ = build_parts()
+        for rail in part_points(m, "ChineRubRail", hull):
+            front = float(rail[:, 2].min())
+            hit = surface_hit(m, hull, (math.copysign(2.0, float(rail[0, 0])), btr70.hull_y(btr70.CHINE_Y), front + 0.02), (-math.copysign(1.0, float(rail[0, 0])), 0.0, 0.0), btr70.HULL_SURFACE)
+            self.assertIsNotNone(hit)
+            self.assertGreater(abs(hit[0][0]), 1.33, f"Chine rail starts in the air at z {front:.2f}")
+        for bracket in part_points(m, "HeadlightBracket", hull):
+            x, z = float(bracket[:, 0].mean()), float(bracket[:, 2].mean())
+            low, _ = surface_heights(m, hull, (x, z), 0.05, btr70.HULL_SURFACE)
+            self.assertLess(float(bracket[:, 1].min()) - low, 0.06, "Headlight bracket floats above the cheek plate")
+
+    def test_turret_plinth_sits_on_the_roof(self):
+        m, hull, _ = build_parts()
+        (plinth,) = part_points(m, "TurretPlinth", hull)
+        low, _ = surface_heights(m, hull, (0.0, btr70.TURRET_RING[2]), 0.5, btr70.HULL_SURFACE)
+        self.assertLess(float(plinth[:, 1].min()), low + 0.01, "Turret plinth floats above the roof")
+        self.assertGreaterEqual(float(plinth[:, 1].max()) + 0.01, btr70.TURRET_RING[1], "Turret ring floats above the plinth")
+
+
 class Btr70GeometryTests(unittest.TestCase):
     def test_proportions_and_dimensions(self):
         manifest = btr70.generate_all()

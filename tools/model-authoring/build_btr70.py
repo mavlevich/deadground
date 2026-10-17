@@ -64,10 +64,17 @@ CHINE_Y = 1.280                     # main hull chine ledge
 ROOF_Y = 1.720                      # flat horizontal main hull roof
 REAR_ROOF_Y = 1.685                 # engine deck step
 STERN_TOP_Y = 1.610                 # top of rear transom
-NOSE_TIP_Y = 1.160                  # sharp horizontal prow edge
-GLACIS_START_Z = -3.420             # start of main sloped front glacis
-GLACIS_START_Y = 1.210
-CAB_ROOF_Z = -2.260                 # front edge of horizontal roof
+# Bow, from the drawing (heights before HULL_STRETCH). A shallow upper nose plate carries the
+# trim vane, a steeper plate carries the two windshields, and 45 degree cheek plates join the
+# full-width chine to the narrower roof. The roof is 1.7 m wide at its front edge.
+NOSE_TIP_Y = 1.290                  # prow edge, level with the chine
+NOSE_PLATE_Z = -3.400
+WINDSHIELD_BASE_Z = -2.990          # crease between the nose plate and the windshield plate
+WINDSHIELD_BASE_Y = 1.463
+NOSE_PLATE_SLOPE = (WINDSHIELD_BASE_Y - NOSE_TIP_Y) / (WINDSHIELD_BASE_Z + 3.710)
+CAB_ROOF_Z = -2.480                 # front edge of horizontal roof
+CAB_ROOF_W = 0.850                  # roof half width at its front edge
+CHEEK_REAR_Z = -1.750               # rear corner of the cheek plates, roof at full width
 FIGHTING_REAR_Z = 1.480             # transition to rear engine deck
 ENGINE_SLOPE_Z = 3.540              # rear of engine deck before stern transom
 
@@ -81,7 +88,20 @@ WHEEL_Z = [-2.020, -0.635, 1.080, 2.450]
 DOOR_CENTER_Z = 0.280
 
 # BPU-1 squat conical turret seated at Z = -1.028 m
-TURRET_RING = (0.0, ROOF_Y + 0.025, -1.028)
+# The hull is authored on the heights above and then stretched vertically above the belly. The
+# 1:35 drawing by V. Brovkin (drawingdatabase.com) shows the roof near 1.96 m but draws wheels and
+# overall height about 5 % large; a 1.855 m roof keeps its proportions and puts the turret top at the
+# published 2.235 m. The searchlight reaches about 2.32 m, the height given on the drawing.
+HULL_STRETCH = (1.855 - BELLY_Y) / (ROOF_Y - BELLY_Y)
+
+
+def hull_y(y):
+    """Height after the hull stretch, for parts placed on the stretched hull."""
+    return BELLY_Y + (y - BELLY_Y) * HULL_STRETCH
+
+
+# BPU-1 turret centre 1.25 m behind the first axle (side and top views of the drawing).
+TURRET_RING = (0.0, hull_y(ROOF_Y + 0.025), -0.770)
 TURRET_HEIGHT = 0.355
 TURRET_PROFILE = [
     (0.675, 0.000),
@@ -95,7 +115,8 @@ TURRET_PROFILE = [
 ]
 TURRET_SURFACE = {"TurretCone"}
 GUN_TRUNNION_LOCAL = (0.0, 0.190, -0.500)
-MUZZLE_LOCAL_Z = -1.420
+# KPVT muzzle about 1.75 m ahead of the turret centre, as on the drawing.
+MUZZLE_LOCAL_Z = -1.260
 
 HULL_SURFACE = {"HullBody"}
 
@@ -155,16 +176,35 @@ def add_framed_plate(m, name, center, axes, half, paint, cavity, steel, parent, 
 # ----------------------------------------------------------------------------
 
 
+def stretch_hull(m, hull):
+    """Stretch every hull part vertically above the belly by HULL_STRETCH, normals included."""
+    nodes = m.data["nodes"]
+    for index, (node_id, parent, mat, points, normals, indices, colors) in enumerate(m.parts):
+        if parent != hull:
+            continue
+        translation = nodes[node_id]["translation"]
+        translation[1] = hull_y(translation[1])
+        points = [(x, y * HULL_STRETCH, z) for x, y, z in points]
+        stretched = []
+        for nx, ny, nz in normals:
+            ny /= HULL_STRETCH
+            length = math.sqrt(nx * nx + ny * ny + nz * nz) or 1.0
+            stretched.append((nx / length, ny / length, nz / length))
+        m.parts[index] = (node_id, parent, mat, points, stretched, indices, colors)
+
+
 def build_hull(m, hull, mats, lod):
     paint, steel, cavity = mats["paint"], mats["steel"], mats["cavity"]
 
-    # 1. Upper boat hull above the wheel-arch apron: single continuous front glacis into
-    #    a flat horizontal roofline (no central hump). Width over chine is 2.780 m, rub rail brings it to 2.800 m.
+    # 1. Upper boat hull above the wheel-arch apron: nose plate, windshield plate and cheek plates
+    #    into a flat horizontal roofline (no central hump). Width over chine is 2.780 m, rub rail brings it to 2.800 m.
+    nose_y = NOSE_TIP_Y + (NOSE_PLATE_Z - HULL_FRONT_Z) * NOSE_PLATE_SLOPE
     upper_stations = [
-        (HULL_FRONT_Z, upper_hull_section(1.060, NOSE_TIP_Y, 1.000, NOSE_TIP_Y + 0.025, 0.050, 0.025)),
-        (GLACIS_START_Z, upper_hull_section(1.330, CHINE_Y - 0.040, 1.230, GLACIS_START_Y, 0.060, 0.045)),
-        (-2.840, upper_hull_section(1.390, CHINE_Y, planar_roof_w(1.480), 1.480, 0.065, 0.085)),
-        (CAB_ROOF_Z, upper_hull_section(1.390, CHINE_Y, planar_roof_w(ROOF_Y), ROOF_Y, 0.065, 0.085)),
+        (HULL_FRONT_Z, upper_hull_section(0.930, NOSE_TIP_Y - 0.035, 0.900, NOSE_TIP_Y, 0.030, 0.020)),
+        (NOSE_PLATE_Z, upper_hull_section(1.060, CHINE_Y - 0.015, 0.950, nose_y, 0.040, 0.030)),
+        (WINDSHIELD_BASE_Z, upper_hull_section(1.270, CHINE_Y, 1.010, WINDSHIELD_BASE_Y, 0.050, 0.060)),
+        (CAB_ROOF_Z, upper_hull_section(1.390, CHINE_Y, CAB_ROOF_W, ROOF_Y, 0.050, 0.085)),
+        (CHEEK_REAR_Z, upper_hull_section(1.390, CHINE_Y, planar_roof_w(ROOF_Y), ROOF_Y, 0.065, 0.085)),
         (FIGHTING_REAR_Z, upper_hull_section(1.390, CHINE_Y, planar_roof_w(ROOF_Y), ROOF_Y, 0.065, 0.085)),
         (FIGHTING_REAR_Z + 0.140, upper_hull_section(1.390, CHINE_Y, planar_roof_w(REAR_ROOF_Y), REAR_ROOF_Y, 0.065, 0.085)),
         (ENGINE_SLOPE_Z, upper_hull_section(1.390, CHINE_Y, planar_roof_w(REAR_ROOF_Y - 0.020), REAR_ROOF_Y - 0.020, 0.065, 0.085)),
@@ -179,8 +219,8 @@ def build_hull(m, hull, mats, lod):
     #    - Inter-wheel fender divider between Wheel 3 and Wheel 4 (Z = +1.76)
     #    - Rear wheel-arch cutout behind Wheel 4 into the stern tub
     lower_stations = [
-        (HULL_FRONT_Z, lower_tub_section(0.760, NOSE_TIP_Y - 0.030, 0.980, NOSE_TIP_Y - 0.010, 1.050, NOSE_TIP_Y)),
-        (GLACIS_START_Z, lower_tub_section(0.780, 0.920, 1.200, 0.940, 1.330, CHINE_Y - 0.060)),
+        (HULL_FRONT_Z, lower_tub_section(0.700, NOSE_TIP_Y - 0.085, 0.880, NOSE_TIP_Y - 0.065, 0.920, NOSE_TIP_Y - 0.050)),
+        (NOSE_PLATE_Z, lower_tub_section(0.780, 0.990, 0.990, 1.010, 1.050, CHINE_Y - 0.040)),
         (-2.840, lower_tub_section(0.800, BELLY_Y + 0.040, 1.240, 0.620, 1.370, ARCH_LIP_Y)),
         # Front wheel-arch upward cut ahead of Axle 1 (Z = -2.020)
         (-2.500, lower_tub_section(0.820, BELLY_Y, 0.920, 0.800, 0.960, ARCH_LIP_Y)),
@@ -207,28 +247,37 @@ def build_hull(m, hull, mats, lod):
     ]
     loft_sections(m, "HullLowerTub", lower_stations, paint, hull, tint=0.92)
 
-    # Front nose trim vane plate folded flush on the bow lip
-    glacis_slope = math.atan2(ROOF_Y - GLACIS_START_Y, CAB_ROOF_Z - GLACIS_START_Z)
-    glacis_along = (0.0, math.sin(glacis_slope), math.cos(glacis_slope))
-    glacis_normal = (0.0, math.cos(glacis_slope), -math.sin(glacis_slope))
-    obox(m, "TrimVane", (0.0, 1.205, -3.520), ((1.0, 0.0, 0.0), (0.0, 0.98, -0.20), (0.0, 0.20, 0.98)), (0.86, 0.015, 0.12), paint, hull, tint=0.92)
+    # Trim vane folded flat on the upper nose plate
+    nose_slope = math.atan(NOSE_PLATE_SLOPE)
+    nose_along = (0.0, math.sin(nose_slope), math.cos(nose_slope))
+    nose_normal = (0.0, math.cos(nose_slope), -math.sin(nose_slope))
+
+    def nose_plate_y(z):
+        return NOSE_TIP_Y + (z - HULL_FRONT_Z) * NOSE_PLATE_SLOPE
+
+    vane_z = -3.480
+    obox(m, "TrimVane", (0.0, nose_plate_y(vane_z) + 0.030, vane_z), ((1.0, 0.0, 0.0), nose_normal, nose_along), (0.84, 0.015, 0.22), paint, hull, tint=0.92)
     if lod == 0:
         for hx in (-0.64, -0.22, 0.22, 0.64):
-            m.add_box("VaneHinge", (0.045, 0.032, 0.065), (hx, 1.220, -3.400), steel, hull)
+            m.add_box("VaneHinge", (0.045, 0.032, 0.065), (hx, nose_plate_y(-3.230) + 0.020, -3.230), steel, hull)
+
+    glacis_slope = math.atan2(ROOF_Y - WINDSHIELD_BASE_Y, CAB_ROOF_Z - WINDSHIELD_BASE_Z)
+    glacis_along = (0.0, math.sin(glacis_slope), math.cos(glacis_slope))
+    glacis_normal = (0.0, math.cos(glacis_slope), -math.sin(glacis_slope))
 
     # Flush armored windshield shutters with recessed shadow seams
     for sign in (-1, 1):
-        wx = sign * 0.44
-        wz = -2.76
-        wy = GLACIS_START_Y + (wz - GLACIS_START_Z) * (ROOF_Y - GLACIS_START_Y) / (CAB_ROOF_Z - GLACIS_START_Z)
+        wx = sign * 0.40
+        wz = -2.735
+        wy = WINDSHIELD_BASE_Y + (wz - WINDSHIELD_BASE_Z) * (ROOF_Y - WINDSHIELD_BASE_Y) / (CAB_ROOF_Z - WINDSHIELD_BASE_Z)
         axes_g = ((1.0, 0.0, 0.0), glacis_normal, glacis_along)
         seam_c = (wx, wy + glacis_normal[1] * 0.010, wz + glacis_normal[2] * 0.010)
         if lod < 2:
-            obox(m, "WindshieldSeam", seam_c, axes_g, (0.325, 0.010, 0.265), cavity, hull)
+            obox(m, "WindshieldSeam", seam_c, axes_g, (0.260, 0.010, 0.250), cavity, hull)
         base_c = (wx, wy + glacis_normal[1] * 0.020, wz + glacis_normal[2] * 0.020)
-        obox(m, "WindshieldCoaming", base_c, axes_g, (0.310, 0.016, 0.250), paint, hull, tint=0.84)
+        obox(m, "WindshieldCoaming", base_c, axes_g, (0.245, 0.016, 0.235), paint, hull, tint=0.84)
         hatch_c = (wx, wy + glacis_normal[1] * 0.036, wz + glacis_normal[2] * 0.036)
-        obox(m, "WindshieldShutter", hatch_c, axes_g, (0.285, 0.014, 0.225), paint, hull, tint=0.95)
+        obox(m, "WindshieldShutter", hatch_c, axes_g, (0.220, 0.014, 0.210), paint, hull, tint=0.95)
         if lod == 0:
             for rz in (-0.075, 0.075):
                 rc = (
@@ -236,12 +285,12 @@ def build_hull(m, hull, mats, lod):
                     hatch_c[1] + glacis_normal[1] * 0.012 + glacis_along[1] * rz,
                     hatch_c[2] + glacis_normal[2] * 0.012 + glacis_along[2] * rz,
                 )
-                obox(m, "ShutterRib", rc, axes_g, (0.24, 0.008, 0.018), paint, hull, tint=1.04)
-            for hx_off in (-0.18, 0.18):
+                obox(m, "ShutterRib", rc, axes_g, (0.18, 0.008, 0.018), paint, hull, tint=1.04)
+            for hx_off in (-0.13, 0.13):
                 hc = (
                     wx + hx_off,
-                    hatch_c[1] + glacis_normal[1] * 0.012 + glacis_along[1] * 0.21,
-                    hatch_c[2] + glacis_normal[2] * 0.012 + glacis_along[2] * 0.21,
+                    hatch_c[1] + glacis_normal[1] * 0.012 + glacis_along[1] * 0.20,
+                    hatch_c[2] + glacis_normal[2] * 0.012 + glacis_along[2] * 0.20,
                 )
                 obox(m, "ShutterHinge", hc, axes_g, (0.028, 0.012, 0.035), steel, hull)
         # Twin armored periscope hoods right above windshields at the front roofline
@@ -255,8 +304,15 @@ def build_hull(m, hull, mats, lod):
                 m.add_box("PeriscopeGlass", (0.105, 0.034, 0.026), (px + ox, py + 0.004, pz - 0.088), mats["glass"], hull)
         # Commander sight hood on the right front roof corner
         if sign < 0 and lod < 2:
-            m.add_box("CommanderSightHood", (0.14, 0.11, 0.16), (sign * 0.78, ROOF_Y + 0.055, CAB_ROOF_Z + 0.02), paint, hull, tint=0.88)
-            m.add_box("CommanderSightGlass", (0.09, 0.05, 0.02), (sign * 0.78, ROOF_Y + 0.065, CAB_ROOF_Z - 0.058), mats["glass"], hull)
+            m.add_box("CommanderSightHood", (0.14, 0.11, 0.16), (sign * 0.74, ROOF_Y + 0.055, CAB_ROOF_Z + 0.10), paint, hull, tint=0.88)
+            m.add_box("CommanderSightGlass", (0.09, 0.05, 0.02), (sign * 0.74, ROOF_Y + 0.065, CAB_ROOF_Z + 0.022), mats["glass"], hull)
+
+        # Driver and commander roof hatches behind the periscopes
+        if lod < 2:
+            m.add_box("CrewHatchSeam", (0.50, 0.016, 0.50), (sign * 0.40, ROOF_Y + 0.002, -2.030), cavity, hull)
+        m.add_box("CrewRoofHatch", (0.46, 0.026, 0.46), (sign * 0.40, ROOF_Y + 0.010, -2.030), paint, hull, tint=0.92)
+        if lod == 0:
+            m.add_box("CrewHatchHinge", (0.30, 0.030, 0.040), (sign * 0.40, ROOF_Y + 0.020, -1.785), steel, hull)
 
     def side_frame(sign, y, z, surface=HULL_SURFACE):
         hit = surface_hit(m, hull, (sign * 2.0, y, z), (-float(sign), 0.0, 0.0), surface)
@@ -282,7 +338,8 @@ def build_hull(m, hull, mats, lod):
 
     for sign in (-1, 1):
         # Upper chine rub rail (brings hull width to exactly 2.800 m) + lower wheel-arch lip molding
-        m.add_box("ChineRubRail", (0.020, 0.030, 6.70), (sign * 1.390, CHINE_Y, 0.05), steel, hull)
+        # The rail starts where the bow cheeks reach full width.
+        m.add_box("ChineRubRail", (0.020, 0.030, 5.95), (sign * 1.390, CHINE_Y, 0.425), steel, hull)
         m.add_box("WheelArchLip", (0.020, 0.025, 5.60), (sign * 1.370, ARCH_LIP_Y, 0.22), paint, hull, tint=0.80)
 
         # Braided steel tow cable clamped along the chine ledge
@@ -360,8 +417,12 @@ def build_hull(m, hull, mats, lod):
                 lv_axes, (0.022, 0.130, 0.260), paint, cavity, steel, hull, tint=0.82, lod=lod
             )
 
-        # Front cheek headlight shelf + lights
-        hx, hy, hz = sign * 1.18, 1.37, -3.06
+        # Headlights on the cheek plates, on a bracket above the sloped armor
+        hx, hz = sign * 1.12, -2.780
+        cheek = surface_hit(m, hull, (hx, 3.0, hz), (0.0, -1.0, 0.0), HULL_SURFACE)
+        if cheek is None:
+            raise RuntimeError("headlight missed the cheek plate")
+        hy = cheek[0][1] + 0.100
         m.add_box("HeadlightBracket", (0.24, 0.026, 0.20), (hx, hy - 0.075, hz), paint, hull, tint=0.88)
         m.add_cylinder("HeadlightHousing", 0.072, 0.12, (hx - sign * 0.04, hy, hz), steel, "z", 8 if lod < 2 else 6, parent=hull)
         if lod < 2:
@@ -378,12 +439,14 @@ def build_hull(m, hull, mats, lod):
                 rod(m, "HeadlightGuard", (gx, hy + 0.090, hz + 0.07), (gx, hy + 0.090, hz - 0.075), 0.008, steel, hull, sides=4)
             rod(m, "HeadlightGuardBar", (c_left, hy + 0.090, hz - 0.075), (c_right, hy + 0.090, hz - 0.075), 0.008, steel, hull, sides=4)
             # Rearview mirror on stalk
-            rod(m, "MirrorStalk", (sign * 1.24, 1.48, -2.44), (sign * 1.32, 1.68, -2.44), 0.008, steel, hull, sides=4)
-            m.add_box("MirrorHead", (0.035, 0.13, 0.080), (sign * 1.32, 1.72, -2.44), steel, hull)
+            mirror = surface_hit(m, hull, (sign * 1.24, 3.0, -2.44), (0.0, -1.0, 0.0), HULL_SURFACE)
+            my = mirror[0][1] if mirror else 1.40
+            rod(m, "MirrorStalk", (sign * 1.24, my, -2.44), (sign * 1.32, my + 0.20, -2.44), 0.008, steel, hull, sides=4)
+            m.add_box("MirrorHead", (0.035, 0.13, 0.080), (sign * 1.32, my + 0.24, -2.44), steel, hull)
 
         # Heavy forged bow tow hooks and shackles (frontmost point reaches Z = -3.770 m)
-        m.add_box("BowTowMount", (0.09, 0.10, 0.06), (sign * 0.68, 1.04, HULL_FRONT_Z + 0.03), steel, hull)
-        m.add_cylinder("BowShackle", 0.055, 0.032, (sign * 0.68, 0.98, -3.715), steel, "x", 8 if lod < 2 else 6, parent=hull)
+        m.add_box("BowTowMount", (0.09, 0.10, 0.06), (sign * 0.60, 1.11, HULL_FRONT_Z + 0.03), steel, hull)
+        m.add_cylinder("BowShackle", 0.055, 0.032, (sign * 0.60, 1.05, -3.715), steel, "x", 8 if lod < 2 else 6, parent=hull)
 
     # Low turret base plinth on the forward roof
     m.add_cylinder("TurretPlinth", 0.70, 0.036, (0.0, ROOF_Y + 0.012, TURRET_RING[2]), steel, "y", (20, 14, 8)[lod], parent=hull)
@@ -397,11 +460,11 @@ def build_hull(m, hull, mats, lod):
     # Troop roof hatches behind the turret
     for sign in (-1, 1):
         if lod < 2:
-            m.add_box("TroopHatchSeam", (0.45, 0.016, 0.84), (sign * 0.42, ROOF_Y + 0.002, 0.28), cavity, hull)
-        m.add_box("TroopRoofHatch", (0.42, 0.028, 0.80), (sign * 0.42, ROOF_Y + 0.010, 0.28), paint, hull, tint=0.92)
+            m.add_box("TroopHatchSeam", (0.45, 0.016, 0.84), (sign * 0.42, ROOF_Y + 0.002, 0.53), cavity, hull)
+        m.add_box("TroopRoofHatch", (0.42, 0.028, 0.80), (sign * 0.42, ROOF_Y + 0.010, 0.53), paint, hull, tint=0.92)
         if lod == 0:
             for rx in (-0.10, 0.10):
-                m.add_box("HatchRib", (0.042, 0.010, 0.68), (sign * 0.42 + rx, ROOF_Y + 0.022, 0.28), paint, hull, tint=0.98)
+                m.add_box("HatchRib", (0.042, 0.010, 0.68), (sign * 0.42 + rx, ROOF_Y + 0.022, 0.53), paint, hull, tint=0.98)
 
     # Clean rear engine deck (MTO): longitudinal cooling grilles and louvers only (no stowage boxes or tarps)
     for sign in (-1, 1):
@@ -428,11 +491,12 @@ def build_hull(m, hull, mats, lod):
             m.add_cylinder("TailLampRed", 0.038, 0.025, (tx - sign * 0.05, ty, tz + 0.020), mats["marker_red"], "z", 6, parent=hull)
             m.add_cylinder("TailLampAmber", 0.038, 0.025, (tx + sign * 0.05, ty, tz + 0.020), mats["marker_amber"], "z", 6, parent=hull)
 
+    stretch_hull(m, hull)
+
 
 # ----------------------------------------------------------------------------
 # Running gear (Toroidal KI-80 13.00-18 chevron tires + deep CTIS hubs)
 # ----------------------------------------------------------------------------
-
 
 def road_wheel(m, sign, z, sides, mats, parent, lod):
     x = sign * WHEEL_X_CENTER
@@ -601,7 +665,7 @@ def build_markings(m, hull, lod=0):
             (-0.74, (0.30, 0.30), (0.0, 0.0, 0.5, 1.0)),
             (-0.12, (0.48, 0.27), (0.5, 0.0, 1.0, 1.0)),
         ]:
-            hit = surface_hit(m, hull, (sign * 2.0, 1.48, z), (-float(sign), 0.0, 0.0), HULL_SURFACE)
+            hit = surface_hit(m, hull, (sign * 2.0, hull_y(1.48), z), (-float(sign), 0.0, 0.0), HULL_SURFACE)
             if hit is None:
                 raise RuntimeError(f"Marking ray missed HullBody at z={z}, sign={sign}")
             center, normal = hit
