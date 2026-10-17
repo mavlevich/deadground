@@ -16,6 +16,7 @@ internal static class FactionVehicleRegressionTests
         CheckTrackTravel(scene);
         CheckImportedMaterials();
         CheckEnemyTankFaction();
+        CheckEnemyReconFaction();
     }
 
     private static void CheckFactionModels(Node3D scene)
@@ -24,6 +25,8 @@ internal static class FactionVehicleRegressionTests
         UnitView us = new("prototype_tank", "us");
         UnitView none = new("prototype_tank");
         UnitView unknown = new("prototype_tank", "unknown_faction");
+        UnitView sovietRecon = new("recon_vehicle", "soviet");
+        UnitView noneRecon = new("recon_vehicle");
         try
         {
             Require(soviet.LodCount == 3 && soviet.GetLod(0)!.SceneFilePath.EndsWith("T62Alt/t62alt.glb", StringComparison.Ordinal),
@@ -35,6 +38,14 @@ internal static class FactionVehicleRegressionTests
             Require(unknown.GetLod(0)!.SceneFilePath.EndsWith("Vehicles/tank.glb", StringComparison.Ordinal),
                 "An unknown faction must fall back to the base scene.");
             Require(soviet.Model.FindChild("TurretYaw", true, false) is not null, "Faction tank lost its turret pivot.");
+
+            Require(sovietRecon.LodCount == 3 && sovietRecon.GetLod(0)!.SceneFilePath.EndsWith("BTR70/btr70.glb", StringComparison.Ordinal),
+                "Soviet recon vehicle did not use the BTR-70 with three LODs.");
+            Require(noneRecon.LodCount == 1 && noneRecon.GetLod(0)!.SceneFilePath.EndsWith("Vehicles/recon.glb", StringComparison.Ordinal),
+                "A match without factions must keep the prototype recon vehicle.");
+            Require(sovietRecon.LeftMotionMeshCount > 0 && sovietRecon.RightMotionMeshCount > 0,
+                "BTR-70 wheel motion meshes were not found.");
+            Require(sovietRecon.Model.FindChild("TurretYaw", true, false) is not null, "Faction recon vehicle lost its turret pivot.");
         }
         finally
         {
@@ -42,6 +53,8 @@ internal static class FactionVehicleRegressionTests
             us.Root.Free();
             none.Root.Free();
             unknown.Root.Free();
+            sovietRecon.Root.Free();
+            noneRecon.Root.Free();
         }
     }
 
@@ -112,7 +125,12 @@ internal static class FactionVehicleRegressionTests
 
     private static void CheckImportedMaterials()
     {
-        foreach ((string path, bool camo) in new[] { ("res://Assets/Vehicles/T62Alt/t62alt.glb", false), ("res://Assets/Vehicles/M60/m60.glb", true) })
+        foreach ((string path, bool camo) in new[]
+        {
+            ("res://Assets/Vehicles/T62Alt/t62alt.glb", false),
+            ("res://Assets/Vehicles/M60/m60.glb", true),
+            ("res://Assets/Vehicles/BTR70/btr70.glb", false)
+        })
         {
             Node3D model = GD.Load<PackedScene>(path).Instantiate<Node3D>();
             try
@@ -173,6 +191,31 @@ internal static class FactionVehicleRegressionTests
             Require(generic.GetChild<Node3D>(0).SceneFilePath.EndsWith("Vehicles/tank.glb", StringComparison.Ordinal),
                 "Without factions enemy tanks keep the generic model.");
             Require(us.FindChild("HostileAffiliationMarker", true, false) is not null, "Faction enemy tank lost its hostile marker.");
+        }
+        finally
+        {
+            us.Free();
+            soviet.Free();
+            generic.Free();
+        }
+    }
+
+    private static void CheckEnemyReconFaction()
+    {
+        MatchSetup setup = new(MatchSetup.CurrentProtocolVersion, 1, 1, "Ops", PlayerFactions: ["soviet", "us"]);
+        Node3D us = ContactVisualCatalog.InstantiateEnemyModel(ContactClassification.Recon, setup.GetHostileFaction(1))!;
+        Node3D soviet = ContactVisualCatalog.InstantiateEnemyModel(ContactClassification.Recon, setup.GetHostileFaction(2))!;
+        Node3D generic = ContactVisualCatalog.InstantiateEnemyModel(ContactClassification.Recon)!;
+        try
+        {
+            Require(us.Name == "EnemyReconModel" && us.GetChild<Node3D>(0).SceneFilePath.EndsWith("Vehicles/recon.glb", StringComparison.Ordinal),
+                "Player 1 must see identified enemy recon with default model when no faction override exists.");
+            Require(soviet.Name == "EnemyReconModel" && soviet.GetChild<Node3D>(0).SceneFilePath.EndsWith("BTR70/btr70_lod1.glb", StringComparison.Ordinal),
+                "Player 2 must see identified enemy recon as BTR-70 LOD1.");
+            Require(generic.GetChild<Node3D>(0).SceneFilePath.EndsWith("Vehicles/recon.glb", StringComparison.Ordinal),
+                "Without factions enemy recon keeps the generic model.");
+            Require(soviet.FindChild("HostileAffiliationMarker", true, false) is not null, "Faction enemy recon lost its hostile marker.");
+            Require(us.FindChild("HostileAffiliationMarker", true, false) is not null, "Generic enemy recon lost its hostile marker.");
         }
         finally
         {
