@@ -666,6 +666,34 @@ The AI sends normal commands and reads only its side's knowledge. Headless bot v
 - Frame pacing and stall resilience:
   - Frame delta clamping and elapsed overshoot compensation prevent stuck effects or visual artifacts after large frame stalls or backgrounding. If overshoot exceeds effect lifetime during stalls, mesh instances are discarded immediately without spawning.
 
+### 18.6 T-62 asset study
+
+The T-62 preview explores restrained stylized realism with physical meter-scale
+proportions, rounded cast-turret profiles, hard armor plate edges and matte materials.
+There is no deliberate pixelation. Map palette and atmosphere can vary independently;
+vehicle scale, presentation pivots and readable shot feedback remain consistent.
+
+The asset is generated from original source with three explicit LODs. Shared material
+palettes and linear per-part vertex tints keep material/surface counts bounded.
+sRGB authoring colors are converted to glTF linear factors, with an import script
+enabling vertex-color multiplication, seeded triplanar paint variation and roughness.
+Broad height-dependent dust is baked into the linear vertex colors.
+The generated manifest records actual counts and close/RTS/distant roles.
+The current models share a broad cast-turret roof, more upright cheeks, rolled front
+mudguards and lower fender stowage. Close detail adds pressed wheel depressions,
+towing loops, turret rails, individual track shoes and procedural surface relief.
+The RTS material omits that normal texture, and its mesh removes those small fittings.
+The model includes dished wheels, a toothed rear sprocket, tangent track runs,
+exposed fender fuel cells and removable rear drums behind the armor. External layout is checked against operator-manual
+views and museum photographs; local dimensions and curvature remain approximations.
+Automatic import LOD generation is disabled for this three-LOD authored asset.
+The concept image is an art reference; its printed polygon count is not an asset measurement.
+
+The isolated preview uses fitted orthographic cameras, gameplay camera sizes 38/75/160,
+optional scale/grid/comparison views, articulation and shot feedback. Normal mission
+visual mappings and authoritative simulation data are unchanged. These asset studies
+still require large-battle render validation before setting production GPU budgets.
+
 ## 19. Rule sets and modularity
 
 A rule set is a list of systems plus data. Replaceable points:
