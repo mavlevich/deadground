@@ -15,6 +15,8 @@ internal partial class CombatEffects : Node3D
     public const int MaxResidues = 16;
     public const int MaxPendingImpacts = 16;
     public const int MaxAudioPlayers = 6;
+    public const int MaxBlastDust = 6;
+    public const int MaxBarrelSmoke = 6;
     public const int EventHistorySize = 256;
 
     public const float TracerSpeed = 160f;
@@ -30,8 +32,19 @@ internal partial class CombatEffects : Node3D
     public const float ExplosionLifetime = 0.60f;
     public const float ResidueLifetime = 15.0f;
     public const float ResidueFadeStart = 4.0f;
+    // Muzzle blast dust is strongest for a gun close to the ground and fades out above this height.
+    public const float BlastDustMaxMuzzleHeight = 3.5f;
+    // Shot particles are skipped for events older than this; younger ones are fast-forwarded.
+    public const float GunParticlesMaxEventAge = 0.2f;
 
     private readonly HeightMap _map;
+    private readonly GpuParticles3D[] _blastDust = new GpuParticles3D[MaxBlastDust];
+    private readonly GpuParticles3D[] _barrelSmoke = new GpuParticles3D[MaxBarrelSmoke];
+    private int _nextBlastDust;
+    private int _nextBarrelSmoke;
+
+    internal GpuParticles3D[] BlastDust => _blastDust;
+    internal GpuParticles3D[] BarrelSmoke => _barrelSmoke;
     private readonly uint[] _recentEventIds = new uint[EventHistorySize];
     private int _recentEventIndex;
 
@@ -142,6 +155,16 @@ internal partial class CombatEffects : Node3D
         InitImpacts();
         InitExplosions();
         InitResidues();
+        for (int i = 0; i < MaxBlastDust; i++)
+        {
+            _blastDust[i] = ParticleEffects.CreateBlastDust();
+            AddChild(_blastDust[i]);
+        }
+        for (int i = 0; i < MaxBarrelSmoke; i++)
+        {
+            _barrelSmoke[i] = ParticleEffects.CreateBarrelSmoke();
+            AddChild(_barrelSmoke[i]);
+        }
 
         _audioListener = new AudioListener3D { Name = "CombatAudioListener" };
         AddChild(_audioListener);
@@ -607,6 +630,11 @@ internal partial class CombatEffects : Node3D
                     SpawnMuzzleFlash(origin, shotDir, ageSeconds);
                 }
 
+                if (ageSeconds < GunParticlesMaxEventAge)
+                {
+                    SpawnGunParticles(origin, shotDir, ageSeconds);
+                }
+
                 if (ageSeconds < SmokePuffLifetime)
                 {
                     SpawnSmokePuff(origin, isImpactSmoke: false, ageSeconds);
@@ -673,9 +701,36 @@ internal partial class CombatEffects : Node3D
 
         SpawnMuzzleFlash(origin, shotDir);
         SpawnSmokePuff(origin, isImpactSmoke: false);
+        SpawnGunParticles(origin, shotDir);
         SpawnTracer(origin, target, flightDuration);
         QueuePendingImpact(target, flightDuration);
         PlaySound(_cannonAudio, origin, SoundPriority.Cannon);
+    }
+
+    // Ground dust from the muzzle blast and gun gas drifting from the barrel. Presentation only.
+    private void SpawnGunParticles(Vector3 muzzle, Vector3 shotDir, float ageSeconds = 0f)
+    {
+        Vector3 flat = new(shotDir.X, 0f, shotDir.Z);
+        flat = flat.LengthSquared() > 0.0001f ? flat.Normalized() : Vector3.Forward;
+        Basis facing = Basis.LookingAt(flat, Vector3.Up);
+
+        float ground = _map.GetHeight(muzzle.X, muzzle.Z);
+        float strength = Mathf.Clamp(1f - (muzzle.Y - ground) / BlastDustMaxMuzzleHeight, 0f, 1f);
+        if (strength > 0.05f)
+        {
+            GpuParticles3D dust = _blastDust[_nextBlastDust];
+            _nextBlastDust = (_nextBlastDust + 1) % MaxBlastDust;
+            dust.Transform = new Transform3D(facing, new Vector3(muzzle.X, ground + 1.0f, muzzle.Z) - flat * 0.6f);
+            dust.AmountRatio = 0.35f + 0.65f * strength;
+            dust.Preprocess = ageSeconds;
+            dust.Restart();
+        }
+
+        GpuParticles3D smoke = _barrelSmoke[_nextBarrelSmoke];
+        _nextBarrelSmoke = (_nextBarrelSmoke + 1) % MaxBarrelSmoke;
+        smoke.Transform = new Transform3D(facing, muzzle);
+        smoke.Preprocess = ageSeconds;
+        smoke.Restart();
     }
 
     private void TriggerImpactFeedback(Vector3 position, float elapsedOffset = 0f)
@@ -1013,6 +1068,14 @@ internal partial class CombatEffects : Node3D
         ResetPool(_impacts);
         ResetPool(_explosions);
         ResetPool(_residues);
+        foreach (GpuParticles3D dust in _blastDust)
+        {
+            dust.Emitting = false;
+        }
+        foreach (GpuParticles3D smoke in _barrelSmoke)
+        {
+            smoke.Emitting = false;
+        }
 
         for (int i = 0; i < MaxAudioPlayers; i++)
         {
