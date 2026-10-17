@@ -8,8 +8,11 @@ namespace DeadGround.Client;
 internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int>? maxHealthProvider = null,
     Func<ushort, string?>? unitIdProvider = null, Func<string?>? factionProvider = null)
 {
+    internal const int ControlGroupCount = 9;
+
     internal Dictionary<EntityId, UnitView> Views { get; } = new();
     internal HashSet<EntityId> Selected { get; } = new();
+    private readonly HashSet<EntityId>[] _controlGroups = CreateControlGroups();
     private readonly HashSet<EntityId> _present = new(WireProtocol.MaxUnits);
     private readonly List<EntityId> _removed = new(WireProtocol.MaxUnits);
     private readonly Func<ushort, int>? _maxHealthProvider = maxHealthProvider;
@@ -23,6 +26,52 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
         : this(parent, map, def => def < catalog.Units.Length ? catalog.Units[def].MaxHealth : 100,
             def => def < catalog.Units.Length ? catalog.Units[def].Id : null, factionProvider)
     {
+    }
+
+    private static HashSet<EntityId>[] CreateControlGroups()
+    {
+        HashSet<EntityId>[] groups = new HashSet<EntityId>[ControlGroupCount];
+        for (int i = 0; i < ControlGroupCount; i++)
+            groups[i] = new HashSet<EntityId>();
+        return groups;
+    }
+
+    internal HashSet<EntityId> GetControlGroup(int groupNumber)
+    {
+        if (groupNumber < 1 || groupNumber > ControlGroupCount)
+            throw new ArgumentOutOfRangeException(nameof(groupNumber));
+        return _controlGroups[groupNumber - 1];
+    }
+
+    internal int GetLowestControlGroup(EntityId id)
+    {
+        for (int i = 0; i < ControlGroupCount; i++)
+        {
+            if (_controlGroups[i].Contains(id))
+                return i + 1;
+        }
+        return 0;
+    }
+
+    internal int GetSelectedControlGroup()
+    {
+        if (Selected.Count == 0) return 0;
+        for (int i = 0; i < ControlGroupCount; i++)
+        {
+            HashSet<EntityId> group = _controlGroups[i];
+            if (group.Count != Selected.Count) continue;
+            bool allMatch = true;
+            foreach (EntityId id in Selected)
+            {
+                if (!group.Contains(id))
+                {
+                    allMatch = false;
+                    break;
+                }
+            }
+            if (allMatch) return i + 1;
+        }
+        return 0;
     }
 
     public static int GetDefaultMaxHealth(ushort definition)
@@ -72,6 +121,8 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
             view.Root.QueueFree();
             Views.Remove(id);
             Selected.Remove(id);
+            for (int i = 0; i < ControlGroupCount; i++)
+                _controlGroups[i].Remove(id);
         }
     }
 
@@ -80,6 +131,12 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
         _cameraSize = cameraSize;
         foreach (UnitView view in Views.Values)
             view.UpdateLod(cameraSize);
+    }
+
+    internal void UpdateSelectionVisuals()
+    {
+        foreach ((EntityId id, UnitView view) in Views)
+            view.SetSelected(Selected.Contains(id));
     }
 
     internal void UpdateRecoil(double delta)
@@ -103,6 +160,8 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
         }
         Views.Clear();
         Selected.Clear();
+        for (int i = 0; i < ControlGroupCount; i++)
+            _controlGroups[i].Clear();
         _present.Clear();
         _removed.Clear();
     }

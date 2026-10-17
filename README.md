@@ -87,8 +87,11 @@ its fog of war filter.
 Alternatively, build `src/Game.Godot/Game.Godot.csproj`, then import
 `src/Game.Godot/project.godot` in the Godot .NET editor and run the main scene.
 
-Units move automatically in local demo mode. Left-click selects a unit, Shift + left-click
-adds to the selection, and right-click orders a move. WASD or arrow keys smoothly pan the
+Units move automatically in local demo mode. Left-click selects a unit, dragging with the left button
+box-selects own units, double-clicking an own unit selects all on-screen units of the same type,
+Shift + left-click/drag adds to the selection, and right-click orders a move. `Ctrl+1..9` or `Cmd+1..9` (on every platform)
+stores a control group, `Shift+1..9` adds to it, `1..9` selects it, and pressing the same group number twice
+within 0.35 s centers the camera on the group. WASD or arrow keys smoothly pan the
 camera with normalized diagonal speed scaled by zoom. The mouse wheel smoothly zooms, Space restores
 the overview, and Escape closes open dialogs or clears unit selection. F10, O, or the HUD SETTINGS button
 opens display settings (VSync toggle and FPS cap). The HUD shows connection state, tick time, allocations and traffic.
@@ -132,7 +135,8 @@ For self-contained local inspection without a dedicated server:
   - `Current`: Vibrant red diamond marker with a vertical ground indicator stem, updating with live enemy position.
   - `LastKnown`: Muted translucent red diamond marker with a base ring on the ground, fixed at the position where line of sight was lost.
 - **Selection**:
-  - Left-click selects an own unit or an enemy contact marker.
+  - Left-click selects an own unit or an enemy contact marker; left-drag box-selects own units; double-clicking an own unit selects all on-screen own units of the same type.
+  - `Ctrl+1..9` or `Cmd+1..9` (on every platform) stores the current own selection in a control group, `Shift+1..9` adds to it, `1..9` recalls it, and double-tapping `1..9` centers the camera on the group.
   - Selecting an enemy contact shows its contact ID and observation state in the HUD.
   - Enemy contacts cannot be commanded to move; move orders are only accepted for owned units.
 - **Scenario lifecycle walkthrough**:
@@ -228,6 +232,7 @@ The 2000 m x 2000 m scenario map (`navigation-large`) includes:
 - **Narrow 2.2 m passage**: Gap at X=1200 between buildings at Z in [500..540]. Reconnaissance vehicles fit through the gap; tanks route around the perimeter.
 - **Enclosed unreachable courtyard**: 4-wall perimeter [1400..1480, 1400..1480]. Ordering a move into the interior fails gracefully without stalling the tick budget.
 - **Winding slalom course**: 8 alternating barrier walls at [1600..1900, 200..700] requiring >64 waypoints. Vehicles navigate seamlessly across multiple consecutive chunks.
+- **Debug route targets**: Press `Alt+1` through `Alt+6` with units selected to issue preset long-range test routes across the obstacle topologies (plain number keys `1..9` remain bound to control groups).
 
 ### Recon Raid mission (recon-raid)
 
@@ -499,10 +504,11 @@ Follow this checklist to verify an exported client interactively:
 2. World rendering: Confirm that the window opens, displaying the 128 x 128 m terrain, green grid overlay, directional lighting and HUD panels.
 3. Unit spawning: Confirm that 12 friendly units appear on the map. Verify that all 12 units automatically begin moving north (+60 m).
 4. Selection:
-   - Left-click any unit. Confirm that a yellow selection ring appears, and the status bar displays "1 selected / right-click terrain to move".
-   - Shift + left-click another unit to add it to the selection.
-   - Left-click empty terrain to deselect. Confirm status displays "No units selected".
-   - Press Escape to clear active selections.
+   - Left-click any unit. Confirm that a yellow selection ring appears, and the status bar displays "1 unit selected / Unit #N / RMB terrain to move, RMB enemy to attack".
+   - Drag with the left mouse button across multiple units to box-select them; double-click a unit to select all on-screen units of the same type.
+   - Shift + left-click or Shift + box-drag to add units to the selection.
+   - Press `Ctrl+1..9` (`Cmd+1..9` on macOS) to store a control group, `Shift+1..9` to add to it, `1..9` to recall it (showing the group number on unit badges, the selection card, and the status bar), and double-tap `1..9` to center the camera on the group.
+   - Left-click empty terrain or press Escape to clear active selections.
 5. Movement orders:
    - Select one or more units.
    - Right-click terrain. Confirm that a yellow target ring appears at the click position.

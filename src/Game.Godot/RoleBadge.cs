@@ -23,6 +23,7 @@ internal sealed partial class RoleBadge : PanelContainer
 
     private EntityId? _lastUnitId;
     private string? _lastRoleText;
+    private int _lastControlGroup = -1;
     private ContactId? _lastContactId;
     private ContactState _lastState;
     private DetectionLevel _lastLevel;
@@ -32,6 +33,8 @@ internal sealed partial class RoleBadge : PanelContainer
 
     public EntityId? BoundUnitId { get; private set; }
     public ContactId? BoundContactId { get; private set; }
+    public int BoundControlGroup => _lastControlGroup;
+    public string LabelText => _label.Text;
     public Vector2 ScreenCenter { get; private set; }
 
     public RoleBadge()
@@ -49,16 +52,17 @@ internal sealed partial class RoleBadge : PanelContainer
         AddChild(_label);
     }
 
-    public void BindUnit(EntityId id, string roleText)
+    public void BindUnit(EntityId id, string roleText, int controlGroup = 0)
     {
         BoundUnitId = id;
         BoundContactId = null;
 
-        if (_lastUnitId != id || !string.Equals(_lastRoleText, roleText, StringComparison.Ordinal))
+        if (_lastUnitId != id || !string.Equals(_lastRoleText, roleText, StringComparison.Ordinal) || _lastControlGroup != controlGroup)
         {
             _lastUnitId = id;
             _lastRoleText = roleText;
-            _label.Text = roleText;
+            _lastControlGroup = controlGroup;
+            _label.Text = controlGroup > 0 ? $"{roleText} {controlGroup}" : roleText;
             StyleBoxFlat style = roleText.Contains("TANK", StringComparison.OrdinalIgnoreCase) ? FriendlyTankStyle : FriendlyStyle;
             if (!ReferenceEquals(_lastStyle, style))
             {
@@ -72,6 +76,7 @@ internal sealed partial class RoleBadge : PanelContainer
     {
         BoundUnitId = null;
         BoundContactId = id;
+        _lastControlGroup = 0;
         int ageRounded = (int)MathF.Round(ageSeconds);
 
         if (_lastContactId != id || _lastState != state || _lastLevel != level || _lastClassification != classification || (state == ContactState.LastKnown && _lastAgeRounded != ageRounded))

@@ -29,7 +29,8 @@ internal static class ClientRegressionTests
             CombatFeedbackRegressionTests.Run(scene);
             VehiclePreviewRegressionTests.Run(scene);
             FactionVehicleRegressionTests.Run(scene);
-            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability combat_feedback vehicle_preview faction_vehicles");
+            SelectionRegressionTests.Run(scene);
+            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability combat_feedback vehicle_preview faction_vehicles rts_selection");
             return true;
         }
         catch (Exception exception)
