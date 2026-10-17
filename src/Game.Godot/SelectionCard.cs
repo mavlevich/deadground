@@ -311,6 +311,7 @@ internal sealed partial class SelectionCard : PanelContainer
             {
                 "tank" => "Combat Tank",
                 "recon" => "Scout",
+                "apc" => "Armored Personnel Carrier",
                 "command_vehicle" => "Command Vehicle",
                 _ => def.Classification
             };
@@ -325,6 +326,7 @@ internal sealed partial class SelectionCard : PanelContainer
     {
         "prototype_tank" => "Prototype Tank",
         "recon_vehicle" => "Reconnaissance Vehicle",
+        "apc" => "Armored Personnel Carrier",
         "prototype_vehicle" => "Prototype Vehicle",
         _ => id
     };
@@ -339,6 +341,7 @@ internal sealed partial class SelectionCard : PanelContainer
     {
         ContactClassification.Tank => "Tank",
         ContactClassification.Recon => "Recon Vehicle",
+        ContactClassification.Apc => "APC",
         ContactClassification.CommandVehicle => "Command Vehicle",
         ContactClassification.Vehicle => "Vehicle",
         _ => "Unknown"

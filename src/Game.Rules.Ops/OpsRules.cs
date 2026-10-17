@@ -182,6 +182,7 @@ public sealed class OpsPerceptionCatalog : IUnitPerceptionCatalog
                 "command" or "command_vehicle" or "commandvehicle" => ContactClassification.CommandVehicle,
                 "tank" => ContactClassification.Tank,
                 "recon" or "recon_vehicle" => ContactClassification.Recon,
+                "apc" => ContactClassification.Apc,
                 "vehicle" => ContactClassification.Vehicle,
                 _ => ContactClassification.Vehicle
             };
@@ -894,6 +895,8 @@ public static class CombatScenario
         ushort reconIdx = catalog.RequireDefinitionIndex("recon_vehicle");
         UnitDefinition tankDef = catalog.RequireDefinition("prototype_tank");
         ushort tankIdx = catalog.RequireDefinitionIndex("prototype_tank");
+        UnitDefinition apcDef = catalog.RequireDefinition("apc");
+        ushort apcIdx = catalog.RequireDefinitionIndex("apc");
 
         int tankAmmo = 10;
         if (catalog.Weapons is not null)
@@ -914,6 +917,10 @@ public static class CombatScenario
         world.CreateUnit(2, tankIdx, new Vector2(33f, 25f), tankDef.Speed, tankDef.MaxHealth, tankAmmo); // behind low wall
         world.CreateUnit(2, tankIdx, new Vector2(65f, 50f), tankDef.Speed, tankDef.MaxHealth, tankAmmo); // behind building
         world.CreateUnit(2, reconIdx, new Vector2(65f, 80f), reconDef.Speed, reconDef.MaxHealth, 0);
+
+        // One unarmed APC per side, created last so earlier entity IDs stay the same.
+        world.CreateUnit(1, apcIdx, new Vector2(8f, 38f), apcDef.Speed, apcDef.MaxHealth, 0);
+        world.CreateUnit(2, apcIdx, new Vector2(75f, 65f), apcDef.Speed, apcDef.MaxHealth, 0);
 
         return new Simulation(world, rules);
     }

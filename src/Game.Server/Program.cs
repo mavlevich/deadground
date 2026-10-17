@@ -118,7 +118,7 @@ if (smokeTest)
     if (scenario == "combat")
     {
         for (int i = 0; i < 20; i++) session.Advance(1d / Simulation.TickRate);
-        if (session.Replica.OwnUnits.Length != 3 || session.Replica.ContactCount == 0)
+        if (session.Replica.OwnUnits.Length != 4 || session.Replica.ContactCount == 0)
             throw new InvalidOperationException("Combat smoke test initial detection failed.");
 
         EntityId tankId = default;

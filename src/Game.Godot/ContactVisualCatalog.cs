@@ -13,7 +13,8 @@ internal static class ContactVisualCatalog
         return classification switch
         {
             ContactClassification.Tank => CreateEnemyTankModel(hostileFaction),
-            ContactClassification.Recon => CreateEnemyReconModel(hostileFaction),
+            ContactClassification.Recon => CreateEnemyModel("contact_recon", "EnemyReconModel", hostileFaction),
+            ContactClassification.Apc => CreateEnemyModel("contact_apc", "EnemyApcModel", hostileFaction),
             ContactClassification.CommandVehicle => CreateEnemyCommandVehicleModel(),
             ContactClassification.Vehicle => CreateEnemyGenericVehicleModel(),
             _ => null
@@ -29,11 +30,11 @@ internal static class ContactVisualCatalog
         return visual.Root;
     }
 
-    private static Node3D CreateEnemyReconModel(string? hostileFaction)
+    private static Node3D CreateEnemyModel(string visualId, string name, string? hostileFaction)
     {
-        VehicleVisual visual = VehicleVisualCatalog.InstantiateVisual("contact_recon", hostileFaction)
-            ?? throw new InvalidOperationException("visuals.json has no contact_recon entry for enemy recon presentation.");
-        visual.Root.Name = "EnemyReconModel";
+        VehicleVisual visual = VehicleVisualCatalog.InstantiateVisual(visualId, hostileFaction)
+            ?? throw new InvalidOperationException($"visuals.json has no {visualId} entry for enemy contact presentation.");
+        visual.Root.Name = name;
         AttachHostileAffiliationMarker(visual.Root);
         return visual.Root;
     }

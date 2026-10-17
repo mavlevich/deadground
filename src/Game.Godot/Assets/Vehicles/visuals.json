@@ -27,6 +27,10 @@
   },
   "recon_vehicle": {
     "scene": "res://Assets/Vehicles/recon.glb",
+    "scale": 0.75
+  },
+  "apc": {
+    "scene": "res://Assets/Vehicles/recon.glb",
     "scale": 0.75,
     "factions": {
       "soviet": {
@@ -56,6 +60,10 @@
     }
   },
   "contact_recon": {
+    "scene": "res://Assets/Vehicles/recon.glb",
+    "scale": 0.75
+  },
+  "contact_apc": {
     "scene": "res://Assets/Vehicles/recon.glb",
     "scale": 0.75,
     "factions": {

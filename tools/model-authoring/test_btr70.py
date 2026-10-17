@@ -285,12 +285,14 @@ class Btr70GeometryTests(unittest.TestCase):
         visuals = json.loads(visuals_path.read_text())
         manifest = json.loads((ASSETS_DIR / "BTR70" / "manifest.json").read_text())
 
-        recon_factions = visuals.get("recon_vehicle", {}).get("factions", {})
-        self.assertIn("soviet", recon_factions)
-        soviet_recon = recon_factions["soviet"]
+        # The BTR-70 is an armored personnel carrier, not a recon vehicle.
+        self.assertNotIn("factions", visuals["recon_vehicle"])
+        apc_factions = visuals.get("apc", {}).get("factions", {})
+        self.assertIn("soviet", apc_factions)
+        soviet_apc = apc_factions["soviet"]
 
-        self.assertAlmostEqual(soviet_recon["track_wrap"], manifest["track_wrap_meters"], places=6)
-        self.assertAlmostEqual(soviet_recon["track_gauge"], manifest["track_gauge_meters"], places=3)
+        self.assertAlmostEqual(soviet_apc["track_wrap"], manifest["track_wrap_meters"], places=6)
+        self.assertAlmostEqual(soviet_apc["track_gauge"], manifest["track_gauge_meters"], places=3)
 
 
 if __name__ == "__main__":

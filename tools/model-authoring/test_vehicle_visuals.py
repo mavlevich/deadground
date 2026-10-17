@@ -18,8 +18,8 @@ class VehicleVisualsTests(unittest.TestCase):
             # A whole number of pattern cycles, so track links never jump when travel wraps.
             self.assertAlmostEqual(period / cycle, round(period / cycle), places=6, msg=faction)
 
-    def test_client_wraps_wheeled_recon_travel(self):
-        visuals = json.loads((ASSETS / "visuals.json").read_text())["recon_vehicle"]["factions"]
+    def test_client_wraps_wheeled_apc_travel(self):
+        visuals = json.loads((ASSETS / "visuals.json").read_text())["apc"]["factions"]
         manifest = json.loads((ASSETS / "BTR70" / "manifest.json").read_text())
         period = manifest["track_wrap_meters"]
         self.assertAlmostEqual(visuals["soviet"]["track_wrap"], period, places=6)

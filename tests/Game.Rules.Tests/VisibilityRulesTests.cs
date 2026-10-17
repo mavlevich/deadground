@@ -20,10 +20,11 @@ public sealed class VisibilityRulesTests
         Assert.True(catalog.Detection.EvaluationIntervalTicks > 0);
         Assert.True(catalog.Detection.CorrelationDistanceGate > 0f);
 
-        Assert.Equal(3, catalog.Units.Length);
+        Assert.Equal(4, catalog.Units.Length);
         Assert.Equal("prototype_vehicle", catalog.Units[0].Id);
         Assert.Equal("recon_vehicle", catalog.Units[1].Id);
         Assert.Equal("prototype_tank", catalog.Units[2].Id);
+        Assert.Equal("apc", catalog.Units[3].Id);
 
         foreach (UnitDefinition unit in catalog.Units)
         {
