@@ -1,0 +1,58 @@
+{
+  "asset": "BRDM-2 (GAZ-41-08) 4x4 amphibious scout car RTS visual study",
+  "configuration": "BRDM-2 with 4x4 road wheels, retracted auxiliary belly wheels, forward visor flaps, dual rear deck louvres, side mufflers with heat shields, single rear waterjet outlet, BPU-1 turret, and 14.5 mm KPVT gun",
+  "units": "meters",
+  "up": "+Y",
+  "forward": "-Z",
+  "color_authoring": "sRGB hex converted to linear glTF factors",
+  "vertex_colors": "rgb: tint x baked ambient occlusion x edge wear, a: dirt mask",
+  "reference_anchors": {
+    "hull_length_meters": 5.6,
+    "overall_length_meters": 5.75,
+    "width_over_hull_meters": 2.35,
+    "height_to_turret_top_meters": 2.17,
+    "height_to_searchlight_meters": 2.31,
+    "ground_clearance_meters": 0.43,
+    "wheelbase_meters": 3.1,
+    "track_gauge_front_meters": 1.84,
+    "track_gauge_rear_meters": 1.79,
+    "track_gauge_meters": 1.84,
+    "wheel_radius_meters": 0.56,
+    "wheels_per_side": 2,
+    "belly_wheels_per_side": 2
+  },
+  "lods": [
+    {
+      "file": "brdm2.glb",
+      "triangles": 7238,
+      "vertices": 8852,
+      "mesh_parts": 28,
+      "materials": 8,
+      "bytes": 561312,
+      "lod": 0,
+      "role": "close"
+    },
+    {
+      "file": "brdm2_lod1.glb",
+      "triangles": 3437,
+      "vertices": 3846,
+      "mesh_parts": 27,
+      "materials": 8,
+      "bytes": 262832,
+      "lod": 1,
+      "role": "rts"
+    },
+    {
+      "file": "brdm2_lod2.glb",
+      "triangles": 1466,
+      "vertices": 2001,
+      "mesh_parts": 14,
+      "materials": 4,
+      "bytes": 116668,
+      "lod": 2,
+      "role": "distant"
+    }
+  ],
+  "track_gauge_meters": 1.84,
+  "track_wrap_meters": 999.2777912538415
+}
