@@ -91,10 +91,28 @@ internal sealed class CameraRig
         SyncCamera();
     }
 
+    // The camera looks down at the focus along a fixed direction (up 115, back 80 at the closest
+    // zoom). An orthographic view of height Size starts its bottom rows Size/2 * cot(pitch) closer to
+    // the ground than the focus, so the camera backs off with the zoom; otherwise the near half of a
+    // wide view falls behind the camera and is clipped.
+    internal const float BaseDistance = 140f;
+    private static readonly Vector3 ViewOffsetDirection = new Vector3(0f, 115f, 80f).Normalized();
+    private const float TerrainMargin = 150f;
+
+    internal static float CameraDistance(float size)
+    {
+        float cotPitch = ViewOffsetDirection.Z / ViewOffsetDirection.Y;
+        return Mathf.Max(BaseDistance, size * 0.5f * cotPitch + TerrainMargin);
+    }
+
     private void SyncCamera()
     {
-        _camera.Size = _model.CurrentSize;
-        _camera.Position = new Vector3(_model.Focus.X, _model.Focus.Y + 115f, _model.Focus.Z + 80f);
-        _camera.LookAt(new Vector3(_model.Focus.X, _model.Focus.Y, _model.Focus.Z), Vector3.Up);
+        float size = _model.CurrentSize;
+        float distance = CameraDistance(size);
+        _camera.Size = size;
+        Vector3 focus = new(_model.Focus.X, _model.Focus.Y, _model.Focus.Z);
+        _camera.Position = focus + ViewOffsetDirection * distance;
+        _camera.Far = distance + size + 1000f;
+        _camera.LookAt(focus, Vector3.Up);
     }
 }

@@ -5,25 +5,51 @@ namespace DeadGround.Client;
 
 internal static class TerrainView
 {
-    public static MeshInstance3D Create(HeightMap map)
+    public static readonly Vector3 LightDirection = new(-0.5f, 0.70710678f, -0.5f);
+    public static readonly Color LowColor = new("424f3c");
+    public static readonly Color HighColor = new("687459");
+
+    public static float ComputeHillshade(Vector3 normal)
+    {
+        float dot = normal.Dot(LightDirection);
+        return 0.45f + 0.778f * dot;
+    }
+
+    public static MeshInstance3D Create(HeightMap map, FogOfWarView? fogOverlay = null)
     {
         int columns = map.Columns, rows = map.Rows;
         Vector3[] vertices = new Vector3[columns * rows];
         Vector3[] normals = new Vector3[vertices.Length];
         Color[] colors = new Color[vertices.Length];
         int[] indices = new int[(columns - 1) * (rows - 1) * 6];
-        Color low = new("53644c"), high = new("849070");
+
+        float minH = map.MinHeight;
+        float maxH = map.MaxHeight;
+        float heightSpan = maxH - minH;
+
         for (int z = 0; z < rows; z++)
+        {
             for (int x = 0; x < columns; x++)
             {
                 int i = z * columns + x;
                 float wx = x * map.CellSize, wz = z * map.CellSize;
                 float h = map.GetHeight(wx, wz);
                 vertices[i] = new Vector3(wx, h, wz);
-                normals[i] = new Vector3(map.GetHeight(wx - map.CellSize, wz) - map.GetHeight(wx + map.CellSize, wz),
-                    2 * map.CellSize, map.GetHeight(wx, wz - map.CellSize) - map.GetHeight(wx, wz + map.CellSize)).Normalized();
-                colors[i] = low.Lerp(high, Mathf.Clamp(h / 10, 0, 1));
+                normals[i] = new Vector3(
+                    map.GetHeight(wx - map.CellSize, wz) - map.GetHeight(wx + map.CellSize, wz),
+                    2 * map.CellSize,
+                    map.GetHeight(wx, wz - map.CellSize) - map.GetHeight(wx, wz + map.CellSize)).Normalized();
+
+                float heightT = heightSpan > 0.001f ? Mathf.Clamp((h - minH) / heightSpan, 0f, 1f) : 0.5f;
+                Color baseColor = LowColor.Lerp(HighColor, heightT);
+                float hillshade = ComputeHillshade(normals[i]);
+                colors[i] = new Color(
+                    Mathf.Clamp(baseColor.R * hillshade, 0f, 1f),
+                    Mathf.Clamp(baseColor.G * hillshade, 0f, 1f),
+                    Mathf.Clamp(baseColor.B * hillshade, 0f, 1f),
+                    1.0f);
             }
+        }
         int offset = 0;
         for (int z = 0; z < rows - 1; z++)
             for (int x = 0; x < columns - 1; x++)
@@ -41,10 +67,14 @@ internal static class TerrainView
         arrays[(int)Mesh.ArrayType.Index] = indices;
         ArrayMesh mesh = new();
         mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+
+        Material material = fogOverlay != null
+            ? fogOverlay.Material
+            : new StandardMaterial3D { ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded, VertexColorUseAsAlbedo = true };
         return new MeshInstance3D
         {
             Mesh = mesh,
-            MaterialOverride = new StandardMaterial3D { VertexColorUseAsAlbedo = true, Roughness = 1 }
+            MaterialOverride = material
         };
     }
 

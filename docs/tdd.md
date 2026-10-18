@@ -815,6 +815,7 @@ Implementation order:
 - Immediate stop on key release without inertia or drift.
 - Exponential zoom smoothing: `1 - exp(-12 * delta)`, frame-rate independent over arbitrary frame rates.
 - Space key restores default focus and zoom size.
+- The camera looks down at the focus along a fixed direction and backs off as the orthographic size grows, with the far plane following it. At a wide zoom the near rows of the view would otherwise start behind the camera and the near half of the map would be clipped.
 - Panning and zooming remain active while issuing move/attack orders and selecting units.
 
 Selection and control groups (client presentation only):
@@ -1001,6 +1002,18 @@ still require large-battle render validation before setting production GPU budge
   shot, blast and smoke for visual review.
 - Open rules questions, not implemented: whether a shot briefly reveals the shooter, and whether
   muzzle dust briefly blinds the shooter on dry ground. Both need a TDD rules change first.
+
+### 18.9 Fog of war and relief
+
+- Terrain relief shading in `TerrainView` scales height tinting to the map height range (`MinHeight` to `MaxHeight`) rather than a fixed ceiling, keeping height variations discernible across maps of all sizes.
+- Hillshade lighting from terrain normals uses conventional cartographic northwest light (azimuth 315 deg, altitude 45 deg, direction `(-0.5, 0.70710678, -0.5)`). Normal dot lighting scales with increased slope contrast, rendered unshaded so scene lights do not wash out subtle relief.
+- Fog of war on the map (`FogOfWarView`) visualizes terrain currently observed by friendly units. It operates strictly on client-known state: own units from `ClientReplica`, perception limits (`sensor_range`, `eye_height`) from the unit catalog, the terrain heightmap, and scenario static geometry. It never inspects server simulation state or hidden enemy truth.
+- A 2D visibility grid covers the terrain: 20 m cells on kilometer maps and 4 m cells on small test maps. Visibility is evaluated using a per-cell viewshed (XDraw) that visits every cell in range exactly once in square rings outward from the observer. Each cell interpolates its horizon from closer neighbor cells, and ground points not below that horizon are seen. Structures raise the horizon of cells they cover to their top.
+- Recomputation runs at approximately 4 Hz (every 0.25 s). Units are swept within a frame time budget of 0.85 ms and the sweep continues in the next frame, so per-frame CPU time stays under 2 ms.
+- Each own unit keeps the cells it saw at its last sweep, and the grid counts how many units see each cell. A unit that moved less than 2 m keeps its viewshed and is not swept again; a moved unit removes its old cells and adds the new ones; a unit that left the replica removes its cells. A force that holds its ground costs almost nothing per cycle, and only movers are swept.
+- When publishing visibility, the fog texture is blurred by one cell into a preallocated R8 image and texture, ensuring zero managed heap allocations in steady state while providing smooth, soft boundaries at any camera distance.
+- Vehicles, contacts, ghost markers, role badges, projectile tracers, and combat effects remain fully visible regardless of map fog.
+- The overlay can be toggled in game using F9 or V for comparative inspection and debugging.
 
 ## 19. Rule sets and modularity
 

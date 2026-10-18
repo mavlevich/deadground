@@ -34,7 +34,8 @@ internal static class ClientRegressionTests
             VehicleEffectsRegressionTests.Run(scene);
             CannonSoundRegressionTests.Run(scene);
             CheckSeenMeansKnownContactPresentation(scene);
-            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability combat_feedback vehicle_preview faction_vehicles rts_selection vehicle_effects cannon_sound historical_units seen_means_known");
+            FogOfWarRegressionTests.Run(scene);
+            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability combat_feedback vehicle_preview faction_vehicles rts_selection vehicle_effects cannon_sound historical_units seen_means_known fog_of_war relief");
             return true;
         }
         catch (Exception exception)
@@ -435,6 +436,35 @@ internal static class ClientRegressionTests
         }
     }
 
+    // At a wide zoom the near half of the map used to fall behind the camera and was clipped,
+    // which showed as a wavy edge with half the map missing.
+    private static void CheckWholeViewInFrontOfCamera(Node3D scene)
+    {
+        Camera3D camera = new() { Projection = Camera3D.ProjectionType.Orthogonal };
+        scene.AddChild(camera);
+        try
+        {
+            CameraRig rig = new(camera, new Vector3(1000, 20, 1000), 2500f, 2000f, 2000f);
+            Basis basis = camera.GlobalTransform.Basis;
+            Vector3 forward = -basis.Z;
+            Vector3 up = basis.Y;
+            float half = camera.Size * 0.5f;
+            foreach (float v in new[] { -half, 0f, half })
+            {
+                Vector3 origin = camera.GlobalPosition + up * v;
+                // Distance along the view ray to the ground level of the focus, plus or minus 50 m of relief.
+                foreach (float ground in new[] { -30f, 20f, 70f })
+                {
+                    float t = (origin.Y - ground) / -forward.Y;
+                    Require(t > camera.Near && t < camera.Far,
+                        $"Ground at {ground} m on view row {v:F0} is outside the camera range (t={t:F1}, far={camera.Far:F0}).");
+                }
+            }
+            Require(rig.Size == 2500f, "Wide zoom size mismatch.");
+        }
+        finally { camera.QueueFree(); }
+    }
+
     private static void CheckCameraRig(Node3D scene)
     {
         Camera3D camera = new();
@@ -446,6 +476,7 @@ internal static class ClientRegressionTests
             Require(rig.Size == 112f, "Initial size mismatch.");
             Require(camera.Size == 112f, "Camera projection size mismatch.");
             Require(camera.Position.Y > 64f, "Camera Y offset missing.");
+            CheckWholeViewInFrontOfCamera(scene);
 
             // Test zoom in
             rig.ZoomIn();

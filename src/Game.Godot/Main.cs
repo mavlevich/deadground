@@ -41,9 +41,12 @@ public partial class Main : Node3D
     private PanelContainer _topHud = null!, _bottomHud = null!;
     private readonly Rect2[] _badgeOccludingPanels = new Rect2[6];
     private readonly Rect2[] _inputOccludingPanels = new Rect2[5];
+    private FogOfWarView? _fogOfWar;
     private string? _screenshotPath;
     private double _screenshotTimer = 0.5;
+    private bool _screenshotQuit;
 
+    internal FogOfWarView? FogOfWar => _fogOfWar;
     internal CameraRig CameraRig => _cameraRig;
     internal SettingsPanel SettingsPanel => _settingsPanel;
     internal SelectionCard SelectionCard => _selectionCard;
@@ -129,6 +132,8 @@ public partial class Main : Node3D
         string? connectTarget = null;
         string? captureDir = null;
         string? effectsCaptureDir = null;
+        float? overrideCameraSize = null;
+        Vector3? overrideCameraFocus = null;
         int port = 7777;
 
         void ParseArgs(string[] args)
@@ -158,6 +163,26 @@ public partial class Main : Node3D
                 else if (args[i] == "--screenshot-delay" && i + 1 < args.Length && double.TryParse(args[i + 1], System.Globalization.CultureInfo.InvariantCulture, out double delay))
                 {
                     _screenshotTimer = delay;
+                    i++;
+                }
+                else if (args[i] == "--screenshot-quit")
+                {
+                    _screenshotQuit = true;
+                }
+                else if (args[i] == "--camera-size" && i + 1 < args.Length && float.TryParse(args[i + 1], System.Globalization.CultureInfo.InvariantCulture, out float cSize))
+                {
+                    overrideCameraSize = cSize;
+                    i++;
+                }
+                else if (args[i] == "--camera-focus" && i + 1 < args.Length)
+                {
+                    string[] parts = args[i + 1].Split(',');
+                    if (parts.Length == 2 &&
+                        float.TryParse(parts[0], System.Globalization.CultureInfo.InvariantCulture, out float fx) &&
+                        float.TryParse(parts[1], System.Globalization.CultureInfo.InvariantCulture, out float fz))
+                    {
+                        overrideCameraFocus = new Vector3(fx, 0, fz);
+                    }
                     i++;
                 }
                 else if (args[i] == "--vehicle-effects-capture" && i + 1 < args.Length)
@@ -248,7 +273,8 @@ public partial class Main : Node3D
         }
 
 
-        MeshInstance3D terrain = TerrainView.Create(_map);
+        _fogOfWar = new FogOfWarView(_map, scenarioGeometry);
+        MeshInstance3D terrain = TerrainView.Create(_map, _fogOfWar);
         AddChild(terrain);
         _terrainWindingValid = !_smokeTest || TerrainView.HasUpwardFrontFaces(terrain);
         AddChild(TerrainView.CreateGrid(_map));
@@ -293,7 +319,7 @@ public partial class Main : Node3D
             _benchmarkTargetFrames = activeSettings.BenchmarkFrames;
         }
 
-        float initialCameraSize = _scenario switch
+        float initialCameraSize = overrideCameraSize ?? _scenario switch
         {
             "combat" => 75,
             "navigation-large" => 450,
@@ -303,7 +329,7 @@ public partial class Main : Node3D
         };
         _camera = new Camera3D { Projection = Camera3D.ProjectionType.Orthogonal, Size = initialCameraSize, Far = 3500, Current = true };
         AddChild(_camera);
-        Vector3 initialFocus = _scenario switch
+        Vector3 initialFocus = overrideCameraFocus ?? _scenario switch
         {
             "combat" => new Vector3(45, 0, 45),
             "navigation-large" => new Vector3(300, 0, 300),
@@ -316,6 +342,10 @@ public partial class Main : Node3D
 
         // Historical scenarios use the Cold War catalog; the small test maps keep prototype data.
         _catalog = ScenarioContent.LoadCatalog(_scenario);
+        if (_session.Replica.OwnUnits.Length > 0)
+        {
+            _fogOfWar.UpdateAllNow(_session.Replica, _catalog);
+        }
         // Factions are part of the public match setup; the side is known once the session assigns it.
         MatchSetup matchSetup = setup;
         _unitViews = new UnitViewSet(this, _map, _catalog, () => matchSetup.GetPlayerFaction(_session.AssignedPlayerId));
@@ -434,6 +464,7 @@ public partial class Main : Node3D
         _lastFrameTimestamp = frameStartTimestamp;
 
         _session.Advance(delta);
+        _fogOfWar?.Update((float)delta, _session.Replica, _catalog);
         UpdateViews();
         _unitViews.UpdateLod(_cameraRig.Size);
         _unitViews.UpdateRecoil(delta);
@@ -524,6 +555,10 @@ public partial class Main : Node3D
                     GD.Print($"SCREENSHOT_SAVED {_screenshotPath}");
                 }
                 _screenshotPath = null;
+                if (_screenshotQuit)
+                {
+                    GetTree().Quit(0);
+                }
             }
         }
 
@@ -633,6 +668,14 @@ public partial class Main : Node3D
 
         if (@event is InputEventKey { Pressed: true, Echo: false } key)
         {
+            if (key.Keycode is Key.F9 or Key.V)
+            {
+                _fogOfWar?.Toggle();
+                _status.Text = _fogOfWar?.IsEnabled == true ? "Fog of war enabled" : "Fog of war disabled";
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
             if (key.Keycode is Key.F10 or Key.O)
             {
                 CancelActiveDrag();
@@ -1227,6 +1270,7 @@ public partial class Main : Node3D
 
         if (_session.Replica.OwnUnits.Length > 0)
         {
+            _fogOfWar?.UpdateAllNow(_session.Replica, _catalog);
             _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
         }
         _status.Text = "Mission restarted. Objective: Destroy enemy command vehicle. Preserve recon vehicle.";
@@ -1269,6 +1313,7 @@ public partial class Main : Node3D
 
     public override void _ExitTree()
     {
+        _fogOfWar?.Dispose();
         _missionPanel?.Cleanup();
         _session?.Dispose();
     }
