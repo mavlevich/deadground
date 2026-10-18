@@ -225,8 +225,8 @@ Two-stage detection and identification:
 - Continuous line-of-sight requirement: if visual contact is broken, or if the unit leaves `identify_range` before the required duration is reached, the identification progress counter resets to zero.
 - Once identified, the contact classification is revealed (`Recon`, `Tank`, `CommandVehicle`, `Apc`).
   `Apc` was added in protocol version 9.
-- Planned (section 17.1): a third stage. `Recognized` reveals the role, and `Identified` reveals the
-  vehicle type, for example "T-62".
+- Planned (section 17.1): identification also reveals the vehicle type, for example "T-62", not only
+  the role.
 - When an identified contact is lost (`Current` becomes `LastKnown`) and subsequently re-correlated, its detection level resets to `Detected` and its classification resets to `Unknown`. A new period of continuous observation within identify range is required to confirm identity again.
 
 Contact lifecycle:
@@ -741,7 +741,7 @@ Vehicle types:
   later `m151a2`, `brdm2u`, `m577`, `ural375d`, `m35a2` (era about 1976 to 1982). A type replaces the
   "prototype unit plus faction model" pairs; `visuals.json` maps each type to its model directly.
 - Unit data gains `name` (display name, for example "T-62"), `faction` and `role` (`tank`, `apc`,
-  `recon`, `command`, `truck`). The role becomes the contact classification on recognition.
+  `recon`, `command`, `truck`). The role becomes the contact classification on identification.
 - Scenarios spawn the types of each player's faction. A scenario names the types it uses, so a
   missing model or a missing type fails at load, not in play.
 - The client shows the type name in the selection card, for example "T-62 / Tank", and keeps the
@@ -756,17 +756,17 @@ Numbers and sources:
   heading (section 9.5).
 - Weapons: effective range from period sources. Hit probability by range is section 12.3, not the
   range field. Armor values by side are stored now and used when section 12.3 lands.
-- Sensors: separate ranges to detect, recognize and identify, per observer type, for a clear day,
-  open ground and a moving target. Cover, a halted target, dust, smoke and weather reduce them later
+- Sensors: separate ranges to detect and to identify, per observer type, for a clear day, open
+  ground and a moving target. Cover, a halted target, dust, smoke and weather reduce them later
   (section 10). These starting values are estimates until a period table is found.
 
-Recognition and identification (section 7.1):
+Identification (section 7.1):
 
-- Three stages replace the current two: `Detected` (something is there), `Recognized` (role, for
-  example "tank") and `Identified` (type, for example "T-62"). Each stage needs continuous line of
-  sight within its range for a time from data, like `identify_ticks` today.
-- A contact carries the identified type only at `Identified`. Before that the client shows the role
-  only. This keeps the type from leaking once a faction has more than one tank type.
+- The two stages stay: `Detected` (something is there) and `Identified`. Identification now reveals
+  the vehicle type, for example "T-62", and with it the role. There is no separate stage for the role
+  alone; it would add a step that players barely notice.
+- A contact carries the type only at `Identified`. A `Detected` contact shows nothing about type or
+  role, so the type cannot leak even when a faction has more than one tank type.
 - The contact record gains a type field (`ushort`, the unit definition of the type, sent only when
   identified). The protocol version increases by one.
 
@@ -780,8 +780,8 @@ Presentation:
 Implementation order:
 
 1. Unit types, names, period numbers and a 2 km combat scenario. The client shows type names for own
-   units. Contacts keep the current two stages.
-2. Three-stage recognition and identification with the type field in contacts.
+   units. Identified contacts still show the role only.
+2. The type field in identified contacts, so the client names identified enemies.
 3. The 2 x 2 km recon raid battlefield (milestone M1) with the new data.
 
 ## 18. Presentation
