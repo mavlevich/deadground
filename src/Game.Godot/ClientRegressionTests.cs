@@ -31,7 +31,8 @@ internal static class ClientRegressionTests
             FactionVehicleRegressionTests.Run(scene);
             SelectionRegressionTests.Run(scene);
             VehicleEffectsRegressionTests.Run(scene);
-            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability combat_feedback vehicle_preview faction_vehicles rts_selection vehicle_effects");
+            CannonSoundRegressionTests.Run(scene);
+            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability combat_feedback vehicle_preview faction_vehicles rts_selection vehicle_effects cannon_sound");
             return true;
         }
         catch (Exception exception)
