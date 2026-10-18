@@ -217,18 +217,14 @@ Rules:
 
 Clients see enemies only as contacts. A contact has its own `ContactId`, issued per side. Enemy `EntityId` values never reach a client, even for a fully identified unit. Otherwise a modified client could follow an identified tank by its ID after it hides again.
 
-A contact holds: detection level (`Detected`, `Identified`), classification (`Unknown`, `Vehicle`, `Tank`, `Recon`, `CommandVehicle`, `Apc`), last known position, last seen tick, and what the side may know about its state (for example "damaged", never exact health).
+A contact holds: vehicle type (definition index), classification (`Vehicle`, `Tank`, `Recon`, `CommandVehicle`, `Apc`), state (`Current`, `LastKnown`), last known position, last seen tick, and what the side may know about its state (for example "damaged", never exact health).
 
-Two-stage detection and identification:
+Seen means known:
 
-- A hostile unit entering visual line-of-sight within sensor range starts at `DetectionLevel.Detected` with `ContactClassification.Unknown`.
-- To reach `DetectionLevel.Identified`, an observer must maintain continuous line-of-sight to the unit within the observer unit's `identify_range` for at least `identify_ticks`.
-- Continuous line-of-sight requirement: if visual contact is broken, or if the unit leaves `identify_range` before the required duration is reached, the identification progress counter resets to zero.
-- Once identified, the contact classification is revealed (`Recon`, `Tank`, `CommandVehicle`, `Apc`).
-  `Apc` was added in protocol version 9.
-- Planned (section 17.1): identification also reveals the vehicle type, for example "T-62", not only
-  the role.
-- When an identified contact is lost (`Current` becomes `LastKnown`) and subsequently re-correlated, its detection level resets to `Detected` and its classification resets to `Unknown`. A new period of continuous observation within identify range is required to confirm identity again.
+- A contact has no "detected but unknown" stage. As soon as a side sees an enemy unit, its contact carries the classification (role) and the vehicle type. Fog of war stays: only what own units see.
+- There is no separate identification progress counter, no identify range, and no identify duration.
+- When a contact is lost (`Current` becomes `LastKnown`), it retains the vehicle type and classification last seen without updating while unseen.
+- When a contact is re-correlated, its track resumes under the existing `ContactId` and retains its vehicle type and classification.
 
 Contact lifecycle:
 
@@ -463,14 +459,13 @@ same commands gives the same headings. Stage 2 adds the wheeled tests listed abo
   - Expiration: `LastKnown` contacts age out and are permanently removed once unobserved for longer than `MemoryDurationTicks` (default 100 ticks / 5.0 s).
   - Overflow eviction policy: each side supports up to 256 contacts. If capacity is exceeded, the oldest `LastKnown` contact is evicted first. `Current` contacts are never evicted in favor of `LastKnown` markers.
   - Canonical export: exported contacts are sorted deterministically by `ContactId` for consistent network serialization.
-- Snapshot wire protocol v6:
-  - Protocol version incremented to 6.
-  - Header is 16 bytes: `Version` (1 byte), `SnapshotKind` (1 byte), `uint Sequence` (4 bytes), `int ServerTick` (4 bytes), `ushort UnitCount` (2 bytes), `ushort ContactCount` (2 bytes), `ushort EventCount` (2 bytes).
+- Snapshot wire protocol v10:
+  - Protocol version incremented to 10.
+  - Header is 48 bytes: `Version` (1 byte), `SnapshotKind` (1 byte), `uint Sequence` (4 bytes), `int ServerTick` (4 bytes), `ushort UnitCount` (2 bytes), `ushort ContactCount` (2 bytes), `ushort EventCount` (2 bytes), plus session header fields.
   - Own unit record is 30 bytes: `uint Id` (4 bytes), `ushort Definition` (2 bytes), `Vector2 Position` (8 bytes), `uint SupportSurface` (4 bytes), `byte NavStatus` (1 byte), `ushort Health` (2 bytes), `ushort Ammunition` (2 bytes), `ushort ReloadTicksRemaining` (2 bytes), `byte AttackStatus` (1 byte), `uint TargetContactId` (4 bytes).
-  - Contact record is 18 bytes: `uint ContactId` (4 bytes), `byte State` (1 byte), `byte Classification` (1 byte), `Vector2 Position` (8 bytes), `int LastSeenTick` (4 bytes).
+  - Contact record is 20 bytes: `uint ContactId` (4 bytes), `byte State` (1 byte), `byte Classification` (1 byte), `ushort Type` (2 bytes), `Vector2 Position` (8 bytes), `int LastSeenTick` (4 bytes).
   - Combat event record is 39 bytes: `uint EventId` (4 bytes), `int ServerTick` (4 bytes), `byte Kind` (1 byte), `ushort PresentationId` (2 bytes), `Vector3 Origin` (12 bytes), `Vector3 Target` (12 bytes), `uint ShooterUnitId` (4 bytes).
   - Commands: `MoveCommand` is 22 bytes (`MoveKind = 1`), `AttackCommand` is 18 bytes (`AttackKind = 7`: `Version` (1), `Kind` (1), `Sequence` (4), `ClientTick` (4), `Unit` (4), `TargetContactId` (4)). Both commands share a single sequence stream per player.
-  - Maximum snapshot payload size is 37,840 bytes (`16 + 1024 * 30 + 256 * 18 + 64 * 39`).
   - Information isolation: server-filtered snapshots only contain permitted observations and knowledge-filtered events for the recipient player. Foreign truth state and hidden firing origins are never transmitted.
 
 Detection is a measured CPU hotspot that fits the per-tick simulation budget: steady-state detection, combat resolution, and snapshot serialization execute with zero managed heap allocations.
@@ -656,6 +651,7 @@ Status: planned for M2. M1 units keep one weapon each, so the M1 exit does not d
 - Map objects use `MapObjectId`. Their static geometry stays in the map package; snapshots carry allowed mutable fields such as bridge condition and objective ownership. A missing knowledge entry does not mean the object was destroyed or restored to its initial state.
 - Clients apply a full snapshot only after the complete message is received. On reconnect the same state blocks restore the allowed view without needing earlier presentation events.
 - Budget estimate: 100 unit records at about 16 bytes are 1.6 KB, or 16 KB/s at 10 Hz. This estimates only unit records. Measurements include contacts, world state, headers and transport overhead against the 30 KB/s budget.
+- Protocol version 10: contact records are 20 bytes (`ContactId` (4), `State` (1), `Classification` (1), `ushort Type` (2), `Position` (8), `LastSeenTick` (4)). Own units are 30 bytes.
 - Delta compression (acknowledged baselines, dirty fields) is added only if measurements exceed the budget.
 - Quantization: ground units send X, Z and support surface. Height is computed on the client (section 8.3). 10 cm precision on a 16 km map is 18 bits per axis.
 - Clients render about 100 to 150 ms behind the server and interpolate.
@@ -745,13 +741,13 @@ Vehicle types:
   "prototype unit plus faction model" pairs; `visuals.json` maps each type to its model directly.
 - Unit data gains `name` (display name, for example "T-62") and `faction`. The existing
   `classification` field holds the role (`tank`, `apc`, `recon`, `command`, `truck`), which becomes
-  the contact classification on identification. The catalog rejects a blank name or an unknown
+  the contact classification when the unit is seen. The catalog rejects a blank name or an unknown
   faction.
 - Scenarios spawn the types of each player's faction. A scenario names the types it uses, so a
   missing model or a missing type fails at load, not in play.
-- The client shows the type name in the selection card ("T-62 [Combat Tank]") and on the badge of
-  own units ("T-62", "BTR-70"). Enemy badges keep the role ("TANK") until identification reveals the
-  type (step 2 below); the name must not show more than the side has identified.
+- The client shows the type name in the selection card ("T-62 [Tank]") and on the badge of
+  own units and enemy contacts ("T-62", "BTR-70") immediately upon sighting. Prototype units show
+  their role ("TANK", "RECON", "CMD").
 
 Numbers and sources:
 
@@ -763,19 +759,18 @@ Numbers and sources:
   or reverses as fast as it drives. `turn_rate` comes with hull heading (section 9.5).
 - Weapons: effective range from period sources. Hit probability by range is section 12.3, not the
   range field. Armor values by side are stored now and used when section 12.3 lands.
-- Sensors: separate ranges to detect and to identify, per observer type, for a clear day, open
-  ground and a moving target. Cover, a halted target, dust, smoke and weather reduce them later
-  (section 10). These starting values are estimates until a period table is found.
+- Sensors: visual sensor range per observer type, for a clear day, open ground and a moving target.
+  Cover, a halted target, dust, smoke and weather reduce them later (section 10). Seen means known:
+  any visible unit reveals its vehicle type at once.
 
-Identification (section 7.1):
+Seen means known (section 7.1):
 
-- The two stages stay: `Detected` (something is there) and `Identified`. Identification now reveals
-  the vehicle type, for example "T-62", and with it the role. There is no separate stage for the role
-  alone; it would add a step that players barely notice.
-- A contact carries the type only at `Identified`. A `Detected` contact shows nothing about type or
-  role, so the type cannot leak even when a faction has more than one tank type.
-- The contact record gains a type field (`ushort`, the unit definition of the type, sent only when
-  identified). The protocol version increases by one.
+- A visible enemy shows its vehicle type at once. The separate identification stage and progress
+  counter (identify range, identify duration, reset on loss) are removed.
+- The contact record carries the vehicle definition index (`ushort Type`), revealing the vehicle type
+  and role immediately. Protocol version is 10.
+- Enemy contacts render with their vehicle type's model (1:1 scale with hostile affiliation marker)
+  instead of an unknown diamond marker.
 
 Presentation:
 
@@ -789,9 +784,9 @@ Implementation order:
 1. Done. Unit types, names, period numbers and the 2 km `battle` scenario (a meeting engagement: a
    ridge with two saddles hides the start areas from each other, and a village sits on one saddle).
    The client shows type names for own units, draws historical models at 1:1 scale and a 100 m grid
-   on kilometer maps. Identified contacts still show the role only, with the prototype contact models
-   at their 0.75 scale until step 2.
-2. The type field in identified contacts, so the client names identified enemies.
+   on kilometer maps.
+2. Done. Seen means known: contacts carry vehicle type immediately, protocol version 10, real models
+   and type badges on enemy contacts without identification delay.
 3. The 2 x 2 km recon raid battlefield (milestone M1) with the new data.
 
 ## 18. Presentation
@@ -866,14 +861,13 @@ Planned controls (client only unless a section is named):
 
 ### 18.4 Unit, contact, and combat readability
 
-- Visual contact classification and identity isolation:
-  - Unknown enemy contacts (`DetectionLevel.Detected` or `ContactClassification.Unknown`) display a neutral 45-degree rotated diamond marker (`BoxMesh`) without 3D vehicle geometry or health bars.
-  - Confirmed enemy contacts (`DetectionLevel.Identified`) display generic vehicle 3D models (`tank.glb`, `recon.glb`, or dedicated command vehicle chassis with radio shelter and communication mast) mapped strictly from `ContactClassification`, never from truth unit definitions.
+- Visual contact classification and identity presentation ("seen means known"):
+  - A visible enemy contact (`ContactState.Current`) is drawn directly with the 3D model of its vehicle type, or its classification fallback model if the type is outside the visual catalog.
   - To prevent sharing or mutating shared material instances, enemy vehicle models are distinguished with hostile affiliation ground markers (`HostileAffiliationMarker`) and distinct badge themes.
-  - Lost contacts (`ContactState.LastKnown`) immediately hide live 3D models and display stationary uncertainty ghost markers at frozen coordinates with observation age.
-  - State transitions strictly clear stale models: `Identified` -> `LastKnown` -> `Detected Unknown` (destroys old vehicle model and resets classification) -> re-identification as a different classification instantiates the new generic model.
+  - Lost contacts (`ContactState.LastKnown`) immediately hide live 3D models and display stationary uncertainty ghost markers at frozen coordinates with observation age, showing the ghost base and the last seen type on the badge.
+  - State transitions strictly clear stale models: transitioning to `LastKnown` hides the vehicle model and shows the ghost base; re-establishing line of sight restores the 3D model for the visible vehicle type.
 - Screen-space role badges:
-  - Role indicators (`TANK`, `RECON`, `CMD`, `[ ? ]`) anchored in screen space above units and contacts.
+  - Role and vehicle name indicators (for example "T-62", "BTR-70", or prototype roles "TANK", "RECON", "CMD") anchored in screen space above units and contacts.
   - Text and badge shapes distinguish units without relying solely on color tinting.
   - Dynamic culling hides badges that are behind the camera, off-screen, or occluded by main UI panels (`_topHud`, `_bottomHud`, `_selectionCard`, `_settingsPanel`, `_missionPanel`).
   - Opacity scales smoothly with camera zoom to prevent popping.

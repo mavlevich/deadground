@@ -104,7 +104,7 @@ internal sealed partial class SelectionCard : PanelContainer
     // Contact cached state
     private ContactId _cachedContactId;
     private ContactState _cachedContactState;
-    private DetectionLevel _cachedContactLevel;
+    private ushort _cachedContactType = ushort.MaxValue;
     private ContactClassification _cachedContactClassification;
     private int _cachedContactAgeKey = -1;
 
@@ -256,7 +256,7 @@ internal sealed partial class SelectionCard : PanelContainer
         if (_mode == DisplayMode.Contact &&
             _cachedContactId == contact.Id &&
             _cachedContactState == contact.State &&
-            _cachedContactLevel == contact.Level &&
+            _cachedContactType == contact.Type &&
             _cachedContactClassification == contact.Classification &&
             _cachedContactAgeKey == ageKey)
         {
@@ -266,7 +266,7 @@ internal sealed partial class SelectionCard : PanelContainer
         _mode = DisplayMode.Contact;
         _cachedContactId = contact.Id;
         _cachedContactState = contact.State;
-        _cachedContactLevel = contact.Level;
+        _cachedContactType = contact.Type;
         _cachedContactClassification = contact.Classification;
         _cachedContactAgeKey = ageKey;
 
@@ -276,11 +276,22 @@ internal sealed partial class SelectionCard : PanelContainer
         string stateStr = contact.State == ContactState.Current ? "Current Observation (Live Track)" : "Last Known Position (Frozen Marker)";
         _line1Label.Text = $"State: {stateStr}";
 
-        string classStr = contact.Level == DetectionLevel.Identified
-            ? $"Identified {FormatClassification(contact.Classification)}"
-            : "Detected (Unknown Type)";
-        _line2Label.Text = $"Classification: {classStr}";
-        _line2Label.Modulate = contact.Level == DetectionLevel.Identified ? new Color("ff8060") : new Color("e0a080");
+        string typeName;
+        if (contact.Type < _catalog.Units.Length)
+        {
+            UnitDefinition def = _catalog.Units[contact.Type];
+            if (def.Name is not null)
+                typeName = $"{def.Name} [{FormatClassification(contact.Classification)}]";
+            else
+                typeName = GetRoleName(def);
+        }
+        else
+        {
+            typeName = FormatClassification(contact.Classification);
+        }
+
+        _line2Label.Text = $"Classification: {typeName}";
+        _line2Label.Modulate = new Color("ff8060");
 
         float ageSeconds = ageTicks / (float)Simulation.TickRate;
         string ageFormatted = ageSeconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);

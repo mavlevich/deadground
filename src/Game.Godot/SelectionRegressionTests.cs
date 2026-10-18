@@ -80,8 +80,8 @@ internal static class SelectionRegressionTests
             OwnUnitObservation u1 = new(new EntityId(1), 0, new NumericsVector2(40, 45), 0);
             OwnUnitObservation u2 = new(new EntityId(2), 1, new NumericsVector2(55, 50), 0);
             OwnUnitObservation u3 = new(new EntityId(3), 0, new NumericsVector2(90, 90), 0);
-            ContactObservation c1 = new(new ContactId(501), ContactState.Current, DetectionLevel.Identified,
-                ContactClassification.Tank, new NumericsVector2(48, 48), 5);
+            ContactObservation c1 = new(new ContactId(501), ContactState.Current,
+                ContactClassification.Tank, 0, new NumericsVector2(48, 48), 5);
 
             ApplyWithContacts(replica, bytes, 1, 5, [u1, u2, u3], [c1]);
             unitViews.Sync(replica, 5);

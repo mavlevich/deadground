@@ -13,16 +13,6 @@ public enum ContactState : byte
 }
 
 /// <summary>
-/// Recognition fidelity level of a perceived enemy contact.
-/// </summary>
-public enum DetectionLevel : byte
-{
-    None = 0,
-    Detected = 1,
-    Identified = 2
-}
-
-/// <summary>
 /// Perceived classification of a contact.
 /// </summary>
 public enum ContactClassification : byte
@@ -38,33 +28,16 @@ public enum ContactClassification : byte
 
 /// <summary>
 /// Permitted observation data for a perceived contact, exposed to client replicas and AI.
-/// Never exposes truth EntityId, exact definition, velocity, or private state.
+/// Exposes vehicle type (unit definition index) and classification, but never truth EntityId, velocity, or private state.
 /// </summary>
 public readonly record struct ContactObservation(
     ContactId Id,
     ContactState State,
-    DetectionLevel Level,
     ContactClassification Classification,
+    ushort Type,
     Vector2 Position,
     int LastSeenTick)
 {
     public bool IsCurrent => State == ContactState.Current;
     public bool IsLastKnown => State == ContactState.LastKnown;
-    public bool IsIdentified => Level == DetectionLevel.Identified;
-
-    public ContactObservation(
-        ContactId id,
-        ContactState state,
-        ContactClassification classification,
-        Vector2 position,
-        int lastSeenTick)
-        : this(
-            id,
-            state,
-            classification == ContactClassification.Unknown ? DetectionLevel.Detected : DetectionLevel.Identified,
-            classification,
-            position,
-            lastSeenTick)
-    {
-    }
 }

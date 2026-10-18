@@ -319,7 +319,7 @@ public partial class Main : Node3D
         // Factions are part of the public match setup; the side is known once the session assigns it.
         MatchSetup matchSetup = setup;
         _unitViews = new UnitViewSet(this, _map, _catalog, () => matchSetup.GetPlayerFaction(_session.AssignedPlayerId));
-        _contactViews = new ContactViewSet(this, _map, () => matchSetup.GetHostileFaction(_session.AssignedPlayerId));
+        _contactViews = new ContactViewSet(this, _map, _catalog, () => matchSetup.GetHostileFaction(_session.AssignedPlayerId));
         _combatEffects = new CombatEffects(_map);
         AddChild(_combatEffects);
 

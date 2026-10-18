@@ -33,7 +33,8 @@ internal static class ClientRegressionTests
             HistoricalUnitsRegressionTests.Run();
             VehicleEffectsRegressionTests.Run(scene);
             CannonSoundRegressionTests.Run(scene);
-            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability combat_feedback vehicle_preview faction_vehicles rts_selection vehicle_effects cannon_sound historical_units");
+            CheckSeenMeansKnownContactPresentation(scene);
+            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability combat_feedback vehicle_preview faction_vehicles rts_selection vehicle_effects cannon_sound historical_units seen_means_known");
             return true;
         }
         catch (Exception exception)
@@ -107,7 +108,7 @@ internal static class ClientRegressionTests
                 "Reordered recon definition did not instantiate the recon scene.");
             Require(!ReferenceEquals(tankView.Model, views.Views[otherTank.Id].Model), "Vehicle instances share a node.");
 
-            ContactObservation target = new(new ContactId(801), ContactState.Current, ContactClassification.Unknown,
+            ContactObservation target = new(new ContactId(801), ContactState.Current, ContactClassification.Unknown, 0,
                 new NumericsVector2(12, 0), 2);
             tank = tank with { Position = new NumericsVector2(12, 10), TargetContactId = target.Id };
             ApplyWithContacts(replica, bytes, 2, 2, [tank, recon, otherTank], [target]);
@@ -147,6 +148,7 @@ internal static class ClientRegressionTests
                 new ContactId(101),
                 ContactState.Current,
                 ContactClassification.Unknown,
+                0,
                 new NumericsVector2(25, 30),
                 10);
 
@@ -173,6 +175,7 @@ internal static class ClientRegressionTests
                 new ContactId(101),
                 ContactState.LastKnown,
                 ContactClassification.Unknown,
+                0,
                 new NumericsVector2(25, 30),
                 10);
 
@@ -589,21 +592,21 @@ internal static class ClientRegressionTests
             panel.UpdateMission(inProgress, 100);
             Require(!panel.IsMissionFinished, "Mission should not be marked finished while in progress.");
 
-            // 2. Target identified
+            // 2. Target spotted
             MissionObservation identified = inProgress with
             {
                 TargetContactId = new ContactId(501),
-                Flags = MissionObservation.FlagTargetIdentified
+                Flags = MissionObservation.FlagTargetSpotted
             };
             panel.UpdateMission(identified, 200);
-            Require(!panel.IsMissionFinished, "Mission should not be finished when target is only identified.");
+            Require(!panel.IsMissionFinished, "Mission should not be finished when target is only spotted.");
 
             // 3. Victory
             MissionObservation victory = identified with
             {
                 Status = MissionStatus.Victory,
                 EndReason = MissionEndReason.TargetDestroyed,
-                Flags = MissionObservation.FlagTargetIdentified | MissionObservation.FlagTargetDestroyed
+                Flags = MissionObservation.FlagTargetSpotted | MissionObservation.FlagTargetDestroyed
             };
             panel.UpdateMission(victory, 300);
             Require(panel.IsMissionFinished, "Mission should be marked finished on victory.");
@@ -629,140 +632,111 @@ internal static class ClientRegressionTests
         {
             HeightMap map = HeightMap.CreatePrototype();
             DeadGround.Rules.Ops.UnitCatalog catalog = DeadGround.Rules.Ops.PrototypeScenario.LoadCatalog();
-            ContactViewSet contactViews = new(parent, map);
+            ContactViewSet contactViews = new(parent, map, catalog);
             UnitViewSet unitViews = new(parent, map, catalog);
             ClientReplica replica = new();
             byte[] bytes = new byte[WireProtocol.MaxMessageSize];
 
-            // 1. Unknown contact representation
-            ContactObservation unknownContact = new(
+            ushort tankDef = catalog.RequireDefinitionIndex("prototype_tank");
+            ushort reconDef = catalog.RequireDefinitionIndex("recon_vehicle");
+            ushort cmdDef = catalog.RequireDefinitionIndex("prototype_vehicle");
+
+            // 1. Seen means known: Enemy tank contact immediately shows 3D vehicle model
+            ContactObservation tankContact = new(
                 new ContactId(101),
                 ContactState.Current,
-                DetectionLevel.Detected,
-                ContactClassification.Unknown,
+                ContactClassification.Tank,
+                tankDef,
                 new NumericsVector2(30, 40),
                 5);
 
-            ApplyWithContacts(replica, bytes, 1, 5, [], [unknownContact]);
+            ApplyWithContacts(replica, bytes, 1, 5, [], [tankContact]);
             contactViews.Sync(replica);
 
-            Require(contactViews.Views.TryGetValue(unknownContact.Id, out ContactView? cv), "Unknown contact view not created.");
-            Require(!cv!.HasEnemyModel, "Unknown contact must not have a 3D vehicle model.");
-            Require(cv.Marker.Visible, "Unknown contact must display the neutral diamond marker.");
-            Require(!cv.GhostBase.Visible, "Current unknown contact must not display ghost base marker.");
-            Require(cv.CurrentModelClassification == ContactClassification.Unknown, "Current classification should be Unknown.");
-
-            // 2. Identified contact models (Tank, Recon, CommandVehicle)
-            ContactObservation tankContact = unknownContact with
-            {
-                Classification = ContactClassification.Tank,
-                Level = DetectionLevel.Identified
-            };
-            ApplyWithContacts(replica, bytes, 2, 6, [], [tankContact]);
-            contactViews.Sync(replica);
-
-            Require(cv.HasEnemyModel, "Identified tank must instantiate a vehicle model.");
+            Require(contactViews.Views.TryGetValue(tankContact.Id, out ContactView? cv), "Contact view not created.");
+            Require(cv!.HasEnemyModel, "Seen enemy tank contact must instantiate a vehicle model immediately.");
             Require(cv.CurrentModelClassification == ContactClassification.Tank, "Classification should be Tank.");
-            Require(!cv.Marker.Visible, "Diamond marker should be hidden when identified.");
+            Require(cv.CurrentModelType == tankDef, "Model type should match definition index.");
+            Require(!cv.GhostBase.Visible, "Live contact must not display ghost base marker.");
             Require(cv.EnemyModel!.FindChild("HostileAffiliationMarker", true, false) is not null,
-                "Identified enemy model must attach HostileAffiliationMarker.");
+                "Enemy model must attach HostileAffiliationMarker.");
 
-            // Switch to Recon
+            // 2. Switch to Recon
             ContactObservation reconContact = tankContact with
             {
-                Classification = ContactClassification.Recon
+                Classification = ContactClassification.Recon,
+                Type = reconDef
             };
-            ApplyWithContacts(replica, bytes, 3, 7, [], [reconContact]);
+            ApplyWithContacts(replica, bytes, 2, 6, [], [reconContact]);
             contactViews.Sync(replica);
 
-            Require(cv.HasEnemyModel, "Identified recon must have enemy model.");
+            Require(cv.HasEnemyModel, "Recon contact must have enemy model.");
             Require(cv.CurrentModelClassification == ContactClassification.Recon, "Classification should be Recon.");
+            Require(cv.CurrentModelType == reconDef, "Type should be recon.");
             Require(cv.EnemyModel!.Name == "EnemyReconModel", "Model should be enemy recon.");
 
-            // Switch to CommandVehicle
+            // 3. Switch to CommandVehicle (uses procedural fallback)
             ContactObservation cmdContact = tankContact with
             {
-                Classification = ContactClassification.CommandVehicle
+                Classification = ContactClassification.CommandVehicle,
+                Type = cmdDef
             };
-            ApplyWithContacts(replica, bytes, 4, 8, [], [cmdContact]);
+            ApplyWithContacts(replica, bytes, 3, 7, [], [cmdContact]);
             contactViews.Sync(replica);
 
-            Require(cv.HasEnemyModel, "Identified command vehicle must have model.");
+            Require(cv.HasEnemyModel, "Command vehicle contact must have enemy model.");
             Require(cv.CurrentModelClassification == ContactClassification.CommandVehicle, "Classification should be CommandVehicle.");
+            Require(cv.CurrentModelType == cmdDef, "Type should be command vehicle.");
             Require(cv.EnemyModel!.Name == "EnemyCommandVehicleModel", "Model should be enemy command vehicle.");
 
-            // 3. Transition to LastKnown hides live model and displays ghost marker
+            // 4. Transition to LastKnown hides live model and displays ghost marker
             ContactObservation lastKnownContact = cmdContact with
             {
                 State = ContactState.LastKnown,
                 Position = new NumericsVector2(32, 42)
             };
-            ApplyWithContacts(replica, bytes, 5, 9, [], [lastKnownContact]);
+            ApplyWithContacts(replica, bytes, 4, 8, [], [lastKnownContact]);
             contactViews.Sync(replica);
 
             Require(!cv.HasEnemyModel, "LastKnown contact must hide live model.");
-            Require(cv.Marker.Visible, "LastKnown contact must display marker.");
             Require(cv.GhostBase.Visible, "LastKnown contact must display ghost base marker.");
             Require(cv.Root.Position.X == 32 && cv.Root.Position.Z == 42, "Position must match last known coordinates.");
 
-            // 4. Re-appearance as Detected Unknown under same ContactId clears model and identity
-            ContactObservation reacquiredUnknown = new(
-                cmdContact.Id,
-                ContactState.Current,
-                DetectionLevel.Detected,
-                ContactClassification.Unknown,
-                new NumericsVector2(35, 45),
-                10);
-            ApplyWithContacts(replica, bytes, 6, 10, [], [reacquiredUnknown]);
-            contactViews.Sync(replica);
-
-            Require(!cv.HasEnemyModel, "Reacquired unknown contact must not have model.");
-            Require(cv.EnemyModel is null, "Previous enemy model must be destroyed and freed.");
-            Require(cv.CurrentModelClassification == ContactClassification.Unknown, "Classification must reset to Unknown.");
-            Require(cv.Marker.Visible, "Marker diamond must be visible.");
-            Require(!cv.GhostBase.Visible, "Ghost base must be hidden.");
-
-            // Subsequent re-identification as Tank creates tank model, not old command vehicle
-            ContactObservation reIdentifiedTank = reacquiredUnknown with
+            // 5. Re-appearance as Current restores live model under same ContactId
+            ContactObservation reacquiredContact = lastKnownContact with
             {
-                Classification = ContactClassification.Tank,
-                Level = DetectionLevel.Identified
+                State = ContactState.Current,
+                Position = new NumericsVector2(35, 45),
+                LastSeenTick = 10
             };
-            ApplyWithContacts(replica, bytes, 7, 11, [], [reIdentifiedTank]);
+            ApplyWithContacts(replica, bytes, 5, 10, [], [reacquiredContact]);
             contactViews.Sync(replica);
-            Require(cv.HasEnemyModel, "Re-identified contact must create model.");
+
+            Require(cv.HasEnemyModel, "Reacquired current contact must show enemy model.");
+            Require(!cv.GhostBase.Visible, "Ghost base must be hidden when contact is current.");
+            Require(cv.CurrentModelType == cmdDef, "Type must be preserved.");
+
+            // Switch back to tank
+            ApplyWithContacts(replica, bytes, 6, 11, [], [tankContact]);
+            contactViews.Sync(replica);
+            Require(cv.HasEnemyModel, "Restoring tank contact must show tank model.");
             Require(cv.CurrentModelClassification == ContactClassification.Tank, "Classification should be Tank.");
-            Require(cv.EnemyModel!.Name == "EnemyTankModel", "Model should be enemy tank.");
+            Require(cv.CurrentModelType == tankDef, "Type should be tank.");
 
-            // Generic Vehicle classification
-            ContactObservation vehicleContact = reIdentifiedTank with
+            // Unsupported classification fallback retains safe state without crashing
+            ContactObservation unsupportedContact = tankContact with
             {
-                Classification = ContactClassification.Vehicle
-            };
-            ApplyWithContacts(replica, bytes, 8, 12, [], [vehicleContact]);
-            contactViews.Sync(replica);
-            Require(cv.HasEnemyModel, "Identified generic vehicle must instantiate a model.");
-            Require(cv.CurrentModelClassification == ContactClassification.Vehicle, "Classification should be Vehicle.");
-            Require(cv.EnemyModel!.Name == "EnemyGenericVehicleModel", "Model should be enemy generic vehicle.");
-            Require(cv.EnemyModel.FindChild("HostileAffiliationMarker", true, false) is not null,
-                "Enemy generic vehicle model must attach HostileAffiliationMarker.");
-            Require(!cv.Marker.Visible, "Diamond marker should be hidden when generic vehicle model is active.");
-
-            // Unsupported classification fallback retains world representation
-            ContactObservation unsupportedContact = vehicleContact with
-            {
+                Type = ushort.MaxValue,
                 Classification = (ContactClassification)99
             };
             cv.Update(unsupportedContact, groundY: 0f, isSelected: false);
             Require(!cv.HasEnemyModel, "Unsupported classification must not have an enemy model.");
             Require(cv.EnemyModel is null, "Previous vehicle model must be cleared.");
-            Require(cv.Marker.Visible, "Unsupported classification must retain generic marker diamond.");
             Require(!cv.GhostBase.Visible, "Live unsupported contact must not show ghost base.");
 
             // Transition from unsupported back to modeled class (Tank)
-            cv.Update(reIdentifiedTank, groundY: 0f, isSelected: false);
-            Require(cv.HasEnemyModel, "Re-identifying as tank after unsupported class must create tank model.");
-            Require(!cv.Marker.Visible, "Diamond marker should be hidden when tank model is restored.");
+            cv.Update(tankContact, groundY: 0f, isSelected: false);
+            Require(cv.HasEnemyModel, "Restoring tank after unsupported class must create tank model.");
 
             // 5. SelectionCard unit, multiple units, contact, empty
             SelectionCard card = new(catalog);
@@ -884,10 +858,10 @@ internal static class ClientRegressionTests
             cacheTestBadge.BindUnit(new EntityId(9001), "TANK");
             cacheTestBadge.BindUnit(new EntityId(9001), "TANK");
 
-            cacheTestBadge.BindContact(new ContactId(801), ContactState.Current, DetectionLevel.Identified, ContactClassification.Tank, 0.2f);
-            cacheTestBadge.BindContact(new ContactId(801), ContactState.LastKnown, DetectionLevel.Identified, ContactClassification.Tank, 1.2f);
-            cacheTestBadge.BindContact(new ContactId(801), ContactState.LastKnown, DetectionLevel.Identified, ContactClassification.Tank, 1.4f);
-            cacheTestBadge.BindContact(new ContactId(801), ContactState.LastKnown, DetectionLevel.Identified, ContactClassification.Tank, 2.1f);
+            cacheTestBadge.BindContact(new ContactId(801), ContactState.Current, "TANK", ContactClassification.Tank, 0.2f);
+            cacheTestBadge.BindContact(new ContactId(801), ContactState.LastKnown, "TANK", ContactClassification.Tank, 1.2f);
+            cacheTestBadge.BindContact(new ContactId(801), ContactState.LastKnown, "TANK", ContactClassification.Tank, 1.4f);
+            cacheTestBadge.BindContact(new ContactId(801), ContactState.LastKnown, "TANK", ContactClassification.Tank, 2.1f);
             parent.RemoveChild(cacheTestBadge);
             cacheTestBadge.QueueFree();
 
@@ -938,7 +912,7 @@ internal static class ClientRegressionTests
 
             // Mixed unit and contact: add contact badge on top of both
             RoleBadge badgeEnemy = new();
-            badgeEnemy.BindContact(new ContactId(7001), ContactState.Current, DetectionLevel.Identified, ContactClassification.Tank, 0f);
+            badgeEnemy.BindContact(new ContactId(7001), ContactState.Current, "TANK", ContactClassification.Tank, 0f);
             badgeEnemy.UpdateScreenPosition(new Vector2(200, 200));
             badgeEnemy.Visible = true;
             overlay.AddChild(badgeEnemy);
@@ -991,6 +965,86 @@ internal static class ClientRegressionTests
             // Clear overlay
             overlay.Clear();
             Require(overlay.GetChildCount() == 0, "Overlay Clear() should remove all badge nodes.");
+        }
+        finally
+        {
+            parent.QueueFree();
+        }
+    }
+
+    private static void CheckSeenMeansKnownContactPresentation(Node3D scene)
+    {
+        Node3D parent = new();
+        scene.AddChild(parent);
+        try
+        {
+            DeadGround.Rules.Ops.UnitCatalog catalog = DeadGround.Rules.Ops.ScenarioContent.LoadCatalog("battle");
+            HeightMap map = HeightMap.CreatePrototype();
+            ContactViewSet contactViews = new(parent, map, catalog, () => "soviet");
+            ClientReplica replica = new();
+            byte[] bytes = new byte[WireProtocol.MaxMessageSize];
+
+            // 1. Seen enemy contact of type t62: drawn with T62Alt/t62alt.glb at scale 1.0
+            ushort t62Def = catalog.RequireDefinitionIndex("t62");
+            ContactObservation t62Contact = new(
+                new ContactId(201),
+                ContactState.Current,
+                ContactClassification.Tank,
+                t62Def,
+                new NumericsVector2(25, 25),
+                10);
+
+            ApplyWithContacts(replica, bytes, 1, 10, [], [t62Contact]);
+            contactViews.Sync(replica);
+
+            Require(contactViews.Views.TryGetValue(t62Contact.Id, out ContactView? t62View),
+                "Contact view for t62 was not created.");
+            Require(t62View!.HasEnemyModel, "Enemy t62 contact must have visual model.");
+            Require(t62View.EnemyModel!.GetChild<Node3D>(0).SceneFilePath.EndsWith("T62Alt/t62alt.glb", StringComparison.Ordinal),
+                "Enemy t62 must instantiate T62Alt/t62alt.glb.");
+            Require(t62View.EnemyModel.Scale.IsEqualApprox(Vector3.One),
+                $"Enemy t62 model scale must be 1.0, got {t62View.EnemyModel.Scale}.");
+
+            // Role badge reads "T-62"
+            RoleBadgeOverlay overlay = new(catalog);
+            parent.AddChild(overlay);
+            string badgeText = overlay.GetRoleText(t62Def, ContactClassification.Tank);
+            Require(badgeText == "T-62", $"Role badge text for t62 should be 'T-62', got '{badgeText}'.");
+
+            RoleBadge badge = new();
+            parent.AddChild(badge);
+            badge.BindContact(t62Contact.Id, t62Contact.State, badgeText, t62Contact.Classification, 0f);
+            Require(badge.LabelText == "T-62", $"Role badge label must read 'T-62', got '{badge.LabelText}'.");
+
+            // SelectionCard shows "T-62"
+            SelectionCard card = new(catalog);
+            parent.AddChild(card);
+            card.UpdateContact(t62Contact, 10);
+            Require(card.Line2Text.Contains("T-62"), $"SelectionCard must show 'T-62', got '{card.Line2Text}'.");
+
+            // 2. Contact whose Type is outside catalog: falls back to classification model without exception
+            ushort outsideType = 9999;
+            ContactObservation outsideContact = new(
+                new ContactId(202),
+                ContactState.Current,
+                ContactClassification.Tank,
+                outsideType,
+                new NumericsVector2(30, 30),
+                12);
+
+            ApplyWithContacts(replica, bytes, 2, 12, [], [outsideContact]);
+            contactViews.Sync(replica);
+
+            Require(contactViews.Views.TryGetValue(outsideContact.Id, out ContactView? outsideView),
+                "Contact view for outside contact was not created.");
+            Require(outsideView!.HasEnemyModel, "Outside catalog contact must fall back to classification model without exception.");
+            Require(outsideView.EnemyModel!.GetChild<Node3D>(0).SceneFilePath.EndsWith("T62Alt/t62alt_lod1.glb", StringComparison.Ordinal) ||
+                    outsideView.EnemyModel.GetChild<Node3D>(0).SceneFilePath.EndsWith("tank.glb", StringComparison.Ordinal),
+                "Outside catalog contact must use classification fallback model.");
+
+            card.UpdateContact(outsideContact, 12);
+            Require(card.Line2Text.Contains("Tank"),
+                $"SelectionCard for outside contact must show fallback classification name 'Tank', got '{card.Line2Text}'.");
         }
         finally
         {

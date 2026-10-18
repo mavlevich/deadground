@@ -198,6 +198,7 @@ public sealed class FramePacingTests
             contactId,
             ContactState.Current,
             ContactClassification.Unknown,
+            0,
             new Vector2(50f, 50f),
             0);
 
@@ -209,6 +210,7 @@ public sealed class FramePacingTests
             contactId,
             ContactState.LastKnown,
             ContactClassification.Unknown,
+            0,
             new Vector2(50f, 50f),
             0);
 

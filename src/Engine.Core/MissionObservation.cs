@@ -30,10 +30,10 @@ public readonly record struct MissionObservation(
     float SearchAreaRadius,
     byte Flags)
 {
-    public const byte FlagTargetIdentified = 1;
+    public const byte FlagTargetSpotted = 1;
     public const byte FlagTargetDestroyed = 2;
 
-    public bool IsTargetIdentified => (Flags & FlagTargetIdentified) != 0;
+    public bool IsTargetSpotted => (Flags & FlagTargetSpotted) != 0;
     public bool IsTargetDestroyed => (Flags & FlagTargetDestroyed) != 0;
 }
 

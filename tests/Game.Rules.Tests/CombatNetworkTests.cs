@@ -531,13 +531,13 @@ public sealed class CombatNetworkTests
     }
 
     [Fact]
-    public void WireProtocol_Version9_Preserves3DEndpointsAndShooterIdentity()
+    public void WireProtocol_Version10_Preserves3DEndpointsAndShooterIdentity()
     {
-        Assert.Equal(9, WireProtocol.Version);
+        Assert.Equal(10, WireProtocol.Version);
         Assert.Equal(32, WireProtocol.MissionSize);
         Assert.Equal(48, WireProtocol.SnapshotHeaderSize);
         Assert.Equal(30, WireProtocol.UnitSize);
-        Assert.Equal(19, WireProtocol.ContactSize);
+        Assert.Equal(20, WireProtocol.ContactSize);
         Assert.Equal(39, WireProtocol.EventSize);
 
         ClientReplica replica = new();

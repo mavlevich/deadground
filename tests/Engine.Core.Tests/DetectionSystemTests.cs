@@ -10,9 +10,9 @@ public sealed class DetectionSystemTests
     {
         private readonly Dictionary<ushort, UnitPerceptionProfile> _profiles = new();
 
-        public void Register(ushort definition, VisualSensorProfile? sensor, TargetObservationPoints? points)
+        public void Register(ushort definition, VisualSensorProfile? sensor, TargetObservationPoints? points, ContactClassification classification = ContactClassification.Vehicle)
         {
-            _profiles[definition] = new UnitPerceptionProfile(sensor, points);
+            _profiles[definition] = new UnitPerceptionProfile(sensor, points, classification);
         }
 
         public bool TryGetProfile(ushort definition, out UnitPerceptionProfile profile) =>
@@ -303,7 +303,7 @@ public sealed class DetectionSystemTests
         EntityId enemy = new(10);
         // 1. Initial observation at tick 0
         tracker.BeginDetectionStep();
-        tracker.RegisterObservation(enemy, new Vector2(20, 20), currentTick: 0);
+        tracker.RegisterObservation(enemy, new Vector2(20, 20), currentTick: 0, ContactClassification.Vehicle, 0);
         tracker.EndDetectionStep(currentTick: 0);
         ContactId originalId = tracker.ExportContacts()[0].Id;
 
@@ -314,7 +314,7 @@ public sealed class DetectionSystemTests
 
         // 3. Rediscovery at tick 10 within 15m (gate is 25m, elapsed is 6 ticks <= 40)
         tracker.BeginDetectionStep();
-        tracker.RegisterObservation(enemy, new Vector2(30, 20), currentTick: 10);
+        tracker.RegisterObservation(enemy, new Vector2(30, 20), currentTick: 10, ContactClassification.Vehicle, 0);
         tracker.EndDetectionStep(currentTick: 10);
 
         ReadOnlySpan<ContactObservation> contacts = tracker.ExportContacts();
@@ -337,7 +337,7 @@ public sealed class DetectionSystemTests
         EntityId enemy = new(10);
         // 1. Initial observation at tick 0
         tracker.BeginDetectionStep();
-        tracker.RegisterObservation(enemy, new Vector2(20, 20), currentTick: 0);
+        tracker.RegisterObservation(enemy, new Vector2(20, 20), currentTick: 0, ContactClassification.Vehicle, 0);
         tracker.EndDetectionStep(currentTick: 0);
         ContactId originalId = tracker.ExportContacts()[0].Id;
 
@@ -347,7 +347,7 @@ public sealed class DetectionSystemTests
 
         // 3. Rediscovery at distance 40m (> 10m gate)
         tracker.BeginDetectionStep();
-        tracker.RegisterObservation(enemy, new Vector2(60, 20), currentTick: 10);
+        tracker.RegisterObservation(enemy, new Vector2(60, 20), currentTick: 10, ContactClassification.Vehicle, 0);
         tracker.EndDetectionStep(currentTick: 10);
 
         ReadOnlySpan<ContactObservation> contacts = tracker.ExportContacts();
@@ -365,9 +365,9 @@ public sealed class DetectionSystemTests
 
         // Fill capacity with 3 LastKnown contacts
         tracker.BeginDetectionStep();
-        tracker.RegisterObservation(new EntityId(1), new Vector2(10, 10), currentTick: 0);
-        tracker.RegisterObservation(new EntityId(2), new Vector2(20, 20), currentTick: 2);
-        tracker.RegisterObservation(new EntityId(3), new Vector2(30, 30), currentTick: 4);
+        tracker.RegisterObservation(new EntityId(1), new Vector2(10, 10), currentTick: 0, ContactClassification.Vehicle, 0);
+        tracker.RegisterObservation(new EntityId(2), new Vector2(20, 20), currentTick: 2, ContactClassification.Vehicle, 0);
+        tracker.RegisterObservation(new EntityId(3), new Vector2(30, 30), currentTick: 4, ContactClassification.Vehicle, 0);
         tracker.EndDetectionStep(currentTick: 4);
 
         // Lose all contacts so they become LastKnown
@@ -377,7 +377,7 @@ public sealed class DetectionSystemTests
 
         // Now observe a 4th new target at tick 8 (overflow!)
         tracker.BeginDetectionStep();
-        tracker.RegisterObservation(new EntityId(4), new Vector2(40, 40), currentTick: 8);
+        tracker.RegisterObservation(new EntityId(4), new Vector2(40, 40), currentTick: 8, ContactClassification.Vehicle, 0);
         tracker.EndDetectionStep(currentTick: 8);
 
         Assert.Equal(3, tracker.Count);
@@ -665,7 +665,7 @@ public sealed class DetectionSystemTests
 
         // Tick 0: Target A observed at (20, 20)
         tracker.BeginDetectionStep();
-        tracker.RegisterObservation(new EntityId(1), new Vector2(20, 20), currentTick: 0);
+        tracker.RegisterObservation(new EntityId(1), new Vector2(20, 20), currentTick: 0, ContactClassification.Vehicle, 0);
         tracker.EndDetectionStep(currentTick: 0);
         ContactId idA = tracker.ExportContacts()[0].Id;
 
@@ -677,7 +677,7 @@ public sealed class DetectionSystemTests
         // Tick 4 (elapsed 2 ticks = 0.1s): dynamic gate is min(35, 5 + 0.1 * 10) = 6.0m
         // Target B observed 20m away at (40, 20). 20m > 6m, so must NOT correlate with A!
         tracker.BeginDetectionStep();
-        tracker.RegisterObservation(new EntityId(2), new Vector2(40, 20), currentTick: 4);
+        tracker.RegisterObservation(new EntityId(2), new Vector2(40, 20), currentTick: 4, ContactClassification.Vehicle, 0);
         tracker.EndDetectionStep(currentTick: 4);
 
         ReadOnlySpan<ContactObservation> contacts = tracker.ExportContacts();
@@ -701,7 +701,7 @@ public sealed class DetectionSystemTests
 
         // Tick 0: Target A observed at (20, 20)
         tracker.BeginDetectionStep();
-        tracker.RegisterObservation(new EntityId(1), new Vector2(20, 20), currentTick: 0);
+        tracker.RegisterObservation(new EntityId(1), new Vector2(20, 20), currentTick: 0, ContactClassification.Vehicle, 0);
         tracker.EndDetectionStep(currentTick: 0);
         ContactId idA = tracker.ExportContacts()[0].Id;
 
@@ -713,7 +713,7 @@ public sealed class DetectionSystemTests
         // Tick 42 (elapsed 40 ticks = 2.0s): dynamic gate is min(35, 5 + 2.0 * 10) = 25.0m
         // Target observed at (35, 20) (distance 15m <= 25m): must correlate back to Contact A!
         tracker.BeginDetectionStep();
-        tracker.RegisterObservation(new EntityId(1), new Vector2(35, 20), currentTick: 42);
+        tracker.RegisterObservation(new EntityId(1), new Vector2(35, 20), currentTick: 42, ContactClassification.Vehicle, 0);
         tracker.EndDetectionStep(currentTick: 42);
 
         ReadOnlySpan<ContactObservation> contacts = tracker.ExportContacts();
@@ -783,5 +783,97 @@ public sealed class DetectionSystemTests
 
         ReadOnlySpan<ContactObservation> p2Contacts = detection.GetContacts(2);
         Assert.True(p2Contacts.IsEmpty, "Observer behind 5m sparse terrain peak should not observe target.");
+    }
+
+    [Fact]
+    public void DetectionSystem_TwoEnemyUnitsOfDifferentDefinitionsSeen_ExposeTypesAndClassificationsImmediately()
+    {
+        HeightMap map = CreateFlatMap();
+        StaticGeometry geometry = new(map, []);
+        TestCatalog catalog = new();
+        // Observer unit (Tank, def 0)
+        catalog.Register(0, new VisualSensorProfile(range: 100.0f, eyeHeight: 2.0f), new TargetObservationPoints(0.5f, 1.5f), ContactClassification.Tank);
+        // Enemy unit 1 (Recon, def 1)
+        catalog.Register(1, null, new TargetObservationPoints(0.5f, 1.0f), ContactClassification.Recon);
+        // Enemy unit 2 (Apc, def 2)
+        catalog.Register(2, null, new TargetObservationPoints(0.5f, 1.2f), ContactClassification.Apc);
+
+        DetectionSystem detection = new(geometry, catalog);
+        WorldState world = new(map);
+        // Side 1 observer
+        world.CreateUnit(1, 0, new Vector2(20, 20), 5.0f);
+        // Side 2 units
+        world.CreateUnit(2, 1, new Vector2(35, 20), 5.0f);
+        world.CreateUnit(2, 2, new Vector2(50, 20), 5.0f);
+
+        detection.Update(world, tick: 1);
+        detection.Update(world, tick: 2);
+
+        ReadOnlySpan<ContactObservation> p1Contacts = detection.GetContacts(1);
+        Assert.Equal(2, p1Contacts.Length);
+
+        ContactObservation reconContact = Assert.Single(p1Contacts.ToArray(), c => c.Type == 1);
+        Assert.Equal(ContactState.Current, reconContact.State);
+        Assert.Equal(ContactClassification.Recon, reconContact.Classification);
+        Assert.Equal(new Vector2(35, 20), reconContact.Position);
+
+        ContactObservation apcContact = Assert.Single(p1Contacts.ToArray(), c => c.Type == 2);
+        Assert.Equal(ContactState.Current, apcContact.State);
+        Assert.Equal(ContactClassification.Apc, apcContact.Classification);
+        Assert.Equal(new Vector2(50, 20), apcContact.Position);
+    }
+
+    [Fact]
+    public void DetectionSystem_LastKnownContact_TypeAndPositionDoNotChangeWhenHiddenUnitMoves()
+    {
+        HeightMap map = CreateFlatMap();
+        StaticGeometry geometry = new(map, []);
+        TestCatalog catalog = new();
+        // Observer has 60m range
+        catalog.Register(0, new VisualSensorProfile(range: 60.0f, eyeHeight: 2.0f), new TargetObservationPoints(0.5f, 1.5f), ContactClassification.Tank);
+        // Enemy tank
+        catalog.Register(1, null, new TargetObservationPoints(0.5f, 1.5f), ContactClassification.Tank);
+
+        DetectionTuning tuning = new(memoryDurationTicks: 100, evaluationIntervalTicks: 1);
+        DetectionSystem detection = new(geometry, catalog, tuning);
+        WorldState world = new(map);
+        // Side 1 observer at (20, 20)
+        world.CreateUnit(1, 0, new Vector2(20, 20), 5.0f);
+        // Side 2 enemy unit at (35, 20) (distance 15m < 60m)
+        EntityId enemyId = world.CreateUnit(2, 1, new Vector2(35, 20), 10.0f);
+
+        // Tick 1: observed
+        detection.Update(world, tick: 1);
+        ReadOnlySpan<ContactObservation> p1Contacts = detection.GetContacts(1);
+        Assert.Equal(1, p1Contacts.Length);
+        Assert.Equal(ContactState.Current, p1Contacts[0].State);
+        Assert.Equal(1, p1Contacts[0].Type);
+        Assert.Equal(new Vector2(35, 20), p1Contacts[0].Position);
+        ContactId contactId = p1Contacts[0].Id;
+
+        // Break line of sight: move the enemy unit beyond 60m range (e.g. to (100, 100))
+        world.SetPosition(enemyId, new Vector2(100, 100));
+
+        // Tick 2: observation lost -> transitions to LastKnown
+        detection.Update(world, tick: 2);
+        p1Contacts = detection.GetContacts(1);
+        Assert.Equal(1, p1Contacts.Length);
+        Assert.Equal(contactId, p1Contacts[0].Id);
+        Assert.Equal(ContactState.LastKnown, p1Contacts[0].State);
+        Assert.Equal(1, p1Contacts[0].Type);
+        Assert.Equal(new Vector2(35, 20), p1Contacts[0].Position);
+
+        // Move the hidden unit further away in the fog of war to (120, 120)
+        world.SetPosition(enemyId, new Vector2(120, 120));
+
+        // Tick 3: contact remains LastKnown, Type and Position MUST NOT change!
+        detection.Update(world, tick: 3);
+        p1Contacts = detection.GetContacts(1);
+        Assert.Equal(1, p1Contacts.Length);
+        Assert.Equal(contactId, p1Contacts[0].Id);
+        Assert.Equal(ContactState.LastKnown, p1Contacts[0].State);
+        Assert.Equal(1, p1Contacts[0].Type);
+        Assert.Equal(new Vector2(35, 20), p1Contacts[0].Position);
+        Assert.Equal(ContactClassification.Tank, p1Contacts[0].Classification);
     }
 }

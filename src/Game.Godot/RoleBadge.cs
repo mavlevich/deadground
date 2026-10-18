@@ -26,7 +26,6 @@ internal sealed partial class RoleBadge : PanelContainer
     private int _lastControlGroup = -1;
     private ContactId? _lastContactId;
     private ContactState _lastState;
-    private DetectionLevel _lastLevel;
     private ContactClassification _lastClassification;
     private int _lastAgeRounded = -1;
     private StyleBoxFlat? _lastStyle;
@@ -72,37 +71,31 @@ internal sealed partial class RoleBadge : PanelContainer
         }
     }
 
-    public void BindContact(ContactId id, ContactState state, DetectionLevel level, ContactClassification classification, float ageSeconds)
+    public void BindContact(ContactId id, ContactState state, string roleText, ContactClassification classification, float ageSeconds)
     {
         BoundUnitId = null;
         BoundContactId = id;
         _lastControlGroup = 0;
         int ageRounded = (int)MathF.Round(ageSeconds);
 
-        if (_lastContactId != id || _lastState != state || _lastLevel != level || _lastClassification != classification || (state == ContactState.LastKnown && _lastAgeRounded != ageRounded))
+        if (_lastContactId != id || _lastState != state || !string.Equals(_lastRoleText, roleText, StringComparison.Ordinal) || _lastClassification != classification || (state == ContactState.LastKnown && _lastAgeRounded != ageRounded))
         {
             _lastContactId = id;
             _lastState = state;
-            _lastLevel = level;
+            _lastRoleText = roleText;
             _lastClassification = classification;
             _lastAgeRounded = ageRounded;
 
             StyleBoxFlat style;
             if (state == ContactState.LastKnown)
             {
-                string classStr = level == DetectionLevel.Identified ? GetShortClass(classification) : "?";
-                _label.Text = $"{classStr} {ageRounded}s";
+                _label.Text = $"{roleText} {ageRounded}s";
                 style = EnemyLastKnownStyle;
-            }
-            else if (level == DetectionLevel.Identified && classification != ContactClassification.Unknown)
-            {
-                _label.Text = GetShortClass(classification);
-                style = classification == ContactClassification.CommandVehicle ? EnemyCommandStyle : EnemyIdentifiedStyle;
             }
             else
             {
-                _label.Text = "[ ? ]";
-                style = EnemyUnknownStyle;
+                _label.Text = roleText;
+                style = classification == ContactClassification.CommandVehicle ? EnemyCommandStyle : EnemyIdentifiedStyle;
             }
 
             if (!ReferenceEquals(_lastStyle, style))
@@ -132,16 +125,6 @@ internal sealed partial class RoleBadge : PanelContainer
         // Expand hit area slightly (4px padding) for easier clicking
         return rect.Grow(4f).HasPoint(screenPoint);
     }
-
-    private static string GetShortClass(ContactClassification classification) => classification switch
-    {
-        ContactClassification.Tank => "TANK",
-        ContactClassification.Recon => "RECON",
-        ContactClassification.Apc => "APC",
-        ContactClassification.CommandVehicle => "CMD",
-        ContactClassification.Vehicle => "VEH",
-        _ => "UNKNOWN"
-    };
 
     private static StyleBoxFlat CreateStyle(Color bg, Color border) => new()
     {

@@ -279,7 +279,7 @@ In a second terminal, connect the client:
   - Outcome immutability: The announced result is fixed once reached and cannot be altered.
   - Cessation: Once the mission finishes, units halt, combat orders are cleared, and subsequent gameplay orders are rejected.
 - **Mission HUD**:
-  - Top-left briefing card displays objective, target identification status, squad roster, and mission timer.
+  - Top-left briefing card displays objective, target spotted status, squad roster, and mission timer.
   - Approximate target search area is shown via a 3D ground ring until the target is spotted.
   - Result card displays Victory/Defeat, specific reason, and attempt duration.
   - In local play, clicking RETRY MISSION or pressing R starts a clean restart with fresh simulation state.
@@ -543,11 +543,11 @@ Follow this checklist to verify an exported client interactively:
    - Press Escape to close the settings panel before clearing unit selections.
 8. Unit and contact readability:
    - Floating role badges: confirm role badges appear above units (`TANK`, `RECON`, `CMD`) and contacts (`[ ? ]`, `TANK`, `RECON`, `CMD`). Left-clicking a badge selects the unit or contact; right-clicking an enemy badge issues an attack order. Badges smoothly fade when zooming in close and hide when occluded by HUD cards or off-screen.
-   - Contact representation: unknown contacts appear as neutral red diamonds without health bars; identified contacts display generic vehicle models with hostile ground brackets; last-known contacts hide live models and display frozen ghost markers with observation age.
+   - Contact representation: a seen enemy is drawn at once with the model of its vehicle type and a hostile ground bracket, and its badge shows the type (for example "T-62"); last-known contacts hide live models and display frozen ghost markers with the last seen type and observation age.
    - Tactical selection card: bottom-left card displays unit health, armament status (distinguishing unarmed recon from empty tanks), reload countdown, and server attack execution status. Inspecting contacts shows state, classification, and age in seconds without leaking health or ammo.
    - Order notifications: persistent notifications (3.0s) show queued or rejected order results without being overwritten by selection card updates.
 9. Weapon and combat feedback:
-   - Firing presentation: select an armed tank and right-click an identified enemy contact. Confirm directional muzzle flash aligned with the gun barrel, localized barrel recoil into the turret mantlet returning smoothly to bind pose without displacing health bars or selection rings, and an expanding smoke puff.
+   - Firing presentation: select an armed tank and right-click a seen enemy contact. Confirm directional muzzle flash aligned with the gun barrel, localized barrel recoil into the turret mantlet returning smoothly to bind pose without displacing health bars or selection rings, and an expanding smoke puff.
    - Shell streak: observe a transient moving shell streak (160 m/s, 3.2 m length, bounded flight duration [0.08s, 0.22s]) traveling from the muzzle to target, rather than a permanent laser beam.
    - Impact feedback: hits against targets produce a brief orange impact flash, sparks rising upward, and an expanding dust/smoke cloud accompanied by distinct metallic impact audio.
    - Destruction effect: destroyed vehicles produce a distinct large spherical explosion fireball and lingering ground scorch mark clamped to the terrain surface.

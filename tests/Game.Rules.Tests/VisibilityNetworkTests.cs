@@ -63,7 +63,7 @@ public sealed class VisibilityNetworkTests
         Assert.Equal(1, client1.Replica.ContactCount);
         ContactObservation c1Contact = client1.Replica.Contacts[0];
         Assert.Equal(ContactState.Current, c1Contact.State);
-        Assert.Equal(ContactClassification.Unknown, c1Contact.Classification);
+        Assert.Equal(ContactClassification.Tank, c1Contact.Classification);
 
         // The observed contact position matches enemy 1 around (33, 27)
         Assert.InRange(c1Contact.Position.X, 32f, 34f);

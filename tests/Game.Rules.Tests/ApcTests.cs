@@ -30,14 +30,14 @@ public sealed class ApcTests
     {
         ClientReplica replica = new();
         byte[] bytes = new byte[WireProtocol.MaxMessageSize];
-        ContactObservation contact = new(new ContactId(7), ContactState.Current, ContactClassification.Apc, new Vector2(40f, 50f), 3);
+        ContactObservation contact = new(new ContactId(7), ContactState.Current, ContactClassification.Apc, 42, new Vector2(40f, 50f), 3);
 
         int size = WireProtocol.WriteSnapshot(bytes, 1, 3, [], [contact], []);
 
         Assert.True(replica.TryApply(bytes.AsSpan(0, size)));
         Assert.True(replica.TryGetContact(new ContactId(7), out ContactObservation received));
         Assert.Equal(ContactClassification.Apc, received.Classification);
-        Assert.Equal(DetectionLevel.Identified, received.Level);
+        Assert.Equal(42, received.Type);
     }
 
     [Fact]
@@ -45,10 +45,10 @@ public sealed class ApcTests
     {
         ClientReplica replica = new();
         byte[] bytes = new byte[WireProtocol.MaxMessageSize];
-        ContactObservation contact = new(new ContactId(7), ContactState.Current, ContactClassification.Apc, new Vector2(40f, 50f), 3);
+        ContactObservation contact = new(new ContactId(7), ContactState.Current, ContactClassification.Apc, 0, new Vector2(40f, 50f), 3);
 
         int size = WireProtocol.WriteSnapshot(bytes, 1, 3, [], [contact], []);
-        bytes[WireProtocol.SnapshotHeaderSize + 6] = (byte)ContactClassification.Apc + 1;
+        bytes[WireProtocol.SnapshotHeaderSize + 5] = (byte)ContactClassification.Apc + 1;
 
         Assert.False(replica.TryApply(bytes.AsSpan(0, size)));
     }
