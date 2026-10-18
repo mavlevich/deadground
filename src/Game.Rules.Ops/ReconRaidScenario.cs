@@ -299,15 +299,7 @@ public static class ReconRaidScenario
         UnitDefinition cmdDef = catalog.RequireDefinition("prototype_vehicle");
         ushort cmdIdx = catalog.RequireDefinitionIndex("prototype_vehicle");
 
-        int tankAmmo = 10;
-        if (catalog.Weapons is not null)
-        {
-            foreach (WeaponData w in catalog.Weapons)
-            {
-                if (string.Equals(w.Id, tankDef.Weapon, StringComparison.Ordinal))
-                    tankAmmo = w.AmmoCapacity;
-            }
-        }
+        int tankAmmo = catalog.GetAmmoCapacity(tankDef);
 
         // Side 1 (Player): 1 recon vehicle and 2 tanks in southwest corner [60..80, 60..80]
         EntityId playerReconId = world.CreateUnit(1, reconIdx, new Vector2(70f, 70f), reconDef.Speed, reconDef.MaxHealth, 0);

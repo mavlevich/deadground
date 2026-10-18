@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="../Engine.Core/Engine.Core.csproj" />
-    <EmbeddedResource Include="../../content/coldwar/units.json" LogicalName="DeadGround.Units.json" />
+    <EmbeddedResource Include="../../content/prototype/units.json" LogicalName="DeadGround.Units.json" />
+    <EmbeddedResource Include="../../content/coldwar/units.json" LogicalName="DeadGround.ColdWarUnits.json" />
   </ItemGroup>
 </Project>

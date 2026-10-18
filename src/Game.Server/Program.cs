@@ -36,16 +36,6 @@ if (scenario == "recon-raid")
     maxClients = 1;
 }
 
-HeightMap map = scenario switch
-{
-    "visibility" => VisibilityScenario.CreateMap(),
-    "navigation" => NavigationScenario.CreateMap(),
-    "navigation-large" => LargeNavigationScenario.CreateMap(),
-    "combat" => CombatScenario.CreateMap(),
-    "recon-raid" => ReconRaidScenario.CreateMap(),
-    _ => HeightMap.CreatePrototype()
-};
-
 StaticGeometry? scenarioGeometry = scenario switch
 {
     "visibility" => VisibilityScenario.CreateStaticGeometry(),
@@ -53,8 +43,12 @@ StaticGeometry? scenarioGeometry = scenario switch
     "navigation-large" => LargeNavigationScenario.CreateStaticGeometry(),
     "combat" => CombatScenario.CreateStaticGeometry(),
     "recon-raid" => ReconRaidScenario.CreateStaticGeometry(),
+    "battle" => BattleScenario.CreateStaticGeometry(),
     _ => null
 };
+
+// Scenarios with geometry carry their own map; build it only once.
+HeightMap map = scenarioGeometry?.HeightMap ?? HeightMap.CreatePrototype();
 
 MatchSetup setup = scenario switch
 {
@@ -63,6 +57,7 @@ MatchSetup setup = scenario switch
     "navigation-large" => LargeNavigationScenario.CreateMatchSetup(scenarioGeometry!),
     "combat" => CombatScenario.CreateMatchSetup(scenarioGeometry!),
     "recon-raid" => ReconRaidScenario.CreateMatchSetup(scenarioGeometry!),
+    "battle" => BattleScenario.CreateMatchSetup(scenarioGeometry!),
     _ => PrototypeScenario.CreateMatchSetup(map)
 };
 
@@ -73,6 +68,7 @@ Simulation CreateSimulation() => scenario switch
     "navigation-large" => LargeNavigationScenario.CreateSimulation(scenarioGeometry!),
     "combat" => CombatScenario.CreateSimulation(scenarioGeometry!),
     "recon-raid" => ReconRaidScenario.CreateSimulation(scenarioGeometry!),
+    "battle" => BattleScenario.CreateSimulation(scenarioGeometry!),
     _ => PrototypeScenario.Create(map)
 };
 
@@ -139,6 +135,24 @@ if (smokeTest)
             throw new InvalidOperationException("Combat smoke test tick mismatch.");
 
         Console.WriteLine($"COMBAT_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} contacts={session.Replica.ContactCount}");
+        return;
+    }
+
+    if (scenario == "battle")
+    {
+        for (int i = 0; i < 20; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.Replica.OwnUnits.Length != BattleScenario.UnitsPerSide || session.Replica.ContactCount != 0)
+            throw new InvalidOperationException("Battle smoke test: the sides must start out of sight.");
+
+        EntityId mover = session.Replica.OwnUnits[0].Id;
+        Vector2 from = session.Replica.OwnUnits[0].Position;
+        session.Move(mover, from + new Vector2(0f, -200f));
+        for (int i = 0; i < 100; i++) session.Advance(1d / Simulation.TickRate);
+        Vector2 to = session.Replica.SamplePosition(mover, session.Replica.LatestTick);
+        if (session.Tick != 120 || Vector2.Distance(from, to) < 10f)
+            throw new InvalidOperationException("Battle smoke test: the unit did not move.");
+
+        Console.WriteLine($"BATTLE_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} moved={Vector2.Distance(from, to):F1}");
         return;
     }
 
