@@ -972,8 +972,9 @@ still require large-battle render validation before setting production GPU budge
 - The APC carries no weapon yet; its 14.5 mm KPVT comes with machine guns in M2. Troop capacity
   comes with infantry and containers (section 11.2). Its speed and sensor values use the same
   prototype scale as the other units.
-- Reconnaissance vehicles keep the prototype model until the BRDM-2 exists. `contact_recon` already
-  takes faction overrides for it.
+- The Soviet `brdm2` type uses the BRDM-2 model from `build_brdm2.py` (three LODs, checked against a
+  dimensioned drawing). Identified Soviet recon contacts use its LOD1 through `contact_recon`. The
+  prototype `recon_vehicle` on the test maps keeps the prototype model.
 - Wheels use the same motion data as track wheels: they turn with the travel of their side, and the
   wrap period is a whole number of wheel turns.
 

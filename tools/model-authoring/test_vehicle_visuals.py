@@ -35,12 +35,14 @@ class VehicleVisualsTests(unittest.TestCase):
 
         visuals = json.loads((ASSETS / "visuals.json").read_text())
         btr_manifest = json.loads((ASSETS / "BTR70" / "manifest.json").read_text())
+        brdm_manifest = json.loads((ASSETS / "BRDM2" / "manifest.json").read_text())
         expected_gauge = {
             "t62": 2 * build_t62_alt.TRACK_X_CENTER,
             "m60a1": 2 * build_m60.TRACK_X_CENTER,
             "btr70": btr_manifest["track_gauge_meters"],
+            "brdm2": brdm_manifest["track_gauge_meters"],
         }
-        for unit, folder in (("t62", "T62Alt"), ("m60a1", "M60"), ("btr70", "BTR70")):
+        for unit, folder in (("t62", "T62Alt"), ("m60a1", "M60"), ("btr70", "BTR70"), ("brdm2", "BRDM2")):
             manifest = json.loads((ASSETS / folder / "manifest.json").read_text())
             entry = visuals[unit]
             self.assertEqual(entry["scale"], 1.0, msg=unit)

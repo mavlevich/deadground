@@ -490,20 +490,26 @@ public sealed class DetectionSystemTests
         PlayerKnowledge k = new(1);
 
         // Warm up simulation and knowledge buffers
-        for (int i = 0; i < 20; i++)
-        {
-            sim.Step();
-            sim.UpdateKnowledge(k);
-        }
-
-        // Measure allocated bytes over 100 warmed ticks
-        long before = GC.GetAllocatedBytesForCurrentThread();
         for (int i = 0; i < 100; i++)
         {
             sim.Step();
             sim.UpdateKnowledge(k);
         }
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        // A per-tick allocation shows up in every window. One-time runtime work, such as tiered JIT
+        // recompiling hot methods with a delay on a slow CI runner, shows up in one window at most;
+        // it made this test fail once on macOS with 4,680 bytes.
+        long allocated = long.MaxValue;
+        for (int window = 0; window < 3 && allocated != 0; window++)
+        {
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 100; i++)
+            {
+                sim.Step();
+                sim.UpdateKnowledge(k);
+            }
+            allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        }
         Assert.Equal(0L, allocated);
     }
 
