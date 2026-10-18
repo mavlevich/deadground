@@ -61,17 +61,22 @@ internal static class TerrainView
         return indices.Length > 0;
     }
 
+    // Grid line spacing in meters: 8 m on small test maps, 100 m on kilometer maps so the grid
+    // stays readable and its mesh stays small.
+    internal static float GridSpacing(HeightMap map) => Math.Max(map.Width, map.Depth) > 500f ? 100f : 8f;
+
     public static MeshInstance3D CreateGrid(HeightMap map)
     {
+        float spacing = GridSpacing(map);
         List<Vector3> vertices = new();
-        for (float line = 0; line <= map.Width; line += 8)
+        for (float line = 0; line <= map.Width; line += spacing)
             for (float p = 0; p < map.Depth; p += map.CellSize)
             {
                 float end = Math.Min(p + map.CellSize, map.Depth);
                 vertices.Add(new Vector3(line, map.GetHeight(line, p) + 0.06f, p));
                 vertices.Add(new Vector3(line, map.GetHeight(line, end) + 0.06f, end));
             }
-        for (float line = 0; line <= map.Depth; line += 8)
+        for (float line = 0; line <= map.Depth; line += spacing)
             for (float p = 0; p < map.Width; p += map.CellSize)
             {
                 float end = Math.Min(p + map.CellSize, map.Width);

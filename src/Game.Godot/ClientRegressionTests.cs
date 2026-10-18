@@ -30,9 +30,10 @@ internal static class ClientRegressionTests
             VehiclePreviewRegressionTests.Run(scene);
             FactionVehicleRegressionTests.Run(scene);
             SelectionRegressionTests.Run(scene);
+            HistoricalUnitsRegressionTests.Run();
             VehicleEffectsRegressionTests.Run(scene);
             CannonSoundRegressionTests.Run(scene);
-            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability combat_feedback vehicle_preview faction_vehicles rts_selection vehicle_effects cannon_sound");
+            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability combat_feedback vehicle_preview faction_vehicles rts_selection vehicle_effects cannon_sound historical_units");
             return true;
         }
         catch (Exception exception)
@@ -224,6 +225,9 @@ internal static class ClientRegressionTests
 
         string combat = Main.FormatTitle(1, "combat");
         Require(combat.Contains("SIDE 1") && combat.Contains("COMBAT SCENARIO"), "Combat title did not format correctly.");
+
+        string battle = Main.FormatTitle(1, "battle");
+        Require(battle.Contains("MEETING ENGAGEMENT"), "Battle title did not format correctly.");
     }
 
     private static void CheckCombatEffectsAndLifecycle(Node3D scene)

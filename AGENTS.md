@@ -29,6 +29,7 @@ src/Game.Rules.Sandbox/ test rule set
 src/Game.Server/        dedicated server, console app
 src/Game.Godot/         Godot client
 content/coldwar/        unit, weapon and faction data (JSON)
+content/prototype/      test unit data for the small test maps
 maps/                   exported map data
 tests/                  test and benchmark projects
 tools/                  map export and other tools

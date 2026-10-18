@@ -146,7 +146,7 @@ internal sealed partial class SelectionCard : PanelContainer
         _cachedSingleControlGroup = controlGroup;
 
         UnitDefinition? def = ownUnit.Definition < _catalog.Units.Length ? _catalog.Units[ownUnit.Definition] : null;
-        string name = def is not null ? FormatUnitName(def.Id) : $"Unit #{ownUnit.Id.Value}";
+        string name = def is not null ? FormatUnitName(def) : $"Unit #{ownUnit.Id.Value}";
         string role = def is not null ? GetRoleName(def) : "Combat Unit";
 
         string groupText = (controlGroup >= 0 && controlGroup < SingleUnitGroupTexts.Length)
@@ -322,18 +322,21 @@ internal sealed partial class SelectionCard : PanelContainer
         return "Vehicle";
     }
 
-    private static string FormatUnitName(string id) => id switch
+    // Historical types carry their real name; prototype units fall back to a readable ID.
+    internal static string FormatUnitName(UnitDefinition def) => def.Name ?? def.Id switch
     {
         "prototype_tank" => "Prototype Tank",
         "recon_vehicle" => "Reconnaissance Vehicle",
         "apc" => "Armored Personnel Carrier",
         "prototype_vehicle" => "Prototype Vehicle",
-        _ => id
+        _ => def.Id
     };
 
     private static string FormatWeaponName(string id) => id switch
     {
         "tank_gun_100mm" => "100mm Tank Gun",
+        "gun_115mm_u5ts" => "115mm U-5TS Gun",
+        "gun_105mm_m68" => "105mm M68 Gun",
         _ => id
     };
 

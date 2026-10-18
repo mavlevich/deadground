@@ -203,6 +203,12 @@ public partial class Main : Node3D
             _map = scenarioGeometry.HeightMap;
             setup = CombatScenario.CreateMatchSetup(scenarioGeometry);
         }
+        else if (_scenario == "battle")
+        {
+            scenarioGeometry = BattleScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = BattleScenario.CreateMatchSetup(scenarioGeometry);
+        }
         else if (_scenario == "recon-raid")
         {
             scenarioGeometry = ReconRaidScenario.CreateStaticGeometry();
@@ -236,6 +242,7 @@ public partial class Main : Node3D
                 "navigation-large" => new LocalSession(LargeNavigationScenario.CreateSimulation(scenarioGeometry!)),
                 "combat" => new LocalSession(CombatScenario.CreateSimulation(scenarioGeometry!)),
                 "recon-raid" => new LocalSession(ReconRaidScenario.CreateSimulation(scenarioGeometry!)),
+                "battle" => new LocalSession(BattleScenario.CreateSimulation(scenarioGeometry!)),
                 _ => new LocalSession(PrototypeScenario.Create(_map))
             };
         }
@@ -286,16 +293,29 @@ public partial class Main : Node3D
             _benchmarkTargetFrames = activeSettings.BenchmarkFrames;
         }
 
-        float initialCameraSize = _scenario == "combat" ? 75 : (_scenario == "navigation-large" ? 450 : (_scenario == "recon-raid" ? 160 : 112));
+        float initialCameraSize = _scenario switch
+        {
+            "combat" => 75,
+            "navigation-large" => 450,
+            "recon-raid" => 160,
+            "battle" => 160,
+            _ => 112
+        };
         _camera = new Camera3D { Projection = Camera3D.ProjectionType.Orthogonal, Size = initialCameraSize, Far = 3500, Current = true };
         AddChild(_camera);
-        Vector3 initialFocus = _scenario == "combat"
-            ? new Vector3(45, 0, 45)
-            : (_scenario == "navigation-large" ? new Vector3(300, 0, 300) : (_scenario == "recon-raid" ? new Vector3(100, 0, 100) : new Vector3(64, 0, 64)));
+        Vector3 initialFocus = _scenario switch
+        {
+            "combat" => new Vector3(45, 0, 45),
+            "navigation-large" => new Vector3(300, 0, 300),
+            "recon-raid" => new Vector3(100, 0, 100),
+            "battle" => new Vector3(BattleScenario.SovietStart.X, 0, BattleScenario.SovietStart.Y),
+            _ => new Vector3(64, 0, 64)
+        };
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
         _cameraRig.SetDefaultView(initialFocus, initialCameraSize);
 
-        _catalog = PrototypeScenario.LoadCatalog();
+        // Historical scenarios use the Cold War catalog; the small test maps keep prototype data.
+        _catalog = ScenarioContent.LoadCatalog(_scenario);
         // Factions are part of the public match setup; the side is known once the session assigns it.
         MatchSetup matchSetup = setup;
         _unitViews = new UnitViewSet(this, _map, _catalog, () => matchSetup.GetPlayerFaction(_session.AssignedPlayerId));
@@ -519,16 +539,19 @@ public partial class Main : Node3D
                     "navigation-large" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
                     "combat" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 4,
                     "recon-raid" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
+                    "battle" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == BattleScenario.UnitsPerSide,
                     _ => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
                         _session.Replica.OwnUnits[0].Position.Y > 24
                 };
-                string token = _scenario == "combat"
-                    ? (ok ? "M1_CLIENT_COMBAT_SMOKE_OK" : "M1_CLIENT_COMBAT_SMOKE_FAILED")
-                    : (_scenario == "navigation-large"
-                        ? (ok ? "M1_CLIENT_NAV_LARGE_SMOKE_OK" : "M1_CLIENT_NAV_LARGE_SMOKE_FAILED")
-                        : (_scenario == "recon-raid"
-                            ? (ok ? "M1_CLIENT_RECON_RAID_SMOKE_OK" : "M1_CLIENT_RECON_RAID_SMOKE_FAILED")
-                            : (ok ? "M0_CLIENT_SMOKE_OK" : "M0_CLIENT_SMOKE_FAILED")));
+                string prefix = _scenario switch
+                {
+                    "combat" => "M1_CLIENT_COMBAT_SMOKE",
+                    "navigation-large" => "M1_CLIENT_NAV_LARGE_SMOKE",
+                    "recon-raid" => "M1_CLIENT_RECON_RAID_SMOKE",
+                    "battle" => "M1_CLIENT_BATTLE_SMOKE",
+                    _ => "M0_CLIENT_SMOKE"
+                };
+                string token = prefix + (ok ? "_OK" : "_FAILED");
                 GD.Print(token);
                 GetTree().Quit(ok ? 0 : 1);
             }
@@ -1224,8 +1247,18 @@ public partial class Main : Node3D
         CornerRadiusTopRight = 6
     };
 
-    public static string FormatTitle(int assignedSide, string scenario) =>
-        $"DEAD GROUND   /   SIDE {assignedSide}   /   {(scenario == "visibility" ? "RECON SCENARIO" : scenario == "combat" ? "COMBAT SCENARIO" : scenario == "recon-raid" ? "RECON RAID MISSION" : "M0 NETWORK TEST")}";
+    public static string FormatTitle(int assignedSide, string scenario)
+    {
+        string name = scenario switch
+        {
+            "visibility" => "RECON SCENARIO",
+            "combat" => "COMBAT SCENARIO",
+            "recon-raid" => "RECON RAID MISSION",
+            "battle" => "MEETING ENGAGEMENT",
+            _ => "M0 NETWORK TEST"
+        };
+        return $"DEAD GROUND   /   SIDE {assignedSide}   /   {name}";
+    }
 
     internal static string FormatControlsHelpText(bool isMacOs) =>
         isMacOs

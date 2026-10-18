@@ -99,6 +99,7 @@ deadground/
     Game.Godot/           Godot client: presentation, UI, input, local host
   content/
     coldwar/              unit, weapon, sensor, faction definitions
+    prototype/            test unit data for the small test maps
   maps/                   exported map data for the simulation
   tests/
     Engine.Core.Tests/
@@ -720,9 +721,10 @@ The AI sends normal commands and reads only its side's knowledge. Headless bot v
 
 ### 17.1 Historical unit data
 
-Status: planned. Today `units.json` holds prototype units (`prototype_tank`, `recon_vehicle`, `apc`)
-with numbers tuned for 128 m test maps: a tank gun reaches 60 m and a tank drives at 5 m/s. Faction
-models only change the look. This section replaces them with real vehicle types and period numbers.
+Status: step 1 of the implementation order below is done. `content/coldwar/units.json` holds the
+historical types and the `battle` scenario uses them. The prototype units (`prototype_tank`,
+`recon_vehicle`, `apc`) moved to `content/prototype/units.json`: their numbers are tuned for 128 m
+test maps (a tank gun reaches 60 m, a tank drives at 5 m/s) and faction models only change their look.
 
 Scale and time:
 
@@ -733,27 +735,32 @@ Scale and time:
   minutes. A faster game speed may exist later for single player and tests only; it never changes
   the data.
 - Battles need maps of at least 2 x 2 km, up to the 15 x 15 km limit of section 2. The 128 m maps
-  stay as test maps with their own test unit data, loaded through `PrototypeScenario.LoadCatalog`.
+  stay as test maps with their own test unit data, loaded through `PrototypeScenario.LoadCatalog`;
+  historical data loads through `ColdWarContent.LoadCatalog`. The client picks the catalog by scenario.
 
 Vehicle types:
 
 - Each unit type is one real vehicle of one faction: `t62`, `m60a1`, `btr70`, `m113a1`, `brdm2`, and
   later `m151a2`, `brdm2u`, `m577`, `ural375d`, `m35a2` (era about 1976 to 1982). A type replaces the
   "prototype unit plus faction model" pairs; `visuals.json` maps each type to its model directly.
-- Unit data gains `name` (display name, for example "T-62"), `faction` and `role` (`tank`, `apc`,
-  `recon`, `command`, `truck`). The role becomes the contact classification on identification.
+- Unit data gains `name` (display name, for example "T-62") and `faction`. The existing
+  `classification` field holds the role (`tank`, `apc`, `recon`, `command`, `truck`), which becomes
+  the contact classification on identification. The catalog rejects a blank name or an unknown
+  faction.
 - Scenarios spawn the types of each player's faction. A scenario names the types it uses, so a
   missing model or a missing type fails at load, not in play.
-- The client shows the type name in the selection card, for example "T-62 / Tank", and keeps the
-  short role badge ("TANK", "APC").
+- The client shows the type name in the selection card ("T-62 [Combat Tank]") and on the badge of
+  own units ("T-62", "BTR-70"). Enemy badges keep the role ("TANK") until identification reveals the
+  type (step 2 below); the name must not show more than the side has identified.
 
 Numbers and sources:
 
 - Every value comes from `docs/unit-sources.md`, with a numbered source. A value without a period
   source is marked as an estimate there, with the reason for its choice.
 - Mobility: `speed_road`, `speed_offroad` and `reverse_speed` in m/s, plus water speed for amphibious
-  types. Until the map has a road layer, units move at `speed_offroad`. `turn_rate` comes with hull
-  heading (section 9.5).
+  types. Until the map has a road layer, units move at `speed_offroad`; a type gives `speed_offroad`
+  instead of `speed`, never both. The catalog rejects a type that is faster off-road than on the road
+  or reverses as fast as it drives. `turn_rate` comes with hull heading (section 9.5).
 - Weapons: effective range from period sources. Hit probability by range is section 12.3, not the
   range field. Armor values by side are stored now and used when section 12.3 lands.
 - Sensors: separate ranges to detect and to identify, per observer type, for a clear day, open
@@ -779,8 +786,11 @@ Presentation:
 
 Implementation order:
 
-1. Unit types, names, period numbers and a 2 km combat scenario. The client shows type names for own
-   units. Identified contacts still show the role only.
+1. Done. Unit types, names, period numbers and the 2 km `battle` scenario (a meeting engagement: a
+   ridge with two saddles hides the start areas from each other, and a village sits on one saddle).
+   The client shows type names for own units, draws historical models at 1:1 scale and a 100 m grid
+   on kilometer maps. Identified contacts still show the role only, with the prototype contact models
+   at their 0.75 scale until step 2.
 2. The type field in identified contacts, so the client names identified enemies.
 3. The 2 x 2 km recon raid battlefield (milestone M1) with the new data.
 

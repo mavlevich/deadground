@@ -72,5 +72,47 @@
         "scale": 0.75
       }
     }
+  },
+  "t62": {
+    "scene": "res://Assets/Vehicles/T62Alt/t62alt.glb",
+    "lods": [
+      "res://Assets/Vehicles/T62Alt/t62alt_lod1.glb",
+      "res://Assets/Vehicles/T62Alt/t62alt_lod2.glb"
+    ],
+    "scale": 1.0,
+    "track_gauge": 2.72,
+    "track_wrap": 956.8023455857378
+  },
+  "m60a1": {
+    "scene": "res://Assets/Vehicles/M60/m60.glb",
+    "lods": [
+      "res://Assets/Vehicles/M60/m60_lod1.glb",
+      "res://Assets/Vehicles/M60/m60_lod2.glb"
+    ],
+    "scale": 1.0,
+    "track_gauge": 2.92,
+    "track_wrap": 993.182877105738
+  },
+  "btr70": {
+    "scene": "res://Assets/Vehicles/BTR70/btr70.glb",
+    "lods": [
+      "res://Assets/Vehicles/BTR70/btr70_lod1.glb",
+      "res://Assets/Vehicles/BTR70/btr70_lod2.glb"
+    ],
+    "scale": 1.0,
+    "track_gauge": 2.4,
+    "track_wrap": 999.2777912538415
+  },
+  "m113a1": {
+    "scene": "res://Assets/Vehicles/recon.glb",
+    "scale": 1.0
+  },
+  "brdm2": {
+    "scene": "res://Assets/Vehicles/recon.glb",
+    "scale": 1.0
+  },
+  "m151a2": {
+    "scene": "res://Assets/Vehicles/recon.glb",
+    "scale": 1.0
   }
 }

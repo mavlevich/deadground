@@ -196,11 +196,14 @@ internal sealed partial class RoleBadgeOverlay : Control
         _cachedPanels.Clear();
     }
 
-    private string GetOwnUnitRoleText(ushort definition)
+    // Own units show their real type ("T-62"); prototype units show their role.
+    internal string GetOwnUnitRoleText(ushort definition)
     {
         if (definition < _catalog.Units.Length)
         {
             UnitDefinition def = _catalog.Units[definition];
+            if (def.Name is not null)
+                return def.Name.ToUpperInvariant();
             if (!string.IsNullOrEmpty(def.Classification))
             {
                 return def.Classification.ToLowerInvariant() switch

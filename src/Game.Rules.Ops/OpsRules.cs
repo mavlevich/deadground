@@ -94,7 +94,15 @@ public sealed record UnitDefinition(
     string? Weapon = null,
     float IdentifyRange = 0f,
     int IdentifyTicks = 80,
-    string? Classification = null);
+    string? Classification = null,
+    // Historical types (section 17.1): display name, faction and period speeds in m/s.
+    // A type gives speed_offroad instead of speed; units move at it until maps have roads.
+    string? Name = null,
+    string? Faction = null,
+    float SpeedRoad = 0f,
+    float SpeedOffroad = 0f,
+    float ReverseSpeed = 0f,
+    float WaterSpeed = 0f);
 
 public sealed record FactionData(string Id, string? Name = null);
 
@@ -136,6 +144,18 @@ public sealed record UnitCatalog(
                 return (ushort)i;
         }
         throw new KeyNotFoundException($"Unit definition '{id}' not found in catalog.");
+    }
+
+    // Full ammunition load of the unit's weapon, or 0 for an unarmed unit.
+    public int GetAmmoCapacity(UnitDefinition unit)
+    {
+        if (unit.Weapon is null || Weapons is null) return 0;
+        for (int i = 0; i < Weapons.Length; i++)
+        {
+            if (string.Equals(Weapons[i].Id, unit.Weapon, StringComparison.Ordinal))
+                return Weapons[i].AmmoCapacity;
+        }
+        return 0;
     }
 
     public UnitDefinition? GetDefinition(string id)
@@ -404,6 +424,20 @@ public static class PrototypeScenario
                 throw new InvalidOperationException("Invalid identify range.");
             if (unit.IdentifyTicks <= 0)
                 throw new InvalidOperationException("Invalid identify ticks.");
+            if (unit.Name is not null && string.IsNullOrWhiteSpace(unit.Name))
+                throw new InvalidOperationException($"Unit '{unit.Id}' has a blank name.");
+            if (unit.Faction is not null && !data.HasFaction(unit.Faction))
+                throw new InvalidOperationException($"Unit '{unit.Id}' names unknown faction '{unit.Faction}'.");
+            if (!float.IsFinite(unit.SpeedRoad) || !float.IsFinite(unit.SpeedOffroad) ||
+                !float.IsFinite(unit.ReverseSpeed) || !float.IsFinite(unit.WaterSpeed) ||
+                unit.SpeedRoad < 0 || unit.SpeedOffroad < 0 || unit.ReverseSpeed < 0 || unit.WaterSpeed < 0)
+                throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid period speed.");
+            if (unit.SpeedOffroad > 0 && unit.SpeedRoad == 0)
+                throw new InvalidOperationException($"Unit '{unit.Id}' gives speed_offroad but no speed_road.");
+            if (unit.SpeedOffroad > 0 && unit.SpeedRoad < unit.SpeedOffroad)
+                throw new InvalidOperationException($"Unit '{unit.Id}' is faster off-road than on the road.");
+            if (unit.ReverseSpeed > 0 && unit.ReverseSpeed >= Math.Max(unit.SpeedRoad, unit.Speed))
+                throw new InvalidOperationException($"Unit '{unit.Id}' reverses as fast as it drives forward.");
         }
         return data;
     }
@@ -413,23 +447,17 @@ public static class PrototypeScenario
         ArgumentNullException.ThrowIfNull(stream);
         using MemoryStream ms = new();
         stream.CopyTo(ms);
-        byte[] bytes = ms.ToArray();
-        ulong hash = 14695981039346656037UL;
-        for (int i = 0; i < bytes.Length; i++)
-        {
-            hash ^= bytes[i];
-            hash *= 1099511628211UL;
-        }
-        UnitCatalog data = JsonSerializer.Deserialize(bytes, ContentJsonContext.Default.UnitCatalog)
-            ?? throw new InvalidOperationException("Unit data is empty.");
-        data = data with { ContentHash = hash };
-        return ValidateCatalog(data);
+        return ParseCatalog(ms.ToArray());
     }
 
     public static UnitCatalog LoadCatalog(string json)
     {
         ArgumentNullException.ThrowIfNull(json);
-        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(json);
+        return ParseCatalog(System.Text.Encoding.UTF8.GetBytes(json));
+    }
+
+    private static UnitCatalog ParseCatalog(byte[] bytes)
+    {
         ulong hash = 14695981039346656037UL;
         for (int i = 0; i < bytes.Length; i++)
         {
@@ -439,7 +467,23 @@ public static class PrototypeScenario
         UnitCatalog data = JsonSerializer.Deserialize(bytes, ContentJsonContext.Default.UnitCatalog)
             ?? throw new InvalidOperationException("Unit data is empty.");
         data = data with { ContentHash = hash };
-        return ValidateCatalog(data);
+        return ValidateCatalog(ApplyOffroadSpeed(data));
+    }
+
+    // A historical type gives speed_offroad and no speed; it moves at its off-road speed.
+    private static UnitCatalog ApplyOffroadSpeed(UnitCatalog data)
+    {
+        if (data.Units is null) return data;
+        UnitDefinition[] units = (UnitDefinition[])data.Units.Clone();
+        for (int i = 0; i < units.Length; i++)
+        {
+            UnitDefinition unit = units[i];
+            if (unit is null || unit.SpeedOffroad == 0f) continue;
+            if (unit.Speed != 0f)
+                throw new InvalidOperationException($"Unit '{unit.Id}' gives both speed and speed_offroad.");
+            units[i] = unit with { Speed = unit.SpeedOffroad };
+        }
+        return data with { Units = units };
     }
 
     public static UnitCatalog LoadCatalog()
@@ -898,15 +942,7 @@ public static class CombatScenario
         UnitDefinition apcDef = catalog.RequireDefinition("apc");
         ushort apcIdx = catalog.RequireDefinitionIndex("apc");
 
-        int tankAmmo = 10;
-        if (catalog.Weapons is not null)
-        {
-            foreach (WeaponData w in catalog.Weapons)
-            {
-                if (string.Equals(w.Id, tankDef.Weapon, StringComparison.Ordinal))
-                    tankAmmo = w.AmmoCapacity;
-            }
-        }
+        int tankAmmo = catalog.GetAmmoCapacity(tankDef);
 
         // Side 1: 2 tanks and 1 recon vehicle
         world.CreateUnit(1, reconIdx, new Vector2(15f, 25f), reconDef.Speed, reconDef.MaxHealth, 0);

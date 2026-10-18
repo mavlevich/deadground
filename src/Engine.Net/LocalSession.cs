@@ -20,7 +20,7 @@ public sealed class LocalSession : IGameSession
     public long RejectedCommands => _client.RejectedCommands;
     public bool IsConnected => true;
     public int AssignedPlayerId { get; }
-    public string StatusDescription => "Local authoritative simulation / prototype terrain";
+    public string StatusDescription => "Local authoritative simulation";
 
     public LocalSession(Simulation simulation, int player = 1, int reservedBotPlayer = 0)
     {
