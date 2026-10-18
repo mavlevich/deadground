@@ -61,7 +61,13 @@
   },
   "contact_recon": {
     "scene": "res://Assets/Vehicles/recon.glb",
-    "scale": 0.75
+    "scale": 0.75,
+    "factions": {
+      "soviet": {
+        "scene": "res://Assets/Vehicles/BRDM2/brdm2_lod1.glb",
+        "scale": 0.75
+      }
+    }
   },
   "contact_apc": {
     "scene": "res://Assets/Vehicles/recon.glb",
@@ -108,8 +114,14 @@
     "scale": 1.0
   },
   "brdm2": {
-    "scene": "res://Assets/Vehicles/recon.glb",
-    "scale": 1.0
+    "scene": "res://Assets/Vehicles/BRDM2/brdm2.glb",
+    "lods": [
+      "res://Assets/Vehicles/BRDM2/brdm2_lod1.glb",
+      "res://Assets/Vehicles/BRDM2/brdm2_lod2.glb"
+    ],
+    "scale": 1.0,
+    "track_gauge": 1.84,
+    "track_wrap": 999.2777912538415
   },
   "m151a2": {
     "scene": "res://Assets/Vehicles/recon.glb",

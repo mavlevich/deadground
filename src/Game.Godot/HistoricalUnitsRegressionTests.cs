@@ -34,6 +34,7 @@ internal static class HistoricalUnitsRegressionTests
             ("t62", "T62Alt/t62alt.glb"),
             ("m60a1", "M60/m60.glb"),
             ("btr70", "BTR70/btr70.glb"),
+            ("brdm2", "BRDM2/brdm2.glb"),
         ];
         foreach ((string id, string scene) in built)
         {

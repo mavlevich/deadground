@@ -217,8 +217,8 @@ internal static class FactionVehicleRegressionTests
                 "Player 2 must see an identified enemy APC as BTR-70 LOD1.");
             Require(usApc.Name == "EnemyApcModel" && usApc.GetChild<Node3D>(0).SceneFilePath.EndsWith("Vehicles/recon.glb", StringComparison.Ordinal),
                 "Player 1 must see a US APC with the placeholder model.");
-            Require(sovietRecon.Name == "EnemyReconModel" && sovietRecon.GetChild<Node3D>(0).SceneFilePath.EndsWith("Vehicles/recon.glb", StringComparison.Ordinal),
-                "Enemy Soviet recon must not use the BTR-70.");
+            Require(sovietRecon.Name == "EnemyReconModel" && sovietRecon.GetChild<Node3D>(0).SceneFilePath.EndsWith("BRDM2/brdm2_lod1.glb", StringComparison.Ordinal),
+                "Identified enemy Soviet recon must use the BRDM-2, not the BTR-70.");
             Require(generic.GetChild<Node3D>(0).SceneFilePath.EndsWith("Vehicles/recon.glb", StringComparison.Ordinal),
                 "Without factions an enemy APC keeps the generic model.");
             Require(sovietApc.FindChild("HostileAffiliationMarker", true, false) is not null, "Enemy APC lost its hostile marker.");

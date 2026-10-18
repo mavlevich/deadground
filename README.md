@@ -335,7 +335,7 @@ M113A1 and M151A2. Speeds, gun ranges and sensor ranges come from period sources
 ./tools/run-client.sh -- --scenario battle
 ```
 
-The M113A1, BRDM-2 and M151A2 use a placeholder model until their own models exist.
+The M113A1 and M151A2 use a placeholder model until their own models exist.
 
 ### Combat scenario and combat feedback
 
