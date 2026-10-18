@@ -4,12 +4,17 @@ using Godot;
 
 namespace DeadGround.Client;
 
-internal sealed class ContactViewSet(Node3D parent, HeightMap map, Func<string?>? hostileFactionProvider = null)
+internal sealed class ContactViewSet(Node3D parent, HeightMap map, Func<string?>? hostileFactionProvider = null, Func<ushort, string?>? unitIdProvider = null)
 {
     internal Dictionary<ContactId, ContactView> Views { get; } = new();
     internal HashSet<ContactId> Selected { get; } = new();
     private readonly HashSet<ContactId> _present = new(WireProtocol.MaxContacts);
     private readonly List<ContactId> _removed = new(WireProtocol.MaxContacts);
+
+    public ContactViewSet(Node3D parent, HeightMap map, DeadGround.Rules.Ops.UnitCatalog catalog, Func<string?>? hostileFactionProvider = null)
+        : this(parent, map, hostileFactionProvider, def => def < catalog.Units.Length ? catalog.Units[def].Id : null)
+    {
+    }
 
     internal void Sync(ClientReplica replica, double renderTick = 0)
     {
@@ -19,7 +24,7 @@ internal sealed class ContactViewSet(Node3D parent, HeightMap map, Func<string?>
             _present.Add(contact.Id);
             if (!Views.TryGetValue(contact.Id, out ContactView? view))
             {
-                view = new ContactView(hostileFactionProvider);
+                view = new ContactView(hostileFactionProvider, unitIdProvider);
                 Views.Add(contact.Id, view);
                 parent.AddChild(view.Root);
             }

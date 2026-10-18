@@ -558,7 +558,7 @@ public sealed class CombatTests
     }
 
     [Fact]
-    public void DestructionEvent_OpponentsReceiveGenericPresentationId_OwnerReceivesTruthDefinition()
+    public void DestructionEvent_OpponentAndOwnerReceiveKnownVehicleDefinition()
     {
         var (sim, world, _) = CreateSetup();
         using (sim)
@@ -569,21 +569,22 @@ public sealed class CombatTests
 
             for (int i = 0; i < 4; i++) sim.Step();
             Assert.True(sim.Detection!.TryGetContactByEntity(1, victim, out ContactObservation contact));
-            Assert.Equal(ContactClassification.Unknown, contact.Classification);
+            Assert.Equal(ContactClassification.Vehicle, contact.Classification);
+            Assert.Equal(victimDef, contact.Type);
 
             Assert.True(sim.TryEnqueue(1, new AttackCommand(1, sim.Tick, attacker, contact.Id)));
             sim.Step(); // Victim destroyed
 
             CombatEventObservation[] buffer = new CombatEventObservation[16];
 
-            // Opponent (side 1) receives generic presentation ID 0 (no definition disclosure)
+            // Opponent (side 1) observes destruction with known definition (seen means known)
             ReadOnlySpan<CombatEventObservation> oppEvents = sim.Combat!.DrainEvents(1, buffer);
             bool foundOppDestroyed = false;
             for (int i = 0; i < oppEvents.Length; i++)
             {
                 if (oppEvents[i].Kind == CombatEventKind.UnitDestroyed)
                 {
-                    Assert.Equal((ushort)0, oppEvents[i].PresentationId);
+                    Assert.Equal(victimDef, oppEvents[i].PresentationId);
                     foundOppDestroyed = true;
                 }
             }

@@ -16,9 +16,8 @@ public sealed class SideContactTracker
     public readonly record struct ObservedTarget(
         EntityId Id,
         Vector2 Position,
-        bool InIdentifyRange = false,
-        int IdentifyTicks = 0,
-        ContactClassification TrueClassification = ContactClassification.Unknown);
+        ContactClassification Classification = ContactClassification.Unknown,
+        ushort Type = 0);
 
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     private static int CompareTargets(in ObservedTarget a, in ObservedTarget b)
@@ -140,17 +139,13 @@ public sealed class SideContactTracker
     {
         public ContactId Id;
         public ContactState State;
-        public DetectionLevel Level;
         public ContactClassification Classification;
+        public ushort Type;
         public Vector2 Position;
         public int LastSeenTick;
         public bool ObservedThisStep;
         public bool HasBoundEntity;
         public EntityId BoundEntityId; // Internal tracker link for continuous tracking only
-        public int ConsecutiveIdentifyTicks;
-        public int RequiredIdentifyTicks;
-        public int LastIdentifiedTick;
-        public ContactClassification TargetTrueClassification;
     }
 
     private readonly Entry[] _entries;
@@ -195,9 +190,14 @@ public sealed class SideContactTracker
     /// <summary>
     /// Registers a single observation (convenience overload for tests).
     /// </summary>
-    public void RegisterObservation(EntityId enemyId, Vector2 position, int currentTick)
+    public void RegisterObservation(
+        EntityId enemyId,
+        Vector2 position,
+        int currentTick,
+        ContactClassification classification,
+        ushort type)
     {
-        Span<ObservedTarget> single = stackalloc ObservedTarget[1] { new(enemyId, position) };
+        Span<ObservedTarget> single = stackalloc ObservedTarget[1] { new(enemyId, position, classification, type) };
         RegisterObservations(single, currentTick);
     }
 
@@ -224,8 +224,9 @@ public sealed class SideContactTracker
                 ref Entry entry = ref _entries[contactIndex];
                 entry.Position = target.Position;
                 entry.LastSeenTick = currentTick;
+                entry.Classification = target.Classification;
+                entry.Type = target.Type;
                 entry.ObservedThisStep = true;
-                UpdateIdentification(ref entry, in target, currentTick);
             }
             else
             {
@@ -283,73 +284,22 @@ public sealed class SideContactTracker
 
             if (bestMatchIndex != -1)
             {
-                // Correlated with existing last-known contact: reset to Detected and Unknown
+                // Correlated with existing last-known contact: resume live track with seen classification and type
                 ref Entry correlated = ref _entries[bestMatchIndex];
                 correlated.State = ContactState.Current;
-                correlated.Level = DetectionLevel.Detected;
-                correlated.Classification = ContactClassification.Unknown;
-                correlated.ConsecutiveIdentifyTicks = 0;
-                correlated.LastIdentifiedTick = -1;
+                correlated.Classification = target.Classification;
+                correlated.Type = target.Type;
                 correlated.Position = target.Position;
                 correlated.LastSeenTick = currentTick;
                 correlated.ObservedThisStep = true;
                 correlated.HasBoundEntity = true;
                 correlated.BoundEntityId = target.Id;
                 _entityToContactIndex[target.Id] = bestMatchIndex;
-                UpdateIdentification(ref correlated, in target, currentTick);
             }
             else
             {
                 // New contact creation
                 AllocateNewContact(in target, currentTick);
-            }
-        }
-    }
-
-    private void UpdateIdentification(ref Entry entry, in ObservedTarget target, int currentTick)
-    {
-        if (target.TrueClassification != ContactClassification.Unknown)
-        {
-            entry.TargetTrueClassification = target.TrueClassification;
-        }
-
-        if (entry.Level == DetectionLevel.Identified)
-        {
-            return;
-        }
-
-        if (target.InIdentifyRange)
-        {
-            if (target.IdentifyTicks > 0)
-            {
-                entry.RequiredIdentifyTicks = target.IdentifyTicks;
-            }
-
-            if (entry.LastIdentifiedTick >= 0 && currentTick - entry.LastIdentifiedTick <= _tuning.EvaluationIntervalTicks)
-            {
-                int elapsed = currentTick - entry.LastIdentifiedTick;
-                if (elapsed <= 0) elapsed = _tuning.EvaluationIntervalTicks;
-                entry.ConsecutiveIdentifyTicks += elapsed;
-            }
-            else
-            {
-                entry.ConsecutiveIdentifyTicks = _tuning.EvaluationIntervalTicks;
-            }
-            entry.LastIdentifiedTick = currentTick;
-
-            if (entry.RequiredIdentifyTicks > 0 && entry.ConsecutiveIdentifyTicks >= entry.RequiredIdentifyTicks)
-            {
-                entry.Level = DetectionLevel.Identified;
-                entry.Classification = entry.TargetTrueClassification != ContactClassification.Unknown
-                    ? entry.TargetTrueClassification
-                    : ContactClassification.Vehicle;
-            }
-        }
-        else
-        {
-            if (entry.LastIdentifiedTick >= 0 && currentTick - entry.LastIdentifiedTick > _tuning.EvaluationIntervalTicks)
-            {
-                entry.ConsecutiveIdentifyTicks = 0;
             }
         }
     }
@@ -372,14 +322,6 @@ public sealed class SideContactTracker
                     _entityToContactIndex.Remove(entry.BoundEntityId);
                     entry.HasBoundEntity = false;
                     entry.BoundEntityId = default; // Break internal truth link upon loss
-                }
-            }
-
-            if (entry.Level != DetectionLevel.Identified)
-            {
-                if (entry.LastIdentifiedTick >= 0 && currentTick - entry.LastIdentifiedTick > _tuning.EvaluationIntervalTicks)
-                {
-                    entry.ConsecutiveIdentifyTicks = 0;
                 }
             }
         }
@@ -452,21 +394,16 @@ public sealed class SideContactTracker
         {
             Id = newId,
             State = ContactState.Current,
-            Level = DetectionLevel.Detected,
-            Classification = ContactClassification.Unknown,
+            Classification = target.Classification,
+            Type = target.Type,
             Position = target.Position,
             LastSeenTick = currentTick,
             ObservedThisStep = true,
             HasBoundEntity = true,
-            BoundEntityId = target.Id,
-            ConsecutiveIdentifyTicks = 0,
-            LastIdentifiedTick = -1,
-            RequiredIdentifyTicks = target.IdentifyTicks,
-            TargetTrueClassification = target.TrueClassification
+            BoundEntityId = target.Id
         };
         _entityToContactIndex[target.Id] = assignedIndex;
         _count++;
-        UpdateIdentification(ref newEntry, in target, currentTick);
     }
 
     private void RemoveAt(int index)
@@ -502,8 +439,8 @@ public sealed class SideContactTracker
             _exportBuffer[i] = new ContactObservation(
                 entry.Id,
                 entry.State,
-                entry.Level,
                 entry.Classification,
+                entry.Type,
                 entry.Position,
                 entry.LastSeenTick);
         }
@@ -523,7 +460,7 @@ public sealed class SideContactTracker
             if (_entries[i].Id.Value == id.Value)
             {
                 ref Entry e = ref _entries[i];
-                contact = new ContactObservation(e.Id, e.State, e.Level, e.Classification, e.Position, e.LastSeenTick);
+                contact = new ContactObservation(e.Id, e.State, e.Classification, e.Type, e.Position, e.LastSeenTick);
                 return true;
             }
         }
@@ -565,7 +502,7 @@ public sealed class SideContactTracker
             contactIndex >= 0 && contactIndex < _count)
         {
             ref Entry e = ref _entries[contactIndex];
-            contact = new ContactObservation(e.Id, e.State, e.Level, e.Classification, e.Position, e.LastSeenTick);
+            contact = new ContactObservation(e.Id, e.State, e.Classification, e.Type, e.Position, e.LastSeenTick);
             return true;
         }
         contact = default;

@@ -118,11 +118,12 @@ internal sealed partial class RoleBadgeOverlay : Control
             }
 
             float ageSeconds = Math.Max(0, serverTick - view.Observation.LastSeenTick) / (float)Simulation.TickRate;
-            badge.BindContact(id, view.Observation.State, view.Observation.Level, view.Observation.Classification, ageSeconds);
+            string roleText = GetRoleText(view.Observation.Type, view.Observation.Classification);
+            badge.BindContact(id, view.Observation.State, roleText, view.Observation.Classification, ageSeconds);
 
             float heightOffset = view.Observation.State == ContactState.LastKnown
                 ? 2.2f
-                : (view.Observation.Level == DetectionLevel.Identified ? 2.8f : 3.0f);
+                : 2.8f;
 
             Vector3 worldPos = view.Root.Position + Vector3.Up * heightOffset;
             if (camera.IsPositionBehind(worldPos))
@@ -196,8 +197,8 @@ internal sealed partial class RoleBadgeOverlay : Control
         _cachedPanels.Clear();
     }
 
-    // Own units show their real type ("T-62"); prototype units show their role.
-    internal string GetOwnUnitRoleText(ushort definition)
+    // Units show their real type ("T-62"); prototype units show their role.
+    internal string GetRoleText(ushort definition, ContactClassification fallbackClassification = ContactClassification.Unknown)
     {
         if (definition < _catalog.Units.Length)
         {
@@ -219,8 +220,18 @@ internal sealed partial class RoleBadgeOverlay : Control
             if (def.Id.Contains("recon", StringComparison.OrdinalIgnoreCase)) return "RECON";
             if (def.Id.Contains("command", StringComparison.OrdinalIgnoreCase)) return "CMD";
         }
-        return "UNIT";
+        return fallbackClassification switch
+        {
+            ContactClassification.Tank => "TANK",
+            ContactClassification.Recon => "RECON",
+            ContactClassification.Apc => "APC",
+            ContactClassification.CommandVehicle => "CMD",
+            ContactClassification.Vehicle => "VEH",
+            _ => "UNIT"
+        };
     }
+
+    internal string GetOwnUnitRoleText(ushort definition) => GetRoleText(definition);
 
     internal static bool IsOffscreenOrOccluded(Rect2 badgeRect, Vector2 viewportSize, ReadOnlySpan<Rect2> occludingPanels)
     {

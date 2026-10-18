@@ -54,11 +54,11 @@ vehicle detectability by observers with and without binoculars [13], but gives n
 values assume a clear day, open ground and a moving target. Cover, concealment, a halted target,
 dust, smoke and weather reduce them later (section 10).
 
-| Observer | Detect | Identify (type) |
-|---|---|---|
-| Reconnaissance vehicle, halted, with optics | 3,000 m | 1,500 m |
-| Tank, buttoned up | 2,000 m | 1,000 m |
-| APC | 1,500 m | 800 m |
+| Observer | Detect |
+|---|---|
+| Reconnaissance vehicle, halted, with optics | 3,000 m |
+| Tank, buttoned up | 2,000 m |
+| APC | 1,500 m |
 
 ## Notes
 

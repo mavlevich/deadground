@@ -3,13 +3,31 @@ using Godot;
 
 namespace DeadGround.Client;
 
-// Contact presentation mapping maps allowed ContactClassification to generic visual models.
-// It is intentionally decoupled from own-unit definition IDs to prevent information leaks.
+// Contact presentation mapping maps visible contacts to their type model,
+// with procedural fallbacks for types without an authored visual entry.
 internal static class ContactVisualCatalog
 {
-    // hostileFaction comes from the public match setup, never from the contact itself.
-    internal static Node3D? InstantiateEnemyModel(ContactClassification classification, string? hostileFaction = null)
+    // hostileFaction comes from the public match setup, never from private opponent truth.
+    internal static Node3D? InstantiateEnemyModel(string? unitId, ContactClassification classification, string? hostileFaction = null)
     {
+        if (unitId is not null)
+        {
+            VehicleVisual? visual = VehicleVisualCatalog.InstantiateVisual(unitId, hostileFaction);
+            if (visual is not null)
+            {
+                visual.Root.Name = classification switch
+                {
+                    ContactClassification.Tank => "EnemyTankModel",
+                    ContactClassification.Recon => "EnemyReconModel",
+                    ContactClassification.Apc => "EnemyApcModel",
+                    ContactClassification.CommandVehicle => "EnemyCommandVehicleModel",
+                    _ => "EnemyVehicleModel"
+                };
+                AttachHostileAffiliationMarker(visual.Root);
+                return visual.Root;
+            }
+        }
+
         return classification switch
         {
             ContactClassification.Tank => CreateEnemyTankModel(hostileFaction),

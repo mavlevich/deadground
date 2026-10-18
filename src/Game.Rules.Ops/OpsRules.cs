@@ -92,8 +92,6 @@ public sealed record UnitDefinition(
     float Radius = 1.0f,
     int MaxHealth = 100,
     string? Weapon = null,
-    float IdentifyRange = 0f,
-    int IdentifyTicks = 80,
     string? Classification = null,
     // Historical types (section 17.1): display name, faction and period speeds in m/s.
     // A type gives speed_offroad instead of speed; units move at it until maps have roads.
@@ -180,10 +178,8 @@ public sealed class OpsPerceptionCatalog : IUnitPerceptionCatalog
         for (int i = 0; i < catalog.Units.Length; i++)
         {
             UnitDefinition unit = catalog.Units[i];
-            float idRange = unit.IdentifyRange > 0 ? unit.IdentifyRange : unit.SensorRange * 0.4f;
-            int idTicks = unit.IdentifyTicks > 0 ? unit.IdentifyTicks : 80;
             VisualSensorProfile? sensor = unit.SensorRange > 0 && unit.EyeHeight > 0
-                ? new VisualSensorProfile(unit.SensorRange, unit.EyeHeight, idRange, idTicks)
+                ? new VisualSensorProfile(unit.SensorRange, unit.EyeHeight)
                 : null;
             TargetObservationPoints? points = unit.TargetPoints is { Length: > 0 }
                 ? new TargetObservationPoints(unit.TargetPoints)
@@ -420,10 +416,6 @@ public static class PrototypeScenario
                 if (!float.IsFinite(height) || height < 0)
                     throw new InvalidOperationException("Invalid target observation height.");
             }
-            if (!float.IsFinite(unit.IdentifyRange) || unit.IdentifyRange < 0)
-                throw new InvalidOperationException("Invalid identify range.");
-            if (unit.IdentifyTicks <= 0)
-                throw new InvalidOperationException("Invalid identify ticks.");
             if (unit.Name is not null && string.IsNullOrWhiteSpace(unit.Name))
                 throw new InvalidOperationException($"Unit '{unit.Id}' has a blank name.");
             if (unit.Faction is not null && !data.HasFaction(unit.Faction))

@@ -225,8 +225,8 @@ public sealed class VisibilityRulesTests
 
         ContactObservation[] contacts =
         [
-            new ContactObservation(new ContactId(101), ContactState.Current, ContactClassification.Unknown, new Vector2(35.5f, 40.25f), 40),
-            new ContactObservation(new ContactId(102), ContactState.LastKnown, ContactClassification.Unknown, new Vector2(50f, 60f), 35)
+            new ContactObservation(new ContactId(101), ContactState.Current, ContactClassification.Unknown, 0, new Vector2(35.5f, 40.25f), 40),
+            new ContactObservation(new ContactId(102), ContactState.LastKnown, ContactClassification.Unknown, 0, new Vector2(50f, 60f), 35)
         ];
 
         int bytesWritten = WireProtocol.WriteSnapshot(buffer, 1, 42, ownUnits, contacts);
@@ -264,7 +264,7 @@ public sealed class VisibilityRulesTests
         // Valid initial snapshot at tick 5
         ContactObservation[] validContacts =
         [
-            new ContactObservation(new ContactId(1), ContactState.Current, ContactClassification.Unknown, new Vector2(10f, 20f), 5)
+            new ContactObservation(new ContactId(1), ContactState.Current, ContactClassification.Unknown, 0, new Vector2(10f, 20f), 5)
         ];
         int len1 = WireProtocol.WriteSnapshot(buffer, 1, 5, [], validContacts);
         Assert.True(replica.TryApply(buffer.AsSpan(0, len1)));
@@ -273,7 +273,7 @@ public sealed class VisibilityRulesTests
         // Corrupted snapshot at tick 6 where contact claims LastSeenTick = 1000 (> snapshot tick 6)
         ContactObservation[] invalidContacts =
         [
-            new ContactObservation(new ContactId(1), ContactState.Current, ContactClassification.Unknown, new Vector2(10f, 20f), 1000)
+            new ContactObservation(new ContactId(1), ContactState.Current, ContactClassification.Unknown, 0, new Vector2(10f, 20f), 1000)
         ];
         int len2 = WireProtocol.WriteSnapshot(buffer, 2, 6, [], invalidContacts);
 
@@ -300,7 +300,7 @@ public sealed class VisibilityRulesTests
         for (int i = 0; i < contacts.Length; i++)
         {
             contacts[i] = new ContactObservation(new ContactId((uint)(i + 100)), ContactState.Current,
-                ContactClassification.Unknown, new Vector2(i * 3, i * 3), 10);
+                ContactClassification.Unknown, 0, new Vector2(i * 3, i * 3), 10);
         }
 
         byte[] fullSnapshot = new byte[WireProtocol.MaxMessageSize];
@@ -347,7 +347,7 @@ public sealed class VisibilityRulesTests
 
         ContactObservation[] contacts =
         [
-            new ContactObservation(new ContactId(1), ContactState.Current, ContactClassification.Unknown, new Vector2(10f, 20f), 1)
+            new ContactObservation(new ContactId(1), ContactState.Current, ContactClassification.Unknown, 0, new Vector2(10f, 20f), 1)
         ];
 
         int len = WireProtocol.WriteSnapshot(buffer, 1, 1, [], contacts);
@@ -371,9 +371,9 @@ public sealed class VisibilityRulesTests
         replica = new();
         Assert.False(replica.TryApply(corrupted.AsSpan(0, len)));
 
-        // 4. Corrupt position to NaN (at offset 7 in 19-byte contact record)
+        // 4. Corrupt position to NaN (at offset 8 in 20-byte contact record)
         corrupted = (byte[])buffer.Clone();
-        BinaryPrimitives.WriteSingleLittleEndian(corrupted.AsSpan(contactsOffset + 7), float.NaN);
+        BinaryPrimitives.WriteSingleLittleEndian(corrupted.AsSpan(contactsOffset + 8), float.NaN);
         replica = new();
         Assert.False(replica.TryApply(corrupted.AsSpan(0, len)));
 
@@ -393,7 +393,7 @@ public sealed class VisibilityRulesTests
         // 1. Initial snapshot with 1 Current contact
         ContactObservation[] c1 =
         [
-            new ContactObservation(new ContactId(1), ContactState.Current, ContactClassification.Unknown, new Vector2(10f, 20f), 1)
+            new ContactObservation(new ContactId(1), ContactState.Current, ContactClassification.Unknown, 0, new Vector2(10f, 20f), 1)
         ];
         int len1 = WireProtocol.WriteSnapshot(buffer, 1, 1, [], c1);
         Assert.True(replica.TryApply(buffer.AsSpan(0, len1)));
@@ -406,7 +406,7 @@ public sealed class VisibilityRulesTests
         // 2. Snapshot where contact transitioned to LastKnown
         ContactObservation[] c2 =
         [
-            new ContactObservation(new ContactId(1), ContactState.LastKnown, ContactClassification.Unknown, new Vector2(10f, 20f), 1)
+            new ContactObservation(new ContactId(1), ContactState.LastKnown, ContactClassification.Unknown, 0, new Vector2(10f, 20f), 1)
         ];
         int len2 = WireProtocol.WriteSnapshot(buffer, 2, 2, [], c2);
         Assert.True(replica.TryApply(buffer.AsSpan(0, len2)));

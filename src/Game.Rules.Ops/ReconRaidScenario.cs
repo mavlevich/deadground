@@ -113,7 +113,7 @@ public sealed class ReconRaidMissionSystem : IMissionSystem
     {
         if (player == 1)
         {
-            // For player 1: resolve target contact if earned through identification
+            // For player 1: resolve target contact if earned through spotting the command vehicle
             ContactId contactId = default;
             bool hasTargetContact = false;
 
@@ -121,8 +121,7 @@ public sealed class ReconRaidMissionSystem : IMissionSystem
             for (int i = 0; i < contacts.Length; i++)
             {
                 ref readonly ContactObservation contact = ref contacts[i];
-                if (contact.Level == DetectionLevel.Identified &&
-                    contact.Classification == ContactClassification.CommandVehicle)
+                if (contact.Classification == ContactClassification.CommandVehicle)
                 {
                     contactId = contact.Id;
                     hasTargetContact = true;
@@ -131,7 +130,7 @@ public sealed class ReconRaidMissionSystem : IMissionSystem
             }
 
             byte flags = 0;
-            if (hasTargetContact) flags |= MissionObservation.FlagTargetIdentified;
+            if (hasTargetContact) flags |= MissionObservation.FlagTargetSpotted;
             if (Status == MissionStatus.Victory || EndReason == MissionEndReason.TargetDestroyed)
                 flags |= MissionObservation.FlagTargetDestroyed;
 

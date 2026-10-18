@@ -222,9 +222,9 @@ internal sealed partial class MissionPanel : Control
             _targetStatusLabel.Text = "Target: DESTROYED (Objective complete)";
             _targetStatusLabel.AddThemeColorOverride("font_color", new Color("77dd77"));
         }
-        else if (mission.IsTargetIdentified && mission.TargetContactId.Value != 0)
+        else if (mission.IsTargetSpotted && mission.TargetContactId.Value != 0)
         {
-            _targetStatusLabel.Text = $"Target: IDENTIFIED (Enemy Contact #{mission.TargetContactId.Value})";
+            _targetStatusLabel.Text = $"Target: SPOTTED (Enemy Contact #{mission.TargetContactId.Value})";
             _targetStatusLabel.AddThemeColorOverride("font_color", new Color("ff7777"));
         }
         else

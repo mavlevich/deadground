@@ -30,8 +30,6 @@ public sealed class DetectionSystem : ISimulationSystem
     private readonly bool[] _unitHasSensor;
     private readonly float[] _unitSensorRange;
     private readonly Vector3[] _unitEyePos;
-    private readonly float[] _unitIdentifyRanges;
-    private readonly int[] _unitIdentifyTicks;
     private readonly ContactClassification[] _unitClassifications;
     private readonly TargetObservationPoints?[] _unitTargetPoints;
     private readonly Vector3[] _unitTopTargetPoint;
@@ -80,8 +78,6 @@ public sealed class DetectionSystem : ISimulationSystem
         _unitIds = new EntityId[maxUnits];
         _unitHasSensor = new bool[maxUnits];
         _unitSensorRange = new float[maxUnits];
-        _unitIdentifyRanges = new float[maxUnits];
-        _unitIdentifyTicks = new int[maxUnits];
         _unitClassifications = new ContactClassification[maxUnits];
         _unitEyePos = new Vector3[maxUnits];
         _unitTargetPoints = new TargetObservationPoints?[maxUnits];
@@ -115,15 +111,11 @@ public sealed class DetectionSystem : ISimulationSystem
                 {
                     _unitHasSensor[i] = true;
                     _unitSensorRange[i] = profile.Sensor.Range;
-                    _unitIdentifyRanges[i] = profile.Sensor.IdentifyRange;
-                    _unitIdentifyTicks[i] = profile.Sensor.IdentifyTicks;
                     _unitEyePos[i] = new Vector3(u.Position.X, groundY + profile.Sensor.EyeHeight, u.Position.Y);
                 }
                 else
                 {
                     _unitHasSensor[i] = false;
-                    _unitIdentifyRanges[i] = 0f;
-                    _unitIdentifyTicks[i] = 80;
                 }
 
                 if (profile.TargetPoints is not null)
@@ -140,8 +132,6 @@ public sealed class DetectionSystem : ISimulationSystem
             else
             {
                 _unitHasSensor[i] = false;
-                _unitIdentifyRanges[i] = 0f;
-                _unitIdentifyTicks[i] = 80;
                 _unitClassifications[i] = ContactClassification.Vehicle;
                 _unitTargetPoints[i] = null;
             }
@@ -196,41 +186,11 @@ public sealed class DetectionSystem : ISimulationSystem
             {
                 int targetUnitIndex = _candidateBuffer[c];
 
-                float distToTarget = Vector2.Distance(obsPos, _unitPositions[targetUnitIndex]);
-                float obsIdRange = _unitIdentifyRanges[i];
-                bool obsInIdRange = obsIdRange > 0 && distToTarget <= obsIdRange;
-                int obsIdTicks = _unitIdentifyTicks[i];
-                ContactClassification targetClass = _unitClassifications[targetUnitIndex];
-
-                // Skip targets already confirmed observed by this side in this tick (or upgrade identify capability)
+                // Skip targets already confirmed observed by this side in this tick
                 int word = bitmaskSideOffset + (targetUnitIndex >> 5);
                 uint bit = 1u << (targetUnitIndex & 31);
                 if ((_observedBitmask[word] & bit) != 0)
-                {
-                    if (obsInIdRange)
-                    {
-                        int baseOffset = sideIndex * _maxUnits;
-                        int currentCount = _observedCounts[sideIndex];
-                        for (int k = 0; k < currentCount; k++)
-                        {
-                            if (_observedTargetsBuffer[baseOffset + k].Id.Value == _unitIds[targetUnitIndex].Value)
-                            {
-                                ref SideContactTracker.ObservedTarget existing = ref _observedTargetsBuffer[baseOffset + k];
-                                if (!existing.InIdentifyRange || obsIdTicks < existing.IdentifyTicks)
-                                {
-                                    existing = new SideContactTracker.ObservedTarget(
-                                        existing.Id,
-                                        existing.Position,
-                                        true,
-                                        existing.InIdentifyRange ? Math.Min(existing.IdentifyTicks, obsIdTicks) : obsIdTicks,
-                                        targetClass);
-                                }
-                                break;
-                            }
-                        }
-                    }
                     continue;
-                }
 
                 TargetObservationPoints? points = _unitTargetPoints[targetUnitIndex];
                 if (points is null)
@@ -275,12 +235,13 @@ public sealed class DetectionSystem : ISimulationSystem
                     int count = _observedCounts[sideIndex];
                     if (count < _maxUnits)
                     {
+                        ContactClassification targetClass = _unitClassifications[targetUnitIndex];
+                        ushort targetType = _unitDefinitions[targetUnitIndex];
                         _observedTargetsBuffer[sideIndex * _maxUnits + count] = new SideContactTracker.ObservedTarget(
                             _unitIds[targetUnitIndex],
                             _unitPositions[targetUnitIndex],
-                            obsInIdRange,
-                            obsIdTicks,
-                            targetClass);
+                            targetClass,
+                            targetType);
                         _observedCounts[sideIndex] = count + 1;
                     }
                 }

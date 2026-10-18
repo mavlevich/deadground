@@ -92,11 +92,11 @@ public sealed class HostTests
         byte[] buffer = new byte[WireProtocol.MaxMessageSize];
 
         ContactId contactId = new(1);
-        ContactObservation c1 = new(contactId, ContactState.Current, ContactClassification.Unknown, new Vector2(10, 10), 10);
+        ContactObservation c1 = new(contactId, ContactState.Current, ContactClassification.Unknown, 0, new Vector2(10, 10), 10);
         int size1 = WireProtocol.WriteSnapshot(buffer, sequence: 1, tick: 10, units: [], contacts: [c1]);
         Assert.True(replica.TryApply(buffer.AsSpan(0, size1)));
 
-        ContactObservation c2 = new(contactId, ContactState.Current, ContactClassification.Unknown, new Vector2(30, 10), 20);
+        ContactObservation c2 = new(contactId, ContactState.Current, ContactClassification.Unknown, 0, new Vector2(30, 10), 20);
         int size2 = WireProtocol.WriteSnapshot(buffer, sequence: 2, tick: 20, units: [], contacts: [c2]);
         Assert.True(replica.TryApply(buffer.AsSpan(0, size2)));
 
@@ -113,12 +113,12 @@ public sealed class HostTests
         byte[] buffer = new byte[WireProtocol.MaxMessageSize];
 
         ContactId contactId = new(1);
-        ContactObservation c1 = new(contactId, ContactState.Current, ContactClassification.Unknown, new Vector2(10, 10), 10);
+        ContactObservation c1 = new(contactId, ContactState.Current, ContactClassification.Unknown, 0, new Vector2(10, 10), 10);
         int size1 = WireProtocol.WriteSnapshot(buffer, sequence: 1, tick: 10, units: [], contacts: [c1]);
         Assert.True(replica.TryApply(buffer.AsSpan(0, size1)));
 
         // In second frame, contact becomes LastKnown at (10, 10)
-        ContactObservation c2 = new(contactId, ContactState.LastKnown, ContactClassification.Unknown, new Vector2(10, 10), 10);
+        ContactObservation c2 = new(contactId, ContactState.LastKnown, ContactClassification.Unknown, 0, new Vector2(10, 10), 10);
         int size2 = WireProtocol.WriteSnapshot(buffer, sequence: 2, tick: 20, units: [], contacts: [c2]);
         Assert.True(replica.TryApply(buffer.AsSpan(0, size2)));
 

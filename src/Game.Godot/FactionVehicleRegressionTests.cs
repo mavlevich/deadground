@@ -183,9 +183,9 @@ internal static class FactionVehicleRegressionTests
     private static void CheckEnemyTankFaction()
     {
         MatchSetup setup = new(MatchSetup.CurrentProtocolVersion, 1, 1, "Ops", PlayerFactions: ["soviet", "us"]);
-        Node3D us = ContactVisualCatalog.InstantiateEnemyModel(ContactClassification.Tank, setup.GetHostileFaction(1))!;
-        Node3D soviet = ContactVisualCatalog.InstantiateEnemyModel(ContactClassification.Tank, setup.GetHostileFaction(2))!;
-        Node3D generic = ContactVisualCatalog.InstantiateEnemyModel(ContactClassification.Tank)!;
+        Node3D us = ContactVisualCatalog.InstantiateEnemyModel(null, ContactClassification.Tank, setup.GetHostileFaction(1))!;
+        Node3D soviet = ContactVisualCatalog.InstantiateEnemyModel(null, ContactClassification.Tank, setup.GetHostileFaction(2))!;
+        Node3D generic = ContactVisualCatalog.InstantiateEnemyModel(null, ContactClassification.Tank)!;
         try
         {
             Require(us.Name == "EnemyTankModel" && us.GetChild<Node3D>(0).SceneFilePath.EndsWith("M60/m60_lod1.glb", StringComparison.Ordinal),
@@ -207,10 +207,10 @@ internal static class FactionVehicleRegressionTests
     private static void CheckEnemyContactFactions()
     {
         MatchSetup setup = new(MatchSetup.CurrentProtocolVersion, 1, 1, "Ops", PlayerFactions: ["soviet", "us"]);
-        Node3D usApc = ContactVisualCatalog.InstantiateEnemyModel(ContactClassification.Apc, setup.GetHostileFaction(1))!;
-        Node3D sovietApc = ContactVisualCatalog.InstantiateEnemyModel(ContactClassification.Apc, setup.GetHostileFaction(2))!;
-        Node3D sovietRecon = ContactVisualCatalog.InstantiateEnemyModel(ContactClassification.Recon, setup.GetHostileFaction(2))!;
-        Node3D generic = ContactVisualCatalog.InstantiateEnemyModel(ContactClassification.Apc)!;
+        Node3D usApc = ContactVisualCatalog.InstantiateEnemyModel(null, ContactClassification.Apc, setup.GetHostileFaction(1))!;
+        Node3D sovietApc = ContactVisualCatalog.InstantiateEnemyModel(null, ContactClassification.Apc, setup.GetHostileFaction(2))!;
+        Node3D sovietRecon = ContactVisualCatalog.InstantiateEnemyModel(null, ContactClassification.Recon, setup.GetHostileFaction(2))!;
+        Node3D generic = ContactVisualCatalog.InstantiateEnemyModel(null, ContactClassification.Apc)!;
         try
         {
             Require(sovietApc.Name == "EnemyApcModel" && sovietApc.GetChild<Node3D>(0).SceneFilePath.EndsWith("BTR70/btr70_lod1.glb", StringComparison.Ordinal),

@@ -25,7 +25,7 @@ public static class WireProtocol
     public const int SnapshotHeaderSize = 16 + MissionSize;
     public const int UnitSize = 30;
     public const int MaxUnits = 1024;
-    public const int ContactSize = 19;
+    public const int ContactSize = 20;
     public const int MaxContacts = 256;
     public const int EventSize = 39;
     public const int MaxEvents = 64;
@@ -222,11 +222,11 @@ public static class WireProtocol
             Span<byte> record = bytes.Slice(contactsOffset + i * ContactSize, ContactSize);
             BinaryPrimitives.WriteUInt32LittleEndian(record, contact.Id.Value);
             record[4] = (byte)contact.State;
-            record[5] = (byte)contact.Level;
-            record[6] = (byte)contact.Classification;
-            BinaryPrimitives.WriteSingleLittleEndian(record[7..], contact.Position.X);
-            BinaryPrimitives.WriteSingleLittleEndian(record[11..], contact.Position.Y);
-            BinaryPrimitives.WriteInt32LittleEndian(record[15..], contact.LastSeenTick);
+            record[5] = (byte)contact.Classification;
+            BinaryPrimitives.WriteUInt16LittleEndian(record[6..], contact.Type);
+            BinaryPrimitives.WriteSingleLittleEndian(record[8..], contact.Position.X);
+            BinaryPrimitives.WriteSingleLittleEndian(record[12..], contact.Position.Y);
+            BinaryPrimitives.WriteInt32LittleEndian(record[16..], contact.LastSeenTick);
         }
 
         int eventsOffset = SnapshotHeaderSize + units.Length * UnitSize + contacts.Length * ContactSize;
@@ -394,17 +394,15 @@ public static class WireProtocol
             ReadOnlySpan<byte> record = bytes.Slice(contactsOffset + i * ContactSize, ContactSize);
             ContactId contactId = new(BinaryPrimitives.ReadUInt32LittleEndian(record));
             byte stateByte = record[4];
-            byte levelByte = record[5];
-            byte classByte = record[6];
-            Vector2 position = new(BinaryPrimitives.ReadSingleLittleEndian(record[7..]),
-                BinaryPrimitives.ReadSingleLittleEndian(record[11..]));
-            int lastSeenTick = BinaryPrimitives.ReadInt32LittleEndian(record[15..]);
+            byte classByte = record[5];
+            ushort typeVal = BinaryPrimitives.ReadUInt16LittleEndian(record[6..]);
+            Vector2 position = new(BinaryPrimitives.ReadSingleLittleEndian(record[8..]),
+                BinaryPrimitives.ReadSingleLittleEndian(record[12..]));
+            int lastSeenTick = BinaryPrimitives.ReadInt32LittleEndian(record[16..]);
 
             if (contactId.Value == 0 ||
                 stateByte is not ((byte)ContactState.Current or (byte)ContactState.LastKnown) ||
-                levelByte is not ((byte)DetectionLevel.Detected or (byte)DetectionLevel.Identified) ||
                 classByte > (byte)ContactClassification.Apc ||
-                (levelByte == (byte)DetectionLevel.Detected && classByte != (byte)ContactClassification.Unknown) ||
                 !float.IsFinite(position.X) || !float.IsFinite(position.Y) ||
                 lastSeenTick < 0 || lastSeenTick > tick ||
                 !frame.ContactIndices.TryAdd(contactId, i))
@@ -415,8 +413,8 @@ public static class WireProtocol
             frame.Contacts[i] = new ContactObservation(
                 contactId,
                 (ContactState)stateByte,
-                (DetectionLevel)levelByte,
                 (ContactClassification)classByte,
+                typeVal,
                 position,
                 lastSeenTick);
         }

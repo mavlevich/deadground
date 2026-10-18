@@ -283,7 +283,7 @@ public sealed class ReconRaidMissionTests
         MissionObservation obs = sim.Mission!.GetObservation(1);
 
         // Initial observation before target detection
-        Assert.False(obs.IsTargetIdentified);
+        Assert.False(obs.IsTargetSpotted);
         Assert.Equal(default, obs.TargetContactId);
         Assert.Equal(new Vector2(420f, 420f), obs.SearchAreaCenter);
         Assert.Equal(70f, obs.SearchAreaRadius);
@@ -301,7 +301,7 @@ public sealed class ReconRaidMissionTests
         Assert.True(ok);
 
         Assert.Equal(obs.MissionId, replica.Mission.MissionId);
-        Assert.False(replica.Mission.IsTargetIdentified);
+        Assert.False(replica.Mission.IsTargetSpotted);
         Assert.Equal(default, replica.Mission.TargetContactId);
     }
 
@@ -318,7 +318,7 @@ public sealed class ReconRaidMissionTests
             TargetContactId: default,
             SearchAreaCenter: new Vector2(420f, 420f),
             SearchAreaRadius: 70f,
-            Flags: MissionObservation.FlagTargetIdentified | MissionObservation.FlagTargetDestroyed);
+            Flags: MissionObservation.FlagTargetSpotted | MissionObservation.FlagTargetDestroyed);
 
         // Simulate frame skipped: sequence jumps from 1 to 5
         int size = WireProtocol.WriteSnapshot(buffer, 5, 100, [], [], [], victoryObs);
@@ -454,7 +454,7 @@ public sealed class ReconRaidMissionTests
             sim.UpdateKnowledge(playerKnowledge);
 
             MissionObservation obs = sim.Mission!.GetObservation(1);
-            if (obs.IsTargetIdentified)
+            if (obs.IsTargetSpotted)
             {
                 targetContact = obs.TargetContactId;
                 break;
@@ -521,7 +521,7 @@ public sealed class ReconRaidMissionTests
     [Fact]
     public void Review_HandshakeAndWireProtocol_AgreeOnCurrentVersion()
     {
-        Assert.Equal(9, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(10, MatchSetup.CurrentProtocolVersion);
         Assert.Equal(MatchSetup.CurrentProtocolVersion, WireProtocol.Version);
     }
 
@@ -530,7 +530,7 @@ public sealed class ReconRaidMissionTests
     {
         HeightMap map = HeightMap.CreatePrototype();
         MatchSetup serverSetup = PrototypeScenario.CreateMatchSetup(map);
-        Assert.Equal(9, serverSetup.ProtocolVersion);
+        Assert.Equal(10, serverSetup.ProtocolVersion);
 
         using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
         int port = serverTransport.Port;
@@ -664,7 +664,7 @@ public sealed class ReconRaidMissionTests
         sim.UpdateKnowledge(knowledge);
 
         MissionObservation obs = sim.Mission!.GetObservation(1);
-        Assert.True(obs.IsTargetIdentified);
+        Assert.True(obs.IsTargetSpotted);
         Assert.NotEqual(default, obs.TargetContactId);
         ContactId identifiedContactId = obs.TargetContactId;
 
@@ -678,7 +678,7 @@ public sealed class ReconRaidMissionTests
 
         // Target identity and ContactId must survive transition to LastKnown
         MissionObservation obsAfterLoss = sim.Mission.GetObservation(1);
-        Assert.True(obsAfterLoss.IsTargetIdentified);
+        Assert.True(obsAfterLoss.IsTargetSpotted);
         Assert.Equal(identifiedContactId, obsAfterLoss.TargetContactId);
     }
 
@@ -745,7 +745,7 @@ public sealed class ReconRaidMissionTests
             TargetContactId: new ContactId(42),
             SearchAreaCenter: new Vector2(420f, 420f),
             SearchAreaRadius: 70f,
-            Flags: MissionObservation.FlagTargetIdentified | MissionObservation.FlagTargetDestroyed);
+            Flags: MissionObservation.FlagTargetSpotted | MissionObservation.FlagTargetDestroyed);
 
         // Snapshot received 65 ticks after finish
         int size = WireProtocol.WriteSnapshot(buffer, 10, 150, [], [], [], termObs);
@@ -760,12 +760,12 @@ public sealed class ReconRaidMissionTests
     }
 
     [Fact]
-    public void Review_ProbingTargetWithPlayerTank_DoesNotIdentifyTargetPrematurely()
+    public void ProbingTargetWithPlayerUnit_SpotsTargetImmediately()
     {
         StaticGeometry geometry = ReconRaidScenario.CreateStaticGeometry();
         Simulation sim = ReconRaidScenario.CreateSimulation(geometry);
 
-        // Place one extra player-1 tank (not the recon) at (412, 445), at the open west side of the compound, with ammo = 0
+        // Place one extra player-1 tank at (412, 445), at the open west side of the compound, with ammo = 0
         ushort tankDef = sim.World.GetUnitAt(1).Definition;
         sim.World.CreateUnit(1, tankDef, new Vector2(412f, 445f), 5.0f, 120, 0);
 
@@ -778,112 +778,85 @@ public sealed class ReconRaidMissionTests
         }
         sim.UpdateKnowledge(knowledge);
 
-        // Contacts are detected (current), but classification remains Unknown
-        Assert.True(knowledge.ContactCount >= 2);
-        for (int i = 0; i < knowledge.ContactCount; i++)
-        {
-            Assert.Equal(DetectionLevel.Detected, knowledge.Contacts[i].Level);
-            Assert.Equal(ContactClassification.Unknown, knowledge.Contacts[i].Classification);
-        }
+        // Seen means known: Contacts carry their classification and type immediately
+        ContactObservation[] contactsArr = knowledge.Contacts.ToArray();
+        ContactObservation cmdContact = Assert.Single(contactsArr, c => c.Classification == ContactClassification.CommandVehicle);
+        Assert.Equal(ContactState.Current, cmdContact.State);
+        Assert.Equal(ContactClassification.CommandVehicle, cmdContact.Classification);
 
-        // Mission observation must not report TargetContactId or FlagTargetIdentified
+        // Mission observation reports TargetContactId and FlagTargetSpotted immediately
         MissionObservation obs = sim.Mission!.GetObservation(1);
-        Assert.False(obs.IsTargetIdentified);
-        Assert.Equal(default, obs.TargetContactId);
+        Assert.True(obs.IsTargetSpotted);
+        Assert.Equal(cmdContact.Id, obs.TargetContactId);
     }
 
     [Fact]
-    public void ReconVehicle_EarnsIdentification_AfterContinuousLosForIdentifyTicks()
+    public void ReconVehicle_SpotsCommandVehicle_ImmediatelyOnLineOfSight()
     {
         StaticGeometry geometry = ReconRaidScenario.CreateStaticGeometry();
         Simulation sim = ReconRaidScenario.CreateSimulation(geometry);
 
-        // Position player recon vehicle (id 1) within identify range of command vehicle (435, 432)
-        sim.World.SetPosition(new EntityId(1), new Vector2(430f, 432f)); // 5m away, inside 60m identify range
+        // Position player recon vehicle (id 1) within sight of command vehicle (435, 432)
+        sim.World.SetPosition(new EntityId(1), new Vector2(430f, 432f));
 
         PlayerKnowledge knowledge = new(1, 16);
-
-        // At tick 30 (before 40 ticks), target is detected but not yet identified
-        for (int i = 0; i < 30; i++)
-        {
-            sim.Step();
-        }
+        sim.Step();
+        sim.Step();
         sim.UpdateKnowledge(knowledge);
-        MissionObservation obsBefore = sim.Mission!.GetObservation(1);
-        Assert.False(obsBefore.IsTargetIdentified);
 
-        // At tick 40, continuous LOS inside identify range completes
-        for (int i = 30; i < 40; i++)
-        {
-            sim.Step();
-        }
-        sim.UpdateKnowledge(knowledge);
-        MissionObservation obsAfter = sim.Mission.GetObservation(1);
-        Assert.True(obsAfter.IsTargetIdentified);
-        Assert.NotEqual(default, obsAfter.TargetContactId);
+        MissionObservation obs = sim.Mission!.GetObservation(1);
+        Assert.True(obs.IsTargetSpotted);
+        Assert.NotEqual(default, obs.TargetContactId);
 
-        // The contact itself has Identified level and CommandVehicle classification
+        // The contact itself has CommandVehicle classification and type immediately
         ContactObservation[] contactsArr = knowledge.Contacts.ToArray();
-        ContactObservation targetContact = Assert.Single(contactsArr, c => c.Id == obsAfter.TargetContactId);
-        Assert.Equal(DetectionLevel.Identified, targetContact.Level);
+        ContactObservation targetContact = Assert.Single(contactsArr, c => c.Id == obs.TargetContactId);
         Assert.Equal(ContactClassification.CommandVehicle, targetContact.Classification);
+        Assert.Equal(ContactState.Current, targetContact.State);
     }
 
     [Fact]
-    public void InterruptedLineOfSight_ResetsIdentificationProgress()
+    public void InterruptedLineOfSight_TransitionsToLastKnownAndPreservesType()
     {
         StaticGeometry geometry = ReconRaidScenario.CreateStaticGeometry();
         Simulation sim = ReconRaidScenario.CreateSimulation(geometry);
 
         // Position player recon near command vehicle
         sim.World.SetPosition(new EntityId(1), new Vector2(430f, 432f));
-
-        // Advance for 20 ticks (halfway to 40 ticks)
-        for (int i = 0; i < 20; i++)
-        {
-            sim.Step();
-        }
-
-        // Teleport far away to break line of sight for 10 ticks
-        sim.World.SetPosition(new EntityId(1), new Vector2(100f, 100f));
-        for (int i = 0; i < 10; i++)
-        {
-            sim.Step();
-        }
-
-        // Return to visual contact
-        sim.World.SetPosition(new EntityId(1), new Vector2(430f, 432f));
-
-        // Advance another 20 ticks (interrupted observation requires fresh 40 ticks)
-        for (int i = 0; i < 20; i++)
-        {
-            sim.Step();
-        }
+        sim.Step();
+        sim.Step();
 
         PlayerKnowledge knowledge = new(1, 16);
         sim.UpdateKnowledge(knowledge);
         MissionObservation obs = sim.Mission!.GetObservation(1);
+        Assert.True(obs.IsTargetSpotted);
 
-        // Must not be identified yet because prior progress was reset
-        Assert.False(obs.IsTargetIdentified);
+        // Teleport far away to break line of sight
+        sim.World.SetPosition(new EntityId(1), new Vector2(100f, 100f));
+        sim.Step();
+        sim.Step();
+        sim.Step();
+
+        sim.UpdateKnowledge(knowledge);
+        ContactObservation lastKnown = Assert.Single(knowledge.Contacts.ToArray(), c => c.Id == obs.TargetContactId);
+        Assert.Equal(ContactState.LastKnown, lastKnown.State);
+        Assert.Equal(ContactClassification.CommandVehicle, lastKnown.Classification);
     }
 
     [Fact]
-    public void ReCorrelation_ResetsLevelToDetected_AndClassificationToUnknown()
+    public void ReCorrelation_PreservesTypeAndClassification()
     {
         StaticGeometry geometry = ReconRaidScenario.CreateStaticGeometry();
         Simulation sim = ReconRaidScenario.CreateSimulation(geometry);
 
-        // Position recon to earn identification of command vehicle
+        // Position recon to spot command vehicle (evaluation interval is 2 ticks)
         sim.World.SetPosition(new EntityId(1), new Vector2(430f, 432f));
-        for (int i = 0; i < 40; i++)
-        {
-            sim.Step();
-        }
+        sim.Step();
+        sim.Step();
 
         PlayerKnowledge knowledge = new(1, 16);
         sim.UpdateKnowledge(knowledge);
-        Assert.True(sim.Mission!.GetObservation(1).IsTargetIdentified);
+        Assert.True(sim.Mission!.GetObservation(1).IsTargetSpotted);
 
         // Break contact so it transitions to LastKnown
         sim.World.SetPosition(new EntityId(1), new Vector2(100f, 100f));
@@ -892,18 +865,18 @@ public sealed class ReconRaidMissionTests
         sim.UpdateKnowledge(knowledge);
 
         ContactObservation lastKnown = Assert.Single(knowledge.Contacts.ToArray(), c => c.State == ContactState.LastKnown && c.Classification == ContactClassification.CommandVehicle);
-        Assert.Equal(DetectionLevel.Identified, lastKnown.Level);
 
         // Re-observe target within correlation gate
         sim.World.SetPosition(new EntityId(1), new Vector2(430f, 432f));
         sim.Step();
+        sim.Step();
         sim.UpdateKnowledge(knowledge);
 
-        // Contact correlated back to live track: level resets to Detected, classification resets to Unknown
+        // Contact correlated back to live track: state is Current, Type and Classification are preserved
         ContactObservation correlated = Assert.Single(knowledge.Contacts.ToArray(), c => c.Id == lastKnown.Id);
         Assert.Equal(ContactState.Current, correlated.State);
-        Assert.Equal(DetectionLevel.Detected, correlated.Level);
-        Assert.Equal(ContactClassification.Unknown, correlated.Classification);
+        Assert.Equal(lastKnown.Type, correlated.Type);
+        Assert.Equal(ContactClassification.CommandVehicle, correlated.Classification);
     }
 
     [Fact]
