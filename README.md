@@ -325,6 +325,18 @@ automatic preview LOD. Tab toggles comparison vehicles and human scale reference
 G toggles the measured grid. Add `--vehicle-preview-capture <directory>` for screenshots.
 See `src/Game.Godot/Assets/Vehicles/T62/README.md` for generation, palette and limits.
 
+### Meeting engagement (historical units)
+
+A 2 x 2 km battle at 1:1 scale with historical unit types: T-62, BTR-70 and BRDM-2 against M60A1,
+M113A1 and M151A2. Speeds, gun ranges and sensor ranges come from period sources
+(`docs/unit-sources.md`); a ridge hides the two start areas from each other.
+
+```sh
+./tools/run-client.sh -- --scenario battle
+```
+
+The M113A1, BRDM-2 and M151A2 use a placeholder model until their own models exist.
+
 ### Combat scenario and combat feedback
 
 To run the direct-fire combat scenario with tank and reconnaissance firefights. Each side also has

@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "factions": [
+    { "id": "soviet", "name": "Soviet Army" },
+    { "id": "us", "name": "US Army" }
+  ],
+  "detection": {
+    "memory_duration_ticks": 100,
+    "correlation_window_ticks": 60,
+    "correlation_distance_gate": 25.0,
+    "evaluation_interval_ticks": 2,
+    "max_correlation_speed": 10.0,
+    "slack": 5.0,
+    "max_gate": 35.0
+  },
+  "weapons": [
+    {
+      "id": "tank_gun_100mm",
+      "range": 60.0,
+      "reload_duration_ticks": 40,
+      "damage": 50,
+      "ammo_capacity": 10,
+      "muzzle_height": 1.9,
+      "presentation_id": "cannon_100mm"
+    }
+  ],
+  "units": [
+    {
+      "id": "prototype_vehicle",
+      "speed": 6.0,
+      "sensor_range": 60.0,
+      "identify_range": 20.0,
+      "identify_ticks": 80,
+      "eye_height": 1.8,
+      "target_points": [0.7, 1.6],
+      "radius": 1.0,
+      "max_health": 100,
+      "classification": "command_vehicle"
+    },
+    {
+      "id": "recon_vehicle",
+      "speed": 7.0,
+      "sensor_range": 70.0,
+      "identify_range": 60.0,
+      "identify_ticks": 40,
+      "eye_height": 1.6,
+      "target_points": [0.6, 1.4],
+      "radius": 0.8,
+      "max_health": 60,
+      "classification": "recon"
+    },
+    {
+      "id": "prototype_tank",
+      "speed": 5.0,
+      "sensor_range": 50.0,
+      "identify_range": 25.0,
+      "identify_ticks": 80,
+      "eye_height": 2.0,
+      "target_points": [0.8, 1.8],
+      "radius": 1.4,
+      "max_health": 120,
+      "weapon": "tank_gun_100mm",
+      "classification": "tank"
+    },
+    {
+      "id": "apc",
+      "speed": 6.5,
+      "sensor_range": 50.0,
+      "identify_range": 20.0,
+      "identify_ticks": 80,
+      "eye_height": 2.0,
+      "target_points": [0.7, 1.7],
+      "radius": 1.4,
+      "max_health": 80,
+      "classification": "apc"
+    }
+  ]
+}
