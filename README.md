@@ -94,7 +94,7 @@ stores a control group, `Shift+1..9` adds to it, `1..9` selects it, and pressing
 within 0.35 s centers the camera on the group. WASD or arrow keys smoothly pan the
 camera with normalized diagonal speed scaled by zoom. The mouse wheel smoothly zooms, Space restores
 the overview, and Escape closes open dialogs or clears unit selection. F10, O, or the HUD SETTINGS button
-opens display settings (VSync toggle and FPS cap). The HUD shows connection state, tick time, allocations and traffic.
+opens display settings (VSync toggle and FPS cap). F9 or V toggles fog of war on the map. The HUD shows connection state, tick time, allocations and traffic.
 The host reports whether a valid command was queued or rejected. Rejections give
 no hidden-world details. Queue admission does not guarantee arrival at the target.
 
@@ -551,6 +551,10 @@ Follow this checklist to verify an exported client interactively:
    - Shell streak: observe a transient moving shell streak (160 m/s, 3.2 m length, bounded flight duration [0.08s, 0.22s]) traveling from the muzzle to target, rather than a permanent laser beam.
    - Impact feedback: hits against targets produce a brief orange impact flash, sparks rising upward, and an expanding dust/smoke cloud accompanied by distinct metallic impact audio.
    - Destruction effect: destroyed vehicles produce a distinct large spherical explosion fireball and lingering ground scorch mark clamped to the terrain surface.
+10. Fog of war and relief shading:
+   - Press F9 or V to toggle the client fog of war overlay on and off.
+   - Confirm terrain outside own unit sensor ranges is darkened and desaturated, while seen terrain displays full brightness and relief hillshading.
+   - Verify that obstacles (such as walls or ridges) cast sight shadows across the terrain grid.
 
 ## Platforms
 
