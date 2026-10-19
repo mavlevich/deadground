@@ -118,19 +118,9 @@ public sealed class ClientReplica
     public Vector2 SamplePosition(EntityId id, double renderTick)
     {
         if (_count == 0 || !Latest.Indices.TryGetValue(id, out int index)) return default;
-        int oldest = (_next - _count + _frames.Length) % _frames.Length;
-        SnapshotFrame left = _frames[oldest];
-        SnapshotFrame right = Latest;
-        for (int i = 0; i < _count; i++)
-        {
-            SnapshotFrame frame = _frames[(oldest + i) % _frames.Length];
-            if (frame.Tick <= renderTick) left = frame;
-            if (frame.Tick >= renderTick) { right = frame; break; }
-        }
+        FindBracket(renderTick, out SnapshotFrame left, out SnapshotFrame right, out float alpha);
         if (!left.Indices.TryGetValue(id, out int li) || !right.Indices.TryGetValue(id, out int ri))
             return Latest.Units[index].Position;
-        float alpha = right.Tick == left.Tick ? 1 :
-            (float)Math.Clamp((renderTick - left.Tick) / (right.Tick - left.Tick), 0, 1);
         return Vector2.Lerp(left.Units[li].Position, right.Units[ri].Position, alpha);
     }
 
@@ -141,16 +131,7 @@ public sealed class ClientReplica
         if (latestContact.State != ContactState.Current)
             return latestContact.Position;
 
-        int oldest = (_next - _count + _frames.Length) % _frames.Length;
-        SnapshotFrame left = _frames[oldest];
-        SnapshotFrame right = Latest;
-        for (int i = 0; i < _count; i++)
-        {
-            SnapshotFrame frame = _frames[(oldest + i) % _frames.Length];
-            if (frame.Tick <= renderTick) left = frame;
-            if (frame.Tick >= renderTick) { right = frame; break; }
-        }
-
+        FindBracket(renderTick, out SnapshotFrame left, out SnapshotFrame right, out float alpha);
         if (!left.ContactIndices.TryGetValue(id, out int li) || !right.ContactIndices.TryGetValue(id, out int ri))
             return latestContact.Position;
 
@@ -161,8 +142,6 @@ public sealed class ClientReplica
         if (leftContact.State != ContactState.Current || rightContact.State != ContactState.Current)
             return latestContact.Position;
 
-        float alpha = right.Tick == left.Tick ? 1 :
-            (float)Math.Clamp((renderTick - left.Tick) / (right.Tick - left.Tick), 0, 1);
         return Vector2.Lerp(leftContact.Position, rightContact.Position, alpha);
     }
 
@@ -176,53 +155,65 @@ public sealed class ClientReplica
         return yaw;
     }
 
-    public float SampleTurretYaw(EntityId id, double renderTick)
+    /// <summary>
+    /// Turret yaw and hull heading of an own unit, both sampled from the same snapshot pair so a
+    /// turret that rides on the hull stays fixed to it on screen.
+    /// </summary>
+    public void SampleYaws(EntityId id, double renderTick, out float turretYaw, out float hullHeading)
     {
-        if (_count == 0 || !Latest.Indices.TryGetValue(id, out int index)) return 0f;
-        int oldest = (_next - _count + _frames.Length) % _frames.Length;
-        SnapshotFrame left = _frames[oldest];
-        SnapshotFrame right = Latest;
-        for (int i = 0; i < _count; i++)
-        {
-            SnapshotFrame frame = _frames[(oldest + i) % _frames.Length];
-            if (frame.Tick <= renderTick) left = frame;
-            if (frame.Tick >= renderTick) { right = frame; break; }
-        }
+        turretYaw = 0f;
+        hullHeading = 0f;
+        if (_count == 0 || !Latest.Indices.TryGetValue(id, out int index)) return;
+        ref readonly OwnUnitObservation latest = ref Latest.Units[index];
+        FindBracket(renderTick, out SnapshotFrame left, out SnapshotFrame right, out float alpha);
         if (!left.Indices.TryGetValue(id, out int li) || !right.Indices.TryGetValue(id, out int ri))
-            return Latest.Units[index].TurretYaw;
-        float alpha = right.Tick == left.Tick ? 1 :
-            (float)Math.Clamp((renderTick - left.Tick) / (right.Tick - left.Tick), 0, 1);
-        return InterpolateYaw(left.Units[li].TurretYaw, right.Units[ri].TurretYaw, alpha);
+        {
+            turretYaw = latest.TurretYaw;
+            hullHeading = latest.HullHeading;
+            return;
+        }
+        turretYaw = InterpolateYaw(left.Units[li].TurretYaw, right.Units[ri].TurretYaw, alpha);
+        hullHeading = InterpolateYaw(left.Units[li].HullHeading, right.Units[ri].HullHeading, alpha);
     }
 
-    public float SampleContactTurretYaw(ContactId id, double renderTick)
+    /// <summary>
+    /// Turret yaw and hull heading of a contact. A contact that is not current keeps its last seen pose.
+    /// </summary>
+    public void SampleContactYaws(ContactId id, double renderTick, out float turretYaw, out float hullHeading)
     {
-        if (_count == 0 || !Latest.ContactIndices.TryGetValue(id, out int index)) return 0f;
-        ref readonly ContactObservation latestContact = ref Latest.Contacts[index];
-        if (latestContact.State != ContactState.Current)
-            return latestContact.TurretYaw;
+        turretYaw = 0f;
+        hullHeading = 0f;
+        if (_count == 0 || !Latest.ContactIndices.TryGetValue(id, out int index)) return;
+        ref readonly ContactObservation latest = ref Latest.Contacts[index];
+        turretYaw = latest.TurretYaw;
+        hullHeading = latest.HullHeading;
+        if (latest.State != ContactState.Current) return;
 
-        int oldest = (_next - _count + _frames.Length) % _frames.Length;
-        SnapshotFrame left = _frames[oldest];
-        SnapshotFrame right = Latest;
-        for (int i = 0; i < _count; i++)
-        {
-            SnapshotFrame frame = _frames[(oldest + i) % _frames.Length];
-            if (frame.Tick <= renderTick) left = frame;
-            if (frame.Tick >= renderTick) { right = frame; break; }
-        }
-
+        FindBracket(renderTick, out SnapshotFrame left, out SnapshotFrame right, out float alpha);
         if (!left.ContactIndices.TryGetValue(id, out int li) || !right.ContactIndices.TryGetValue(id, out int ri))
-            return latestContact.TurretYaw;
+            return;
 
         ref readonly ContactObservation leftContact = ref left.Contacts[li];
         ref readonly ContactObservation rightContact = ref right.Contacts[ri];
-
         if (leftContact.State != ContactState.Current || rightContact.State != ContactState.Current)
-            return latestContact.TurretYaw;
+            return;
 
-        float alpha = right.Tick == left.Tick ? 1 :
+        turretYaw = InterpolateYaw(leftContact.TurretYaw, rightContact.TurretYaw, alpha);
+        hullHeading = InterpolateYaw(leftContact.HullHeading, rightContact.HullHeading, alpha);
+    }
+
+    private void FindBracket(double renderTick, out SnapshotFrame left, out SnapshotFrame right, out float alpha)
+    {
+        int oldest = (_next - _count + _frames.Length) % _frames.Length;
+        left = _frames[oldest];
+        right = Latest;
+        for (int i = 0; i < _count; i++)
+        {
+            SnapshotFrame frame = _frames[(oldest + i) % _frames.Length];
+            if (frame.Tick <= renderTick) left = frame;
+            if (frame.Tick >= renderTick) { right = frame; break; }
+        }
+        alpha = right.Tick == left.Tick ? 1 :
             (float)Math.Clamp((renderTick - left.Tick) / (right.Tick - left.Tick), 0, 1);
-        return InterpolateYaw(leftContact.TurretYaw, rightContact.TurretYaw, alpha);
     }
 }

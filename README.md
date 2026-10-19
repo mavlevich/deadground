@@ -337,6 +337,13 @@ M113A1 and M151A2. Speeds, gun ranges and sensor ranges come from period sources
 
 The M113A1 and M151A2 use a placeholder model until their own models exist.
 
+To try out your own units without losing them, for example to watch turret traverse, start any
+local scenario with the enemy holding fire:
+
+```sh
+./tools/run-client.sh -- --scenario battle --enemy-hold-fire
+```
+
 ### Combat scenario and combat feedback
 
 To run the direct-fire combat scenario with tank and reconnaissance firefights. Each side also has

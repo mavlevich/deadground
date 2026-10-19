@@ -538,13 +538,13 @@ public sealed class CombatNetworkTests
     }
 
     [Fact]
-    public void WireProtocol_Version12_Preserves3DEndpointsShooterIdentityAndTurretYaw()
+    public void WireProtocol_Version13_Preserves3DEndpointsShooterIdentityAndTurretYaw()
     {
-        Assert.Equal(12, WireProtocol.Version);
+        Assert.Equal(13, WireProtocol.Version);
         Assert.Equal(32, WireProtocol.MissionSize);
         Assert.Equal(48, WireProtocol.SnapshotHeaderSize);
-        Assert.Equal(33, WireProtocol.UnitSize);
-        Assert.Equal(22, WireProtocol.ContactSize);
+        Assert.Equal(35, WireProtocol.UnitSize);
+        Assert.Equal(24, WireProtocol.ContactSize);
         Assert.Equal(39, WireProtocol.EventSize);
 
         ClientReplica replica = new();
@@ -808,8 +808,8 @@ public sealed class CombatNetworkTests
     [Fact]
     public void WireProtocol_SetFireStance_RoundTrip_AndValidation()
     {
-        Assert.Equal(12, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(12, WireProtocol.Version);
+        Assert.Equal(13, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(13, WireProtocol.Version);
 
         byte[] buffer = new byte[32];
         SetFireStanceCommand cmd = new(42, 10, new EntityId(5), FireStance.ReturnFire);

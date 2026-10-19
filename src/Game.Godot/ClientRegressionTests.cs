@@ -112,11 +112,11 @@ internal static class ClientRegressionTests
 
             ContactObservation target = new(new ContactId(801), ContactState.Current, ContactClassification.Unknown, 0,
                 new NumericsVector2(12, 0), 2);
-            tank = tank with { Position = new NumericsVector2(12, 10), TargetContactId = target.Id };
+            tank = tank with { Position = new NumericsVector2(12, 10), TargetContactId = target.Id, HullHeading = -MathF.PI / 2f };
             ApplyWithContacts(replica, bytes, 2, 2, [tank, recon, otherTank], [target]);
             views.Sync(replica, 2);
             Require((-tankView.Model.GlobalBasis.Z.Normalized()).Dot(Vector3.Right) > 0.99f,
-                "Tank did not face its observed movement direction.");
+                "Tank did not take the snapshot hull heading.");
             Require((-turret!.GlobalBasis.Z.Normalized()).Dot(Vector3.Forward) > 0.99f,
                 "Turret did not face the permitted target independently of the hull.");
             Require(views.Views[otherTank.Id].Model.Rotation == Vector3.Zero, "Turning one tank rotated another instance.");
