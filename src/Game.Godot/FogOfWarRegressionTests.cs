@@ -318,6 +318,14 @@ internal static class FogOfWarRegressionTests
         }
         Apply(replica, bytes, 2, 20, units);
 
+        // Wall-clock limits depend on the machine: a CI runner can be ten times slower than a
+        // developer Mac, and a fixed 2 ms limit failed there with 11 ms. What the budget must
+        // guarantee is that a frame sweeps about one unit, not all of them. So the frame limit is
+        // relative to the cost of one sweep measured on this machine.
+        UnitDefinition t62 = catalog.Units[t62Def];
+        double singleSweepMs = MeasureSingleSweepMs(geo, units[0].Position, t62.EyeHeight, t62.SensorRange);
+        double frameLimitMs = 3.0 * singleSweepMs + FogOfWarView.FrameTimeBudgetMs + 2.0;
+
         // Run frames until full cycle completes
         int frames = 0;
         double maxFrameTimeMs = 0.0;
@@ -329,7 +337,8 @@ internal static class FogOfWarRegressionTests
         double frameTime1Ms = (System.Diagnostics.Stopwatch.GetTimestamp() - start1) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
         maxFrameTimeMs = frameTime1Ms;
         totalTimeMs = frameTime1Ms;
-        Require(frameTime1Ms < 2.0, $"Per-frame time must stay under 2.0 ms with 40 units on cycle start, got {frameTime1Ms:F3} ms.");
+        Require(frameTime1Ms < frameLimitMs,
+            $"Cycle start frame took {frameTime1Ms:F3} ms; one sweep costs {singleSweepMs:F3} ms, limit {frameLimitMs:F3} ms.");
         frames++;
 
         while (fog.IsCycleInProgress && frames < 60)
@@ -339,14 +348,31 @@ internal static class FogOfWarRegressionTests
             double frameTimeMs = (System.Diagnostics.Stopwatch.GetTimestamp() - start) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
             if (frameTimeMs > maxFrameTimeMs) maxFrameTimeMs = frameTimeMs;
             totalTimeMs += frameTimeMs;
-            Require(frameTimeMs < 2.0, $"Per-frame time must stay under 2.0 ms with 40 units, got {frameTimeMs:F3} ms on frame {frames}.");
+            Require(frameTimeMs < frameLimitMs,
+                $"Frame {frames} took {frameTimeMs:F3} ms; one sweep costs {singleSweepMs:F3} ms, limit {frameLimitMs:F3} ms.");
             frames++;
         }
 
         Require(!fog.IsCycleInProgress, $"Full update cycle with 40 units did not complete within bounded frames, took {frames} frames.");
         Require(frames <= 50, $"Full update cycle with 40 units must complete within at most 50 frames, took {frames}.");
         Require(fog.SweepsInLastCycle == 40, $"All 40 moved units must be swept, got {fog.SweepsInLastCycle}.");
-        GD.Print($"FOG_40_UNITS_TIME frames={frames} max_frame_ms={maxFrameTimeMs:F3} total_ms={totalTimeMs:F3}");
+        GD.Print($"FOG_40_UNITS_TIME frames={frames} max_frame_ms={maxFrameTimeMs:F3} total_ms={totalTimeMs:F3} single_sweep_ms={singleSweepMs:F3}");
+    }
+
+    // Median time of one viewshed sweep with publishing on this machine, after a warm-up run.
+    private static double MeasureSingleSweepMs(StaticGeometry geo, System.Numerics.Vector2 position, float eyeHeight, float range)
+    {
+        using FogOfWarView probe = new(geo.HeightMap, geo);
+        probe.UpdateUnitNow(position, eyeHeight, range);
+        double[] samples = new double[5];
+        for (int i = 0; i < samples.Length; i++)
+        {
+            long start = System.Diagnostics.Stopwatch.GetTimestamp();
+            probe.UpdateUnitNow(position, eyeHeight, range);
+            samples[i] = (System.Diagnostics.Stopwatch.GetTimestamp() - start) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        }
+        Array.Sort(samples);
+        return samples[samples.Length / 2];
     }
 
     // Units that hold their ground keep their viewshed; only movers are swept again. A unit that
