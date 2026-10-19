@@ -185,11 +185,8 @@ public sealed class NavigationNetworkTests
             }
         }
 
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-        GC.Collect();
-
         double[] times = new double[100];
+        using NoGcAllocationWindow window = new();
         long totalAllocated = 0;
         int minMoving = 1000;
 
@@ -237,7 +234,7 @@ public sealed class NavigationNetworkTests
         double medianMs = times[50];
         double p99Ms = times[98];
 
-        Assert.Equal(0L, totalAllocated);
+        Assert.True(totalAllocated == 0, window.Describe(totalAllocated));
         Assert.True(minMoving >= 980, $"Moving units dropped to {minMoving}/1000.");
 
 #if DEBUG
