@@ -526,7 +526,7 @@ public sealed class ReconRaidMissionTests
     [Fact]
     public void Review_HandshakeAndWireProtocol_AgreeOnCurrentVersion()
     {
-        Assert.Equal(11, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(12, MatchSetup.CurrentProtocolVersion);
         Assert.Equal(MatchSetup.CurrentProtocolVersion, WireProtocol.Version);
     }
 
@@ -535,7 +535,7 @@ public sealed class ReconRaidMissionTests
     {
         HeightMap map = HeightMap.CreatePrototype();
         MatchSetup serverSetup = PrototypeScenario.CreateMatchSetup(map);
-        Assert.Equal(11, serverSetup.ProtocolVersion);
+        Assert.Equal(12, serverSetup.ProtocolVersion);
 
         using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
         int port = serverTransport.Port;

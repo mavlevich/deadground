@@ -54,6 +54,7 @@
       "radius": 1.4,
       "max_health": 120,
       "weapon": "tank_gun_100mm",
+      "turret_traverse_rate": 24.0,
       "classification": "tank"
     },
     {

@@ -123,7 +123,10 @@ public static class BattleScenario
     private static void Spawn(WorldState world, UnitCatalog catalog, int player, string type, Vector2 position)
     {
         UnitDefinition def = catalog.RequireDefinition(type);
-        world.CreateUnit(player, catalog.RequireDefinitionIndex(type), position, def.Speed, def.MaxHealth, catalog.GetAmmoCapacity(def));
+        Vector2 enemySide = player == 1 ? UsStart : SovietStart;
+        Vector2 dir = enemySide - position;
+        float initialYaw = MathF.Atan2(-dir.X, -dir.Y);
+        world.CreateUnit(player, catalog.RequireDefinitionIndex(type), position, def.Speed, def.MaxHealth, catalog.GetAmmoCapacity(def), initialYaw);
     }
 
     public static MatchSetup CreateMatchSetup(StaticGeometry? geometry = null, string ruleSetId = "Battle", UnitCatalog? catalog = null)

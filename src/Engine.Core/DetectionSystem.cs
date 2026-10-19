@@ -33,6 +33,7 @@ public sealed class DetectionSystem : ISimulationSystem
     private readonly ContactClassification[] _unitClassifications;
     private readonly TargetObservationPoints?[] _unitTargetPoints;
     private readonly Vector3[] _unitTopTargetPoint;
+    private readonly float[] _unitTurretYaws;
     private readonly int _maxUnits;
     private readonly int _wordsPerSide;
 
@@ -82,6 +83,7 @@ public sealed class DetectionSystem : ISimulationSystem
         _unitEyePos = new Vector3[maxUnits];
         _unitTargetPoints = new TargetObservationPoints?[maxUnits];
         _unitTopTargetPoint = new Vector3[maxUnits];
+        _unitTurretYaws = new float[maxUnits];
     }
 
     public void Update(WorldState world, int tick)
@@ -103,6 +105,7 @@ public sealed class DetectionSystem : ISimulationSystem
             _unitTeams[i] = world.GetPlayerTeam(u.Owner);
             _unitDefinitions[i] = u.Definition;
             _unitIds[i] = u.Id;
+            _unitTurretYaws[i] = world.TryGetCombatState(u.Id, out WorldState.CombatState cs) ? cs.TurretYaw : 0f;
 
             if (_catalog.TryGetProfile(u.Definition, out UnitPerceptionProfile profile))
             {
@@ -241,7 +244,8 @@ public sealed class DetectionSystem : ISimulationSystem
                             _unitIds[targetUnitIndex],
                             _unitPositions[targetUnitIndex],
                             targetClass,
-                            targetType);
+                            targetType,
+                            _unitTurretYaws[targetUnitIndex]);
                         _observedCounts[sideIndex] = count + 1;
                     }
                 }

@@ -277,7 +277,7 @@ public sealed class CombatNetworkTests
         ushort tankIdx = catalog.RequireDefinitionIndex("prototype_tank");
         UnitDefinition tankDef = catalog.RequireDefinition("prototype_tank");
 
-        EntityId p1Tank = world.CreateUnit(1, tankIdx, new Vector2(12f, 25f), tankDef.Speed, 100, 10);
+        EntityId p1Tank = world.CreateUnit(1, tankIdx, new Vector2(12f, 25f), tankDef.Speed, 100, 10, initialTurretYaw: -MathF.PI / 2f);
         EntityId p2Tank = world.CreateUnit(2, tankIdx, new Vector2(33f, 25f), tankDef.Speed, 50, 10); // 50 HP (destroyed in 1 hit)
         EntityId p3Tank = world.CreateUnit(3, tankIdx, new Vector2(100f, 100f), tankDef.Speed, 100, 10); // Isolated far away
         world.SetFireStance(p1Tank, FireStance.HoldFire);
@@ -538,13 +538,13 @@ public sealed class CombatNetworkTests
     }
 
     [Fact]
-    public void WireProtocol_Version11_Preserves3DEndpointsAndShooterIdentity()
+    public void WireProtocol_Version12_Preserves3DEndpointsShooterIdentityAndTurretYaw()
     {
-        Assert.Equal(11, WireProtocol.Version);
+        Assert.Equal(12, WireProtocol.Version);
         Assert.Equal(32, WireProtocol.MissionSize);
         Assert.Equal(48, WireProtocol.SnapshotHeaderSize);
-        Assert.Equal(31, WireProtocol.UnitSize);
-        Assert.Equal(20, WireProtocol.ContactSize);
+        Assert.Equal(33, WireProtocol.UnitSize);
+        Assert.Equal(22, WireProtocol.ContactSize);
         Assert.Equal(39, WireProtocol.EventSize);
 
         ClientReplica replica = new();
@@ -808,8 +808,8 @@ public sealed class CombatNetworkTests
     [Fact]
     public void WireProtocol_SetFireStance_RoundTrip_AndValidation()
     {
-        Assert.Equal(11, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(11, WireProtocol.Version);
+        Assert.Equal(12, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(12, WireProtocol.Version);
 
         byte[] buffer = new byte[32];
         SetFireStanceCommand cmd = new(42, 10, new EntityId(5), FireStance.ReturnFire);
@@ -881,8 +881,8 @@ public sealed class CombatNetworkTests
         ushort apcIdx = catalog.RequireDefinitionIndex("apc");
         int ammo = catalog.GetAmmoCapacity(tankDef);
 
-        // Player 1 armed tank at (10, 10) with default FireAtWill
-        EntityId shooter = world.CreateUnit(1, tankIdx, new Vector2(10f, 10f), tankDef.Speed, tankDef.MaxHealth, ammo);
+        // Player 1 armed tank at (10, 10) with default FireAtWill facing east toward enemy
+        EntityId shooter = world.CreateUnit(1, tankIdx, new Vector2(10f, 10f), tankDef.Speed, tankDef.MaxHealth, ammo, initialTurretYaw: -MathF.PI / 2f);
         world.SetFireStance(shooter, FireStance.HoldFire); // hold during warmup
 
         // Player 2 tank at (35, 10) (dist 25m) and APC at (34, 10) (dist 24m, slightly closer!)
@@ -945,8 +945,8 @@ public sealed class CombatNetworkTests
         UnitDefinition m60Def = testCatalog.RequireDefinition("m60a1");
         ushort m60DefIdx = testCatalog.RequireDefinitionIndex("m60a1");
 
-        // Player 1: T-62 at (200, 500), BTR-70 at (800, 500)
-        EntityId t62 = world.CreateUnit(1, t62DefIdx, new Vector2(200f, 500f), t62Def.Speed, t62Def.MaxHealth, testCatalog.GetAmmoCapacity(t62Def));
+        // Player 1: T-62 at (200, 500) facing east, BTR-70 at (800, 500)
+        EntityId t62 = world.CreateUnit(1, t62DefIdx, new Vector2(200f, 500f), t62Def.Speed, t62Def.MaxHealth, testCatalog.GetAmmoCapacity(t62Def), initialTurretYaw: -MathF.PI / 2f);
         EntityId btr = world.CreateUnit(1, btrDefIdx, new Vector2(800f, 500f), btrDef.Speed, btrDef.MaxHealth, 0);
         world.SetFireStance(t62, FireStance.HoldFire);
         world.SetFireStance(btr, FireStance.HoldFire);

@@ -24,9 +24,9 @@ public static class WireProtocol
     public const int CommandResultSize = 11;
     public const int MissionSize = 32;
     public const int SnapshotHeaderSize = 16 + MissionSize;
-    public const int UnitSize = 31;
+    public const int UnitSize = 33;
     public const int MaxUnits = 1024;
-    public const int ContactSize = 20;
+    public const int ContactSize = 22;
     public const int MaxContacts = 256;
     public const int EventSize = 39;
     public const int MaxEvents = 64;
@@ -43,6 +43,25 @@ public static class WireProtocol
     public const byte HandshakeResponseKind = 6;
     public const byte AttackKind = 7;
     public const byte SetFireStanceKind = 8;
+
+    public static ushort QuantizeYaw(float yaw)
+    {
+        float wrapped = MathF.IEEERemainder(yaw, MathF.Tau);
+        if (wrapped <= -MathF.PI) wrapped += MathF.Tau;
+        else if (wrapped > MathF.PI) wrapped -= MathF.Tau;
+        float normalized = (wrapped + MathF.PI) / MathF.Tau;
+        if (normalized >= 1.0f) normalized = 0f;
+        if (normalized < 0f) normalized = 0f;
+        return (ushort)Math.Clamp(MathF.Round(normalized * 65535f), 0, 65535);
+    }
+
+    public static float DequantizeYaw(ushort quantized)
+    {
+        float yaw = (quantized / 65535f) * MathF.Tau - MathF.PI;
+        if (yaw <= -MathF.PI) yaw += MathF.Tau;
+        else if (yaw > MathF.PI) yaw -= MathF.Tau;
+        return yaw;
+    }
 
     public static void WriteCommandResult(Span<byte> bytes, CommandResult result)
     {
@@ -239,6 +258,7 @@ public static class WireProtocol
             record[25] = (byte)unit.AttackStatus;
             BinaryPrimitives.WriteUInt32LittleEndian(record[26..], unit.TargetContactId.Value);
             record[30] = (byte)unit.Stance;
+            BinaryPrimitives.WriteUInt16LittleEndian(record[31..], QuantizeYaw(unit.TurretYaw));
         }
 
         int contactsOffset = SnapshotHeaderSize + units.Length * UnitSize;
@@ -253,6 +273,7 @@ public static class WireProtocol
             BinaryPrimitives.WriteSingleLittleEndian(record[8..], contact.Position.X);
             BinaryPrimitives.WriteSingleLittleEndian(record[12..], contact.Position.Y);
             BinaryPrimitives.WriteInt32LittleEndian(record[16..], contact.LastSeenTick);
+            BinaryPrimitives.WriteUInt16LittleEndian(record[20..], QuantizeYaw(contact.TurretYaw));
         }
 
         int eventsOffset = SnapshotHeaderSize + units.Length * UnitSize + contacts.Length * ContactSize;
@@ -395,6 +416,7 @@ public static class WireProtocol
             byte attackStatusByte = record[25];
             uint targetContactVal = BinaryPrimitives.ReadUInt32LittleEndian(record[26..]);
             byte stanceByte = record[30];
+            float turretYaw = DequantizeYaw(BinaryPrimitives.ReadUInt16LittleEndian(record[31..]));
 
             if (id.Value == 0 || !float.IsFinite(position.X) || !float.IsFinite(position.Y) ||
                 navStatusByte > (byte)PathRequestStatus.CapacityExceeded ||
@@ -413,7 +435,8 @@ public static class WireProtocol
                 reloadTicks,
                 (AttackExecutionStatus)attackStatusByte,
                 new ContactId(targetContactVal),
-                (FireStance)stanceByte);
+                (FireStance)stanceByte,
+                turretYaw);
         }
 
         int contactsOffset = SnapshotHeaderSize + unitCount * UnitSize;
@@ -428,6 +451,7 @@ public static class WireProtocol
             Vector2 position = new(BinaryPrimitives.ReadSingleLittleEndian(record[8..]),
                 BinaryPrimitives.ReadSingleLittleEndian(record[12..]));
             int lastSeenTick = BinaryPrimitives.ReadInt32LittleEndian(record[16..]);
+            float turretYaw = DequantizeYaw(BinaryPrimitives.ReadUInt16LittleEndian(record[20..]));
 
             if (contactId.Value == 0 ||
                 stateByte is not ((byte)ContactState.Current or (byte)ContactState.LastKnown) ||
@@ -445,7 +469,8 @@ public static class WireProtocol
                 (ContactClassification)classByte,
                 typeVal,
                 position,
-                lastSeenTick);
+                lastSeenTick,
+                turretYaw);
         }
 
         int eventsOffset = SnapshotHeaderSize + unitCount * UnitSize + contactCount * ContactSize;

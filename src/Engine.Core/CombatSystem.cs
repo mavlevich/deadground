@@ -13,6 +13,7 @@ public sealed class CombatSystem : ISimulationSystem
 {
     public const int DefaultMaxEventsPerPlayer = 64;
     public const float RangeToleranceMargin = 0.5f;
+    public const float TurretAlignmentTolerance = 0.05f;
 
     private readonly StaticGeometry _geometry;
     private readonly IUnitCombatCatalog _combatCatalog;
@@ -129,6 +130,51 @@ public sealed class CombatSystem : ISimulationSystem
         ContactClassification.Recon => 2,
         _ => 3
     };
+
+    public static float NormalizeYaw(float yaw)
+    {
+        yaw = MathF.IEEERemainder(yaw, MathF.Tau);
+        if (yaw <= -MathF.PI) yaw += MathF.Tau;
+        if (yaw > MathF.PI) yaw -= MathF.Tau;
+        return yaw;
+    }
+
+    public static float ShorterArcDelta(float fromYaw, float toYaw)
+    {
+        return MathF.IEEERemainder(toYaw - fromYaw, MathF.Tau);
+    }
+
+    public static bool IsTurretAligned(float currentYaw, Vector2 attackerPos, Vector2 targetPos)
+    {
+        Vector2 dir = targetPos - attackerPos;
+        if (dir.LengthSquared() < 0.0001f) return true;
+        float desiredYaw = MathF.Atan2(-dir.X, -dir.Y);
+        float delta = ShorterArcDelta(currentYaw, desiredYaw);
+        return MathF.Abs(delta) <= TurretAlignmentTolerance;
+    }
+
+    private static void TurnTurret(ref WorldState.CombatState cs, Vector2 attackerPos, Vector2 targetPos, float traverseRateDegPerSec)
+    {
+        Vector2 dir = targetPos - attackerPos;
+        if (dir.LengthSquared() < 0.0001f) return;
+        float desiredYaw = MathF.Atan2(-dir.X, -dir.Y);
+        if (traverseRateDegPerSec <= 0f)
+        {
+            cs.TurretYaw = NormalizeYaw(desiredYaw);
+            return;
+        }
+
+        float maxTurnPerTick = (traverseRateDegPerSec * (MathF.PI / 180f)) * Simulation.TickSeconds;
+        float delta = ShorterArcDelta(cs.TurretYaw, desiredYaw);
+        if (MathF.Abs(delta) <= maxTurnPerTick)
+        {
+            cs.TurretYaw = NormalizeYaw(desiredYaw);
+        }
+        else
+        {
+            cs.TurretYaw = NormalizeYaw(cs.TurretYaw + MathF.Sign(delta) * maxTurnPerTick);
+        }
+    }
 
     public void OnUnitStanceChanged(EntityId unitId, FireStance stance, WorldState world)
     {
@@ -314,6 +360,7 @@ public sealed class CombatSystem : ISimulationSystem
                 // Check 2: Is contact LastKnown?
                 if (contact.State != ContactState.Current)
                 {
+                    TurnTurret(ref cs, attacker.Position, contact.Position, profile.TurretTraverseRate);
                     cs.Status = AttackExecutionStatus.TargetLost;
                     TryPursueTarget(tick, attacker, contact.Position, ref cs, world);
                     world.SetCombatState(attacker.Id, cs);
@@ -336,6 +383,7 @@ public sealed class CombatSystem : ISimulationSystem
                 }
 
                 cs.TargetEntityId = targetEntityId;
+                TurnTurret(ref cs, attacker.Position, targetUnit.Position, profile.TurretTraverseRate);
 
                 float dist = Vector2.Distance(attacker.Position, targetUnit.Position);
 
@@ -363,6 +411,13 @@ public sealed class CombatSystem : ISimulationSystem
                         }
 
                         if (cs.ReloadTicksRemaining > 0)
+                        {
+                            cs.Status = AttackExecutionStatus.Aiming;
+                            world.SetCombatState(attacker.Id, cs);
+                            continue;
+                        }
+
+                        if (!IsTurretAligned(cs.TurretYaw, attacker.Position, targetUnit.Position))
                         {
                             cs.Status = AttackExecutionStatus.Aiming;
                             world.SetCombatState(attacker.Id, cs);
@@ -507,6 +562,8 @@ public sealed class CombatSystem : ISimulationSystem
                 if (targetRetained)
                 {
                     ActiveAttackersCount++;
+                    world.TryGetUnit(cs.TargetEntityId, out UnitState targetUnit);
+                    TurnTurret(ref cs, attacker.Position, targetUnit.Position, profile.TurretTraverseRate);
 
                     if (cs.Ammunition <= 0)
                     {
@@ -522,7 +579,13 @@ public sealed class CombatSystem : ISimulationSystem
                         continue;
                     }
 
-                    world.TryGetUnit(cs.TargetEntityId, out UnitState targetUnit);
+                    if (!IsTurretAligned(cs.TurretYaw, attacker.Position, targetUnit.Position))
+                    {
+                        cs.Status = AttackExecutionStatus.Aiming;
+                        world.SetCombatState(attacker.Id, cs);
+                        continue;
+                    }
+
                     ExecuteShot(tick, attacker, weapon, targetUnit, currentMuzzlePos, currentHitPoint, ref cs, world);
                     continue;
                 }

@@ -17,7 +17,8 @@ public sealed record WeaponDefinition(
 /// </summary>
 public readonly record struct UnitCombatProfile(
     int MaxHealth,
-    WeaponDefinition? Weapon);
+    WeaponDefinition? Weapon,
+    float TurretTraverseRate = 0f);
 
 /// <summary>
 /// Catalog interface providing combat profiles to combat systems.

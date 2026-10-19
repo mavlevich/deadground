@@ -523,7 +523,7 @@ internal partial class CombatEffects : Node3D
         }
     }
 
-    public void ProcessEvents(ReadOnlySpan<CombatEventObservation> events, UnitViewSet unitViews, int currentTick = 0)
+    public void ProcessEvents(ReadOnlySpan<CombatEventObservation> events, UnitViewSet unitViews, int currentTick = 0, ContactViewSet? contactViews = null)
     {
         for (int i = 0; i < events.Length; i++)
         {
@@ -567,6 +567,24 @@ internal partial class CombatEffects : Node3D
                     if (ageSeconds < 0.10f)
                     {
                         shooter.ApplyRecoil(shotDir);
+                    }
+                }
+                else if (contactViews is not null)
+                {
+                    foreach (ContactView cv in contactViews.Views.Values)
+                    {
+                        if (cv.Observation.IsCurrent && cv.Root.Position.DistanceTo(new Vector3(origin.X, cv.Root.Position.Y, origin.Z)) < 4.0f)
+                        {
+                            if (cv.TryGetMuzzleTransform(out Transform3D muzzleXform))
+                            {
+                                origin = muzzleXform.Origin;
+                                if (origin != target)
+                                {
+                                    shotDir = (target - origin).Normalized();
+                                }
+                            }
+                            break;
+                        }
                     }
                 }
 

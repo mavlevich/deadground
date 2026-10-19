@@ -494,12 +494,9 @@ internal sealed class UnitView
         }
     }
 
-    public void AimAt(Vector3 observedPosition)
+    public void SetTurretYaw(float worldYaw)
     {
         if (_turret is null) return;
-        Vector3 direction = observedPosition - _previousPosition;
-        if (direction.X * direction.X + direction.Z * direction.Z <= 0.000001f) return;
-        float worldYaw = Mathf.Atan2(-direction.X, -direction.Z);
         _turretRotation = new Vector3(0, Mathf.Wrap(worldYaw - _heading, -Mathf.Pi, Mathf.Pi), 0);
         _hasAim = true;
         foreach (Rig? rig in _rigs)
@@ -507,6 +504,15 @@ internal sealed class UnitView
             if (rig?.Turret is not null)
                 rig.Turret.Rotation = _turretRotation;
         }
+    }
+
+    public void AimAt(Vector3 observedPosition)
+    {
+        if (_turret is null) return;
+        Vector3 direction = observedPosition - _previousPosition;
+        if (direction.X * direction.X + direction.Z * direction.Z <= 0.000001f) return;
+        float worldYaw = Mathf.Atan2(-direction.X, -direction.Z);
+        SetTurretYaw(worldYaw);
     }
 
     internal Vector3 TurretRotation => _turret?.Rotation ?? Vector3.Zero;

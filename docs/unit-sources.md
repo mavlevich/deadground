@@ -20,13 +20,13 @@ Era: about 1976 to 1982. Speeds are given in km/h as in the sources, with m/s fo
 
 ## Weapons
 
-| Weapon | Mounted on | Effective range used | Notes |
-|---|---|---|---|
-| 115 mm U-5TS (2A20) smoothbore | T-62 | 1,600 m [2] | 40 rounds [2] [15]. One round per 15 s: a US Army bulletin gives 3 to 4 rounds per minute in practice [15]; the gun is often quoted at 6 to 10 [16]. |
-| 115 mm, sight | T-62 | | FAS: APFSDS "extremely accurate out to a maximum effective range of 1,600 meters". TSh2B-41 sight with stadiametric ranging; the laser rangefinder came with the T-62M in the 1980s [2]. |
-| 105 mm M68 rifled | M60A1 | 2,000 m, estimate [12] | 63 rounds [5]. One round per 8.5 s, about 7 rounds per minute [17]. M17A1 coincidence rangefinder in the M19 fire control system [4]. One undocumented hit curve gives about 50% first-round hits at 1,500 m and 28% at 2,000 m; it belongs in section 12.3, not here. |
-| 14.5 mm KPVT, 7.62 mm PKT | BTR-70, BRDM-2 | 1,000 m against light armor, estimate | Ammunition 500 + 2,000 rounds on the BTR-70 [8]. |
-| 12.7 mm M2HB | M113A1 | 1,000 m against light armor, estimate | |
+| Weapon | Mounted on | Effective range used | Traverse rate | Notes |
+|---|---|---|---|---|
+| 115 mm U-5TS (2A20) smoothbore | T-62 | 1,600 m [2] | 18.0 deg/s [15] | 40 rounds [2] [15]. Powered electric traverse: 20.0 s for a full 360 deg turn [15]. One round per 15 s: a US Army bulletin gives 3 to 4 rounds per minute in practice [15]; the gun is often quoted at 6 to 10 [16]. |
+| 115 mm, sight | T-62 | | | FAS: APFSDS "extremely accurate out to a maximum effective range of 1,600 meters". TSh2B-41 sight with stadiametric ranging; the laser rangefinder came with the T-62M in the 1980s [2]. |
+| 105 mm M68 rifled | M60A1 | 2,000 m, estimate [12] | 22.5 deg/s [6] | 63 rounds [5]. Powered hydraulic traverse: 16.0 s for a full 360 deg turn (citing TM 9-2350-215-10) [6]. One round per 8.5 s, about 7 rounds per minute [17]. M17A1 coincidence rangefinder in the M19 fire control system [4]. One undocumented hit curve gives about 50% first-round hits at 1,500 m and 28% at 2,000 m; it belongs in section 12.3, not here. |
+| 14.5 mm KPVT, 7.62 mm PKT | BTR-70, BRDM-2 | 1,000 m against light armor, estimate | | Ammunition 500 + 2,000 rounds on the BTR-70 [8]. |
+| 12.7 mm M2HB | M113A1 | 1,000 m against light armor, estimate | | |
 
 ## Placement estimates
 
@@ -68,6 +68,9 @@ dust, smoke and weather reduce them later (section 10).
 - M151A2: about 106 km/h (66 mph) is the commonly quoted top speed, but no primary source was found.
 - [6] Wikipedia and secondary sources give 19 km/h cross-country for the M60A1 [4]. 25 km/h is used
   so that the T-62 and M60A1 keep their road speed ratio off-road; to confirm from the TM.
+- Turret traverse rates: T-62 electric powered traverse full 360 deg in 20.0 s gives 18.0 deg/s [15].
+  M60A1 hydraulic powered traverse full 360 deg in 16.0 s gives 22.5 deg/s [6]. Prototype test tank
+  uses 24.0 deg/s (360 deg in 15.0 s) as a plausible estimate.
 - Turn rates for pivot turns come with the hull heading PR (section 9.5) and are added here then.
 
 ## Sources
