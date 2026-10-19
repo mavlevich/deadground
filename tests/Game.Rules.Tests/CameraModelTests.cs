@@ -268,4 +268,50 @@ public sealed class CameraModelTests
             MathF.Abs(irregularDisplacementX - expectedDisplacementX) < 0.05f,
             $"Irregular partition displacement ({irregularDisplacementX:F4}) differed from reference ({expectedDisplacementX:F4})");
     }
+
+    [Fact]
+    public void ManySmallWheelEvents_ZoomAsFarAsTheirSum()
+    {
+        // A trackpad or smooth wheel sends many small events for one gesture. Each used to count as
+        // a full notch, so one swipe jumped between the closest and the widest zoom.
+        CameraModel model = new(Vector3.Zero, 112f);
+        model.SetSizeLimits(35f, 500f);
+        for (int i = 0; i < 20; i++) model.ZoomSteps(0.05f);
+        float expected = 112f * MathF.Pow(CameraModel.DefaultZoomStepFactor, 1f);
+        Assert.True(MathF.Abs(model.TargetSize - expected) < 0.01f, $"20 events of 0.05 steps gave {model.TargetSize}, want {expected}");
+    }
+
+    [Fact]
+    public void OneWheelEvent_IsCappedAtTwoSteps()
+    {
+        CameraModel model = new(Vector3.Zero, 112f);
+        model.SetSizeLimits(35f, 500f);
+        model.ZoomSteps(50f);
+        float expected = 112f * MathF.Pow(CameraModel.DefaultZoomStepFactor, CameraModel.MaxStepsPerEvent);
+        Assert.True(MathF.Abs(model.TargetSize - expected) < 0.01f, $"One large event gave {model.TargetSize}, want {expected}");
+    }
+
+    [Fact]
+    public void PlainWheelNotches_KeepTheirStep()
+    {
+        CameraModel model = new(Vector3.Zero, 112f);
+        model.SetSizeLimits(35f, 500f);
+        model.ZoomIn();
+        Assert.True(MathF.Abs(model.TargetSize - 112f * CameraModel.DefaultZoomStepFactor) < 0.01f);
+        model.ZoomOut();
+        Assert.True(MathF.Abs(model.TargetSize - 112f) < 0.01f);
+    }
+
+    [Fact]
+    public void Pinch_ZoomsByItsScale_AndIgnoresBadValues()
+    {
+        CameraModel model = new(Vector3.Zero, 112f);
+        model.SetSizeLimits(35f, 500f);
+        model.ZoomByScale(1.25f);
+        Assert.True(MathF.Abs(model.TargetSize - 112f / 1.25f) < 0.01f);
+        model.ZoomByScale(0f);
+        model.ZoomByScale(float.NaN);
+        model.ZoomSteps(float.PositiveInfinity);
+        Assert.True(MathF.Abs(model.TargetSize - 112f / 1.25f) < 0.01f);
+    }
 }

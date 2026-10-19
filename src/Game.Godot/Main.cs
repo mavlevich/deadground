@@ -799,6 +799,13 @@ public partial class Main : Node3D
             return;
         }
 
+        if (@event is InputEventMagnifyGesture magnify)
+        {
+            _cameraRig.ZoomByScale(magnify.Factor);
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
         if (@event is not InputEventMouseButton mouse) return;
 
         if (mouse.ButtonIndex == MouseButton.Left && !mouse.Pressed)
@@ -814,8 +821,9 @@ public partial class Main : Node3D
 
         if (mouse.ButtonIndex is MouseButton.WheelUp or MouseButton.WheelDown)
         {
-            if (mouse.ButtonIndex == MouseButton.WheelUp) _cameraRig.ZoomIn();
-            else _cameraRig.ZoomOut();
+            // Smooth wheels and trackpads report a fractional amount per event; plain wheels report 0.
+            float steps = mouse.Factor > 0f ? mouse.Factor : 1f;
+            _cameraRig.ZoomSteps(mouse.ButtonIndex == MouseButton.WheelUp ? steps : -steps);
             return;
         }
 

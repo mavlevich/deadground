@@ -68,6 +68,10 @@ internal sealed class CameraRig
         _model.ZoomOut();
     }
 
+    public void ZoomSteps(float steps) => _model.ZoomSteps(steps);
+
+    public void ZoomByScale(float scale) => _model.ZoomByScale(scale);
+
     public void Update(double delta, bool allowInput = true)
     {
         // Clamp delta to prevent massive warps after resuming from background or long stalls
