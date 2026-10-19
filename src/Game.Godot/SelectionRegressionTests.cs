@@ -23,6 +23,7 @@ internal static class SelectionRegressionTests
         CheckNavigationLargeAltTargets();
         CheckControlsHelpLineFormatting();
         CheckHudZeroAllocationsWhenUnchanged(scene);
+        CheckRangeRingsAndZeroAllocations(scene);
     }
 
     private static void CheckEngineProjectionMatchesCameraUnproject(Node3D scene)
@@ -762,6 +763,7 @@ internal static class SelectionRegressionTests
             Require(activeGroup == 2, $"Expected active group 2, got {activeGroup}.");
             card.UpdateSingleOwnUnit(u1, activeGroup);
             Require(card.TitleText.Contains("Group 2"), $"Single-unit card should display 'Group 2', got '{card.TitleText}'.");
+            Require(card.Line3Text.Contains("Fire at will"), $"Single-unit card should display 'Fire at will', got '{card.Line3Text}'.");
 
             // Store {u1, u2} in group 4 and check multi-unit card
             unitViews.Selected.Add(u2.Id);
@@ -856,6 +858,165 @@ internal static class SelectionRegressionTests
     {
         int size = WireProtocol.WriteSnapshot(bytes, sequence, tick, units, contacts);
         Require(replica.TryApply(bytes.AsSpan(0, size)), "Selection regression snapshot was rejected.");
+    }
+
+    private static void CheckRangeRingsAndZeroAllocations(Node3D scene)
+    {
+        Node3D parent = new();
+        scene.AddChild(parent);
+        UnitViewSet? unitViews = null;
+        try
+        {
+            UnitCatalog catalog = PrototypeScenario.LoadCatalog();
+            HeightMap map = HeightMap.CreatePrototype();
+            unitViews = new UnitViewSet(parent, map, catalog);
+            ushort tankDef = catalog.RequireDefinitionIndex("prototype_tank");
+            ushort apcDef = catalog.RequireDefinitionIndex("apc");
+
+            ClientReplica replica = new();
+            byte[] buffer = new byte[WireProtocol.MaxMessageSize];
+
+            OwnUnitObservation tank = new(
+                new EntityId(101),
+                tankDef,
+                new NumericsVector2(20f, 20f),
+                0,
+                Health: 100,
+                Ammunition: 10,
+                Stance: FireStance.FireAtWill);
+
+            OwnUnitObservation unarmedApc = new(
+                new EntityId(102),
+                apcDef,
+                new NumericsVector2(40f, 20f),
+                0,
+                Health: 100,
+                Ammunition: 0,
+                Stance: FireStance.HoldFire);
+
+            ApplyWithContacts(replica, buffer, 1, 1, [tank, unarmedApc], []);
+            unitViews.Sync(replica, 1.0);
+
+            UnitView tankView = unitViews.Views[tank.Id];
+            UnitView apcView = unitViews.Views[unarmedApc.Id];
+
+            Require(tankView.IsArmed, "Prototype tank must be armed.");
+            Require(!apcView.IsArmed, "APC must be unarmed.");
+            Require(tankView.WeaponRange > 0f, "Tank weapon range must be > 0.");
+            Require(tankView.SensorRange > 0f, "Tank sensor range must be > 0.");
+            Require(apcView.SensorRange > 0f, "APC sensor range must be > 0.");
+
+            // 1. Deselected: rings are hidden
+            tankView.SetSelected(false);
+            apcView.SetSelected(false);
+            Require(!tankView.WeaponRangeRing.Visible, "Deselected tank weapon ring must be hidden.");
+            Require(!tankView.SensorRangeRing.Visible, "Deselected tank sensor ring must be hidden.");
+            Require(!apcView.WeaponRangeRing.Visible, "Deselected APC weapon ring must be hidden.");
+            Require(!apcView.SensorRangeRing.Visible, "Deselected APC sensor ring must be hidden.");
+
+            // 2. Select armed tank: both weapon range ring and sensor range ring visible
+            unitViews.Selected.Clear();
+            unitViews.Selected.Add(tank.Id);
+            unitViews.UpdateSelectionVisuals();
+            Require(tankView.WeaponRangeRing.Visible, "Selected armed tank must show weapon range ring.");
+            Require(tankView.SensorRangeRing.Visible, "Selected armed tank must show sensor range ring.");
+
+            // 3. Select unarmed APC: only sensor range ring visible, weapon ring hidden
+            unitViews.Selected.Clear();
+            unitViews.Selected.Add(unarmedApc.Id);
+            unitViews.UpdateSelectionVisuals();
+            Require(!apcView.WeaponRangeRing.Visible, "Selected unarmed APC must NOT show weapon range ring.");
+            Require(apcView.SensorRangeRing.Visible, "Selected unarmed APC must show sensor range ring.");
+
+            // 4. Deselect: all hidden
+            unitViews.Selected.Clear();
+            unitViews.UpdateSelectionVisuals();
+            Require(!tankView.WeaponRangeRing.Visible, "Deselected tank weapon ring must be hidden.");
+            Require(!tankView.SensorRangeRing.Visible, "Deselected tank sensor ring must be hidden.");
+            Require(!apcView.WeaponRangeRing.Visible, "Deselected APC weapon ring must be hidden.");
+            Require(!apcView.SensorRangeRing.Visible, "Deselected APC sensor ring must be hidden.");
+
+            // 5. Select tank again and verify zero allocations in steady state
+            unitViews.Selected.Add(tank.Id);
+            unitViews.UpdateSelectionVisuals();
+            for (int i = 0; i < 5; i++)
+            {
+                unitViews.UpdateSelectionVisuals();
+            }
+
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 50; i++)
+            {
+                unitViews.UpdateSelectionVisuals();
+            }
+            long alloc = GC.GetAllocatedBytesForCurrentThread() - before;
+            Require(alloc == 0, $"Range rings in steady state allocated {alloc} bytes (expected 0).");
+
+            // 6. Movement threshold: do not rebuild mesh every frame while moving; drape only when moved >= 3 m
+            int rebuildCountBefore = tankView.RingsRebuildCount;
+            Vector3 startPos = tankView.Root.Position;
+
+            // Small movement (< 3 m) must NOT rebuild ring meshes
+            tankView.UpdatePosition(startPos + new Vector3(1.0f, 0f, 0f));
+            Require(tankView.RingsRebuildCount == rebuildCountBefore,
+                $"Small movement (< 3m) must not rebuild range rings (was {tankView.RingsRebuildCount}, expected {rebuildCountBefore}).");
+
+            tankView.UpdatePosition(startPos + new Vector3(2.0f, 0f, 0f));
+            Require(tankView.RingsRebuildCount == rebuildCountBefore,
+                $"Small movement (< 3m) must not rebuild range rings (was {tankView.RingsRebuildCount}, expected {rebuildCountBefore}).");
+
+            // Movement >= 3 m MUST rebuild ring meshes
+            tankView.UpdatePosition(startPos + new Vector3(3.5f, 0f, 0f));
+            Require(tankView.RingsRebuildCount > rebuildCountBefore,
+                "Movement >= 3m must rebuild range rings.");
+
+            // 7. Map rectangle clipping tests (ClipSegmentToMap)
+            float mapWidth = 100f;
+            float mapDepth = 100f;
+
+            // Inside: segment entirely within bounds
+            Require(UnitView.ClipSegmentToMap(10f, 10f, 20f, 20f, mapWidth, mapDepth, out float cx0, out float cz0, out float cx1, out float cz1),
+                "Segment inside map bounds must return true.");
+            Require(Mathf.IsEqualApprox(cx0, 10f) && Mathf.IsEqualApprox(cz0, 10f) &&
+                    Mathf.IsEqualApprox(cx1, 20f) && Mathf.IsEqualApprox(cz1, 20f),
+                "Segment inside bounds must not alter endpoints.");
+
+            // Outside: segment entirely outside map bounds
+            Require(!UnitView.ClipSegmentToMap(-20f, 10f, -5f, 10f, mapWidth, mapDepth, out _, out _, out _, out _),
+                "Segment outside left edge must return false.");
+            Require(!UnitView.ClipSegmentToMap(10f, 120f, 20f, 130f, mapWidth, mapDepth, out _, out _, out _, out _),
+                "Segment outside bottom edge must return false.");
+
+            // Crossing: segment crossing left boundary
+            Require(UnitView.ClipSegmentToMap(-10f, 50f, 10f, 50f, mapWidth, mapDepth, out cx0, out cz0, out cx1, out cz1),
+                "Segment crossing left edge must return true.");
+            Require(Mathf.IsEqualApprox(cx0, 0f) && Mathf.IsEqualApprox(cz0, 50f) &&
+                    Mathf.IsEqualApprox(cx1, 10f) && Mathf.IsEqualApprox(cz1, 50f),
+                "Clipped segment must clamp to x=0 at left boundary.");
+
+            // Crossing: segment crossing right boundary
+            Require(UnitView.ClipSegmentToMap(90f, 50f, 110f, 50f, mapWidth, mapDepth, out cx0, out cz0, out cx1, out cz1),
+                "Segment crossing right edge must return true.");
+            Require(Mathf.IsEqualApprox(cx0, 90f) && Mathf.IsEqualApprox(cz0, 50f) &&
+                    Mathf.IsEqualApprox(cx1, 100f) && Mathf.IsEqualApprox(cz1, 50f),
+                "Clipped segment must clamp to x=100 at right boundary.");
+
+            // Crossing: segment crossing top-left corner
+            Require(UnitView.ClipSegmentToMap(-10f, -10f, 10f, 10f, mapWidth, mapDepth, out cx0, out cz0, out cx1, out cz1),
+                "Diagonal segment crossing top-left corner must return true.");
+            Require(Mathf.IsEqualApprox(cx0, 0f) && Mathf.IsEqualApprox(cz0, 0f) &&
+                    Mathf.IsEqualApprox(cx1, 10f) && Mathf.IsEqualApprox(cz1, 10f),
+                "Clipped segment must clamp to corner at (0, 0).");
+
+            // 8. Near-edge unit range ring drape
+            tankView.UpdatePosition(new Vector3(2f, 0f, 2f));
+            Require(tankView.RingsRebuildCount > rebuildCountBefore + 1, "Corner reposition must rebuild range rings.");
+        }
+        finally
+        {
+            unitViews?.Clear();
+            parent.QueueFree();
+        }
     }
 
     private static void Require(bool condition, string message)

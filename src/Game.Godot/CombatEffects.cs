@@ -1028,6 +1028,7 @@ internal partial class CombatEffects : Node3D
             {
                 _audioPlayers[i].Stop();
             }
+            _audioPlayers[i].Stream = null;
             _activeVoices[i] = default;
         }
     }

@@ -17,5 +17,6 @@ public interface IGameSession : IDisposable
     string StatusDescription { get; }
     bool Move(EntityId unit, System.Numerics.Vector2 target);
     bool Attack(EntityId unit, ContactId target);
+    bool SetFireStance(EntityId unit, FireStance stance);
     void Advance(double elapsedSeconds);
 }

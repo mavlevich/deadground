@@ -42,6 +42,7 @@ public sealed class LocalSession : IGameSession
 
     public bool Move(EntityId unit, Vector2 target) => _client.Move(unit, target);
     public bool Attack(EntityId unit, ContactId target) => _client.Attack(unit, target);
+    public bool SetFireStance(EntityId unit, FireStance stance) => _client.SetFireStance(unit, stance);
 
     public void Dispose()
     {

@@ -8,6 +8,15 @@ public readonly record struct MoveCommand(uint Sequence, int ClientTick, EntityI
 
 public readonly record struct AttackCommand(uint Sequence, int ClientTick, EntityId Unit, ContactId Target);
 
+public enum FireStance : byte
+{
+    FireAtWill = 0,
+    ReturnFire = 1,
+    HoldFire = 2
+}
+
+public readonly record struct SetFireStanceCommand(uint Sequence, int ClientTick, EntityId Unit, FireStance Stance);
+
 public enum AttackExecutionStatus : byte
 {
     None = 0,
@@ -49,7 +58,8 @@ public readonly record struct OwnUnitObservation(
     ushort Ammunition = 0,
     ushort ReloadTicksRemaining = 0,
     AttackExecutionStatus AttackStatus = AttackExecutionStatus.None,
-    ContactId TargetContactId = default);
+    ContactId TargetContactId = default,
+    FireStance Stance = FireStance.FireAtWill);
 
 public interface ISimulationRules
 {

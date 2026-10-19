@@ -264,6 +264,7 @@ public sealed class ReconRaidBot
 
             if (distance <= approachThreshold)
             {
+                int slot = GetOrCreateUnitSlot(unit.Id);
                 // Within weapon range: stop and fire
                 if (IsUnitMoving(unit.Id, unit.NavStatus))
                 {
@@ -271,7 +272,9 @@ public sealed class ReconRaidBot
                     RecordLastMoveTarget(unit.Id, unit.Position, tick);
                 }
 
-                if (unit.AttackStatus != AttackExecutionStatus.Aiming || unit.TargetContactId.Value != bestContact.Id.Value)
+                if (_lastAttackTarget[slot].Value != bestContact.Id.Value ||
+                    unit.AttackStatus != AttackExecutionStatus.Aiming ||
+                    unit.TargetContactId.Value != bestContact.Id.Value)
                 {
                     sink.EnqueueAttack(new AttackCommand(_nextSequence++, tick, unit.Id, bestContact.Id));
                     RecordLastAttackTarget(unit.Id, bestContact.Id);
@@ -284,6 +287,8 @@ public sealed class ReconRaidBot
                 {
                     sink.EnqueueMove(new MoveCommand(_nextSequence++, tick, unit.Id, bestContact.Position));
                     RecordLastMoveTarget(unit.Id, bestContact.Position, tick);
+                    int slot = GetOrCreateUnitSlot(unit.Id);
+                    _lastAttackTarget[slot] = default;
                 }
             }
             return;

@@ -20,10 +20,11 @@ public static class WireProtocol
     public const byte Version = MatchSetup.CurrentProtocolVersion;
     public const int MoveSize = 22;
     public const int AttackSize = 18;
+    public const int SetFireStanceSize = 15;
     public const int CommandResultSize = 11;
     public const int MissionSize = 32;
     public const int SnapshotHeaderSize = 16 + MissionSize;
-    public const int UnitSize = 30;
+    public const int UnitSize = 31;
     public const int MaxUnits = 1024;
     public const int ContactSize = 20;
     public const int MaxContacts = 256;
@@ -41,6 +42,7 @@ public static class WireProtocol
     public const byte HandshakeRequestKind = 5;
     public const byte HandshakeResponseKind = 6;
     public const byte AttackKind = 7;
+    public const byte SetFireStanceKind = 8;
 
     public static void WriteCommandResult(Span<byte> bytes, CommandResult result)
     {
@@ -108,6 +110,29 @@ public static class WireProtocol
         uint targetId = BinaryPrimitives.ReadUInt32LittleEndian(bytes[14..]);
         if (sequence == 0 || unitId == 0 || targetId == 0 || tick < 0) return false;
         command = new AttackCommand(sequence, tick, new EntityId(unitId), new ContactId(targetId));
+        return true;
+    }
+
+    public static void WriteSetFireStance(Span<byte> bytes, SetFireStanceCommand command)
+    {
+        if (bytes.Length < SetFireStanceSize) throw new ArgumentException("SetFireStance buffer is too small.");
+        bytes[0] = Version; bytes[1] = SetFireStanceKind;
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[2..], command.Sequence);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[6..], command.ClientTick);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[10..], command.Unit.Value);
+        bytes[14] = (byte)command.Stance;
+    }
+
+    public static bool TryReadSetFireStance(ReadOnlySpan<byte> bytes, out SetFireStanceCommand command)
+    {
+        command = default;
+        if (bytes.Length != SetFireStanceSize || bytes[0] != Version || bytes[1] != SetFireStanceKind) return false;
+        uint sequence = BinaryPrimitives.ReadUInt32LittleEndian(bytes[2..]);
+        int tick = BinaryPrimitives.ReadInt32LittleEndian(bytes[6..]);
+        uint unitId = BinaryPrimitives.ReadUInt32LittleEndian(bytes[10..]);
+        byte stanceByte = bytes[14];
+        if (sequence == 0 || unitId == 0 || tick < 0 || stanceByte > (byte)FireStance.HoldFire) return false;
+        command = new SetFireStanceCommand(sequence, tick, new EntityId(unitId), (FireStance)stanceByte);
         return true;
     }
 
@@ -213,6 +238,7 @@ public static class WireProtocol
             BinaryPrimitives.WriteUInt16LittleEndian(record[23..], unit.ReloadTicksRemaining);
             record[25] = (byte)unit.AttackStatus;
             BinaryPrimitives.WriteUInt32LittleEndian(record[26..], unit.TargetContactId.Value);
+            record[30] = (byte)unit.Stance;
         }
 
         int contactsOffset = SnapshotHeaderSize + units.Length * UnitSize;
@@ -368,10 +394,12 @@ public static class WireProtocol
             ushort reloadTicks = BinaryPrimitives.ReadUInt16LittleEndian(record[23..]);
             byte attackStatusByte = record[25];
             uint targetContactVal = BinaryPrimitives.ReadUInt32LittleEndian(record[26..]);
+            byte stanceByte = record[30];
 
             if (id.Value == 0 || !float.IsFinite(position.X) || !float.IsFinite(position.Y) ||
                 navStatusByte > (byte)PathRequestStatus.CapacityExceeded ||
                 attackStatusByte > (byte)AttackExecutionStatus.TargetLost ||
+                stanceByte > (byte)FireStance.HoldFire ||
                 !frame.Indices.TryAdd(id, i)) return false;
 
             frame.Units[i] = new OwnUnitObservation(
@@ -384,7 +412,8 @@ public static class WireProtocol
                 ammo,
                 reloadTicks,
                 (AttackExecutionStatus)attackStatusByte,
-                new ContactId(targetContactVal));
+                new ContactId(targetContactVal),
+                (FireStance)stanceByte);
         }
 
         int contactsOffset = SnapshotHeaderSize + unitCount * UnitSize;

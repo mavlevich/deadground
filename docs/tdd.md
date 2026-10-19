@@ -517,32 +517,38 @@ arrival. Rejections include no unit ID or reason that could expose hidden state.
 Malformed packets are discarded. These replies use the bounded local transport;
 reliable acknowledgement, retries and reconnect reconciliation remain M1 work.
 
-### 12.1 Attack orders
+### 12.1 Attack orders and fire stances
 
 An attack order targets either a `ContactId` or a ground position. Never an enemy entity ID.
 
-For the initial M1 direct-fire combat slice, attack orders follow a limited subset of the future stance system:
-- Explicit attack orders only, issued by a player targeting a currently observed `ContactId` (`State == ContactState.Current`).
-- Range validation at issuance: orders targeting contacts beyond weapon range plus margin (0.5 m) are rejected immediately; rejection preserves existing valid orders (ongoing movement continues, active attack orders on in-range targets are preserved and continue firing).
-- Stationary firing only: an accepted attack order targeting an in-range contact replaces the active movement order and immediately halts the attacker.
-- A new movement order cancels its active attack order.
-- The attacker does not automatically pursue or chase targets.
-- If the target moves out of weapon range during combat, the unit maintains the attack order but holds fire with status `OutOfRange`.
-- If the target contact transitions to `LastKnown`, the attacker maintains the attack order and holds fire with status `TargetLost`. When the target is re-observed and transitions back to `Current`, the attack order automatically re-resolves the bound entity and resumes firing.
-- The attack order is dropped when the target contact expires from the tracker (e.g. after `MemoryDurationTicks`) or when an observed target is destroyed. If a target is destroyed outside the attacker's line of sight, the attacker's `LastKnown` contact and `TargetLost` order are maintained without leaking the unobserved death until contact expiry.
-- Range and firing line of sight are strictly revalidated at each shot. A stale detection result does not permit shooting through a newly obstructed line.
+#### Fire stances and auto-fire
+
+Every unit has a fire stance: `FireAtWill` (default), `ReturnFire`, or `HoldFire`. Players set stances per unit via commands, and stances are replicated in own unit snapshots.
+
+- `FireAtWill`: An armed unit without an active attack order, and not moving, engages autonomously. It picks a `Current` hostile contact of its side within weapon range that it has its own line of sight to. Firing checks follow the same rules as an attack order.
+- Target prioritization: The unit prefers tanks over APCs over recon over other classes, then the nearest contact.
+- Target retention: The unit keeps its chosen auto-fire target until the contact is lost, moves out of weapon range, or is destroyed.
+- Auto-fire never moves the unit.
+- `ReturnFire`: Behaves like `FireAtWill`, but engages only contacts that fired at this unit (`TookFire`) and that the unit can see with its own line of sight.
+- `HoldFire`: Never fires autonomously.
+
+#### Attack orders and pursuit
+
+- Attack orders out of range are accepted. The unit drives toward the target position until it is within weapon range (with a 0.5 m margin) and has its own line of sight, then halts and fires.
+- If the target transitions to `LastKnown`, the unit drives to the last known position and holds there.
+- The attack order is dropped when the target contact expires from the tracker (after `MemoryDurationTicks`) or when an observed target is destroyed. If a target is destroyed outside line of sight, the unit holds at the last known position until contact expiry without leaking unobserved destruction.
+- A new movement order cancels an active attack order.
+- Firing line of sight and weapon range are rechecked before each shot. Moving units do not fire.
 - Invalid commands are rejected and never cancel an existing valid order.
+
+#### Cued fire
+
+A unit may fire at any `Current` contact known to its side, including targets spotted only by an allied unit, provided the target is within weapon range and the shooter has its own line of sight to it. The shooter's own sensor range does not limit weapon fire (a gunner sight reaches further when told where to look).
+
+#### Area fire and limitations
+
+- Area fire on a ground position (suppression, artillery) does not need a contact. When a lost contact is linked again (section 7.1), the order continues.
 - Prototype limitation: instantaneous shot resolution without ballistics simulation or dispersion. Visual tracers are presentation effects and do not determine damage.
-
-When full stances are implemented in later milestones, lost contacts will behave by stance:
-
-| Stance | Behavior |
-|---|---|
-| Aggressive | Move to the last known position and search |
-| Hold | Keep position, keep aiming at the last known position for a short time, then drop the target |
-| Fire at will | Drop the target and pick a new one |
-
-Area fire on a ground position (suppression, artillery) does not need a contact. When a lost contact is linked again (section 7.1), the order continues.
 
 ### 12.2 Move orders
 
@@ -1074,6 +1080,23 @@ Heavy scenario for measurements: all units observing, firing, changing orders an
 ## 22. Milestones
 
 No dates. Each milestone ends with something playable.
+
+### Agreed M1 order (vertical slice)
+1. Orders: fire stances with auto-fire, attack orders that drive into range, range circles,
+   cued fire at targets spotted by allies. Then turret traverse at period rates.
+2. Readability: contour lines, adjustable camera pitch, compact zoom-aware badges, health and
+   reload over units.
+3. Armor and the BTR-70 and BRDM-2 KPVT.
+4. Wrecks of destroyed vehicles as known world facts, and area fire with dispersion.
+5. Terrain layers: forest (infantry only), roads (speed_road), towns, water with fords and
+   bridges (amphibious vehicles swim), buildings with footprint and height.
+6. A map builder from open data (Copernicus DEM and OpenStreetMap, licenses recorded) and the
+   first real map: Huenfeld and the Haune valley, 5 x 5 km, Fulda Gap 1979 to 1982.
+7. A bot for the battle scenario.
+8. Atmosphere: engine and track sounds, ambient sound, weather (fog and rain also reduce
+   visibility in the rules), sirens.
+Then a pause to play full battles. After it: infantry (mounting APCs, occupying buildings),
+hull heading and collision, artillery, air, minimap and interface.
 
 ### M0. Skeleton
 

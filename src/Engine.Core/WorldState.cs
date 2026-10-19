@@ -57,7 +57,12 @@ public sealed class WorldState : IDisposable
         bool HasAttackOrder,
         ContactId TargetContactId,
         EntityId TargetEntityId,
-        AttackExecutionStatus Status);
+        AttackExecutionStatus Status,
+        FireStance Stance = FireStance.FireAtWill,
+        Vector2 PursuitDestination = default,
+        EntityId LastTookFireAttacker = default,
+        int LastTookFireTick = -1,
+        int LastPursuitRequestTick = -1);
 
     public EntityId CreateUnit(int owner, ushort definition, Vector2 position, float speed, int maxHealth = 100, int ammo = 0)
     {
@@ -75,7 +80,12 @@ public sealed class WorldState : IDisposable
             false,
             default,
             default,
-            AttackExecutionStatus.None);
+            AttackExecutionStatus.None,
+            FireStance.FireAtWill,
+            Vector2.Zero,
+            default,
+            -1,
+            -1);
         Entity entity = _storage.Create(new Identity(id, owner, definition),
             new Position(position), new Motion(position, speed, false), combat);
         _entities[Count] = entity;
@@ -182,6 +192,16 @@ public sealed class WorldState : IDisposable
         combat.TargetContactId = default;
         combat.TargetEntityId = default;
         combat.Status = AttackExecutionStatus.None;
+        combat.PursuitDestination = default;
+        combat.LastPursuitRequestTick = -1;
+        return true;
+    }
+
+    public bool SetFireStance(EntityId id, FireStance stance)
+    {
+        if (!_indices.TryGetValue(id, out int index)) return false;
+        ref CombatState combat = ref _storage.Get<CombatState>(_entities[index]);
+        combat.Stance = stance;
         return true;
     }
 
