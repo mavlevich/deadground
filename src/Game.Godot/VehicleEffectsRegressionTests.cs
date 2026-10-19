@@ -146,6 +146,7 @@ internal static class VehicleEffectsRegressionTests
             float scale = view.Model.Scale.X;
             view.UpdatePosition(new Vector3(0f, 0f, 0f));
             view.UpdatePosition(new Vector3(5f, 0f, 0f));
+            view.SetHullHeading(-Mathf.Pi / 2f); // facing +X, the way the shot goes
             Basis rest = view.Model.Basis;
 
             view.ApplyRecoil(Vector3.Right);

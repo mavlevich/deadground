@@ -60,7 +60,8 @@ public readonly record struct OwnUnitObservation(
     AttackExecutionStatus AttackStatus = AttackExecutionStatus.None,
     ContactId TargetContactId = default,
     FireStance Stance = FireStance.FireAtWill,
-    float TurretYaw = 0f);
+    float TurretYaw = 0f,
+    float HullHeading = 0f);
 
 public interface ISimulationRules
 {

@@ -66,7 +66,8 @@ public sealed class PlayerKnowledge
                     combat.Status,
                     combat.TargetContactId,
                     combat.Stance,
-                    combat.TurretYaw);
+                    combat.TurretYaw,
+                    combat.HullHeading);
             }
             else
             {

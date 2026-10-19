@@ -135,6 +135,7 @@ public partial class Main : Node3D
         float? overrideCameraSize = null;
         Vector3? overrideCameraFocus = null;
         int port = 7777;
+        bool enemyHoldFire = false;
 
         void ParseArgs(string[] args)
         {
@@ -168,6 +169,10 @@ public partial class Main : Node3D
                 else if (args[i] == "--screenshot-quit")
                 {
                     _screenshotQuit = true;
+                }
+                else if (args[i] == "--enemy-hold-fire")
+                {
+                    enemyHoldFire = true;
                 }
                 else if (args[i] == "--camera-size" && i + 1 < args.Length && float.TryParse(args[i + 1], System.Globalization.CultureInfo.InvariantCulture, out float cSize))
                 {
@@ -260,16 +265,19 @@ public partial class Main : Node3D
         }
         else
         {
-            _session = _scenario switch
+            Simulation localSimulation = _scenario switch
             {
-                "visibility" => new LocalSession(VisibilityScenario.CreateSimulation(scenarioGeometry!)),
-                "navigation" => new LocalSession(NavigationScenario.CreateSimulation(scenarioGeometry!)),
-                "navigation-large" => new LocalSession(LargeNavigationScenario.CreateSimulation(scenarioGeometry!)),
-                "combat" => new LocalSession(CombatScenario.CreateSimulation(scenarioGeometry!)),
-                "recon-raid" => new LocalSession(ReconRaidScenario.CreateSimulation(scenarioGeometry!)),
-                "battle" => new LocalSession(BattleScenario.CreateSimulation(scenarioGeometry!)),
-                _ => new LocalSession(PrototypeScenario.Create(_map))
+                "visibility" => VisibilityScenario.CreateSimulation(scenarioGeometry!),
+                "navigation" => NavigationScenario.CreateSimulation(scenarioGeometry!),
+                "navigation-large" => LargeNavigationScenario.CreateSimulation(scenarioGeometry!),
+                "combat" => CombatScenario.CreateSimulation(scenarioGeometry!),
+                "recon-raid" => ReconRaidScenario.CreateSimulation(scenarioGeometry!),
+                "battle" => BattleScenario.CreateSimulation(scenarioGeometry!),
+                _ => PrototypeScenario.Create(_map)
             };
+            // Test switch: the enemy holds fire, so own units can be tried out without losing them.
+            if (enemyHoldFire) TestOptions.HoldFireForOthers(localSimulation, 1);
+            _session = new LocalSession(localSimulation);
         }
 
 

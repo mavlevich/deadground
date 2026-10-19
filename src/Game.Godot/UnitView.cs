@@ -471,12 +471,7 @@ internal sealed class UnitView
             movement.Y = 0;
             if (movement.LengthSquared() > 0.000001f)
             {
-                float heading = Mathf.Atan2(-movement.X, -movement.Z);
-                float turn = _hasHeading ? Mathf.Wrap(heading - _heading, -Mathf.Pi, Mathf.Pi) : 0f;
-                _heading = heading;
-                ApplyHullPose();
-                _hasHeading = true;
-                AdvanceTracks(movement.Length(), turn);
+                AdvanceTracks(movement.Length(), 0f);
                 if (movement.Length() <= MaxDustStep)
                     _distanceSinceEffects += movement.Length();
             }
@@ -493,6 +488,22 @@ internal sealed class UnitView
             }
         }
     }
+
+    /// <summary>
+    /// The hull heading comes from the snapshot, like the turret yaw, so a turret that rides on the
+    /// hull stays fixed to it on screen. A hull turn runs one track ahead of the other.
+    /// </summary>
+    public void SetHullHeading(float worldYaw)
+    {
+        if (_hasHeading && worldYaw == _heading) return;
+        float turn = _hasHeading ? Mathf.Wrap(worldYaw - _heading, -Mathf.Pi, Mathf.Pi) : 0f;
+        _heading = worldYaw;
+        _hasHeading = true;
+        ApplyHullPose();
+        if (turn != 0f) AdvanceTracks(0f, turn);
+    }
+
+    internal float Heading => _heading;
 
     public void SetTurretYaw(float worldYaw)
     {

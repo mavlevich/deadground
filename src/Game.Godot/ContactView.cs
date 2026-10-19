@@ -66,10 +66,11 @@ internal sealed class ContactView
         Root.AddChild(_selection);
     }
 
-    public void Update(ContactObservation contact, float groundY, bool isSelected, float turretYaw = 0f) =>
-        Update(contact, contact.Position, groundY, isSelected, turretYaw);
+    public void Update(ContactObservation contact, float groundY, bool isSelected) =>
+        Update(contact, contact.Position, groundY, isSelected, contact.TurretYaw, contact.HullHeading);
 
-    public void Update(ContactObservation contact, System.Numerics.Vector2 position, float groundY, bool isSelected, float turretYaw = 0f)
+    public void Update(ContactObservation contact, System.Numerics.Vector2 position, float groundY, bool isSelected,
+        float turretYaw, float hullHeading)
     {
         Observation = contact;
         Root.Position = new Vector3(position.X, groundY, position.Y);
@@ -98,7 +99,9 @@ internal sealed class ContactView
             if (_enemyModel is not null)
             {
                 _enemyModel.Visible = true;
-                SetTurretYaw(turretYaw);
+                _enemyModel.Rotation = new Vector3(0, hullHeading, 0);
+                if (_turret is not null)
+                    _turret.Rotation = new Vector3(0, Mathf.Wrap(turretYaw - hullHeading, -Mathf.Pi, Mathf.Pi), 0);
             }
         }
         else
@@ -112,12 +115,6 @@ internal sealed class ContactView
         }
 
         _selection.Visible = isSelected;
-    }
-
-    // Contact models carry no hull heading, so the world yaw is the turret's local yaw.
-    public void SetTurretYaw(float worldYaw)
-    {
-        if (_turret is not null) _turret.Rotation = new Vector3(0, worldYaw, 0);
     }
 
     internal Node3D? Turret => _turret;
