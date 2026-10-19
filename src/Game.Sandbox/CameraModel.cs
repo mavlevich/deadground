@@ -79,14 +79,30 @@ public sealed class CameraModel
         _inputDirection = Vector2.Zero;
     }
 
-    public void ZoomIn()
+    // A single wheel event never moves more than this many steps, however large its reported amount.
+    public const float MaxStepsPerEvent = 2.0f;
+
+    public void ZoomIn() => ZoomSteps(1f);
+
+    public void ZoomOut() => ZoomSteps(-1f);
+
+    /// <summary>
+    /// Zoom by a number of wheel steps, positive toward the ground. Smooth wheels and trackpads send
+    /// many small events per gesture with fractional amounts; each moves the zoom by its own amount,
+    /// so one gesture zooms as far as one notch of a plain wheel per unit of scrolling.
+    /// </summary>
+    public void ZoomSteps(float steps)
     {
-        TargetSize = Math.Clamp(TargetSize * ZoomStepFactor, MinSize, MaxSize);
+        if (!float.IsFinite(steps) || steps == 0f) return;
+        steps = Math.Clamp(steps, -MaxStepsPerEvent, MaxStepsPerEvent);
+        TargetSize = Math.Clamp(TargetSize * MathF.Pow(ZoomStepFactor, steps), MinSize, MaxSize);
     }
 
-    public void ZoomOut()
+    /// <summary>Pinch zoom: a scale above 1 (fingers apart) zooms in by that ratio.</summary>
+    public void ZoomByScale(float scale)
     {
-        TargetSize = Math.Clamp(TargetSize / ZoomStepFactor, MinSize, MaxSize);
+        if (!float.IsFinite(scale) || scale <= 0f) return;
+        TargetSize = Math.Clamp(TargetSize / scale, MinSize, MaxSize);
     }
 
     public void SetZoom(float targetSize)
