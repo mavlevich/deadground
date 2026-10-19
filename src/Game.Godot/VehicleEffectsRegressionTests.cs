@@ -132,7 +132,7 @@ internal static class VehicleEffectsRegressionTests
         EventId: id,
         ServerTick: tick,
         Kind: CombatEventKind.ShotFired,
-        PresentationId: 1,
+        PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
         Origin: new NumericsVector3(origin.X, origin.Y, origin.Z),
         Target: new NumericsVector3(origin.X + 40f, origin.Y, origin.Z),
         ShooterUnitId: new EntityId(41));

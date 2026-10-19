@@ -20,11 +20,17 @@
     {
       "id": "gun_115mm_u5ts",
       "range": 1600.0,
-      "reload_seconds": 15.0,
+      "reload_seconds": 8.5,
       "damage": 50,
       "ammo_capacity": 40,
       "muzzle_height": 1.75,
-      "presentation_id": "cannon_115mm"
+      "presentation_id": "cannon_115mm",
+      "presentation_kind": "cannon",
+      "penetration_near": 290.0,
+      "penetration_far": 200.0,
+      "penetration_near_range": 0.0,
+      "penetration_far_range": 1600.0,
+      "rounds_per_burst": 1
     },
     {
       "id": "gun_105mm_m68",
@@ -33,7 +39,58 @@
       "damage": 50,
       "ammo_capacity": 63,
       "muzzle_height": 2.15,
-      "presentation_id": "cannon_105mm"
+      "presentation_id": "cannon_105mm",
+      "presentation_kind": "cannon",
+      "penetration_near": 290.0,
+      "penetration_far": 155.0,
+      "penetration_near_range": 0.0,
+      "penetration_far_range": 2000.0,
+      "rounds_per_burst": 1
+    },
+    {
+      "id": "mg_14_5mm_kpvt",
+      "range": 1000.0,
+      "reload_seconds": 1.5,
+      "damage": 10,
+      "ammo_capacity": 500,
+      "muzzle_height": 1.9,
+      "presentation_id": "mg_14_5mm",
+      "presentation_kind": "machine_gun",
+      "penetration_near": 34.0,
+      "penetration_far": 18.0,
+      "penetration_near_range": 0.0,
+      "penetration_far_range": 1000.0,
+      "rounds_per_burst": 5
+    },
+    {
+      "id": "mg_12_7mm_m2hb",
+      "range": 1000.0,
+      "reload_seconds": 1.5,
+      "damage": 10,
+      "ammo_capacity": 2000,
+      "muzzle_height": 2.1,
+      "presentation_id": "mg_12_7mm",
+      "presentation_kind": "machine_gun",
+      "penetration_near": 28.0,
+      "penetration_far": 14.0,
+      "penetration_near_range": 0.0,
+      "penetration_far_range": 1000.0,
+      "rounds_per_burst": 5
+    },
+    {
+      "id": "mg_7_62mm_m60",
+      "range": 800.0,
+      "reload_seconds": 1.5,
+      "damage": 5,
+      "ammo_capacity": 1000,
+      "muzzle_height": 1.6,
+      "presentation_id": "mg_7_62mm",
+      "presentation_kind": "machine_gun",
+      "penetration_near": 9.0,
+      "penetration_far": 4.0,
+      "penetration_near_range": 0.0,
+      "penetration_far_range": 800.0,
+      "rounds_per_burst": 5
     }
   ],
   "units": [
@@ -51,7 +108,10 @@
       "radius": 1.65,
       "max_health": 100,
       "weapon": "gun_115mm_u5ts",
-      "turret_traverse_rate": 18.0
+      "turret_traverse_rate": 18.0,
+      "armor_front": 200.0,
+      "armor_side": 80.0,
+      "armor_rear": 45.0
     },
     {
       "id": "m60a1",
@@ -67,7 +127,10 @@
       "radius": 1.8,
       "max_health": 100,
       "weapon": "gun_105mm_m68",
-      "turret_traverse_rate": 22.5
+      "turret_traverse_rate": 22.5,
+      "armor_front": 220.0,
+      "armor_side": 76.0,
+      "armor_rear": 41.0
     },
     {
       "id": "btr70",
@@ -82,7 +145,12 @@
       "eye_height": 2.0,
       "target_points": [0.9, 2.0],
       "radius": 1.4,
-      "max_health": 50
+      "max_health": 50,
+      "weapon": "mg_14_5mm_kpvt",
+      "turret_traverse_rate": 15.0,
+      "armor_front": 16.0,
+      "armor_side": 9.0,
+      "armor_rear": 7.0
     },
     {
       "id": "m113a1",
@@ -97,7 +165,12 @@
       "eye_height": 2.2,
       "target_points": [0.8, 2.3],
       "radius": 1.35,
-      "max_health": 50
+      "max_health": 50,
+      "weapon": "mg_12_7mm_m2hb",
+      "turret_traverse_rate": 30.0,
+      "armor_front": 20.0,
+      "armor_side": 12.0,
+      "armor_rear": 12.0
     },
     {
       "id": "brdm2",
@@ -112,7 +185,12 @@
       "eye_height": 2.0,
       "target_points": [0.8, 2.1],
       "radius": 1.2,
-      "max_health": 50
+      "max_health": 50,
+      "weapon": "mg_14_5mm_kpvt",
+      "turret_traverse_rate": 15.0,
+      "armor_front": 16.0,
+      "armor_side": 8.0,
+      "armor_rear": 5.0
     },
     {
       "id": "m151a2",
@@ -126,7 +204,12 @@
       "eye_height": 1.8,
       "target_points": [0.6, 1.5],
       "radius": 0.85,
-      "max_health": 30
+      "max_health": 30,
+      "weapon": "mg_7_62mm_m60",
+      "turret_traverse_rate": 60.0,
+      "armor_front": 0.0,
+      "armor_side": 0.0,
+      "armor_rear": 0.0
     }
   ]
 }

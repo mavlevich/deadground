@@ -526,7 +526,7 @@ public sealed class ReconRaidMissionTests
     [Fact]
     public void Review_HandshakeAndWireProtocol_AgreeOnCurrentVersion()
     {
-        Assert.Equal(13, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(14, MatchSetup.CurrentProtocolVersion);
         Assert.Equal(MatchSetup.CurrentProtocolVersion, WireProtocol.Version);
     }
 
@@ -535,7 +535,7 @@ public sealed class ReconRaidMissionTests
     {
         HeightMap map = HeightMap.CreatePrototype();
         MatchSetup serverSetup = PrototypeScenario.CreateMatchSetup(map);
-        Assert.Equal(13, serverSetup.ProtocolVersion);
+        Assert.Equal(14, serverSetup.ProtocolVersion);
 
         using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
         int port = serverTransport.Port;
@@ -986,7 +986,7 @@ public sealed class ReconRaidMissionTests
             EventId: 1,
             ServerTick: 10,
             Kind: CombatEventKind.TookFire,
-            PresentationId: 1,
+            PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
             Origin: new Vector3(396f, 0f, 380f),
             Target: new Vector3(396f, 0f, 428f),
             ShooterUnitId: default);

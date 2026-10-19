@@ -81,7 +81,13 @@ public sealed record WeaponData(
     int Damage = 0,
     int AmmoCapacity = 0,
     float MuzzleHeight = 1.8f,
-    string? PresentationId = null);
+    string? PresentationId = null,
+    string? PresentationKind = null,
+    float PenetrationNear = 0f,
+    float PenetrationFar = 0f,
+    float PenetrationNearRange = 0f,
+    float PenetrationFarRange = 0f,
+    int RoundsPerBurst = 1);
 
 public sealed record UnitDefinition(
     string Id,
@@ -101,7 +107,12 @@ public sealed record UnitDefinition(
     float SpeedOffroad = 0f,
     float ReverseSpeed = 0f,
     float WaterSpeed = 0f,
-    float TurretTraverseRate = 0f);
+    float TurretTraverseRate = 0f,
+    float ArmorFront = 0f,
+    float ArmorSide = 0f,
+    float ArmorRear = 0f,
+    float FrontSectorAngle = 90f,
+    float RearSectorAngle = 90f);
 
 public sealed record FactionData(string Id, string? Name = null);
 
@@ -264,12 +275,26 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
         Dictionary<string, WeaponDefinition> weapons = new(StringComparer.Ordinal);
         if (catalog.Weapons is not null)
         {
-            ushort presIdCounter = 1;
+            ushort presIdCounter = 0;
             foreach (WeaponData w in catalog.Weapons)
             {
                 int reloadTicks = w.ReloadDurationTicks > 0
                     ? w.ReloadDurationTicks
                     : (int)MathF.Round(w.ReloadSeconds * Simulation.TickRate);
+
+                WeaponPresentationKind kind = string.Equals(w.PresentationKind, "machine_gun", StringComparison.OrdinalIgnoreCase)
+                    ? WeaponPresentationKind.MachineGun
+                    : string.Equals(w.PresentationKind, "cannon", StringComparison.OrdinalIgnoreCase)
+                        ? WeaponPresentationKind.Cannon
+                        : throw new InvalidOperationException($"Unsupported presentation_kind '{w.PresentationKind}'.");
+
+                ushort presId = WeaponPresentation.MakeId(kind, presIdCounter++);
+
+                float penNear = w.PenetrationNear;
+                float penFar = w.PenetrationFar > 0f ? w.PenetrationFar : w.PenetrationNear;
+                float penNearRange = w.PenetrationNearRange;
+                float penFarRange = w.PenetrationFarRange > 0f ? w.PenetrationFarRange : w.Range;
+                int burst = Math.Max(1, w.RoundsPerBurst);
 
                 weapons[w.Id] = new WeaponDefinition(
                     w.Id,
@@ -278,7 +303,12 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
                     w.Damage,
                     w.AmmoCapacity,
                     w.MuzzleHeight,
-                    presIdCounter++);
+                    presId,
+                    penNear,
+                    penFar,
+                    penNearRange,
+                    penFarRange,
+                    burst);
             }
         }
 
@@ -289,7 +319,13 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
             WeaponDefinition? weapon = unit.Weapon is not null && weapons.TryGetValue(unit.Weapon, out WeaponDefinition? def)
                 ? def
                 : null;
-            _profiles[i] = new UnitCombatProfile(unit.MaxHealth, weapon, unit.TurretTraverseRate);
+            UnitArmor armor = new(
+                unit.ArmorFront,
+                unit.ArmorSide,
+                unit.ArmorRear,
+                unit.FrontSectorAngle > 0f ? unit.FrontSectorAngle : 90f,
+                unit.RearSectorAngle > 0f ? unit.RearSectorAngle : 90f);
+            _profiles[i] = new UnitCombatProfile(unit.MaxHealth, weapon, unit.TurretTraverseRate, armor);
         }
     }
 
@@ -369,10 +405,20 @@ public static class PrototypeScenario
         HashSet<string> weaponNames = new(StringComparer.Ordinal);
         if (data.Weapons is not null)
         {
+            if (data.Weapons.Length > 255)
+                throw new InvalidOperationException("Weapon catalog exceeds maximum of 255 weapons.");
+
             foreach (WeaponData weapon in data.Weapons)
             {
                 if (string.IsNullOrWhiteSpace(weapon.Id) || !weaponNames.Add(weapon.Id))
                     throw new InvalidOperationException("Invalid weapon definition ID.");
+                if (string.IsNullOrWhiteSpace(weapon.PresentationKind))
+                    throw new InvalidOperationException("Missing required weapon presentation_kind.");
+                if (!string.Equals(weapon.PresentationKind, "cannon", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(weapon.PresentationKind, "machine_gun", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException($"Unknown weapon presentation_kind '{weapon.PresentationKind}'.");
+                }
                 if (!float.IsFinite(weapon.Range) || weapon.Range <= 0)
                     throw new InvalidOperationException("Invalid weapon range.");
                 if (weapon.ReloadDurationTicks < 0 || weapon.ReloadDurationTicks > ushort.MaxValue)
@@ -390,6 +436,16 @@ public static class PrototypeScenario
                     throw new InvalidOperationException("Invalid ammo capacity.");
                 if (!float.IsFinite(weapon.MuzzleHeight) || weapon.MuzzleHeight <= 0)
                     throw new InvalidOperationException("Invalid muzzle height.");
+                if (!float.IsFinite(weapon.PenetrationNear) || weapon.PenetrationNear <= 0)
+                    throw new InvalidOperationException("Invalid weapon penetration.");
+                if (!float.IsFinite(weapon.PenetrationFar) || weapon.PenetrationFar <= 0)
+                    throw new InvalidOperationException("Invalid weapon penetration.");
+                if (!float.IsFinite(weapon.PenetrationNearRange) || weapon.PenetrationNearRange < 0)
+                    throw new InvalidOperationException("Invalid weapon penetration range.");
+                if (!float.IsFinite(weapon.PenetrationFarRange) || weapon.PenetrationFarRange < 0)
+                    throw new InvalidOperationException("Invalid weapon penetration range.");
+                if (weapon.RoundsPerBurst < 1 || weapon.RoundsPerBurst > ushort.MaxValue)
+                    throw new InvalidOperationException("Invalid weapon rounds per burst.");
             }
         }
 
@@ -433,6 +489,17 @@ public static class PrototypeScenario
                 throw new InvalidOperationException($"Unit '{unit.Id}' reverses as fast as it drives forward.");
             if (!float.IsFinite(unit.TurretTraverseRate) || unit.TurretTraverseRate < 0)
                 throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid turret traverse rate.");
+            if (!float.IsFinite(unit.ArmorFront) || unit.ArmorFront < 0 ||
+                !float.IsFinite(unit.ArmorSide) || unit.ArmorSide < 0 ||
+                !float.IsFinite(unit.ArmorRear) || unit.ArmorRear < 0)
+            {
+                throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid armor value.");
+            }
+            if (!float.IsFinite(unit.FrontSectorAngle) || unit.FrontSectorAngle < 0 || unit.FrontSectorAngle > 360f ||
+                !float.IsFinite(unit.RearSectorAngle) || unit.RearSectorAngle < 0 || unit.RearSectorAngle > 360f)
+            {
+                throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid armor sector angle.");
+            }
         }
         return data;
     }

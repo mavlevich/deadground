@@ -277,7 +277,7 @@ internal static class ClientRegressionTests
                 EventId: 1,
                 ServerTick: 5,
                 Kind: CombatEventKind.ShotFired,
-                PresentationId: 1,
+                PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
                 Origin: new System.Numerics.Vector3(20, 1.9f, 20),
                 Target: new System.Numerics.Vector3(40, 1.5f, 20),
                 ShooterUnitId: tank.Id);
@@ -561,7 +561,7 @@ internal static class ClientRegressionTests
                 EventId: 101,
                 ServerTick: 5,
                 Kind: CombatEventKind.ShotFired,
-                PresentationId: 1,
+                PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
                 Origin: new System.Numerics.Vector3(20, 1.9f, 20),
                 Target: new System.Numerics.Vector3(40, 1.5f, 20),
                 ShooterUnitId: tank.Id);

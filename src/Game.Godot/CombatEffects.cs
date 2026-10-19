@@ -60,6 +60,7 @@ internal partial class CombatEffects : Node3D
         public float TotalDuration;
         public float ElapsedTime;
         public float StreakLength;
+        public float Thickness;
         public bool Active;
     }
 
@@ -81,6 +82,9 @@ internal partial class CombatEffects : Node3D
     internal struct PendingImpact
     {
         public Vector3 Target;
+        public Vector3 IncomingDirection;
+        public HitResult Result;
+        public bool IsMachineGun;
         public float DelayRemaining;
         public bool Active;
     }
@@ -88,8 +92,9 @@ internal partial class CombatEffects : Node3D
     internal enum SoundPriority
     {
         TookFire = 1,
-        Cannon = 2,
-        Explosion = 3
+        MachineGunBurst = 2,
+        Cannon = 3,
+        Explosion = 4
     }
 
     private struct ActiveVoice
@@ -124,6 +129,10 @@ internal partial class CombatEffects : Node3D
     public const int CannonVariantCount = 3;
     private readonly AudioStreamWav[] _cannonVariants = new AudioStreamWav[CannonVariantCount];
     internal AudioStreamWav[] CannonVariants => _cannonVariants;
+    public const int MgBurstVariantCount = 3;
+    private readonly AudioStreamWav[] _mgBurstVariants = new AudioStreamWav[MgBurstVariantCount];
+    internal AudioStreamWav[] MgBurstVariants => _mgBurstVariants;
+    internal SoundPriority GetVoicePriority(int index) => _activeVoices[index].Priority;
     private AudioStreamWav? _tookFireAudio;
     private AudioStreamWav? _explosionAudio;
 
@@ -341,6 +350,8 @@ internal partial class CombatEffects : Node3D
     {
         for (int i = 0; i < CannonVariantCount; i++)
             _cannonVariants[i] = CannonSound.CreateStream(1337 + i);
+        for (int i = 0; i < MgBurstVariantCount; i++)
+            _mgBurstVariants[i] = CannonSound.CreateBurstStream(2000 + i * 17);
         _tookFireAudio = SynthesizeTookFireSound();
         _explosionAudio = SynthesizeExplosionSound();
 
@@ -545,6 +556,7 @@ internal partial class CombatEffects : Node3D
 
             if (ev.Kind == CombatEventKind.ShotFired)
             {
+                bool isMg = WeaponPresentation.IsMachineGun(ev.PresentationId);
                 float distance = origin.DistanceTo(target);
                 float flightDuration = Mathf.Clamp(distance / TracerSpeed, MinTracerDuration, MaxTracerDuration);
 
@@ -590,7 +602,7 @@ internal partial class CombatEffects : Node3D
 
                 if (ageSeconds < MuzzleFlashLifetime)
                 {
-                    SpawnMuzzleFlash(origin, shotDir, ageSeconds);
+                    SpawnMuzzleFlash(origin, shotDir, isMachineGun: isMg, elapsedOffset: ageSeconds);
                 }
 
                 if (ageSeconds < GunParticlesMaxEventAge)
@@ -605,21 +617,35 @@ internal partial class CombatEffects : Node3D
 
                 if (ageSeconds < flightDuration)
                 {
-                    SpawnTracer(origin, target, flightDuration, ageSeconds);
-                    QueuePendingImpact(target, flightDuration - ageSeconds);
+                    SpawnTracer(origin, target, flightDuration, isMachineGun: isMg, elapsedOffset: ageSeconds);
+                    QueuePendingImpact(target, shotDir, ev.Result, flightDuration - ageSeconds, isMachineGun: isMg);
                 }
                 else
                 {
                     float hitElapsed = ageSeconds - flightDuration;
                     if (hitElapsed < SmokePuffLifetime)
                     {
-                        TriggerImpactFeedback(target, hitElapsed);
+                        if (ev.Result == HitResult.Deflected)
+                        {
+                            TriggerRicochetFeedback(target, shotDir, hitElapsed, isMachineGun: isMg);
+                        }
+                        else
+                        {
+                            TriggerImpactFeedback(target, hitElapsed);
+                        }
                     }
                 }
 
                 if (ageSeconds < 0.15f)
                 {
-                    PlaySound(_cannonVariants[_presentationRng.Next(CannonVariantCount)], origin, SoundPriority.Cannon);
+                    if (isMg)
+                    {
+                        PlaySound(_mgBurstVariants[_presentationRng.Next(MgBurstVariantCount)], origin, SoundPriority.MachineGunBurst);
+                    }
+                    else
+                    {
+                        PlaySound(_cannonVariants[_presentationRng.Next(CannonVariantCount)], origin, SoundPriority.Cannon);
+                    }
                 }
             }
             else if (ev.Kind == CombatEventKind.UnitDestroyed)
@@ -647,7 +673,15 @@ internal partial class CombatEffects : Node3D
             {
                 if (ageSeconds < SmokePuffLifetime)
                 {
-                    TriggerImpactFeedback(target, ageSeconds);
+                    bool isMg = WeaponPresentation.IsMachineGun(ev.PresentationId);
+                    if (ev.Result == HitResult.Deflected)
+                    {
+                        TriggerRicochetFeedback(target, shotDir, ageSeconds, isMachineGun: isMg);
+                    }
+                    else
+                    {
+                        TriggerImpactFeedback(target, ageSeconds);
+                    }
                 }
             }
         }
@@ -666,7 +700,7 @@ internal partial class CombatEffects : Node3D
         SpawnSmokePuff(origin, isImpactSmoke: false);
         SpawnGunParticles(origin, shotDir);
         SpawnTracer(origin, target, flightDuration);
-        QueuePendingImpact(target, flightDuration);
+        QueuePendingImpact(target, shotDir, HitResult.Penetrated, flightDuration);
         PlaySound(_cannonVariants[_presentationRng.Next(CannonVariantCount)], origin, SoundPriority.Cannon);
     }
 
@@ -712,6 +746,27 @@ internal partial class CombatEffects : Node3D
         }
     }
 
+    internal void TriggerRicochetFeedback(Vector3 position, Vector3 incomingDir, float elapsedOffset = 0f, bool isMachineGun = false)
+    {
+        if (elapsedOffset >= SparksLifetime)
+        {
+            return;
+        }
+
+        SpawnSparks(position, elapsedOffset);
+
+        // Reflect bounce off hit surface: keep most forward momentum, add upward bounce and random lateral deflection
+        Vector3 flatIncoming = new Vector3(incomingDir.X, 0f, incomingDir.Z);
+        Vector3 lateral = flatIncoming.LengthSquared() > 0.0001f
+            ? new Vector3(-flatIncoming.Z, 0f, flatIncoming.X).Normalized()
+            : Vector3.Right;
+
+        float lateralOffset = (float)(_presentationRng.NextDouble() * 2.0 - 1.0) * 0.45f;
+        Vector3 bounceDir = (incomingDir * 0.65f + Vector3.Up * 0.45f + lateral * lateralOffset).Normalized();
+        Vector3 ricochetTarget = position + bounceDir * (isMachineGun ? 10.0f : 16.0f);
+        SpawnTracer(position, ricochetTarget, 0.12f, isMachineGun: isMachineGun, elapsedOffset: elapsedOffset);
+    }
+
     private bool HasSeenEvent(uint id)
     {
         for (int i = 0; i < _recentEventIds.Length; i++)
@@ -727,7 +782,7 @@ internal partial class CombatEffects : Node3D
         _recentEventIndex = (_recentEventIndex + 1) % _recentEventIds.Length;
     }
 
-    private void SpawnMuzzleFlash(Vector3 position, Vector3 direction, float elapsedOffset = 0f)
+    private void SpawnMuzzleFlash(Vector3 position, Vector3 direction, bool isMachineGun = false, float elapsedOffset = 0f)
     {
         float remainingLifetime = MuzzleFlashLifetime - elapsedOffset;
         if (remainingLifetime <= 0f) return;
@@ -741,7 +796,7 @@ internal partial class CombatEffects : Node3D
         tm.ScaleDown = true;
         tm.ScaleUp = false;
         tm.FadeAlpha = false;
-        tm.InitialScaleVector = new Vector3(0.5f, 0.5f, 1.1f);
+        tm.InitialScaleVector = isMachineGun ? new Vector3(0.22f, 0.22f, 0.45f) : new Vector3(0.5f, 0.5f, 1.1f);
         tm.Mesh.Position = position;
         float factor = MathF.Max(0.01f, remainingLifetime / MuzzleFlashLifetime);
         tm.Mesh.Scale = tm.InitialScaleVector * factor;
@@ -798,7 +853,7 @@ internal partial class CombatEffects : Node3D
         mid = (front + back) * 0.5f;
     }
 
-    private void SpawnTracer(Vector3 origin, Vector3 target, float flightDuration, float elapsedOffset = 0f)
+    private void SpawnTracer(Vector3 origin, Vector3 target, float flightDuration, bool isMachineGun = false, float elapsedOffset = 0f)
     {
         float distance = origin.DistanceTo(target);
         if (distance < 0.1f) return;
@@ -813,7 +868,8 @@ internal partial class CombatEffects : Node3D
         tracer.Direction = (target - origin) / distance;
         tracer.TotalDuration = flightDuration;
         tracer.ElapsedTime = elapsedOffset;
-        tracer.StreakLength = Mathf.Min(TracerLength, distance * 0.8f);
+        tracer.Thickness = isMachineGun ? TracerThickness * 0.5f : TracerThickness;
+        tracer.StreakLength = isMachineGun ? Mathf.Min(1.5f, distance * 0.8f) : Mathf.Min(TracerLength, distance * 0.8f);
 
         float alpha = elapsedOffset / flightDuration;
         CalculateTracerSegment(
@@ -821,17 +877,20 @@ internal partial class CombatEffects : Node3D
             out Vector3 mid, out float segLen, out Vector3 front);
 
         tracer.Mesh.Position = mid;
-        tracer.Mesh.Scale = new Vector3(TracerThickness, TracerThickness, Mathf.Max(0.1f, segLen));
+        tracer.Mesh.Scale = new Vector3(tracer.Thickness, tracer.Thickness, Mathf.Max(0.1f, segLen));
         tracer.Mesh.LookAt(front + tracer.Direction * 5f, Vector3.Up);
         tracer.Mesh.Visible = true;
     }
 
-    private void QueuePendingImpact(Vector3 target, float delay)
+    private void QueuePendingImpact(Vector3 target, Vector3 incomingDirection, HitResult result, float delay, bool isMachineGun = false)
     {
         int idx = AcquirePendingImpactSlot();
         ref PendingImpact pi = ref _pendingImpacts[idx];
         pi.Active = true;
         pi.Target = target;
+        pi.IncomingDirection = incomingDirection;
+        pi.Result = result;
+        pi.IsMachineGun = isMachineGun;
         pi.DelayRemaining = delay;
     }
 
@@ -1115,7 +1174,7 @@ internal partial class CombatEffects : Node3D
                 out Vector3 mid, out float segLen, out Vector3 front);
 
             tracer.Mesh.Position = mid;
-            tracer.Mesh.Scale = new Vector3(TracerThickness, TracerThickness, Mathf.Max(0.1f, segLen));
+            tracer.Mesh.Scale = new Vector3(tracer.Thickness, tracer.Thickness, Mathf.Max(0.1f, segLen));
             if (segLen > 0.001f)
             {
                 tracer.Mesh.LookAt(front + tracer.Direction * 5f, Vector3.Up);
@@ -1135,7 +1194,14 @@ internal partial class CombatEffects : Node3D
             {
                 float overshoot = -pi.DelayRemaining;
                 pi.Active = false;
-                TriggerImpactFeedback(pi.Target, overshoot);
+                if (pi.Result == HitResult.Deflected)
+                {
+                    TriggerRicochetFeedback(pi.Target, pi.IncomingDirection, overshoot, isMachineGun: pi.IsMachineGun);
+                }
+                else
+                {
+                    TriggerImpactFeedback(pi.Target, overshoot);
+                }
             }
         }
     }

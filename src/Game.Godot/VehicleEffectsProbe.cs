@@ -30,7 +30,7 @@ internal static class VehicleEffectsProbe
             EventId: 9901,
             ServerTick: 0,
             Kind: CombatEventKind.ShotFired,
-            PresentationId: 1,
+            PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
             Origin: new NumericsVector3(origin.X, origin.Y, origin.Z),
             Target: new NumericsVector3(target.X, target.Y, target.Z),
             ShooterUnitId: new EntityId(3));

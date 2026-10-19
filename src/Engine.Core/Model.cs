@@ -35,6 +35,13 @@ public enum CombatEventKind : byte
     TookFire = 3
 }
 
+public enum HitResult : byte
+{
+    None = 0,
+    Penetrated = 1,
+    Deflected = 2
+}
+
 public readonly record struct CombatEventObservation(
     uint EventId,
     int ServerTick,
@@ -42,7 +49,8 @@ public readonly record struct CombatEventObservation(
     ushort PresentationId,
     Vector3 Origin,
     Vector3 Target,
-    EntityId ShooterUnitId = default);
+    EntityId ShooterUnitId = default,
+    HitResult Result = HitResult.None);
 
 public readonly record struct UnitState(EntityId Id, int Owner, ushort Definition,
     Vector2 Position, Vector2 Target, bool Moving);

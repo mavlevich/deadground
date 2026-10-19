@@ -28,7 +28,7 @@ public static class WireProtocol
     public const int MaxUnits = 1024;
     public const int ContactSize = 24;
     public const int MaxContacts = 256;
-    public const int EventSize = 39;
+    public const int EventSize = 40;
     public const int MaxEvents = 64;
     public const int MaxMessageSize = SnapshotHeaderSize + MaxUnits * UnitSize + MaxContacts * ContactSize + MaxEvents * EventSize;
     public const int HandshakeResponseSize = 5;
@@ -291,6 +291,7 @@ public static class WireProtocol
             BinaryPrimitives.WriteSingleLittleEndian(record[27..], ev.Target.X);
             BinaryPrimitives.WriteSingleLittleEndian(record[31..], ev.Target.Y);
             BinaryPrimitives.WriteSingleLittleEndian(record[35..], ev.Target.Z);
+            record[39] = (byte)ev.Result;
         }
 
         return length;
@@ -494,10 +495,13 @@ public static class WireProtocol
                 BinaryPrimitives.ReadSingleLittleEndian(record[31..]),
                 BinaryPrimitives.ReadSingleLittleEndian(record[35..]));
 
+            byte resultByte = record[39];
+
             if (eventId == 0 || serverTick < 0 ||
                 (kindByte != (byte)CombatEventKind.ShotFired &&
                  kindByte != (byte)CombatEventKind.UnitDestroyed &&
                  kindByte != (byte)CombatEventKind.TookFire) ||
+                resultByte > (byte)HitResult.Deflected ||
                 !float.IsFinite(origin.X) || !float.IsFinite(origin.Y) || !float.IsFinite(origin.Z) ||
                 !float.IsFinite(target.X) || !float.IsFinite(target.Y) || !float.IsFinite(target.Z))
             {
@@ -511,7 +515,8 @@ public static class WireProtocol
                 presId,
                 origin,
                 target,
-                new EntityId(shooterIdVal));
+                new EntityId(shooterIdVal),
+                (HitResult)resultByte);
         }
 
         frame.Sequence = sequence;

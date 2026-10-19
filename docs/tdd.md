@@ -475,11 +475,11 @@ same commands gives the same headings. Stage 2 adds the wheeled tests listed abo
   - Overflow eviction policy: each side supports up to 256 contacts. If capacity is exceeded, the oldest `LastKnown` contact is evicted first. `Current` contacts are never evicted in favor of `LastKnown` markers.
   - Canonical export: exported contacts are sorted deterministically by `ContactId` for consistent network serialization.
 - Snapshot wire protocol:
-  - Protocol version incremented to 12.
+  - Protocol version is 14.
   - Header is 48 bytes: `Version` (1 byte), `SnapshotKind` (1 byte), `uint Sequence` (4 bytes), `int ServerTick` (4 bytes), `ushort UnitCount` (2 bytes), `ushort ContactCount` (2 bytes), `ushort EventCount` (2 bytes), plus session header fields.
-  - Own unit record is 33 bytes: `uint Id` (4 bytes), `ushort Definition` (2 bytes), `Vector2 Position` (8 bytes), `uint SupportSurface` (4 bytes), `byte NavStatus` (1 byte), `ushort Health` (2 bytes), `ushort Ammunition` (2 bytes), `ushort ReloadTicksRemaining` (2 bytes), `byte AttackStatus` (1 byte), `uint TargetContactId` (4 bytes), `byte Stance` (1 byte), `ushort TurretYaw` (2 bytes).
-  - Contact record is 22 bytes: `uint ContactId` (4 bytes), `byte State` (1 byte), `byte Classification` (1 byte), `ushort Type` (2 bytes), `Vector2 Position` (8 bytes), `int LastSeenTick` (4 bytes), `ushort TurretYaw` (2 bytes).
-  - Combat event record is 39 bytes: `uint EventId` (4 bytes), `int ServerTick` (4 bytes), `byte Kind` (1 byte), `ushort PresentationId` (2 bytes), `Vector3 Origin` (12 bytes), `Vector3 Target` (12 bytes), `uint ShooterUnitId` (4 bytes).
+  - Own unit record is 35 bytes: `uint Id` (4 bytes), `ushort Definition` (2 bytes), `Vector2 Position` (8 bytes), `uint SupportSurface` (4 bytes), `byte NavStatus` (1 byte), `ushort Health` (2 bytes), `ushort Ammunition` (2 bytes), `ushort ReloadTicksRemaining` (2 bytes), `byte AttackStatus` (1 byte), `uint TargetContactId` (4 bytes), `byte Stance` (1 byte), `ushort TurretYaw` (2 bytes), `ushort HullHeading` (2 bytes).
+  - Contact record is 24 bytes: `uint ContactId` (4 bytes), `byte State` (1 byte), `byte Classification` (1 byte), `ushort Type` (2 bytes), `Vector2 Position` (8 bytes), `int LastSeenTick` (4 bytes), `ushort TurretYaw` (2 bytes), `ushort HullHeading` (2 bytes).
+  - Combat event record is 40 bytes: `uint EventId` (4 bytes), `int ServerTick` (4 bytes), `byte Kind` (1 byte), `ushort PresentationId` (2 bytes), `Vector3 Origin` (12 bytes), `Vector3 Target` (12 bytes), `uint ShooterUnitId` (4 bytes), `byte Result` (1 byte: 0 None, 1 Penetrated, 2 Deflected).
   - Commands: `MoveCommand` is 22 bytes (`MoveKind = 1`), `AttackCommand` is 18 bytes (`AttackKind = 7`: `Version` (1), `Kind` (1), `Sequence` (4), `ClientTick` (4), `Unit` (4), `TargetContactId` (4)), `SetFireStanceCommand` is 15 bytes (`SetFireStanceKind = 8`). All commands share a single sequence stream per player.
   - Information isolation: server-filtered snapshots only contain permitted observations and knowledge-filtered events for the recipient player. Foreign truth state and hidden firing origins are never transmitted.
 
@@ -541,10 +541,10 @@ An attack order targets either a `ContactId` or a ground position. Never an enem
 Every unit has a fire stance: `FireAtWill` (default), `ReturnFire`, or `HoldFire`. Players set stances per unit via commands, and stances are replicated in own unit snapshots.
 
 - `FireAtWill`: An armed unit without an active attack order, and not moving, engages autonomously. It picks a `Current` hostile contact of its side within weapon range that it has its own line of sight to. Firing checks follow the same rules as an attack order.
-- Target prioritization: The unit prefers tanks over APCs over recon over other classes, then the nearest contact.
-- Target retention: The unit keeps its chosen auto-fire target until the contact is lost, moves out of weapon range, or is destroyed.
+- Target prioritization: The unit evaluates whether its weapon can penetrate the candidate contact at current range against the observed aspect and catalog armor (seen means known). Candidate targets that the weapon cannot penetrate are skipped for auto-fire, avoiding wasted bursts against impenetrable armor (such as heavy machine guns against tank fronts). Among penetrable candidates, the unit prefers tanks over APCs over recon over other classes, then the nearest contact. Explicit attack orders given by a player still engage and fire even against impenetrable targets (producing deflection effects).
+- Target retention: The unit keeps its chosen auto-fire target until the contact is lost, moves out of weapon range, is destroyed, or maneuvers such that its observed aspect becomes impenetrable to the weapon.
 - Auto-fire never moves the unit.
-- `ReturnFire`: Behaves like `FireAtWill`, but engages only contacts that fired at this unit (`TookFire`) and that the unit can see with its own line of sight.
+- `ReturnFire`: Behaves like `FireAtWill`, engaging only contacts that fired at this unit (`TookFire`), that the unit can see with its own line of sight, and that its weapon can penetrate based on the observed aspect.
 - `HoldFire`: Never fires autonomously.
 
 #### Attack orders and pursuit
@@ -597,8 +597,7 @@ Status: planned, together with or after section 9.5.
 
 ### 12.3 Direct fire accuracy and armor
 
-Status: planned, replaces the instant hit and fixed damage of the M1 combat slice. Until it lands,
-the section 12.1 contract stays as written.
+Status: armor by side, penetration falloff, and deflection landed. Accuracy curves and fire on the move are planned.
 
 - Hit probability depends on range, shooter movement, target movement, the visible share of the
   target and a ranging bonus for repeated shots at the same target. Values live in weapon data.
@@ -622,9 +621,15 @@ the section 12.1 contract stays as written.
     today. A new move and engage order replaces both route and target.
   - Target loss follows 12.1: `OutOfRange` and `TargetLost` hold fire without stopping the move, and
     the target is dropped when the contact expires or the observed target is destroyed.
-- Armor by side: front, side and rear values per unit. The side is chosen from the angle between the
-  shot direction and the target's hull heading (section 9.5). Penetration versus armor decides the
-  damage. This lifts the M1 exclusion of armor penetration for direct fire only.
+- Armor by side (landed):
+  - Unit data specifies armor in mm RHA equivalent for front, side and rear (`armor_front`, `armor_side`, `armor_rear`). In M1, hull and turret share values as a documented simplification.
+  - The hit side is chosen from the angle between the shot direction and the target's hull heading (`CombatState.HullHeading`). Sector widths come from data with default front 90 degrees (+/- 45 deg), rear 90 degrees (+/- 45 deg), flanks 90 degrees each side.
+  - Weapon data defines penetration at two ranges (`penetration_near` at `penetration_near_range`, `penetration_far` at `penetration_far_range`), linearly interpolated with 2D distance.
+  - Penetration exceeding the target's armor applies weapon damage. Non-penetrating hits do zero damage and produce a deflection result (`HitResult.Deflected`).
+  - Burst weapons: heavy machine guns and light machine guns fire in bursts (`rounds_per_burst`, burst reload interval, ammunition). One combat event is recorded per burst. Partial bursts scale damage proportionally to rounds fired: `Math.Max(1, (damage * roundsFired) / burstRounds)`.
+  - Presentation kinds: weapon catalog definitions require explicit `presentation_kind` (`"cannon"` or `"machine_gun"`), encoded into opaque presentation IDs (`WeaponPresentationKind`). Content validation rejects missing, invalid kinds, or non-positive penetration values.
+  - Combat events carry `HitResult` (1 Penetrated, 2 Deflected) replicated over the wire protocol (offset 39 of the 40-byte event record, protocol version 14).
+  - Information isolation: enemy armor thickness and remaining health are never leaked to contacts or foreign players. Observers receive only the visual hit result at the impact point. Deflections produce ricochet sparks and deflected tracer lines angled forward and away from the target; audio priorities ensure heavy cannon shots are never evicted by rapid machine gun bursts.
 - Blind fire: area fire at a ground point or at a `LastKnown` position has a low hit chance and needs
   no contact. The shooter sees only impacts it can observe. It never learns that an unseen target was
   hit or destroyed (sections 7 and 12.1).
@@ -683,8 +688,7 @@ Status: planned for M2. M1 units keep one weapon each, so the M1 exit does not d
 - M1 sends sparse full snapshots: the complete allowed view each time, no deltas. A unit or contact missing from a complete snapshot is gone from the client's view. World state blocks are also complete for that side, including facts kept from earlier observations.
 - Map objects use `MapObjectId`. Their static geometry stays in the map package; snapshots carry allowed mutable fields such as bridge condition and objective ownership. A missing knowledge entry does not mean the object was destroyed or restored to its initial state.
 - Clients apply a full snapshot only after the complete message is received. On reconnect the same state blocks restore the allowed view without needing earlier presentation events.
-- Budget estimate: 100 unit records at about 16 bytes are 1.6 KB, or 16 KB/s at 10 Hz. This estimates only unit records. Measurements include contacts, world state, headers and transport overhead against the 30 KB/s budget.
-- Protocol version 13: own unit records are 35 bytes (`ushort TurretYaw` (2) at offset 31, `ushort HullHeading` (2) at offset 33). Contact records are 24 bytes (`ushort TurretYaw` (2) at offset 20, `ushort HullHeading` (2) at offset 22). Both angles are quantized to 65536 steps per turn. Contacts carry the turret yaw and hull heading observed at the moment of sighting; `LastKnown` contacts freeze the last observed values.
+- Protocol version 14: own unit records are 35 bytes (`ushort TurretYaw` (2) at offset 31, `ushort HullHeading` (2) at offset 33). Contact records are 24 bytes (`ushort TurretYaw` (2) at offset 20, `ushort HullHeading` (2) at offset 22). Both angles are quantized to 65536 steps per turn. Contacts carry the turret yaw and hull heading observed at the moment of sighting; `LastKnown` contacts freeze the last observed values. Combat event records are 40 bytes (`byte Result` (1) at offset 39: 0 None, 1 Penetrated, 2 Deflected).
 - Delta compression (acknowledged baselines, dirty fields) is added only if measurements exceed the budget.
 - Quantization: ground units send X, Z and support surface. Height is computed on the client (section 8.3). 10 cm precision on a 16 km map is 18 bits per axis.
 - Clients render about 100 to 150 ms behind the server and interpolate.
@@ -791,8 +795,9 @@ Numbers and sources:
   instead of `speed`, never both. The catalog rejects a type that is faster off-road than on the road
   or reverses as fast as it drives. `turn_rate` comes with hull heading (section 9.5).
 - Weapons: effective range from period sources. Hit probability by range is section 12.3, not the
-  range field. Armor values by side are stored now and used when section 12.3 lands.
-- Turret traverse: powered traverse rate in degrees per second from period sources (`docs/unit-sources.md`). T-62 has 18.0 deg/s (full turn in 20.0 s, source [15]), M60A1 has 22.5 deg/s (full turn in 16.0 s, source [6]), prototype tank has 24.0 deg/s estimate.
+  range field. Penetration at near and far ranges is a game value tuned for balance; the sourced or estimated period values sit next to it in `docs/unit-sources.md`. Tank guns fire single kinetic rounds (Soviet 115 mm 3BM-6 APFSDS, US 105 mm M392A2 APDS); APCs and scout vehicles fire heavy machine guns in 5-round bursts (Soviet 14.5 mm KPVT on BTR-70 and BRDM-2, US 12.7 mm M2HB on M113A1); M151A2 armed recon fires 7.62 mm M60 in 5-round bursts.
+- Armor by side: `armor_front`, `armor_side`, `armor_rear` in mm RHA equivalent from period sources (`docs/unit-sources.md`). In M1, hull and turret share values as a documented simplification.
+- Turret traverse: traverse rate in degrees per second from period sources (`docs/unit-sources.md`). T-62 has 18.0 deg/s electric powered traverse (full turn in 20.0 s, source [15]), M60A1 has 22.5 deg/s hydraulic powered traverse (full turn in 16.0 s, sources [6] [19]), BPU-1 turret (BTR-70, BRDM-2) has 15.0 deg/s manual traverse estimate (source [20]), M113A1 cupola has 30.0 deg/s manual traverse estimate (source [21]), M151A2 pedestal mount has 60.0 deg/s manual traverse estimate (source [22]), prototype tank has 24.0 deg/s estimate.
 - Sensors: visual sensor range per observer type, for a clear day, open ground and a moving target.
   Cover, a halted target, dust, smoke and weather reduce them later (section 10). Seen means known:
   any visible unit reveals its vehicle type at once.
