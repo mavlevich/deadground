@@ -41,6 +41,7 @@ public sealed class PrototypeTests
         session.Move(first.Id, new Vector2(120, 120));
         for (int i = 0; i < 40; i++) session.Advance(0.05);
         bool sent = true;
+        using NoGcAllocationWindow window = new();
         long before = GC.GetAllocatedBytesForCurrentThread();
         for (int i = 0; i < 100; i++)
         {
@@ -48,7 +49,7 @@ public sealed class PrototypeTests
             session.Advance(0.05);
         }
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        Assert.Equal(0L, allocated);
+        Assert.True(allocated == 0, window.Describe(allocated));
         Assert.True(sent);
         Assert.True(session.LastCommandResult!.Value.Queued);
     }
