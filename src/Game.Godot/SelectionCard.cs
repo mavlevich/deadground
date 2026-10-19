@@ -359,6 +359,9 @@ internal sealed partial class SelectionCard : PanelContainer
         "tank_gun_100mm" => "100mm Tank Gun",
         "gun_115mm_u5ts" => "115mm U-5TS Gun",
         "gun_105mm_m68" => "105mm M68 Gun",
+        "mg_14_5mm_kpvt" => "14.5mm KPVT HMG",
+        "mg_12_7mm_m2hb" => "12.7mm M2HB HMG",
+        "mg_7_62mm_m60" => "7.62mm M60 MG",
         _ => id
     };
 

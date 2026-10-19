@@ -64,7 +64,7 @@ public sealed class CombatTests
     {
         geometry ??= new StaticGeometry(CreateFlatMap(), []);
 
-        WeaponDefinition gun = new("tank_gun", weaponRange, reloadTicks, damage, ammo, MuzzleHeight: 1.9f, PresentationId: 1);
+        WeaponDefinition gun = new("tank_gun", weaponRange, reloadTicks, damage, ammo, MuzzleHeight: 1.9f, PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0));
 
         TestCombatCatalog combatCat = new();
         combatCat.Register(tankDef, 100, gun);

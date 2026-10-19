@@ -83,7 +83,10 @@ public sealed class HistoricalUnitsTests
         UnitCatalog catalog = ColdWarContent.LoadCatalog();
         Assert.Equal(40, catalog.GetAmmoCapacity(catalog.RequireDefinition("t62")));
         Assert.Equal(63, catalog.GetAmmoCapacity(catalog.RequireDefinition("m60a1")));
-        Assert.Equal(0, catalog.GetAmmoCapacity(catalog.RequireDefinition("btr70")));
+        Assert.Equal(500, catalog.GetAmmoCapacity(catalog.RequireDefinition("btr70")));
+        Assert.Equal(2000, catalog.GetAmmoCapacity(catalog.RequireDefinition("m113a1")));
+        Assert.Equal(500, catalog.GetAmmoCapacity(catalog.RequireDefinition("brdm2")));
+        Assert.Equal(1000, catalog.GetAmmoCapacity(catalog.RequireDefinition("m151a2")));
     }
 
     [Fact]

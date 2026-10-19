@@ -21,7 +21,13 @@
       "damage": 50,
       "ammo_capacity": 10,
       "muzzle_height": 1.9,
-      "presentation_id": "cannon_100mm"
+      "presentation_id": "cannon_100mm",
+      "presentation_kind": "cannon",
+      "penetration_near": 150.0,
+      "penetration_far": 110.0,
+      "penetration_near_range": 0.0,
+      "penetration_far_range": 60.0,
+      "rounds_per_burst": 1
     }
   ],
   "units": [
@@ -33,7 +39,10 @@
       "target_points": [0.7, 1.6],
       "radius": 1.0,
       "max_health": 100,
-      "classification": "command_vehicle"
+      "classification": "command_vehicle",
+      "armor_front": 10.0,
+      "armor_side": 5.0,
+      "armor_rear": 5.0
     },
     {
       "id": "recon_vehicle",
@@ -43,7 +52,10 @@
       "target_points": [0.6, 1.4],
       "radius": 0.8,
       "max_health": 60,
-      "classification": "recon"
+      "classification": "recon",
+      "armor_front": 15.0,
+      "armor_side": 8.0,
+      "armor_rear": 6.0
     },
     {
       "id": "prototype_tank",
@@ -55,7 +67,10 @@
       "max_health": 120,
       "weapon": "tank_gun_100mm",
       "turret_traverse_rate": 24.0,
-      "classification": "tank"
+      "classification": "tank",
+      "armor_front": 100.0,
+      "armor_side": 50.0,
+      "armor_rear": 30.0
     },
     {
       "id": "apc",
@@ -65,7 +80,10 @@
       "target_points": [0.7, 1.7],
       "radius": 1.4,
       "max_health": 80,
-      "classification": "apc"
+      "classification": "apc",
+      "armor_front": 20.0,
+      "armor_side": 10.0,
+      "armor_rear": 10.0
     }
   ]
 }

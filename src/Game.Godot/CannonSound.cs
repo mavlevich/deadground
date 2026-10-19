@@ -10,6 +10,7 @@ internal static class CannonSound
 {
     internal const int SampleRate = 44100;
     internal const float Duration = 3.0f;
+    internal const float BurstDuration = 1.0f;
     internal const float Peak = 0.95f;
 
     // Delay in seconds, gain and low-pass cutoff in Hz of each echo of the dry blast.
@@ -18,6 +19,108 @@ internal static class CannonSound
         (0.31f, 0.12f, 700f),
         (0.78f, 0.06f, 450f),
     ];
+
+    internal static AudioStreamWav CreateBurstStream(int seed)
+    {
+        float[] samples = RenderBurst(seed);
+        byte[] data = new byte[samples.Length * 2];
+        for (int i = 0; i < samples.Length; i++)
+        {
+            short pcm = (short)MathF.Round(samples[i] * 32767f);
+            data[i * 2] = (byte)(pcm & 0xFF);
+            data[i * 2 + 1] = (byte)((pcm >> 8) & 0xFF);
+        }
+        return new AudioStreamWav
+        {
+            Format = AudioStreamWav.FormatEnum.Format16Bits,
+            MixRate = SampleRate,
+            Stereo = false,
+            Data = data
+        };
+    }
+
+    internal static float[] RenderBurst(int seed)
+    {
+        int count = (int)(SampleRate * BurstDuration);
+        Random rand = new(seed);
+        float[] dry = new float[count];
+
+        int shotCount = 5;
+        float shotInterval = 0.08f;
+
+        float hp = 0f, hpPrev = 0f, b1 = 0f, b2 = 0f;
+        for (int i = 0; i < count; i++)
+        {
+            float t = (float)i / SampleRate;
+            float white = (float)rand.NextDouble() * 2f - 1f;
+
+            hp = 0.85f * (hp + white - hpPrev);
+            hpPrev = white;
+
+            float k = Coefficient(450f + 1200f * MathF.Exp(-t / 0.15f));
+            b1 += (white - b1) * k;
+            b2 += (b1 - b2) * k;
+
+            float burstSignal = 0f;
+            for (int s = 0; s < shotCount; s++)
+            {
+                float shotTime = s * shotInterval;
+                if (t >= shotTime)
+                {
+                    float dt = t - shotTime;
+                    if (dt < 0.07f)
+                    {
+                        float crack = hp * MathF.Exp(-dt / 0.006f);
+                        float pop = b2 * MathF.Sin(MathF.Tau * 220f * dt) * MathF.Exp(-dt / 0.025f);
+                        float punch = dt < 0.02f ? (1f - dt / 0.005f) * MathF.Exp(-dt / 0.004f) : 0f;
+                        burstSignal += crack * 1.4f + pop * 2.0f + punch * 1.0f;
+                    }
+                }
+            }
+
+            dry[i] = burstSignal;
+        }
+
+        float[] output = (float[])dry.Clone();
+
+        int echoOffset = (int)(0.12f * SampleRate);
+        float ek = Coefficient(800f);
+        float es1 = 0f, es2 = 0f;
+        for (int i = 0; i + echoOffset < count; i++)
+        {
+            es1 += (dry[i] - es1) * ek;
+            es2 += (es1 - es2) * ek;
+            output[i + echoOffset] += es2 * 0.18f;
+        }
+
+        float r1 = 0f, r2 = 0f;
+        for (int i = 0; i < count; i++)
+        {
+            float t = (float)i / SampleRate;
+            float white = (float)rand.NextDouble() * 2f - 1f;
+            float k = Coefficient(350f);
+            r1 += (white - r1) * k;
+            r2 += (r1 - r2) * k;
+            output[i] += r2 * MathF.Exp(-t / 0.45f) * 0.4f;
+        }
+
+        int fade = (int)(0.15f * SampleRate);
+        for (int i = count - fade; i < count; i++)
+            output[i] *= (float)(count - i) / fade;
+
+        float peak = 0f;
+        foreach (float sample in output)
+            peak = MathF.Max(peak, MathF.Abs(sample));
+        if (peak > 1e-5f)
+        {
+            float drive = 1.3f / peak;
+            float norm = Peak / MathF.Tanh(1.3f);
+            for (int i = 0; i < count; i++)
+                output[i] = MathF.Tanh(output[i] * drive) * norm;
+        }
+
+        return output;
+    }
 
     internal static AudioStreamWav CreateStream(int seed)
     {

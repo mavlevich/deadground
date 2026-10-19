@@ -184,6 +184,56 @@ public sealed class CombatSystem : ISimulationSystem
         }
     }
 
+    public static ArmorSide DetermineHitSide(Vector2 attackerPos, Vector2 targetPos, float targetHullHeading, in UnitArmor armor)
+    {
+        Vector2 toShooter = attackerPos - targetPos;
+        if (toShooter.LengthSquared() < 0.0001f)
+        {
+            return ArmorSide.Front;
+        }
+        float incomingBearing = MathF.Atan2(-toShooter.X, -toShooter.Y);
+        float relAngle = MathF.Abs(ShorterArcDelta(targetHullHeading, incomingBearing));
+
+        if (relAngle <= armor.FrontSectorHalfAngle)
+        {
+            return ArmorSide.Front;
+        }
+        if (relAngle >= MathF.PI - armor.RearSectorHalfAngle)
+        {
+            return ArmorSide.Rear;
+        }
+        return ArmorSide.Side;
+    }
+
+    public static float GetArmorThickness(in UnitArmor armor, ArmorSide side) => side switch
+    {
+        ArmorSide.Front => armor.Front,
+        ArmorSide.Side => armor.Side,
+        ArmorSide.Rear => armor.Rear,
+        _ => armor.Side
+    };
+
+    public static bool CanPenetrateObservedContact(
+        Vector2 attackerPos,
+        WeaponDefinition weapon,
+        in ContactObservation contact,
+        IUnitCombatCatalog catalog)
+    {
+        if (!catalog.TryGetProfile(contact.Type, out UnitCombatProfile targetProfile))
+            return true;
+
+        Vector2 shotDir = contact.Position - attackerPos;
+        float distSq = shotDir.LengthSquared();
+        if (distSq < 0.0001f)
+            return weapon.GetPenetrationAt(0f) > targetProfile.Armor.Front;
+
+        float dist = MathF.Sqrt(distSq);
+        ArmorSide hitSide = DetermineHitSide(attackerPos, contact.Position, contact.HullHeading, targetProfile.Armor);
+        float armorThickness = GetArmorThickness(targetProfile.Armor, hitSide);
+        float penetration = weapon.GetPenetrationAt(dist);
+        return penetration > armorThickness;
+    }
+
     public void OnUnitStanceChanged(EntityId unitId, FireStance stance, WorldState world)
     {
         if (!world.TryGetCombatState(unitId, out WorldState.CombatState cs))
@@ -474,6 +524,7 @@ public sealed class CombatSystem : ISimulationSystem
                         world.AreHostile(attacker.Owner, currentTargetUnit.Owner) &&
                         Vector2.Distance(attacker.Position, currentTargetUnit.Position) <= weapon.Range + RangeToleranceMargin &&
                         (cs.Stance != FireStance.ReturnFire || (cs.LastTookFireAttacker.Value != 0 && cs.TargetEntityId.Value == cs.LastTookFireAttacker.Value)) &&
+                        CanPenetrateObservedContact(attacker.Position, weapon, currentContact, _combatCatalog) &&
                         HasLineOfSightToTarget(attacker, weapon, currentTargetUnit, out currentHitPoint, out currentMuzzlePos))
                     {
                         targetRetained = true;
@@ -535,6 +586,9 @@ public sealed class CombatSystem : ISimulationSystem
                             continue;
 
                         if (cs.Stance == FireStance.ReturnFire && (cs.LastTookFireAttacker.Value == 0 || candidateEntityId.Value != cs.LastTookFireAttacker.Value))
+                            continue;
+
+                        if (!CanPenetrateObservedContact(attacker.Position, weapon, candidate, _combatCatalog))
                             continue;
 
                         if (!HasLineOfSightToTarget(attacker, weapon, candidateUnit, out Vector3 candHit, out Vector3 candMuzzle))
@@ -677,19 +731,49 @@ public sealed class CombatSystem : ISimulationSystem
         ref WorldState.CombatState cs,
         WorldState world)
     {
-        cs.Ammunition--;
+        int burstRounds = Math.Max(1, weapon.RoundsPerBurst);
+        int roundsFired = Math.Min(cs.Ammunition, burstRounds);
+        cs.Ammunition -= roundsFired;
         cs.ReloadTicksRemaining = weapon.ReloadDurationTicks;
         cs.Status = AttackExecutionStatus.Aiming;
         world.SetCombatState(attacker.Id, cs);
 
         TotalShotsFired++;
 
-        // Apply fixed damage
-        world.ApplyDamage(targetUnit.Id, weapon.Damage, out bool isDestroyed);
-        TotalDamageApplied += weapon.Damage;
+        UnitArmor targetArmor = default;
+        if (_combatCatalog.TryGetProfile(targetUnit.Definition, out UnitCombatProfile targetProfile))
+        {
+            targetArmor = targetProfile.Armor;
+        }
+
+        float targetHullHeading = 0f;
+        if (world.TryGetCombatState(targetUnit.Id, out WorldState.CombatState victimCs))
+        {
+            targetHullHeading = victimCs.HullHeading;
+        }
+
+        ArmorSide hitSide = DetermineHitSide(attacker.Position, targetUnit.Position, targetHullHeading, targetArmor);
+        float armorThickness = GetArmorThickness(targetArmor, hitSide);
+        float shotDistance = Vector2.Distance(attacker.Position, targetUnit.Position);
+        float penetration = weapon.GetPenetrationAt(shotDistance);
+        bool penetrates = penetration > armorThickness;
+
+        bool isDestroyed = false;
+        HitResult hitResult;
+        if (penetrates)
+        {
+            int damageToApply = Math.Max(1, (weapon.Damage * roundsFired) / burstRounds);
+            world.ApplyDamage(targetUnit.Id, damageToApply, out isDestroyed);
+            TotalDamageApplied += damageToApply;
+            hitResult = HitResult.Penetrated;
+        }
+        else
+        {
+            hitResult = HitResult.Deflected;
+        }
 
         // Record TookFire attribution in server memory for ReturnFire stance
-        if (world.TryGetCombatState(targetUnit.Id, out WorldState.CombatState victimCs))
+        if (world.TryGetCombatState(targetUnit.Id, out victimCs))
         {
             victimCs.LastTookFireAttacker = attacker.Id;
             victimCs.LastTookFireTick = tick;
@@ -705,7 +789,8 @@ public sealed class CombatSystem : ISimulationSystem
             muzzlePos,
             targetUnit.Id,
             targetUnit.Owner,
-            hitPoint);
+            hitPoint,
+            hitResult);
 
         if (isDestroyed)
         {
@@ -745,7 +830,8 @@ public sealed class CombatSystem : ISimulationSystem
         Vector3 muzzlePos,
         EntityId targetId,
         int targetOwner,
-        Vector3 hitPoint)
+        Vector3 hitPoint,
+        HitResult result = HitResult.None)
     {
         uint eventId = _nextEventId++;
         if (_nextEventId == 0) _nextEventId = 1;
@@ -762,7 +848,8 @@ public sealed class CombatSystem : ISimulationSystem
                     presentationId,
                     muzzlePos,
                     hitPoint,
-                    attackerId);
+                    attackerId,
+                    result);
                 AppendEvent(p, ev);
             }
             else if (p == targetOwner)
@@ -778,7 +865,8 @@ public sealed class CombatSystem : ISimulationSystem
                         presentationId,
                         muzzlePos,
                         hitPoint,
-                        default);
+                        default,
+                        result);
                     AppendEvent(p, ev);
                 }
                 else
@@ -803,7 +891,8 @@ public sealed class CombatSystem : ISimulationSystem
                         presentationId,
                         coarseOrigin,
                         hitPoint,
-                        default);
+                        default,
+                        result);
                     AppendEvent(p, tookFire);
                 }
             }
@@ -819,7 +908,8 @@ public sealed class CombatSystem : ISimulationSystem
                         presentationId,
                         muzzlePos,
                         hitPoint,
-                        default);
+                        default,
+                        result);
                     AppendEvent(p, ev);
                 }
             }

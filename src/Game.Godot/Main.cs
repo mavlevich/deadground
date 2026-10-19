@@ -25,6 +25,8 @@ public partial class Main : Node3D
     private MeshInstance3D _destination = null!;
     private double _hudTimer, _smokeTimer;
     private bool _smokeTest;
+    private int _smokeQuitFrames = -1;
+    private int _smokeExitCode;
     private bool _terrainWindingValid;
     private long _lastBytes;
     private uint _lastCommandResult;
@@ -572,6 +574,20 @@ public partial class Main : Node3D
 
         if (_smokeTest)
         {
+            // In headless smoke tests with the Dummy audio driver, active playbacks stopped during Clear()
+            // require a few frames of main loop processing to retire from AudioServer before quitting.
+            // Quitting immediately leaves 4 ObjectDB instances (AudioStreamWAV and AudioStreamPlaybackWAV)
+            // leaked at exit.
+            if (_smokeQuitFrames >= 0)
+            {
+                _smokeQuitFrames++;
+                if (_smokeQuitFrames >= 12)
+                {
+                    GetTree().Quit(_smokeExitCode);
+                }
+                return;
+            }
+
             _smokeTimer += delta;
             if (_smokeTimer >= 1)
             {
@@ -597,7 +613,8 @@ public partial class Main : Node3D
                 string token = prefix + (ok ? "_OK" : "_FAILED");
                 GD.Print(token);
                 _combatEffects?.Clear();
-                GetTree().Quit(ok ? 0 : 1);
+                _smokeQuitFrames = 0;
+                _smokeExitCode = ok ? 0 : 1;
             }
         }
     }

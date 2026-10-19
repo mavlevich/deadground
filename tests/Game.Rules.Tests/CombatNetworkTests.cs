@@ -322,7 +322,7 @@ public sealed class CombatNetworkTests
             AttackStatus: AttackExecutionStatus.Aiming, TargetContactId: new ContactId(101));
 
         CombatEventObservation ev = new(
-            EventId: 10, ServerTick: 2, Kind: CombatEventKind.ShotFired, PresentationId: 1,
+            EventId: 10, ServerTick: 2, Kind: CombatEventKind.ShotFired, PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
             Origin: new Vector3(10f, 0f, 10f), Target: new Vector3(30f, 0f, 10f));
 
         // 1. Initial snapshot with event
@@ -352,16 +352,16 @@ public sealed class CombatNetworkTests
         byte[] bytes = new byte[WireProtocol.MaxMessageSize];
 
         CombatEventObservation ev1 = new(
-            EventId: 101, ServerTick: 1, Kind: CombatEventKind.ShotFired, PresentationId: 1,
+            EventId: 101, ServerTick: 1, Kind: CombatEventKind.ShotFired, PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
             Origin: new Vector3(10f, 0f, 10f), Target: new Vector3(30f, 0f, 10f));
         CombatEventObservation ev2 = new(
-            EventId: 102, ServerTick: 1, Kind: CombatEventKind.TookFire, PresentationId: 1,
+            EventId: 102, ServerTick: 1, Kind: CombatEventKind.TookFire, PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
             Origin: new Vector3(10f, 0f, 10f), Target: new Vector3(30f, 0f, 10f));
         CombatEventObservation ev3 = new(
-            EventId: 103, ServerTick: 2, Kind: CombatEventKind.UnitDestroyed, PresentationId: 1,
+            EventId: 103, ServerTick: 2, Kind: CombatEventKind.UnitDestroyed, PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
             Origin: default, Target: new Vector3(30f, 0f, 10f));
         CombatEventObservation ev4 = new(
-            EventId: 104, ServerTick: 3, Kind: CombatEventKind.ShotFired, PresentationId: 1,
+            EventId: 104, ServerTick: 3, Kind: CombatEventKind.ShotFired, PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
             Origin: new Vector3(12f, 0f, 10f), Target: new Vector3(32f, 0f, 10f));
 
         // Snapshot 1: ev1 and ev2
@@ -516,7 +516,10 @@ public sealed class CombatNetworkTests
               "damage": 50,
               "ammo_capacity": 255,
               "muzzle_height": 1.8,
-              "presentation_id": "cannon"
+              "presentation_id": "cannon",
+              "presentation_kind": "cannon",
+              "penetration_near": 100.0,
+              "penetration_far": 50.0
             }
           ],
           "units": [
@@ -538,14 +541,14 @@ public sealed class CombatNetworkTests
     }
 
     [Fact]
-    public void WireProtocol_Version13_Preserves3DEndpointsShooterIdentityAndTurretYaw()
+    public void WireProtocol_Version14_PreservesHitResultAndEventProperties()
     {
-        Assert.Equal(13, WireProtocol.Version);
+        Assert.Equal(14, WireProtocol.Version);
         Assert.Equal(32, WireProtocol.MissionSize);
         Assert.Equal(48, WireProtocol.SnapshotHeaderSize);
         Assert.Equal(35, WireProtocol.UnitSize);
         Assert.Equal(24, WireProtocol.ContactSize);
-        Assert.Equal(39, WireProtocol.EventSize);
+        Assert.Equal(40, WireProtocol.EventSize);
 
         ClientReplica replica = new();
         byte[] bytes = new byte[WireProtocol.MaxMessageSize];
@@ -557,7 +560,8 @@ public sealed class CombatNetworkTests
             PresentationId: 7,
             Origin: new Vector3(15.5f, 2.1f, 30.2f),
             Target: new Vector3(45.8f, 1.75f, 60.1f),
-            ShooterUnitId: new EntityId(101));
+            ShooterUnitId: new EntityId(101),
+            Result: HitResult.Deflected);
 
         int size = WireProtocol.WriteSnapshot(bytes, 1, 15, [], [], [ev]);
         Assert.True(replica.TryApply(bytes.AsSpan(0, size)));
@@ -571,6 +575,7 @@ public sealed class CombatNetworkTests
         Assert.Equal(new EntityId(101), deserialized.ShooterUnitId);
         Assert.Equal(new Vector3(15.5f, 2.1f, 30.2f), deserialized.Origin);
         Assert.Equal(new Vector3(45.8f, 1.75f, 60.1f), deserialized.Target);
+        Assert.Equal(HitResult.Deflected, deserialized.Result);
     }
 
     [Fact]
@@ -587,7 +592,10 @@ public sealed class CombatNetworkTests
               "damage": 5,
               "ammo_capacity": 1000,
               "muzzle_height": 1.2,
-              "presentation_id": "mg"
+              "presentation_id": "mg",
+              "presentation_kind": "machine_gun",
+              "penetration_near": 30.0,
+              "penetration_far": 15.0
             }
           ],
           "units": [
@@ -776,7 +784,7 @@ public sealed class CombatNetworkTests
             EventId: 100,
             ServerTick: 42,
             Kind: CombatEventKind.TookFire,
-            PresentationId: 1,
+            PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
             Origin: new System.Numerics.Vector3(0.5f, 0f, 0.866f), // Coarse quantized incoming bearing
             Target: new System.Numerics.Vector3(45f, 1.8f, 10f),   // Impact hit point
             ShooterUnitId: default);                               // Hidden shooter ID
@@ -808,8 +816,8 @@ public sealed class CombatNetworkTests
     [Fact]
     public void WireProtocol_SetFireStance_RoundTrip_AndValidation()
     {
-        Assert.Equal(13, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(13, WireProtocol.Version);
+        Assert.Equal(14, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(14, WireProtocol.Version);
 
         byte[] buffer = new byte[32];
         SetFireStanceCommand cmd = new(42, 10, new EntityId(5), FireStance.ReturnFire);

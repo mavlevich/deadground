@@ -62,7 +62,7 @@ internal static class CombatFeedbackProbe
                     EventId: eventCounter++,
                     ServerTick: tick,
                     Kind: CombatEventKind.ShotFired,
-                    PresentationId: 1,
+                    PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
                     Origin: new NumericsVector3(25, 1.9f, 25),
                     Target: new NumericsVector3(40 + (float)rng.NextDouble() * 10f, 1.5f, 25 + (float)rng.NextDouble() * 10f),
                     ShooterUnitId: new EntityId(101));
@@ -90,7 +90,7 @@ internal static class CombatFeedbackProbe
                     EventId: eventCounter++,
                     ServerTick: tick,
                     Kind: CombatEventKind.ShotFired,
-                    PresentationId: 1,
+                    PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
                     Origin: new NumericsVector3(25, 1.9f, 25),
                     Target: new NumericsVector3(35 + (float)rng.NextDouble() * 20f, 1.5f, 20 + (float)rng.NextDouble() * 20f),
                     ShooterUnitId: new EntityId(101));
@@ -118,7 +118,7 @@ internal static class CombatFeedbackProbe
                     EventId: eventCounter++,
                     ServerTick: 700,
                     Kind: CombatEventKind.ShotFired,
-                    PresentationId: 1,
+                    PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
                     Origin: new NumericsVector3(25, 1.9f, 25),
                     Target: new NumericsVector3(30 + (float)rng.NextDouble() * 30f, 1.5f, 20 + (float)rng.NextDouble() * 30f),
                     ShooterUnitId: new EntityId(101));
@@ -129,7 +129,7 @@ internal static class CombatFeedbackProbe
                     EventId: eventCounter++,
                     ServerTick: 700,
                     Kind: CombatEventKind.UnitDestroyed,
-                    PresentationId: 1,
+                    PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
                     Origin: default,
                     Target: new NumericsVector3(30 + (float)rng.NextDouble() * 20f, 0, 20 + (float)rng.NextDouble() * 20f),
                     ShooterUnitId: default);
@@ -220,7 +220,7 @@ internal static class CombatFeedbackProbe
                         EventId: eventCounter++,
                         ServerTick: f,
                         Kind: CombatEventKind.ShotFired,
-                        PresentationId: 1,
+                        PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
                         Origin: new NumericsVector3(25, 1.9f, 25),
                         Target: new NumericsVector3(45 + (float)rng.NextDouble() * 10f, 1.5f, 25 + (float)rng.NextDouble() * 10f),
                         ShooterUnitId: new EntityId(101));
@@ -258,7 +258,7 @@ internal static class CombatFeedbackProbe
                         EventId: eventCounter++,
                         ServerTick: 100 + f,
                         Kind: CombatEventKind.ShotFired,
-                        PresentationId: 1,
+                        PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
                         Origin: new NumericsVector3(25, 1.9f, 25),
                         Target: new NumericsVector3(40 + (float)rng.NextDouble() * 15f, 1.5f, 20 + (float)rng.NextDouble() * 15f),
                         ShooterUnitId: new EntityId(101));
@@ -275,7 +275,7 @@ internal static class CombatFeedbackProbe
                             EventId: eventCounter++,
                             ServerTick: 100 + f,
                             Kind: CombatEventKind.ShotFired,
-                            PresentationId: 1,
+                            PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
                             Origin: new NumericsVector3(25, 1.9f, 25),
                             Target: new NumericsVector3(30 + (float)rng.NextDouble() * 30f, 1.5f, 20 + (float)rng.NextDouble() * 30f),
                             ShooterUnitId: new EntityId(101));
@@ -286,7 +286,7 @@ internal static class CombatFeedbackProbe
                             EventId: eventCounter++,
                             ServerTick: 100 + f,
                             Kind: CombatEventKind.UnitDestroyed,
-                            PresentationId: 1,
+                            PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
                             Origin: default,
                             Target: new NumericsVector3(35 + (float)rng.NextDouble() * 20f, 0, 25 + (float)rng.NextDouble() * 20f),
                             ShooterUnitId: default);
@@ -391,7 +391,7 @@ internal static class CombatFeedbackProbe
                 EventId: 8801,
                 ServerTick: 10,
                 Kind: CombatEventKind.ShotFired,
-                PresentationId: 1,
+                PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
                 Origin: new NumericsVector3(origin.X, origin.Y, origin.Z),
                 Target: new NumericsVector3(target.X, target.Y, target.Z),
                 ShooterUnitId: shooterId);
@@ -421,7 +421,7 @@ internal static class CombatFeedbackProbe
                 EventId: 8802,
                 ServerTick: 12,
                 Kind: CombatEventKind.UnitDestroyed,
-                PresentationId: 1,
+                PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0),
                 Origin: default,
                 Target: new NumericsVector3(target.X, 0, target.Z),
                 ShooterUnitId: default);

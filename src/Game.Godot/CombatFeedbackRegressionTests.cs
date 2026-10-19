@@ -8,6 +8,9 @@ namespace DeadGround.Client;
 
 internal static class CombatFeedbackRegressionTests
 {
+    private static readonly ushort CannonPresentationId = WeaponPresentation.MakeId(WeaponPresentationKind.Cannon, 0);
+    private static readonly ushort MgPresentationId = WeaponPresentation.MakeId(WeaponPresentationKind.MachineGun, 0);
+
     internal static bool Run(Node3D scene)
     {
         CheckShotFiredSequenceAndDeduplication(scene);
@@ -22,7 +25,10 @@ internal static class CombatFeedbackRegressionTests
         CheckMultipleSnapshotsBetweenFramesRetainAllEvents(scene);
         CheckStaleBufferedEventsDiscardExpiredFeedback(scene);
         CheckTracerMonotonicForwardProgression(scene);
-        GD.Print("COMBAT_FEEDBACK_REGRESSIONS_OK 12/12 passed");
+        CheckMachineGunBurstFeedback(scene);
+        CheckNonPenetratingRicochetFeedback(scene);
+        CheckMachineGunBurstSoundPriority(scene);
+        GD.Print("COMBAT_FEEDBACK_REGRESSIONS_OK 15/15 passed");
         return true;
     }
 
@@ -52,7 +58,7 @@ internal static class CombatFeedbackRegressionTests
                 EventId: 1001,
                 ServerTick: 5,
                 Kind: CombatEventKind.ShotFired,
-                PresentationId: 1,
+                PresentationId: CannonPresentationId,
                 Origin: new NumericsVector3(20, 1.9f, 20),
                 Target: new NumericsVector3(40, 1.5f, 20),
                 ShooterUnitId: tank.Id);
@@ -123,7 +129,7 @@ internal static class CombatFeedbackRegressionTests
                 EventId: 2001,
                 ServerTick: 10,
                 Kind: CombatEventKind.ShotFired,
-                PresentationId: 1,
+                PresentationId: CannonPresentationId,
                 Origin: new NumericsVector3(30, 1.9f, 30), // Coarse delivered origin
                 Target: new NumericsVector3(60, 1.5f, 30),
                 ShooterUnitId: new EntityId(501));
@@ -144,7 +150,7 @@ internal static class CombatFeedbackRegressionTests
                 EventId: 2002,
                 ServerTick: 11,
                 Kind: CombatEventKind.ShotFired,
-                PresentationId: 1,
+                PresentationId: CannonPresentationId,
                 Origin: new NumericsVector3(80, 2f, 80),
                 Target: new NumericsVector3(30, 0f, 30),
                 ShooterUnitId: default);
@@ -177,7 +183,7 @@ internal static class CombatFeedbackRegressionTests
                 EventId: 3001,
                 ServerTick: 20,
                 Kind: CombatEventKind.TookFire,
-                PresentationId: 1,
+                PresentationId: CannonPresentationId,
                 Origin: new NumericsVector3(syntheticOrigin.X, syntheticOrigin.Y, syntheticOrigin.Z),
                 Target: new NumericsVector3(target.X, target.Y, target.Z),
                 ShooterUnitId: default);
@@ -268,7 +274,7 @@ internal static class CombatFeedbackRegressionTests
                 EventId: 5001,
                 ServerTick: 40,
                 Kind: CombatEventKind.ShotFired,
-                PresentationId: 1,
+                PresentationId: CannonPresentationId,
                 Origin: new NumericsVector3(10, 1.9f, 35),
                 Target: new NumericsVector3(target.X, target.Y, target.Z),
                 ShooterUnitId: default);
@@ -281,7 +287,7 @@ internal static class CombatFeedbackRegressionTests
                 EventId: 5002,
                 ServerTick: 41,
                 Kind: CombatEventKind.UnitDestroyed,
-                PresentationId: 1,
+                PresentationId: CannonPresentationId,
                 Origin: default,
                 Target: new NumericsVector3(target.X, target.Y, target.Z),
                 ShooterUnitId: default);
@@ -318,7 +324,7 @@ internal static class CombatFeedbackRegressionTests
                     EventId: 6000 + i,
                     ServerTick: 50,
                     Kind: CombatEventKind.ShotFired,
-                    PresentationId: 1,
+                    PresentationId: CannonPresentationId,
                     Origin: new NumericsVector3(10 + i * 0.1f, 1.9f, 10),
                     Target: new NumericsVector3(40 + i * 0.1f, 1.5f, 40),
                     ShooterUnitId: default);
@@ -372,11 +378,11 @@ internal static class CombatFeedbackRegressionTests
             for (int cycle = 0; cycle < 3; cycle++)
             {
                 CombatEventObservation shot = new(
-                    EventId: (uint)(7001 + cycle * 10), ServerTick: 60, Kind: CombatEventKind.ShotFired, PresentationId: 1,
+                    EventId: (uint)(7001 + cycle * 10), ServerTick: 60, Kind: CombatEventKind.ShotFired, PresentationId: CannonPresentationId,
                     Origin: new NumericsVector3(20, 1.9f, 20), Target: new NumericsVector3(50, 1.5f, 20),
                     ShooterUnitId: tankId);
                 CombatEventObservation destroyed = new(
-                    EventId: (uint)(7002 + cycle * 10), ServerTick: 60, Kind: CombatEventKind.UnitDestroyed, PresentationId: 1,
+                    EventId: (uint)(7002 + cycle * 10), ServerTick: 60, Kind: CombatEventKind.UnitDestroyed, PresentationId: CannonPresentationId,
                     Origin: default, Target: new NumericsVector3(50, 0, 20), ShooterUnitId: default);
 
                 effects.ProcessEvents([shot, destroyed], unitViews);
@@ -421,7 +427,7 @@ internal static class CombatFeedbackRegressionTests
             parent.AddChild(effects144);
 
             CombatEventObservation shot = new(
-                EventId: 8001, ServerTick: 70, Kind: CombatEventKind.ShotFired, PresentationId: 1,
+                EventId: 8001, ServerTick: 70, Kind: CombatEventKind.ShotFired, PresentationId: CannonPresentationId,
                 Origin: new NumericsVector3(20, 1.9f, 20), Target: new NumericsVector3(50, 1.5f, 20),
                 ShooterUnitId: default);
 
@@ -461,9 +467,9 @@ internal static class CombatFeedbackRegressionTests
             parent.AddChild(effects);
 
             CombatEventObservation[] batch = [
-                new CombatEventObservation(9001, 80, CombatEventKind.ShotFired, 1,
+                new CombatEventObservation(9001, 80, CombatEventKind.ShotFired, CannonPresentationId,
                     new NumericsVector3(20, 1.9f, 20), new NumericsVector3(40, 1.5f, 20), default),
-                new CombatEventObservation(9002, 80, CombatEventKind.TookFire, 1,
+                new CombatEventObservation(9002, 80, CombatEventKind.TookFire, CannonPresentationId,
                     new NumericsVector3(10, 0, 10), new NumericsVector3(30, 0, 30), default)
             ];
 
@@ -480,9 +486,9 @@ internal static class CombatFeedbackRegressionTests
 
             for (uint i = 0; i < 20; i++)
             {
-                batch[0] = new CombatEventObservation(9100 + i, 80, CombatEventKind.ShotFired, 1,
+                batch[0] = new CombatEventObservation(9100 + i, 80, CombatEventKind.ShotFired, CannonPresentationId,
                     new NumericsVector3(20, 1.9f, 20), new NumericsVector3(40, 1.5f, 20), default);
-                batch[1] = new CombatEventObservation(9200 + i, 80, CombatEventKind.TookFire, 1,
+                batch[1] = new CombatEventObservation(9200 + i, 80, CombatEventKind.TookFire, CannonPresentationId,
                     new NumericsVector3(10, 0, 10), new NumericsVector3(30, 0, 30), default);
 
                 effects.ProcessEvents(batch, unitViews);
@@ -518,12 +524,12 @@ internal static class CombatFeedbackRegressionTests
                 new EntityId(10), 0, new NumericsVector2(20, 20), 0, Health: 120);
 
             CombatEventObservation shotEvent = new(
-                EventId: 3001, ServerTick: 1, Kind: CombatEventKind.ShotFired, PresentationId: 1,
+                EventId: 3001, ServerTick: 1, Kind: CombatEventKind.ShotFired, PresentationId: CannonPresentationId,
                 Origin: new NumericsVector3(20, 1.9f, 20), Target: new NumericsVector3(40, 1.5f, 20),
                 ShooterUnitId: tank.Id);
 
             CombatEventObservation tookFireEvent = new(
-                EventId: 3002, ServerTick: 2, Kind: CombatEventKind.TookFire, PresentationId: 1,
+                EventId: 3002, ServerTick: 2, Kind: CombatEventKind.TookFire, PresentationId: CannonPresentationId,
                 Origin: new NumericsVector3(0.5f, 0f, 0.866f), Target: new NumericsVector3(20, 1.8f, 20),
                 ShooterUnitId: default);
 
@@ -581,7 +587,7 @@ internal static class CombatFeedbackRegressionTests
                 EventId: 10001,
                 ServerTick: 1,
                 Kind: CombatEventKind.ShotFired,
-                PresentationId: 1,
+                PresentationId: CannonPresentationId,
                 Origin: new NumericsVector3(20, 1.9f, 20),
                 Target: new NumericsVector3(40, 1.5f, 20),
                 ShooterUnitId: tank.Id);
@@ -612,7 +618,7 @@ internal static class CombatFeedbackRegressionTests
                 EventId: 10002,
                 ServerTick: 1,
                 Kind: CombatEventKind.UnitDestroyed,
-                PresentationId: 1,
+                PresentationId: CannonPresentationId,
                 Origin: default,
                 Target: new NumericsVector3(30, 0, 30),
                 ShooterUnitId: default);
@@ -631,7 +637,7 @@ internal static class CombatFeedbackRegressionTests
                 EventId: 10003,
                 ServerTick: 361,
                 Kind: CombatEventKind.UnitDestroyed,
-                PresentationId: 1,
+                PresentationId: CannonPresentationId,
                 Origin: default,
                 Target: new NumericsVector3(30, 0, 30),
                 ShooterUnitId: default);
@@ -693,7 +699,7 @@ internal static class CombatFeedbackRegressionTests
             Vector3 direction = (target - origin).Normalized();
 
             CombatEventObservation shot = new(
-                EventId: 20001, ServerTick: 1, Kind: CombatEventKind.ShotFired, PresentationId: 1,
+                EventId: 20001, ServerTick: 1, Kind: CombatEventKind.ShotFired, PresentationId: CannonPresentationId,
                 Origin: new NumericsVector3(origin.X, origin.Y, origin.Z),
                 Target: new NumericsVector3(target.X, target.Y, target.Z),
                 ShooterUnitId: default);
@@ -728,7 +734,7 @@ internal static class CombatFeedbackRegressionTests
             {
                 effects.Clear();
                 CombatEventObservation testShot = new(
-                    EventId: eventIdCounter++, ServerTick: 1, Kind: CombatEventKind.ShotFired, PresentationId: 1,
+                    EventId: eventIdCounter++, ServerTick: 1, Kind: CombatEventKind.ShotFired, PresentationId: CannonPresentationId,
                     Origin: new NumericsVector3(origin.X, origin.Y, origin.Z),
                     Target: new NumericsVector3(target.X, target.Y, target.Z),
                     ShooterUnitId: default);
@@ -760,6 +766,206 @@ internal static class CombatFeedbackRegressionTests
                     prevPos = curPos;
                 }
             }
+        }
+        finally
+        {
+            parent.QueueFree();
+        }
+    }
+
+    private static void CheckMachineGunBurstFeedback(Node3D scene)
+    {
+        Node3D parent = new();
+        scene.AddChild(parent);
+        try
+        {
+            HeightMap map = HeightMap.CreatePrototype();
+            UnitViewSet unitViews = new(parent, map);
+            CombatEffects effects = new(map);
+            parent.AddChild(effects);
+
+            CombatEventObservation mgEvent = new(
+                EventId: 5001,
+                ServerTick: 5,
+                Kind: CombatEventKind.ShotFired,
+                PresentationId: MgPresentationId,
+                Origin: new NumericsVector3(20, 1.9f, 20),
+                Target: new NumericsVector3(40, 1.5f, 20),
+                ShooterUnitId: default,
+                Result: HitResult.Penetrated);
+
+            effects.ProcessEvents([mgEvent], unitViews);
+
+            Require(effects.ActiveMuzzleFlashesCount == 1, "MG burst did not spawn muzzle flash.");
+            Require(effects.ActiveTracersCount == 1, "MG burst did not spawn tracer.");
+            Require(effects.MuzzleFlashes[0].InitialScaleVector.X < 0.3f, "MG muzzle flash should have lighter scale than cannon.");
+            Require(effects.Tracers[0].Thickness < CombatEffects.TracerThickness, "MG tracer should have thinner scale than cannon.");
+            Require(effects.TotalAudioRequests == 1, "MG burst did not make an audio request.");
+        }
+        finally
+        {
+            parent.QueueFree();
+        }
+    }
+
+    private static void CheckNonPenetratingRicochetFeedback(Node3D scene)
+    {
+        Node3D parent = new();
+        scene.AddChild(parent);
+        try
+        {
+            HeightMap map = HeightMap.CreatePrototype();
+            UnitViewSet unitViews = new(parent, map);
+            CombatEffects effects = new(map);
+            parent.AddChild(effects);
+
+            // Deflected TookFire event: should spawn sparks and a ricochet tracer, but no impact mesh or smoke puff
+            CombatEventObservation deflectedTookFire = new(
+                EventId: 6001,
+                ServerTick: 5,
+                Kind: CombatEventKind.TookFire,
+                PresentationId: MgPresentationId,
+                Origin: new NumericsVector3(20, 1.9f, 20),
+                Target: new NumericsVector3(40, 1.5f, 20),
+                ShooterUnitId: default,
+                Result: HitResult.Deflected);
+
+            effects.ProcessEvents([deflectedTookFire], unitViews);
+
+            Require(effects.ActiveSparksCount >= 1, "Deflected hit did not spawn sparks.");
+            Require(effects.ActiveTracersCount >= 1, "Deflected hit did not spawn ricochet tracer.");
+            Require(effects.ActiveImpactsCount == 0, "Deflected hit should not spawn heavy impact mesh.");
+            Require(effects.ActiveSmokePuffsCount == 0, "Deflected hit should not spawn impact smoke puff.");
+
+            // Penetrating TookFire event: spawns impact mesh and smoke puff
+            CombatEffects penetratingEffects = new(map);
+            parent.AddChild(penetratingEffects);
+
+            CombatEventObservation penetratedTookFire = new(
+                EventId: 6002,
+                ServerTick: 5,
+                Kind: CombatEventKind.TookFire,
+                PresentationId: CannonPresentationId,
+                Origin: new NumericsVector3(20, 1.9f, 20),
+                Target: new NumericsVector3(40, 1.5f, 20),
+                ShooterUnitId: default,
+                Result: HitResult.Penetrated);
+
+            penetratingEffects.ProcessEvents([penetratedTookFire], unitViews);
+
+            Require(penetratingEffects.ActiveImpactsCount >= 1, "Penetrating hit must spawn impact mesh.");
+            Require(penetratingEffects.ActiveSmokePuffsCount >= 1, "Penetrating hit must spawn smoke puff.");
+        }
+        finally
+        {
+            parent.QueueFree();
+        }
+    }
+
+    private static void CheckMachineGunBurstSoundPriority(Node3D scene)
+    {
+        Require(CombatEffects.SoundPriority.MachineGunBurst < CombatEffects.SoundPriority.Cannon,
+            "MachineGunBurst priority must be strictly lower than Cannon.");
+
+        Node3D parent = new();
+        scene.AddChild(parent);
+        try
+        {
+            HeightMap map = HeightMap.CreatePrototype();
+            UnitViewSet unitViews = new(parent, map);
+            CombatEffects effects = new(map);
+            parent.AddChild(effects);
+
+            int playerSlots = CombatEffects.MaxAudioPlayers;
+
+            CombatEventObservation[] cannonEvents = new CombatEventObservation[playerSlots];
+            for (uint i = 0; i < playerSlots; i++)
+            {
+                cannonEvents[i] = new CombatEventObservation(
+                    EventId: 7001 + i,
+                    ServerTick: 5,
+                    Kind: CombatEventKind.ShotFired,
+                    PresentationId: CannonPresentationId,
+                    Origin: new NumericsVector3(20 + i, 1.9f, 20),
+                    Target: new NumericsVector3(40 + i, 1.5f, 20),
+                    ShooterUnitId: default);
+            }
+
+            effects.ProcessEvents(cannonEvents, unitViews);
+
+            Require(effects.DroppedAudioVoicesCount == 0, "No audio voices should be dropped during initial fill.");
+            for (int i = 0; i < playerSlots; i++)
+            {
+                Require(effects.GetVoicePriority(i) == CombatEffects.SoundPriority.Cannon,
+                    $"Audio player {i} must have Cannon priority.");
+            }
+
+            CombatEventObservation mgBurst = new(
+                EventId: 7009,
+                ServerTick: 5,
+                Kind: CombatEventKind.ShotFired,
+                PresentationId: MgPresentationId,
+                Origin: new NumericsVector3(25, 1.9f, 25),
+                Target: new NumericsVector3(45, 1.5f, 25),
+                ShooterUnitId: default);
+
+            effects.ProcessEvents([mgBurst], unitViews);
+
+            Require(effects.DroppedAudioVoicesCount == 1,
+                "Machine gun burst should be dropped when all voices are playing higher-priority cannon.");
+            for (int i = 0; i < playerSlots; i++)
+            {
+                Require(effects.GetVoicePriority(i) == CombatEffects.SoundPriority.Cannon,
+                    $"Audio player {i} must retain Cannon priority after machine gun burst.");
+            }
+
+            CombatEffects effectsMg = new(map);
+            parent.AddChild(effectsMg);
+
+            CombatEventObservation[] mgEvents = new CombatEventObservation[playerSlots];
+            for (uint i = 0; i < playerSlots; i++)
+            {
+                mgEvents[i] = new CombatEventObservation(
+                    EventId: 7010 + i,
+                    ServerTick: 5,
+                    Kind: CombatEventKind.ShotFired,
+                    PresentationId: MgPresentationId,
+                    Origin: new NumericsVector3(20 + i, 1.9f, 20),
+                    Target: new NumericsVector3(40 + i, 1.5f, 20),
+                    ShooterUnitId: default);
+            }
+
+            effectsMg.ProcessEvents(mgEvents, unitViews);
+
+            Require(effectsMg.DroppedAudioVoicesCount == 0, "No audio voices should be dropped during initial MG fill.");
+            for (int i = 0; i < playerSlots; i++)
+            {
+                Require(effectsMg.GetVoicePriority(i) == CombatEffects.SoundPriority.MachineGunBurst,
+                    $"Audio player {i} must have MachineGunBurst priority.");
+            }
+
+            CombatEventObservation cannonShot = new(
+                EventId: 7020,
+                ServerTick: 5,
+                Kind: CombatEventKind.ShotFired,
+                PresentationId: CannonPresentationId,
+                Origin: new NumericsVector3(25, 1.9f, 25),
+                Target: new NumericsVector3(45, 1.5f, 25),
+                ShooterUnitId: default);
+
+            effectsMg.ProcessEvents([cannonShot], unitViews);
+
+            Require(effectsMg.DroppedAudioVoicesCount == 0,
+                "Cannon shot successfully evicted an MG voice and was not dropped.");
+            int cannonCount = 0;
+            for (int i = 0; i < playerSlots; i++)
+            {
+                if (effectsMg.GetVoicePriority(i) == CombatEffects.SoundPriority.Cannon)
+                {
+                    cannonCount++;
+                }
+            }
+            Require(cannonCount == 1, "Exactly one audio player must now play Cannon sound.");
         }
         finally
         {
