@@ -155,10 +155,12 @@ public sealed class SideContactTracker
     private readonly DetectionTuning _tuning;
     private uint _nextContactId = 1;
     private int _count;
+    private bool _exportDirty = true;
 
     public int Side { get; }
     public int Capacity => _entries.Length;
     public int Count => _count;
+    public ReadOnlySpan<ContactObservation> Contacts => ExportContacts();
     public long OverflowEvictionCount { get; private set; }
     public long DroppedDueToCapacityCount { get; private set; }
 
@@ -209,6 +211,10 @@ public sealed class SideContactTracker
     /// </summary>
     public void RegisterObservations(ReadOnlySpan<ObservedTarget> targets, int currentTick)
     {
+        if (targets.Length > 0)
+        {
+            _exportDirty = true;
+        }
         int unassignedCount = 0;
 
         // 1. Fast continuous track check: O(1) direct lookup for already-tracked entities
@@ -317,6 +323,7 @@ public sealed class SideContactTracker
             if (entry.State == ContactState.Current && currentTick - entry.LastSeenTick >= _tuning.EvaluationIntervalTicks)
             {
                 entry.State = ContactState.LastKnown;
+                _exportDirty = true;
                 if (entry.HasBoundEntity)
                 {
                     _entityToContactIndex.Remove(entry.BoundEntityId);
@@ -404,6 +411,7 @@ public sealed class SideContactTracker
         };
         _entityToContactIndex[target.Id] = assignedIndex;
         _count++;
+        _exportDirty = true;
     }
 
     private void RemoveAt(int index)
@@ -425,6 +433,7 @@ public sealed class SideContactTracker
         }
         _entries[lastIndex] = default;
         _count--;
+        _exportDirty = true;
     }
 
     /// <summary>
@@ -433,6 +442,11 @@ public sealed class SideContactTracker
     /// </summary>
     public ReadOnlySpan<ContactObservation> ExportContacts()
     {
+        if (!_exportDirty)
+        {
+            return _exportBuffer.AsSpan(0, _count);
+        }
+
         for (int i = 0; i < _count; i++)
         {
             ref Entry entry = ref _entries[i];
@@ -450,6 +464,7 @@ public sealed class SideContactTracker
         {
             SortExportBuffer(_exportBuffer, 0, _count - 1);
         }
+        _exportDirty = false;
         return _exportBuffer.AsSpan(0, _count);
     }
 

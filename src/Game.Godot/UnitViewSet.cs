@@ -19,6 +19,7 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
     private readonly Func<ushort, string?>? _unitIdProvider = unitIdProvider;
     // Own faction from the match setup; read when a view is created, after the side is assigned.
     private readonly Func<string?>? _factionProvider = factionProvider;
+    private readonly UnitCatalog? _catalog;
     private float _cameraSize;
     private static readonly Lazy<UnitCatalog> DefaultCatalog = new(() => PrototypeScenario.LoadCatalog());
 
@@ -26,6 +27,7 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
         : this(parent, map, def => def < catalog.Units.Length ? catalog.Units[def].MaxHealth : 100,
             def => def < catalog.Units.Length ? catalog.Units[def].Id : null, factionProvider)
     {
+        _catalog = catalog;
     }
 
     private static HashSet<EntityId>[] CreateControlGroups()
@@ -86,6 +88,28 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
         return definition < catalog.Units.Length ? catalog.Units[definition].Id : null;
     }
 
+    internal static UnitCatalog GetDefaultCatalog() => DefaultCatalog.Value;
+
+    internal static (float SensorRange, float WeaponRange) GetRanges(UnitCatalog catalog, ushort definition)
+    {
+        if (definition >= catalog.Units.Length) return (60f, 0f);
+        UnitDefinition def = catalog.Units[definition];
+        float sensorRange = def.SensorRange;
+        float weaponRange = 0f;
+        if (def.Weapon is not null && catalog.Weapons is not null)
+        {
+            foreach (WeaponData w in catalog.Weapons)
+            {
+                if (w.Id == def.Weapon)
+                {
+                    weaponRange = w.Range;
+                    break;
+                }
+            }
+        }
+        return (sensorRange, weaponRange);
+    }
+
     internal void Sync(ClientReplica replica, double renderTick)
     {
         _present.Clear();
@@ -96,6 +120,8 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
             {
                 string? unitId = _unitIdProvider is null ? GetDefaultUnitId(unit.Definition) : _unitIdProvider(unit.Definition);
                 view = new UnitView(unitId, _factionProvider?.Invoke());
+                var (sensorRange, weaponRange) = GetRanges(_catalog ?? DefaultCatalog.Value, unit.Definition);
+                view.ConfigureRanges(sensorRange, weaponRange, map);
                 view.UpdateLod(_cameraSize);
                 Views.Add(unit.Id, view);
                 parent.AddChild(view.Root);

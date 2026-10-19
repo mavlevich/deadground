@@ -64,11 +64,12 @@ public sealed class PlayerKnowledge
                     (ushort)Math.Clamp(combat.Ammunition, 0, ushort.MaxValue),
                     (ushort)Math.Clamp(combat.ReloadTicksRemaining, 0, ushort.MaxValue),
                     combat.Status,
-                    combat.TargetContactId);
+                    combat.TargetContactId,
+                    combat.Stance);
             }
             else
             {
-                _ownUnits[count++] = new OwnUnitObservation(unit.Id, unit.Definition, unit.Position, 0, navStatus);
+                _ownUnits[count++] = new OwnUnitObservation(unit.Id, unit.Definition, unit.Position, 0, navStatus, Stance: FireStance.FireAtWill);
             }
         }
         Count = count;

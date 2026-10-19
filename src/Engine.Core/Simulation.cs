@@ -26,17 +26,28 @@ public sealed class Simulation : IDisposable
     public IMissionSystem? Mission => _mission;
     public bool IsMissionFinished => _mission?.IsFinished == true;
 
+    private enum CommandKind : byte
+    {
+        Move = 0,
+        Attack = 1,
+        SetFireStance = 2
+    }
+
     private readonly record struct QueuedCommand(
         int Player,
-        bool IsAttack,
+        CommandKind Kind,
         MoveCommand Move,
-        AttackCommand Attack)
+        AttackCommand Attack,
+        SetFireStanceCommand SetFireStance)
     {
         public static QueuedCommand CreateMove(int player, MoveCommand move) =>
-            new(player, false, move, default);
+            new(player, CommandKind.Move, move, default, default);
 
         public static QueuedCommand CreateAttack(int player, AttackCommand attack) =>
-            new(player, true, default, attack);
+            new(player, CommandKind.Attack, default, attack, default);
+
+        public static QueuedCommand CreateSetFireStance(int player, SetFireStanceCommand stance) =>
+            new(player, CommandKind.SetFireStance, default, default, stance);
     }
 
     public Simulation(WorldState world, ISimulationRules rules)
@@ -87,6 +98,20 @@ public sealed class Simulation : IDisposable
         return true;
     }
 
+    public bool TryEnqueue(int player, SetFireStanceCommand command)
+    {
+        if (IsMissionFinished) return false;
+        if (player < 1 || player > _lastAccepted.Length || command.Sequence == 0 ||
+            command.Sequence <= _lastAccepted[player - 1] || _commandCount == _commands.Length ||
+            command.Stance > FireStance.HoldFire ||
+            !_world.TryGetUnit(command.Unit, out UnitState unit) ||
+            unit.Owner != player) return false;
+
+        _commands[_commandCount++] = QueuedCommand.CreateSetFireStance(player, command);
+        _lastAccepted[player - 1] = command.Sequence;
+        return true;
+    }
+
     private bool _missionCleanupPerformed;
 
     public void Step()
@@ -112,13 +137,18 @@ public sealed class Simulation : IDisposable
 
         _navigation?.SweepRemovedUnits(_world);
 
-        // Process queued orders: movement and attack commands
+        // Process queued orders: movement, attack, and stance commands
         for (int i = 0; i < _commandCount; i++)
         {
             QueuedCommand queued = _commands[i];
-            if (queued.IsAttack)
+            if (queued.Kind == CommandKind.Attack)
             {
                 _combat?.TryExecuteAttackOrder(queued.Player, queued.Attack, _world);
+            }
+            else if (queued.Kind == CommandKind.SetFireStance)
+            {
+                _world.SetFireStance(queued.SetFireStance.Unit, queued.SetFireStance.Stance);
+                _combat?.OnUnitStanceChanged(queued.SetFireStance.Unit, queued.SetFireStance.Stance, _world);
             }
             else
             {

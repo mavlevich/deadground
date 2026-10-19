@@ -444,6 +444,10 @@ public sealed class ReconRaidMissionTests
         sim.World.SetPosition(new EntityId(2), new Vector2(410f, 432f));
         sim.World.SetPosition(new EntityId(3), new Vector2(410f, 430f));
 
+        // Hold fire initially to verify detection and explicit attack orders rather than auto-fire
+        sim.World.SetFireStance(new EntityId(2), FireStance.HoldFire);
+        sim.World.SetFireStance(new EntityId(3), FireStance.HoldFire);
+
         // Step simulation to trigger detection of command vehicle
         PlayerKnowledge playerKnowledge = new(1, 16);
         ContactId targetContact = default;
@@ -521,7 +525,7 @@ public sealed class ReconRaidMissionTests
     [Fact]
     public void Review_HandshakeAndWireProtocol_AgreeOnCurrentVersion()
     {
-        Assert.Equal(10, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(11, MatchSetup.CurrentProtocolVersion);
         Assert.Equal(MatchSetup.CurrentProtocolVersion, WireProtocol.Version);
     }
 
@@ -530,7 +534,7 @@ public sealed class ReconRaidMissionTests
     {
         HeightMap map = HeightMap.CreatePrototype();
         MatchSetup serverSetup = PrototypeScenario.CreateMatchSetup(map);
-        Assert.Equal(10, serverSetup.ProtocolVersion);
+        Assert.Equal(11, serverSetup.ProtocolVersion);
 
         using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
         int port = serverTransport.Port;

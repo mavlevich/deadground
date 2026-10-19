@@ -213,6 +213,7 @@ public sealed class CombatTests
         {
             EntityId attacker = world.CreateUnit(1, 1, new Vector2(10f, 10f), 6f, 100, 2); // 2 rounds
             EntityId target = world.CreateUnit(2, 1, new Vector2(30f, 10f), 6f, 200, 10);
+            world.SetFireStance(attacker, FireStance.HoldFire);
 
             sim.Step();
             Assert.True(sim.Detection!.TryGetContactByEntity(1, target, out ContactObservation contact));
@@ -275,6 +276,7 @@ public sealed class CombatTests
         {
             EntityId attacker = world.CreateUnit(1, 1, new Vector2(10f, 10f), 6f, 100, 10);
             EntityId target = world.CreateUnit(2, 1, new Vector2(30f, 10f), 6f, 50, 10); // 50 HP: destroyed in 1 hit
+            world.SetFireStance(attacker, FireStance.HoldFire);
 
             for (int i = 0; i < 4; i++) sim.Step();
             Assert.True(sim.Detection!.TryGetContactByEntity(1, target, out ContactObservation contact));
@@ -306,6 +308,10 @@ public sealed class CombatTests
             EntityId b1 = world.CreateUnit(2, 1, new Vector2(20f, 10f), 6f, 50, 10);
             EntityId a2 = world.CreateUnit(1, 1, new Vector2(10f, 20f), 6f, 50, 10);
             EntityId b2 = world.CreateUnit(2, 1, new Vector2(20f, 20f), 6f, 50, 10);
+            world.SetFireStance(a1, FireStance.HoldFire);
+            world.SetFireStance(b1, FireStance.HoldFire);
+            world.SetFireStance(a2, FireStance.HoldFire);
+            world.SetFireStance(b2, FireStance.HoldFire);
 
             // Step 4 ticks so all staggered observer phases complete
             for (int i = 0; i < 4; i++) sim.Step();
@@ -431,6 +437,7 @@ public sealed class CombatTests
         {
             EntityId attacker = world.CreateUnit(1, 1, new Vector2(10f, 10f), 6f, 100, 10);
             EntityId target = world.CreateUnit(2, 1, new Vector2(30f, 10f), 6f, 50, 10);
+            world.SetFireStance(attacker, FireStance.HoldFire);
 
             for (int i = 0; i < 4; i++) sim.Step();
             Assert.True(sim.Detection!.TryGetContactByEntity(1, target, out ContactObservation contact));
@@ -464,6 +471,10 @@ public sealed class CombatTests
             EntityId a2 = world.CreateUnit(1, 1, new Vector2(10f, 15f), 6f, 100, 10);
             EntityId a3 = world.CreateUnit(1, 1, new Vector2(10f, 20f), 6f, 100, 10);
             EntityId victim = world.CreateUnit(2, 1, new Vector2(30f, 15f), 6f, 50, 10);
+            world.SetFireStance(a1, FireStance.HoldFire);
+            world.SetFireStance(a2, FireStance.HoldFire);
+            world.SetFireStance(a3, FireStance.HoldFire);
+            world.SetFireStance(victim, FireStance.HoldFire);
 
             for (int i = 0; i < 4; i++) sim.Step();
             Assert.True(sim.Detection!.TryGetContactByEntity(1, victim, out ContactObservation contact));
@@ -566,6 +577,7 @@ public sealed class CombatTests
             ushort victimDef = 2; // Non-zero definition
             EntityId attacker = world.CreateUnit(1, 1, new Vector2(10f, 10f), 6f, 100, 10);
             EntityId victim = world.CreateUnit(2, victimDef, new Vector2(30f, 10f), 6f, 50, 10);
+            world.SetFireStance(attacker, FireStance.HoldFire);
 
             for (int i = 0; i < 4; i++) sim.Step();
             Assert.True(sim.Detection!.TryGetContactByEntity(1, victim, out ContactObservation contact));
@@ -616,6 +628,10 @@ public sealed class CombatTests
             EntityId b1 = world.CreateUnit(2, 1, new Vector2(20f, 10f), 6f, 50, 10);
             EntityId a2 = world.CreateUnit(1, 1, new Vector2(10f, 20f), 6f, 50, 10);
             EntityId b2 = world.CreateUnit(2, 1, new Vector2(20f, 20f), 6f, 50, 10);
+            world.SetFireStance(a1, FireStance.HoldFire);
+            world.SetFireStance(b1, FireStance.HoldFire);
+            world.SetFireStance(a2, FireStance.HoldFire);
+            world.SetFireStance(b2, FireStance.HoldFire);
 
             for (int i = 0; i < 4; i++) sim.Step();
 
@@ -637,6 +653,10 @@ public sealed class CombatTests
             EntityId b3 = world.CreateUnit(2, 1, new Vector2(20f, 10f), 6f, 50, 10);
             EntityId a4 = world.CreateUnit(1, 1, new Vector2(10f, 20f), 6f, 50, 10);
             EntityId b4 = world.CreateUnit(2, 1, new Vector2(20f, 20f), 6f, 50, 10);
+            world.SetFireStance(a3, FireStance.HoldFire);
+            world.SetFireStance(b3, FireStance.HoldFire);
+            world.SetFireStance(a4, FireStance.HoldFire);
+            world.SetFireStance(b4, FireStance.HoldFire);
 
             for (int i = 0; i < 4; i++) sim.Step();
 
@@ -713,6 +733,8 @@ public sealed class CombatTests
         {
             EntityId attacker = world.CreateUnit(1, 1, new Vector2(10f, 10f), 6f, 100, 10);
             EntityId target = world.CreateUnit(2, 1, new Vector2(30f, 10f), 6f, 100, 10);
+            world.SetFireStance(attacker, FireStance.HoldFire);
+            world.SetFireStance(target, FireStance.HoldFire);
 
             for (int i = 0; i < 4; i++) sim.Step();
             Assert.True(sim.Detection!.TryGetContactByEntity(1, target, out ContactObservation contact));
@@ -832,35 +854,53 @@ public sealed class CombatTests
     }
 
     [Fact]
-    public void AttackOrder_OutOfRange_RejectsOrderWithoutFreezingMovement()
+    public void AttackOrder_OutOfRange_DrivesIntoRangeStopsAndFires_MoveOrderCancels()
     {
-        var (sim, world, _) = CreateSetup(weaponRange: 40f);
+        var (sim, world, _) = CreateSetup(weaponRange: 30f, reloadTicks: 10, damage: 50);
         using (sim)
         {
-            EntityId attacker = world.CreateUnit(1, 1, new Vector2(10f, 10f), 6f, 100, 10);
-            EntityId target = world.CreateUnit(2, 1, new Vector2(70f, 10f), 6f, 100, 10); // dist 60m = 1.5x range
+            // Attacker at (10, 10)
+            EntityId attacker = world.CreateUnit(1, 1, new Vector2(10f, 10f), 10f, 100, 10);
+            // Target at (60, 10) (dist 50m > 30m)
+            EntityId target = world.CreateUnit(2, 1, new Vector2(60f, 10f), 10f, 100, 10);
+            world.SetFireStance(attacker, FireStance.HoldFire);
 
             for (int i = 0; i < 4; i++) sim.Step();
             Assert.True(sim.Detection!.TryGetContactByEntity(1, target, out ContactObservation contact));
 
-            // Unit is moving towards (10, 30)
-            Assert.True(sim.TryEnqueue(1, new MoveCommand(1, sim.Tick, attacker, new Vector2(10f, 30f))));
+            // Issue attack order on contact at > 30m
+            Assert.True(sim.TryEnqueue(1, new AttackCommand(1, sim.Tick, attacker, contact.Id)));
             sim.Step();
 
-            Assert.True(world.TryGetUnit(attacker, out UnitState uMoving));
-            Assert.True(uMoving.Moving);
-
-            // Issue attack order on contact at 1.5x range
-            Assert.True(sim.TryEnqueue(1, new AttackCommand(2, sim.Tick, attacker, contact.Id)));
-            sim.Step();
-
-            // Order was rejected: unit does NOT freeze, continues moving!
+            // Order is accepted and unit is moving towards target
             world.TryGetCombatState(attacker, out WorldState.CombatState cs);
-            Assert.False(cs.HasAttackOrder);
-            Assert.Equal(AttackExecutionStatus.None, cs.Status);
+            Assert.True(cs.HasAttackOrder);
+            Assert.Equal(contact.Id, cs.TargetContactId);
+            Assert.True(world.TryGetUnit(attacker, out UnitState uDriving));
+            Assert.True(uDriving.Moving);
 
-            Assert.True(world.TryGetUnit(attacker, out UnitState uStillMoving));
-            Assert.True(uStillMoving.Moving);
+            // Step until unit reaches weapon range (dist <= 30.5m) and halts to fire
+            for (int i = 0; i < 80; i++)
+            {
+                sim.Step();
+                world.TryGetCombatState(attacker, out WorldState.CombatState csStep);
+                if (csStep.Ammunition < 10) break;
+            }
+
+            // Attacker halted and fired
+            world.TryGetCombatState(attacker, out WorldState.CombatState csFired);
+            Assert.Equal(9, csFired.Ammunition);
+            Assert.True(world.TryGetUnit(attacker, out UnitState uHalted));
+            Assert.False(uHalted.Moving, "Attacker should halt to fire once in range.");
+            world.TryGetCombatState(target, out WorldState.CombatState tsDamaged);
+            Assert.Equal(50, tsDamaged.CurrentHealth);
+
+            // A new move order cancels the attack order
+            Assert.True(sim.TryEnqueue(1, new MoveCommand(2, sim.Tick, attacker, new Vector2(10f, 10f))));
+            sim.Step();
+
+            world.TryGetCombatState(attacker, out WorldState.CombatState csCancelled);
+            Assert.False(csCancelled.HasAttackOrder, "Move order must cancel attack order.");
         }
     }
 
@@ -927,6 +967,7 @@ public sealed class CombatTests
             NavigationSystem nav = (sim.Rules as RuleSet)!.FindSystem<NavigationSystem>()!;
             EntityId attacker = world.CreateUnit(1, 1, new Vector2(10f, 10f), 6f, 100, 10);
             EntityId target = world.CreateUnit(2, 1, new Vector2(30f, 10f), 6f, 50, 10); // 50 HP (one shot kill)
+            world.SetFireStance(attacker, FireStance.HoldFire);
 
             // Target has an active navigation slot
             Assert.True(sim.TryEnqueue(2, new MoveCommand(1, sim.Tick, target, new Vector2(30f, 20f))));
@@ -946,7 +987,7 @@ public sealed class CombatTests
     }
 
     [Fact]
-    public void AttackOrder_OutOfRangeReplacement_PreservesExistingActiveAttackOrder()
+    public void AttackOrder_OutOfRangeReplacement_SwitchesTargetAndDrivesTowardsNewTarget()
     {
         var (sim, world, _) = CreateSetup(weaponRange: 40f, reloadTicks: 10, damage: 25);
         using (sim)
@@ -954,6 +995,7 @@ public sealed class CombatTests
             EntityId attacker = world.CreateUnit(1, 1, new Vector2(10f, 10f), 6f, 100, 10);
             EntityId nearTarget = world.CreateUnit(2, 1, new Vector2(30f, 10f), 6f, 100, 10); // dist 20m <= 40m
             EntityId farTarget = world.CreateUnit(2, 1, new Vector2(70f, 10f), 6f, 100, 10);  // dist 60m > 40m
+            world.SetFireStance(attacker, FireStance.HoldFire);
 
             for (int i = 0; i < 4; i++) sim.Step();
             Assert.True(sim.Detection!.TryGetContactByEntity(1, nearTarget, out ContactObservation cNear));
@@ -970,22 +1012,166 @@ public sealed class CombatTests
             world.TryGetCombatState(nearTarget, out WorldState.CombatState tsNear1);
             Assert.Equal(75, tsNear1.CurrentHealth);
 
-            // Attempt to replace with out-of-range target
+            // Replace with out-of-range target: accepted, attacker switches to far target and drives towards it
             Assert.True(sim.TryEnqueue(1, new AttackCommand(2, sim.Tick, attacker, cFar.Id)));
             sim.Step();
 
-            // Command was rejected: attacker PRESERVES previous valid order on near target
-            world.TryGetCombatState(attacker, out WorldState.CombatState csPreserved);
-            Assert.True(csPreserved.HasAttackOrder);
-            Assert.Equal(cNear.Id, csPreserved.TargetContactId);
-            Assert.NotEqual(AttackExecutionStatus.OutOfRange, csPreserved.Status);
+            world.TryGetCombatState(attacker, out WorldState.CombatState csSwitched);
+            Assert.True(csSwitched.HasAttackOrder);
+            Assert.Equal(cFar.Id, csSwitched.TargetContactId);
+            Assert.True(world.TryGetUnit(attacker, out UnitState uDriving));
+            Assert.True(uDriving.Moving);
+        }
+    }
 
-            // Attacker continues cycling and fires next shot at near target when reloaded
+    [Fact]
+    public void AutoFire_IdleTankWithFireAtWill_EngagesEnemyEnteringRange()
+    {
+        var (sim, world, _) = CreateSetup(weaponRange: 40f, reloadTicks: 10, damage: 50);
+        using (sim)
+        {
+            // Idle tank with default FireAtWill at (10, 10)
+            EntityId shooter = world.CreateUnit(1, 1, new Vector2(10f, 10f), 6f, 100, 10);
+            // Enemy starting out of range at (60, 10)
+            EntityId enemy = world.CreateUnit(2, 1, new Vector2(60f, 10f), 6f, 100, 10);
+
+            for (int i = 0; i < 4; i++) sim.Step();
+            world.TryGetCombatState(shooter, out WorldState.CombatState csInit);
+            Assert.Equal(10, csInit.Ammunition);
+
+            // Enemy enters range at (30, 10)
+            world.SetPosition(enemy, new Vector2(30f, 10f));
+            for (int i = 0; i < 4; i++) sim.Step();
+
+            world.TryGetCombatState(shooter, out WorldState.CombatState csFired);
+            Assert.Equal(9, csFired.Ammunition);
+            world.TryGetCombatState(enemy, out WorldState.CombatState enemyCs);
+            Assert.Equal(50, enemyCs.CurrentHealth);
+        }
+    }
+
+    [Fact]
+    public void AutoFire_HoldFire_NeverFiresAutonomously()
+    {
+        var (sim, world, _) = CreateSetup(weaponRange: 40f, reloadTicks: 10, damage: 50);
+        using (sim)
+        {
+            EntityId shooter = world.CreateUnit(1, 1, new Vector2(10f, 10f), 6f, 100, 10);
+            EntityId enemy = world.CreateUnit(2, 1, new Vector2(30f, 10f), 6f, 100, 10);
+            world.SetFireStance(shooter, FireStance.HoldFire);
+
             for (int i = 0; i < 10; i++) sim.Step();
-            world.TryGetCombatState(attacker, out WorldState.CombatState csFiredAgain);
-            Assert.Equal(8, csFiredAgain.Ammunition);
-            world.TryGetCombatState(nearTarget, out WorldState.CombatState tsNear2);
-            Assert.Equal(50, tsNear2.CurrentHealth);
+
+            world.TryGetCombatState(shooter, out WorldState.CombatState cs);
+            Assert.Equal(10, cs.Ammunition);
+            world.TryGetCombatState(enemy, out WorldState.CombatState enemyCs);
+            Assert.Equal(100, enemyCs.CurrentHealth);
+        }
+    }
+
+    [Fact]
+    public void AutoFire_ReturnFire_FiresOnlyAfterBeingShotAt()
+    {
+        var (sim, world, _) = CreateSetup(weaponRange: 40f, reloadTicks: 10, damage: 25);
+        using (sim)
+        {
+            EntityId unit1 = world.CreateUnit(1, 1, new Vector2(10f, 10f), 6f, 100, 10);
+            EntityId unit2 = world.CreateUnit(2, 1, new Vector2(30f, 10f), 6f, 100, 10);
+            world.SetFireStance(unit1, FireStance.ReturnFire);
+            world.SetFireStance(unit2, FireStance.HoldFire);
+
+            // Unit 1 sees unit 2 in range, but unit 2 has not fired -> Unit 1 does NOT fire
+            for (int i = 0; i < 5; i++) sim.Step();
+            world.TryGetCombatState(unit1, out WorldState.CombatState cs1Init);
+            Assert.Equal(10, cs1Init.Ammunition);
+
+            // Unit 2 fires an explicit shot at Unit 1
+            Assert.True(sim.Detection!.TryGetContactByEntity(2, unit1, out ContactObservation c1));
+            Assert.True(sim.TryEnqueue(2, new AttackCommand(1, sim.Tick, unit2, c1.Id)));
+            sim.Step(); // Unit 2 shoots Unit 1
+
+            world.TryGetCombatState(unit1, out WorldState.CombatState u1AfterHit);
+            Assert.Equal(75, u1AfterHit.CurrentHealth);
+
+            // Next step: Unit 1 now has TookFire from Unit 2 -> Unit 1 auto-fires back in ReturnFire!
+            sim.Step();
+            world.TryGetCombatState(unit1, out WorldState.CombatState cs1Returned);
+            Assert.Equal(9, cs1Returned.Ammunition);
+            world.TryGetCombatState(unit2, out WorldState.CombatState cs2Damaged);
+            Assert.Equal(75, cs2Damaged.CurrentHealth);
+        }
+    }
+
+    [Fact]
+    public void AutoFire_MovingUnit_DoesNotAutoFire()
+    {
+        var (sim, world, _) = CreateSetup(weaponRange: 40f, reloadTicks: 10, damage: 50);
+        using (sim)
+        {
+            EntityId shooter = world.CreateUnit(1, 1, new Vector2(10f, 10f), 6f, 100, 10);
+            EntityId enemy = world.CreateUnit(2, 1, new Vector2(30f, 10f), 6f, 100, 10);
+
+            // Shooter moves towards (10, 50)
+            Assert.True(sim.TryEnqueue(1, new MoveCommand(1, sim.Tick, shooter, new Vector2(10f, 50f))));
+            sim.Step();
+
+            Assert.True(world.TryGetUnit(shooter, out UnitState uMoving));
+            Assert.True(uMoving.Moving);
+
+            // While moving, shooter does not auto-fire even though enemy is in range and LOS
+            for (int i = 0; i < 5; i++) sim.Step();
+
+            world.TryGetCombatState(shooter, out WorldState.CombatState cs);
+            Assert.Equal(10, cs.Ammunition);
+            world.TryGetCombatState(enemy, out WorldState.CombatState enemyCs);
+            Assert.Equal(100, enemyCs.CurrentHealth);
+        }
+    }
+
+    [Fact]
+    public void AttackOrder_LastKnownTarget_DrivesToLastKnownPositionAndHolds_DropsOnExpiry()
+    {
+        // Wall between (20, 5) and (24, 15)
+        OpaqueStructure wall = new(
+            new StructureId(1), minX: 20f, minY: 0f, minZ: 5f, maxX: 24f, maxY: 6f, maxZ: 15f, isGrounded: true);
+        StaticGeometry geo = new(CreateFlatMap(), [wall]);
+
+        var (sim, world, _) = CreateSetup(geo, weaponRange: 20f, reloadTicks: 10, damage: 50);
+        using (sim)
+        {
+            // Attacker at (10, 10)
+            EntityId attacker = world.CreateUnit(1, 1, new Vector2(10f, 10f), 10f, 100, 10);
+            // Target at (40, 30) with unobstructed view initially
+            EntityId target = world.CreateUnit(2, 1, new Vector2(40f, 30f), 10f, 100, 10);
+            world.SetFireStance(attacker, FireStance.HoldFire);
+            world.SetFireStance(target, FireStance.HoldFire);
+
+            for (int i = 0; i < 4; i++) sim.Step();
+            Assert.True(sim.Detection!.TryGetContactByEntity(1, target, out ContactObservation contact));
+
+            // Issue attack order on target out of range (dist ~31.6m > 20m)
+            Assert.True(sim.TryEnqueue(1, new AttackCommand(1, sim.Tick, attacker, contact.Id)));
+            sim.Step();
+
+            // Now move target behind wall to (40, 10), so attacker loses line of sight and target becomes LastKnown
+            world.SetPosition(target, new Vector2(40f, 10f));
+            for (int i = 0; i < 4; i++) sim.Step();
+
+            Assert.True(sim.Detection.TryGetContact(1, contact.Id, out ContactObservation cLastKnown));
+            Assert.Equal(ContactState.LastKnown, cLastKnown.State);
+
+            // Unit drives towards last known position and holds there
+            world.TryGetCombatState(attacker, out WorldState.CombatState csPursuing);
+            Assert.True(csPursuing.HasAttackOrder);
+            Assert.Equal(AttackExecutionStatus.TargetLost, csPursuing.Status);
+
+            // Advance until contact memory duration expires (DefaultMemoryDurationTicks = 100 ticks = 5s)
+            for (int i = 0; i < 110; i++) sim.Step();
+
+            // Contact expired, order dropped!
+            world.TryGetCombatState(attacker, out WorldState.CombatState csExpired);
+            Assert.False(csExpired.HasAttackOrder, "Attack order must drop when LastKnown contact expires.");
+            Assert.Equal(AttackExecutionStatus.None, csExpired.Status);
         }
     }
 
@@ -1006,6 +1192,8 @@ public sealed class CombatTests
             EntityId p2Target = world.CreateUnit(2, 1, new Vector2(30f, 10f), 6f, 100, 10);
             // Player 3 killer at (30, 20) with direct unblocked view of (30, 12.5)
             EntityId p3Killer = world.CreateUnit(3, 1, new Vector2(30f, 20f), 6f, 100, 10);
+            world.SetFireStance(p1Attacker, FireStance.HoldFire);
+            world.SetFireStance(p3Killer, FireStance.HoldFire);
 
             for (int i = 0; i < 4; i++) sim.Step();
             Assert.True(sim.Detection!.TryGetContactByEntity(1, p2Target, out ContactObservation p1Contact));
@@ -1066,6 +1254,159 @@ public sealed class CombatTests
             world.TryGetCombatState(p1Attacker, out WorldState.CombatState csExpired);
             Assert.False(csExpired.HasAttackOrder);
             Assert.Equal(AttackExecutionStatus.None, csExpired.Status);
+        }
+    }
+
+    [Fact]
+    public void ReturnFireAndPursuit_WorksAfterMoreThan1024SpawnedUnits()
+    {
+        var (sim, world, _) = CreateSetup();
+        using (sim)
+        {
+            // Create and remove more than 1024 units so EntityId grows past 1024
+            for (int i = 0; i < 1100; i++)
+            {
+                EntityId dummy = world.CreateUnit(1, 1, new Vector2(50f, 50f), 6f, 100, 10);
+                world.RemoveUnit(dummy);
+            }
+
+            // Attacker and defender now have EntityId.Value > 1024
+            EntityId unit1 = world.CreateUnit(1, 1, new Vector2(10f, 10f), 6f, 100, 10);
+            EntityId unit2 = world.CreateUnit(2, 1, new Vector2(25f, 10f), 6f, 100, 10);
+            Assert.True(unit1.Value > 1024);
+            Assert.True(unit2.Value > 1024);
+
+            world.SetFireStance(unit1, FireStance.ReturnFire);
+            world.SetFireStance(unit2, FireStance.HoldFire);
+
+            for (int i = 0; i < 4; i++) sim.Step();
+
+            Assert.True(sim.Detection!.TryGetContactByEntity(1, unit2, out ContactObservation c2));
+            Assert.True(sim.Detection!.TryGetContactByEntity(2, unit1, out ContactObservation c1));
+
+            // unit1 is in ReturnFire stance and has taken no fire: holds fire
+            world.TryGetCombatState(unit1, out WorldState.CombatState cs1Init);
+            Assert.Equal(10, cs1Init.Ammunition);
+
+            // unit2 fires at unit1
+            Assert.True(sim.TryEnqueue(2, new AttackCommand(1, sim.Tick, unit2, c1.Id)));
+            sim.Step();
+
+            // unit1 was damaged by unit2
+            world.TryGetCombatState(unit1, out WorldState.CombatState cs1Damaged);
+            Assert.Equal(unit2, cs1Damaged.LastTookFireAttacker);
+
+            // In next step, unit1 auto-fires in response (ReturnFire)
+            sim.Step();
+            world.TryGetCombatState(unit1, out WorldState.CombatState cs1Fired);
+            Assert.Equal(9, cs1Fired.Ammunition);
+
+            // Test pursuit with EntityId > 1024: unit2 moves out of weapon range to (100, 10)
+            world.UpdateUnitNavigation(unit2, new Vector2(100f, 10f), new Vector2(100f, 10f), false);
+            for (int i = 0; i < 4; i++) sim.Step();
+
+            Assert.True(sim.Detection!.TryGetContactByEntity(1, unit2, out ContactObservation c2Distant));
+            Assert.True(sim.TryEnqueue(1, new AttackCommand(2, sim.Tick, unit1, c2Distant.Id)));
+            sim.Step();
+
+            world.TryGetCombatState(unit1, out WorldState.CombatState cs1Pursuit);
+            Assert.Equal(AttackExecutionStatus.OutOfRange, cs1Pursuit.Status);
+            Assert.Equal(c2Distant.Position, cs1Pursuit.PursuitDestination);
+        }
+    }
+
+    [Fact]
+    public void AttackOrder_UnreachableTarget_DoesNotSpamPathRequests_PlayerMoveSucceeds()
+    {
+        // Low wall of height 0.5m spans across the map at x=28..32.
+        // It does not block line of sight (eye height 1.5m), but completely blocks ground navigation.
+        OpaqueStructure wall = new(
+            new StructureId(1), minX: 28f, minY: 0f, minZ: 0f, maxX: 32f, maxY: 0.5f, maxZ: 127f, isGrounded: true);
+        StaticGeometry geo = new(CreateFlatMap(), [wall]);
+        // Weapon range 20m: target at 50m requires pursuit
+        var (sim, world, _) = CreateSetup(geo, weaponRange: 20f);
+        using (sim)
+        {
+            NavigationSystem nav = (sim.Rules as RuleSet)!.FindSystem<NavigationSystem>()!;
+            EntityId attacker = world.CreateUnit(1, 1, new Vector2(10f, 10f), 6f, 100, 10);
+            EntityId target = world.CreateUnit(2, 1, new Vector2(50f, 10f), 6f, 100, 10); // across the wall: unreachable
+
+            for (int i = 0; i < 4; i++) sim.Step();
+            Assert.True(sim.Detection!.TryGetContactByEntity(1, target, out ContactObservation contact));
+
+            // Order attack on unreachable target: out of range so unit tries to navigate
+            Assert.True(sim.TryEnqueue(1, new AttackCommand(1, sim.Tick, attacker, contact.Id)));
+            sim.Step();
+
+            // Run the simulation for 3 seconds with the unreachable target. With the throttle the
+            // pursuit gives up after one failed search; without it the unit keeps asking (4 searches
+            // in 3 s here, limited only by the pending search, and more with a faster planner).
+            int searchesBefore = nav.CompletedSearches + nav.FailedSearches;
+            for (int i = 0; i < 60; i++)
+            {
+                sim.Step();
+            }
+            int pursuitSearches = nav.CompletedSearches + nav.FailedSearches - searchesBefore;
+            Assert.True(pursuitSearches <= 1, $"Pursuit of an unreachable target requested {pursuitSearches} paths in 3 s.");
+
+            // Navigation request queue has NOT filled up with repeated attempts
+            // Issue a regular move command to a valid open point on own side
+            Assert.True(sim.TryEnqueue(1, new MoveCommand(2, sim.Tick, attacker, new Vector2(15f, 15f))));
+            sim.Step();
+            while (nav.GetUnitStatus(attacker) is PathRequestStatus.Searching or PathRequestStatus.Pending)
+            {
+                sim.Step();
+            }
+
+            // The player move must succeed without hitting CapacityExceeded
+            Assert.NotEqual(PathRequestStatus.CapacityExceeded, nav.GetUnitStatus(attacker));
+            Assert.Equal(PathRequestStatus.PathFound, nav.GetUnitStatus(attacker));
+        }
+    }
+
+    [Fact]
+    public void AutoFire_DoesNotScanOrAcquireWhileReloading()
+    {
+        var (sim, world, _) = CreateSetup();
+        using (sim)
+        {
+            EntityId shooter = world.CreateUnit(1, 1, new Vector2(10f, 10f), 6f, 100, 10);
+            EntityId target1 = world.CreateUnit(2, 1, new Vector2(20f, 10f), 6f, 100, 10);
+            EntityId target2 = world.CreateUnit(2, 1, new Vector2(20f, 15f), 6f, 100, 10);
+            world.SetFireStance(target1, FireStance.HoldFire);
+            world.SetFireStance(target2, FireStance.HoldFire);
+
+            for (int i = 0; i < 4; i++) sim.Step();
+
+            // Shooter auto-fires at target1
+            world.TryGetCombatState(shooter, out WorldState.CombatState csAfterShot);
+            Assert.True(csAfterShot.ReloadTicksRemaining > 0, "Shooter must be reloading after shot.");
+            Assert.Equal(target1, csAfterShot.TargetEntityId);
+
+            // Destroy/remove target1 so shooter loses its current retained target
+            world.RemoveUnit(target1);
+            sim.Detection!.NotifyEntityDestroyed(target1);
+
+            // Step 1 tick: target1 is gone. Target2 is in range.
+            // But because shooter is reloading, it must NOT scan contacts or acquire target2 yet.
+            sim.Step();
+
+            world.TryGetCombatState(shooter, out WorldState.CombatState csReloading);
+            Assert.True(csReloading.ReloadTicksRemaining > 0);
+            Assert.Equal(0u, csReloading.TargetContactId.Value);
+
+            // Advance remaining reload ticks
+            int remaining = csReloading.ReloadTicksRemaining;
+            for (int i = 0; i < remaining; i++)
+            {
+                sim.Step();
+            }
+
+            // Once reload finishes and weapon is ready, shooter scans and acquires target2 (and fires)
+            world.TryGetCombatState(shooter, out WorldState.CombatState csReady);
+            Assert.NotEqual(0u, csReady.TargetContactId.Value);
+            Assert.Equal(target2, csReady.TargetEntityId);
+            Assert.True(csReady.Ammunition < 10);
         }
     }
 }
