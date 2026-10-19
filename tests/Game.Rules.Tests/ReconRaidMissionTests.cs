@@ -413,6 +413,7 @@ public sealed class ReconRaidMissionTests
             sim.UpdateKnowledge(knowledge2);
         }
 
+        using NoGcAllocationWindow window = new();
         long before = GC.GetAllocatedBytesForCurrentThread();
         for (int i = 0; i < 100; i++)
         {
@@ -422,7 +423,7 @@ public sealed class ReconRaidMissionTests
         }
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-        Assert.Equal(0L, allocated);
+        Assert.True(allocated == 0, window.Describe(allocated));
     }
 
     [Fact]

@@ -494,12 +494,9 @@ public sealed class VisibilityRulesTests
             }
         }
 
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-        GC.Collect();
-
         // 100 measured ticks
         double[] tickTimesMs = new double[100];
+        using NoGcAllocationWindow window = new();
         long totalAllocated = 0;
 
         for (int i = 0; i < 100; i++)
@@ -528,7 +525,7 @@ public sealed class VisibilityRulesTests
         double p99Ms = tickTimesMs[98];
 
         // Steady state execution must not allocate managed memory
-        Assert.Equal(0L, totalAllocated);
+        Assert.True(totalAllocated == 0, window.Describe(totalAllocated));
 
         // Functional CI smoke gate: guarantees zero allocations in steady state
         // and verifies simulation frames progress without unbounded stalls.
