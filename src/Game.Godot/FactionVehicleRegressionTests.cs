@@ -100,6 +100,8 @@ internal static class FactionVehicleRegressionTests
         try
         {
             Require(view.LeftMotionMeshCount > 0 && view.RightMotionMeshCount > 0, "Track motion meshes were not found.");
+            view.SetHullHeading(0f); // the spawn heading is not a turn
+            Require(view.LeftTrackTravel == 0f && view.RightTrackTravel == 0f, "The spawn heading must not move the tracks.");
             view.UpdatePosition(new Vector3(0, 0, 0));
             view.UpdatePosition(new Vector3(0, 0, -3));
             // 3 world meters at visual scale 0.75 is 4 model meters on both sides.
@@ -107,11 +109,13 @@ internal static class FactionVehicleRegressionTests
                 "Straight driving must move both tracks by the same model distance.");
             Require(Mathf.IsEqualApprox(view.GetShaderTrackTravel(left: true), 4f), "Track travel did not reach the shader.");
             // A gentle left turn: the right track runs farther than the left one.
+            view.SetHullHeading(0.1f);
             view.UpdatePosition(new Vector3(-0.3f, 0, -6));
             Require(view.RightTrackTravel - view.LeftTrackTravel > 0.05f, "A left turn must drive the right track farther.");
             float before = view.LeftTrackTravel + view.RightTrackTravel;
             float differentialBefore = view.RightTrackTravel - view.LeftTrackTravel;
             // A 180 degree heading snap is clamped to 0.5 m per side instead of spinning the tracks.
+            view.SetHullHeading(0.1f - Mathf.Pi);
             view.UpdatePosition(new Vector3(-0.3f, 0, -5.9f));
             float differentialChange = Mathf.Abs(view.RightTrackTravel - view.LeftTrackTravel - differentialBefore);
             Require(differentialChange <= 1.0001f, "Heading snaps must not spin the tracks.");

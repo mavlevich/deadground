@@ -63,7 +63,8 @@ public sealed class WorldState : IDisposable
         EntityId LastTookFireAttacker = default,
         int LastTookFireTick = -1,
         int LastPursuitRequestTick = -1,
-        float TurretYaw = 0f);
+        float TurretYaw = 0f,
+        float HullHeading = 0f);
 
     public EntityId CreateUnit(int owner, ushort definition, Vector2 position, float speed, int maxHealth = 100, int ammo = 0, float initialTurretYaw = 0f)
     {
@@ -87,6 +88,7 @@ public sealed class WorldState : IDisposable
             default,
             -1,
             -1,
+            initialTurretYaw,
             initialTurretYaw);
         Entity entity = _storage.Create(new Identity(id, owner, definition),
             new Position(position), new Motion(position, speed, false), combat);
@@ -151,6 +153,7 @@ public sealed class WorldState : IDisposable
         Entity entity = _entities[index];
         ref Position pos = ref _storage.Get<Position>(entity);
         ref Motion motion = ref _storage.Get<Motion>(entity);
+        TurnHullAlong(ref _storage.Get<CombatState>(entity), position - pos.Value);
         pos.Value = position;
         motion.Target = target;
         motion.Active = active;
@@ -190,10 +193,15 @@ public sealed class WorldState : IDisposable
     {
         if (!_indices.TryGetValue(id, out int index)) return false;
         ref CombatState combat = ref _storage.Get<CombatState>(_entities[index]);
+        // Only an ordered target is dropped. A target picked by auto-fire stays, so a unit driving off
+        // keeps its gun on it; the combat system drops it as soon as it is no longer valid.
+        if (combat.HasAttackOrder)
+        {
+            combat.TargetContactId = default;
+            combat.TargetEntityId = default;
+            combat.Status = AttackExecutionStatus.None;
+        }
         combat.HasAttackOrder = false;
-        combat.TargetContactId = default;
-        combat.TargetEntityId = default;
-        combat.Status = AttackExecutionStatus.None;
         combat.PursuitDestination = default;
         combat.LastPursuitRequestTick = -1;
         return true;
@@ -206,6 +214,24 @@ public sealed class WorldState : IDisposable
         combat.Stance = stance;
         return true;
     }
+
+    /// <summary>
+    /// The hull faces the way the unit just moved. Until hull turn rates land (TDD 9.5) it turns at once.
+    /// With no target the turret rides on the hull, so a hull turn carries the gun along. With a target
+    /// the gunner keeps the gun on it while the hull turns (a real hull turns over seconds and the
+    /// gunner tracks through it), so the gun's world bearing stays.
+    /// </summary>
+    internal static void TurnHullAlong(ref CombatState combat, Vector2 step)
+    {
+        if (step.LengthSquared() < MinHullStep * MinHullStep) return;
+        float hull = MathF.Atan2(-step.X, -step.Y);
+        if (combat.TargetContactId.Value == 0)
+            combat.TurretYaw = CombatSystem.NormalizeYaw(combat.TurretYaw + CombatSystem.ShorterArcDelta(combat.HullHeading, hull));
+        combat.HullHeading = hull;
+    }
+
+    // Shorter moves (a final nudge onto the target point) do not say which way the hull faces.
+    internal const float MinHullStep = 0.01f;
 
     public bool SetTurretYaw(EntityId id, float yaw)
     {

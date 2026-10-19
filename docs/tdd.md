@@ -367,9 +367,11 @@ Path following is a separate problem from path planning and needs as much attent
 
 ### 9.5 Vehicle heading and steering
 
-Status: planned, next movement change. Today the simulation has no hull heading: a unit moves in a
-straight line toward its next waypoint, and the client infers facing from displacement. Facing at the
-end of a move, reversing and armor by side all need heading as authoritative state.
+Status: stage 0 landed, stage 1 is the next movement change. Stage 0: every unit has a hull heading
+in the simulation, set to the direction of its last step along the route and turning at once (no turn
+rate). It is replicated as described below, and the client draws hulls from it. A unit still moves in
+a straight line toward its next waypoint. Facing at the end of a move, reversing and armor by side
+need the steering of stage 1.
 
 State and convention:
 
@@ -559,7 +561,12 @@ Every unit has a fire stance: `FireAtWill` (default), `ReturnFire`, or `HoldFire
 - With an active target (attack order or auto-fire), the turret turns toward the target at most at its traverse rate per tick, along the shorter arc.
 - A shot is fired only when the turret points at the target within `TurretAlignmentTolerance` (0.05 radians, about 2.86 degrees).
 - Reload continues while turning. If the weapon is loaded and line of sight is clear, firing occurs on the tick the turret enters alignment tolerance.
-- Without a target, the turret keeps its yaw. Spawned units start facing a direction given by the scenario (toward the enemy side by default in battle and combat scenarios).
+- The hull heading (section 9.5, stage 0) is the direction of the unit's last step along its route, turning at once (no turn rate yet). Spawned units start with hull and gun along the scenario facing (toward the enemy side by default in battle and combat scenarios).
+- The turret rides on the hull. With no target, a hull turn carries the gun along, so a tank driving without a target keeps its gun over the front. With a target, the gunner keeps the gun on it through hull turns (a real hull turns over seconds and the gunner tracks through it).
+- Without a target the gunner lays the gun back over the front at the traverse rate.
+- A move order drops an ordered attack target, not a target picked by auto-fire. A unit driving off keeps its gun on that target while it stays valid (in sight and range), for example watching the enemy over the rear deck when pulling back. Moving units still do not fire; mobile fire is a later rule.
+- Turret yaw goes over the wire in 65536 steps per turn, so 0 and the quarter turns are exact.
+- The client takes both the hull heading and the turret yaw from the same snapshots with the same interpolation, so a gun riding on the hull stays fixed to it on screen.
 
 #### Cued fire
 
@@ -677,7 +684,7 @@ Status: planned for M2. M1 units keep one weapon each, so the M1 exit does not d
 - Map objects use `MapObjectId`. Their static geometry stays in the map package; snapshots carry allowed mutable fields such as bridge condition and objective ownership. A missing knowledge entry does not mean the object was destroyed or restored to its initial state.
 - Clients apply a full snapshot only after the complete message is received. On reconnect the same state blocks restore the allowed view without needing earlier presentation events.
 - Budget estimate: 100 unit records at about 16 bytes are 1.6 KB, or 16 KB/s at 10 Hz. This estimates only unit records. Measurements include contacts, world state, headers and transport overhead against the 30 KB/s budget.
-- Protocol version 12: own unit records are 33 bytes (`ushort TurretYaw` (2) at offset 31, quantized to 16 bits). Contact records are 22 bytes (`ushort TurretYaw` (2) at offset 20, quantized to 16 bits). Contacts carry the turret yaw observed at the moment of sighting; `LastKnown` contacts freeze the last observed yaw.
+- Protocol version 13: own unit records are 35 bytes (`ushort TurretYaw` (2) at offset 31, `ushort HullHeading` (2) at offset 33). Contact records are 24 bytes (`ushort TurretYaw` (2) at offset 20, `ushort HullHeading` (2) at offset 22). Both angles are quantized to 65536 steps per turn. Contacts carry the turret yaw and hull heading observed at the moment of sighting; `LastKnown` contacts freeze the last observed values.
 - Delta compression (acknowledged baselines, dirty fields) is added only if measurements exceed the budget.
 - Quantization: ground units send X, Z and support surface. Height is computed on the client (section 8.3). 10 cm precision on a 16 km map is 18 bits per axis.
 - Clients render about 100 to 150 ms behind the server and interpolate.
@@ -877,8 +884,8 @@ Planned controls (client only unless a section is named):
   `Assets/Vehicles/visuals.json` mapping, keyed by content unit ID rather than numeric catalog order.
 - Imported scenes are cached and instantiated per unit. Static parts are combined by material
   within each functional pivot. The tank has 14 mesh surfaces and the recon vehicle has 10.
-- Presentation derives hull facing from interpolated own-unit displacement. The tank turret
-  faces only a currently observed target contact. This does not change server movement or combat.
+- Presentation takes hull facing from the replicated hull heading (section 9.5) and the turret
+  from the replicated turret yaw. This does not change server movement or combat.
 - Selection, health bars, event recoil and view cleanup remain independent of imported meshes.
 - Enemy contacts retain their existing knowledge-filtered markers. Unknown enemy types are
   never resolved through the own-unit visual mapping.
@@ -981,7 +988,7 @@ still require large-battle render validation before setting production GPU budge
 - Each unit view holds the three authored LODs and switches by orthographic camera size: LOD0 below
   45, LOD1 below 95, LOD2 beyond. Turret aim and barrel recoil are applied to every LOD.
 - Track motion is presentation only. The view accumulates travel per side from interpolated
-  displacement, with a turn differential from the change in inferred heading, clamped so heading snaps
+  displacement, with a turn differential from the change in replicated heading, clamped so heading snaps
   do not spin the tracks. The travel goes to the shader as a per-instance parameter. Wheels rotate
   about their axles; LOD0 track links move along the run and repeat seamlessly after one pattern cycle.
   No nodes or draw calls are added for this.

@@ -231,12 +231,12 @@ public sealed class TurretTraverseTests
 
             OwnUnitObservation own = new(
                 new EntityId(10), 1, new Vector2(50f, 50f), 0,
-                TurretYaw: expectedYaw);
+                TurretYaw: expectedYaw, HullHeading: -expectedYaw);
 
             ContactObservation contact = new(
                 new ContactId(20), ContactState.Current, ContactClassification.Tank, 1,
                 new Vector2(80f, 80f), 5,
-                TurretYaw: expectedYaw);
+                TurretYaw: expectedYaw, HullHeading: -expectedYaw);
 
             int size = WireProtocol.WriteSnapshot(buffer, 1, 10, [own], [contact], []);
             ClientReplica replica = new();
@@ -249,6 +249,10 @@ public sealed class TurretTraverseTests
             Assert.Equal(1, replica.Contacts.Length);
             Assert.True(MathF.Abs(expectedYaw - replica.Contacts[0].TurretYaw) < 0.0002f,
                 $"Contact TurretYaw roundtrip error {MathF.Abs(expectedYaw - replica.Contacts[0].TurretYaw)} for yaw {expectedYaw}");
+            Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(-expectedYaw, replica.OwnUnits[0].HullHeading)) < 0.0002f,
+                $"Unit HullHeading roundtrip gave {replica.OwnUnits[0].HullHeading} for {-expectedYaw}");
+            Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(-expectedYaw, replica.Contacts[0].HullHeading)) < 0.0002f,
+                $"Contact HullHeading roundtrip gave {replica.Contacts[0].HullHeading} for {-expectedYaw}");
         }
     }
 
@@ -333,22 +337,233 @@ public sealed class TurretTraverseTests
         byte[] buffer = new byte[WireProtocol.MaxMessageSize];
 
         // Snapshot at tick 10 with yaw 3.0f
-        OwnUnitObservation u10 = new(new EntityId(1), 1, new Vector2(10f, 10f), 0, TurretYaw: 3.0f);
-        ContactObservation c10 = new(new ContactId(101), ContactState.Current, ContactClassification.Tank, 1, new Vector2(20f, 20f), 10, TurretYaw: 3.0f);
+        OwnUnitObservation u10 = new(new EntityId(1), 1, new Vector2(10f, 10f), 0, TurretYaw: 3.0f, HullHeading: 3.0f);
+        ContactObservation c10 = new(new ContactId(101), ContactState.Current, ContactClassification.Tank, 1, new Vector2(20f, 20f), 10, TurretYaw: 3.0f, HullHeading: 3.0f);
         int size1 = WireProtocol.WriteSnapshot(buffer, 1, 10, [u10], [c10], []);
         Assert.True(replica.TryApply(buffer.AsSpan(0, size1)));
 
         // Snapshot at tick 20 with yaw -3.0f
-        OwnUnitObservation u20 = new(new EntityId(1), 1, new Vector2(10f, 10f), 0, TurretYaw: -3.0f);
-        ContactObservation c20 = new(new ContactId(101), ContactState.Current, ContactClassification.Tank, 1, new Vector2(20f, 20f), 20, TurretYaw: -3.0f);
+        OwnUnitObservation u20 = new(new EntityId(1), 1, new Vector2(10f, 10f), 0, TurretYaw: -3.0f, HullHeading: -3.0f);
+        ContactObservation c20 = new(new ContactId(101), ContactState.Current, ContactClassification.Tank, 1, new Vector2(20f, 20f), 20, TurretYaw: -3.0f, HullHeading: -3.0f);
         int size2 = WireProtocol.WriteSnapshot(buffer, 2, 20, [u20], [c20], []);
         Assert.True(replica.TryApply(buffer.AsSpan(0, size2)));
 
         // Sample at render tick 15 (alpha = 0.5)
-        float sampledUnitYaw = replica.SampleTurretYaw(new EntityId(1), 15.0);
-        float sampledContactYaw = replica.SampleContactTurretYaw(new ContactId(101), 15.0);
+        replica.SampleYaws(new EntityId(1), 15.0, out float sampledUnitYaw, out float sampledUnitHull);
+        replica.SampleContactYaws(new ContactId(101), 15.0, out float sampledContactYaw, out float sampledContactHull);
 
         Assert.True(MathF.Abs(sampledUnitYaw) > 3.0f, $"Sampled unit yaw {sampledUnitYaw} must cross pi along shorter arc");
         Assert.True(MathF.Abs(sampledContactYaw) > 3.0f, $"Sampled contact yaw {sampledContactYaw} must cross pi along shorter arc");
+        Assert.True(MathF.Abs(sampledUnitHull) > 3.0f, $"Sampled unit hull {sampledUnitHull} must cross pi along shorter arc");
+        Assert.True(MathF.Abs(sampledContactHull) > 3.0f, $"Sampled contact hull {sampledContactHull} must cross pi along shorter arc");
+    }
+
+    private static (Simulation Sim, WorldState World, UnitCatalog Catalog) FlatWorld(params OpaqueStructure[] structures)
+    {
+        UnitCatalog catalog = ColdWarContent.LoadCatalog();
+        const int size = 65;
+        HeightMap map = new(size, size, 10f, 0.01f, new ushort[size * size]);
+        OpsRules rules = new(new StaticGeometry(map, structures), catalog, null);
+        WorldState world = new(map);
+        return (new Simulation(world, rules), world, catalog);
+    }
+
+    private static EntityId Spawn(WorldState world, UnitCatalog catalog, int player, string type, Vector2 at, float yaw,
+        int health = 0)
+    {
+        UnitDefinition def = catalog.RequireDefinition(type);
+        return world.CreateUnit(player, catalog.RequireDefinitionIndex(type), at, def.Speed,
+            health > 0 ? health : def.MaxHealth, catalog.GetAmmoCapacity(def), initialTurretYaw: yaw);
+    }
+
+    [Fact]
+    public void DrivingOffWithoutTarget_GunStaysOverTheFront()
+    {
+        // Playtest: the gun lagged behind every hull turn and never settled. The turret rides on the
+        // hull, so with no target it stays over the front whichever way the tank drives.
+        (Simulation sim, WorldState world, UnitCatalog catalog) = FlatWorld();
+        using Simulation _ = sim;
+        EntityId tank = Spawn(world, catalog, 1, "t62", new Vector2(100f, 100f), 0f);
+        Assert.True(sim.TryEnqueue(1, new MoveCommand(1, sim.Tick, tank, new Vector2(500f, 100f))));
+        bool turned = false;
+        for (int tick = 1; tick <= 60; tick++)
+        {
+            sim.Step();
+            world.TryGetCombatState(tank, out WorldState.CombatState cs);
+            Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(cs.HullHeading, cs.TurretYaw)) < 0.0001f,
+                $"Tick {tick}: gun {cs.TurretYaw} off the hull {cs.HullHeading}");
+            turned |= MathF.Abs(CombatSystem.ShorterArcDelta(cs.HullHeading, -MathF.PI / 2f)) < 0.001f;
+        }
+        Assert.True(turned, "The hull must face the travel toward +X.");
+    }
+
+    [Fact]
+    public void HullFacesEachLegOfTheRoute_NotTheFinalTarget()
+    {
+        // Playtest: hull and gun turned apart. The sim aimed the hull at the order's end point while the
+        // client turned it along the route, so around an obstacle the two disagreed.
+        OpaqueStructure wall = new(new StructureId(1), 190f, 0f, 60f, 210f, 5f, 400f);
+        (Simulation sim, WorldState world, UnitCatalog catalog) = FlatWorld(wall);
+        using Simulation _ = sim;
+        EntityId tank = Spawn(world, catalog, 1, "t62", new Vector2(100f, 200f), -MathF.PI / 2f);
+        Assert.True(sim.TryEnqueue(1, new MoveCommand(1, sim.Tick, tank, new Vector2(300f, 200f))));
+        Vector2 previous = new(100f, 200f);
+        int offAxisTicks = 0;
+        for (int tick = 1; tick <= 400; tick++)
+        {
+            sim.Step();
+            world.TryGetUnit(tank, out UnitState unit);
+            world.TryGetCombatState(tank, out WorldState.CombatState cs);
+            Vector2 step = unit.Position - previous;
+            previous = unit.Position;
+            if (step.Length() < 0.05f) continue;
+            float travel = MathF.Atan2(-step.X, -step.Y);
+            Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(travel, cs.HullHeading)) < 0.001f,
+                $"Tick {tick}: hull {cs.HullHeading}, last step went {travel}");
+            Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(cs.HullHeading, cs.TurretYaw)) < 0.0001f,
+                $"Tick {tick}: gun {cs.TurretYaw} off the hull {cs.HullHeading}");
+            if (MathF.Abs(CombatSystem.ShorterArcDelta(travel, -MathF.PI / 2f)) > 0.2f) offAxisTicks++;
+        }
+        Assert.True(offAxisTicks > 10, $"The route must bend around the wall, {offAxisTicks} off-axis ticks.");
+    }
+
+    [Fact]
+    public void UnarmedAndRuleSetMovers_TurnTheirHullsToo()
+    {
+        // The hull heading is sent for every unit, so it must not depend on having a gun or a combat system.
+        (Simulation sim, WorldState world, UnitCatalog catalog) = FlatWorld();
+        using Simulation _ = sim;
+        EntityId jeep = Spawn(world, catalog, 1, "m151a2", new Vector2(100f, 100f), 0f);
+        Assert.True(sim.TryEnqueue(1, new MoveCommand(1, sim.Tick, jeep, new Vector2(400f, 100f))));
+        for (int tick = 0; tick < 20; tick++) sim.Step();
+        world.TryGetCombatState(jeep, out WorldState.CombatState jeepState);
+        Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(jeepState.HullHeading, -MathF.PI / 2f)) < 0.001f,
+            $"An unarmed unit must face its travel, hull {jeepState.HullHeading}");
+
+        using WorldState plainWorld = new(HeightMap.CreatePrototype());
+        using Simulation plain = new(plainWorld, new OpsRules());
+        EntityId box = plainWorld.CreateUnit(1, 0, new Vector2(10f, 10f), 6f);
+        plainWorld.SetTurretYaw(box, 0.4f); // the gun off the front by 0.4 rad
+        Assert.True(plain.TryEnqueue(1, new MoveCommand(1, plain.Tick, box, new Vector2(10f, 40f))));
+        for (int tick = 0; tick < 10; tick++) plain.Step();
+        plainWorld.TryGetCombatState(box, out WorldState.CombatState boxState);
+        Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(boxState.HullHeading, MathF.PI)) < 0.001f,
+            $"The plain movement system must turn the hull to its travel, hull {boxState.HullHeading}");
+        Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(boxState.TurretYaw, MathF.PI + 0.4f)) < 0.001f,
+            $"The gun must ride on the turned hull, yaw {boxState.TurretYaw}");
+    }
+
+    [Fact]
+    public void HullHeading_ReachesOwnKnowledgeAndEnemyContacts()
+    {
+        (Simulation sim, WorldState world, UnitCatalog catalog) = FlatWorld();
+        using Simulation _ = sim;
+        EntityId watcher = Spawn(world, catalog, 1, "brdm2", new Vector2(300f, 100f), 0f);
+        EntityId tank = Spawn(world, catalog, 2, "t62", new Vector2(250f, 140f), 0f);
+        world.SetFireStance(watcher, FireStance.HoldFire);
+        world.SetFireStance(tank, FireStance.HoldFire);
+        // First seen standing still and facing north, then seen driving east. The gun starts well off
+        // the front, so a mix-up of gun and hull shows.
+        for (int tick = 0; tick < 10; tick++) sim.Step();
+        PlayerKnowledge enemy = new(1);
+        sim.UpdateKnowledge(enemy);
+        Assert.Equal(1, enemy.Contacts.Length);
+        Assert.True(MathF.Abs(enemy.Contacts[0].HullHeading) < 0.001f, $"Parked contact hull {enemy.Contacts[0].HullHeading}");
+        world.SetTurretYaw(tank, 1.0f);
+        Assert.True(sim.TryEnqueue(2, new MoveCommand(1, sim.Tick, tank, new Vector2(350f, 140f))));
+        for (int tick = 0; tick < 20; tick++) sim.Step();
+
+        PlayerKnowledge own = new(2);
+        sim.UpdateKnowledge(own);
+        Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(own.OwnUnits[0].HullHeading, -MathF.PI / 2f)) < 0.001f,
+            $"Own knowledge hull {own.OwnUnits[0].HullHeading}");
+
+        sim.UpdateKnowledge(enemy);
+        Assert.Equal(1, enemy.Contacts.Length);
+        Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(enemy.Contacts[0].HullHeading, -MathF.PI / 2f)) < 0.001f,
+            $"Contact hull {enemy.Contacts[0].HullHeading}");
+    }
+
+    [Fact]
+    public void NoTarget_GunReturnsOverTheFrontAtTraverseRate()
+    {
+        (Simulation sim, WorldState world, UnitCatalog catalog) = FlatWorld();
+        using Simulation _ = sim;
+        EntityId tank = Spawn(world, catalog, 1, "t62", new Vector2(100f, 100f), 0f);
+        world.SetTurretYaw(tank, 1.0f); // left over from an engagement, about 57 degrees off the front
+        float cap = catalog.RequireDefinition("t62").TurretTraverseRate * (MathF.PI / 180f) * Simulation.TickSeconds;
+        float previous = 1.0f;
+        int frontTick = -1;
+        for (int tick = 1; tick <= 90; tick++)
+        {
+            sim.Step();
+            world.TryGetCombatState(tank, out WorldState.CombatState cs);
+            Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(previous, cs.TurretYaw)) <= cap + 0.0001f);
+            if (frontTick < 0 && MathF.Abs(cs.TurretYaw) < 0.0001f) frontTick = tick;
+            previous = cs.TurretYaw;
+        }
+        // 1.0 rad at 0.9 degrees per tick: about 64 ticks.
+        Assert.True(frontTick is >= 60 and <= 70, $"Expected the gun over the front after about 64 ticks, got {frontTick}");
+    }
+
+    [Fact]
+    public void PullingBack_KeepsTheGunOnTheEngagedTargetWithoutFiring()
+    {
+        // A tank that drives off from a fight keeps watching its target over the rear deck. It fires
+        // only once it halts again (mobile fire is a later rule).
+        (Simulation sim, WorldState world, UnitCatalog catalog) = FlatWorld();
+        using Simulation _ = sim;
+        EntityId tank = Spawn(world, catalog, 1, "t62", new Vector2(300f, 300f), MathF.PI);
+        EntityId enemy = Spawn(world, catalog, 2, "m60a1", new Vector2(300f, 500f), 0f, health: 100000);
+        world.SetFireStance(enemy, FireStance.HoldFire);
+        for (int tick = 0; tick < 40; tick++) sim.Step();
+        world.TryGetCombatState(tank, out WorldState.CombatState engaged);
+        Assert.NotEqual(0u, engaged.TargetContactId.Value);
+
+        Assert.True(sim.TryEnqueue(1, new MoveCommand(1, sim.Tick, tank, new Vector2(300f, 60f))));
+        int ammo = -1;
+        for (int tick = 1; tick <= 40; tick++)
+        {
+            sim.Step();
+            world.TryGetCombatState(tank, out WorldState.CombatState cs);
+            if (!world.TryGetUnit(tank, out UnitState unit) || !unit.Moving) continue;
+            if (ammo < 0) ammo = cs.Ammunition;
+            Assert.Equal(ammo, cs.Ammunition);
+            Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(cs.HullHeading, 0f)) < 0.001f, "The hull faces the way back.");
+            Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(cs.TurretYaw, MathF.PI)) <= CombatSystem.TurretAlignmentTolerance,
+                $"Tick {tick}: the gun must stay on the enemy behind, yaw {cs.TurretYaw}");
+        }
+        Assert.True(ammo >= 0, "The tank never drove off.");
+    }
+
+    [Fact]
+    public void HoldFireForOthers_StopsOnlyTheOtherPlayers()
+    {
+        using Simulation sim = BattleScenario.CreateSimulation();
+        int changed = TestOptions.HoldFireForOthers(sim, 1);
+        Assert.True(changed > 0);
+        for (int i = 0; i < sim.World.Count; i++)
+        {
+            UnitState unit = sim.World.GetUnitAt(i);
+            Assert.True(sim.World.TryGetCombatState(unit.Id, out WorldState.CombatState cs));
+            Assert.Equal(unit.Owner == 1 ? FireStance.FireAtWill : FireStance.HoldFire, cs.Stance);
+        }
+    }
+
+    [Fact]
+    public void YawQuantization_KeepsZeroAndQuarterTurnsExact()
+    {
+        // With 65535 steps a zero yaw came back as 0.00005 rad, enough to turn an idle hull on the client.
+        Assert.Equal(0f, WireProtocol.DequantizeYaw(WireProtocol.QuantizeYaw(0f)));
+        Assert.Equal(MathF.PI / 2f, WireProtocol.DequantizeYaw(WireProtocol.QuantizeYaw(MathF.PI / 2f)), 6);
+        Assert.Equal(-MathF.PI / 2f, WireProtocol.DequantizeYaw(WireProtocol.QuantizeYaw(-MathF.PI / 2f)), 6);
+        Assert.Equal(MathF.PI, WireProtocol.DequantizeYaw(WireProtocol.QuantizeYaw(MathF.PI)), 6);
+        Assert.Equal(MathF.PI, WireProtocol.DequantizeYaw(WireProtocol.QuantizeYaw(-MathF.PI)), 6);
+        float step = MathF.Tau / 65536f;
+        for (float yaw = -3.14f; yaw < 3.14f; yaw += 0.0137f)
+        {
+            float back = WireProtocol.DequantizeYaw(WireProtocol.QuantizeYaw(yaw));
+            Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(yaw, back)) <= step * 0.51f, $"{yaw} came back as {back}");
+        }
     }
 }

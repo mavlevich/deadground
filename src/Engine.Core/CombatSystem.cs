@@ -157,7 +157,15 @@ public sealed class CombatSystem : ISimulationSystem
     {
         Vector2 dir = targetPos - attackerPos;
         if (dir.LengthSquared() < 0.0001f) return;
-        float desiredYaw = MathF.Atan2(-dir.X, -dir.Y);
+        TurnTurretTo(ref cs, MathF.Atan2(-dir.X, -dir.Y), traverseRateDegPerSec);
+    }
+
+    // With nothing to aim at, the gunner lays the gun back over the front of the hull.
+    private static void ReturnTurretToFront(ref WorldState.CombatState cs, float traverseRateDegPerSec) =>
+        TurnTurretTo(ref cs, cs.HullHeading, traverseRateDegPerSec);
+
+    private static void TurnTurretTo(ref WorldState.CombatState cs, float desiredYaw, float traverseRateDegPerSec)
+    {
         if (traverseRateDegPerSec <= 0f)
         {
             cs.TurretYaw = NormalizeYaw(desiredYaw);
@@ -449,18 +457,6 @@ public sealed class CombatSystem : ISimulationSystem
             else
             {
                 // Unit has NO attack order: evaluate Auto-Fire
-                if (attacker.Moving || cs.Stance == FireStance.HoldFire)
-                {
-                    if (cs.TargetContactId.Value != 0)
-                    {
-                        cs.TargetContactId = default;
-                        cs.TargetEntityId = default;
-                        cs.Status = AttackExecutionStatus.None;
-                    }
-                    world.SetCombatState(attacker.Id, cs);
-                    continue;
-                }
-
                 SideContactTracker tracker = _detection.GetTracker(attacker.Owner);
 
                 // Target retention
@@ -468,7 +464,7 @@ public sealed class CombatSystem : ISimulationSystem
                 Vector3 currentHitPoint = Vector3.Zero;
                 Vector3 currentMuzzlePos = Vector3.Zero;
 
-                if (cs.TargetContactId.Value != 0 && cs.TargetEntityId.Value != 0)
+                if (cs.Stance != FireStance.HoldFire && cs.TargetContactId.Value != 0 && cs.TargetEntityId.Value != 0)
                 {
                     if (tracker.TryGetContact(cs.TargetContactId, out ContactObservation currentContact) &&
                         currentContact.State == ContactState.Current &&
@@ -482,12 +478,25 @@ public sealed class CombatSystem : ISimulationSystem
                     {
                         targetRetained = true;
                     }
+                }
+                if (!targetRetained && cs.TargetContactId.Value != 0)
+                {
+                    cs.TargetContactId = default;
+                    cs.TargetEntityId = default;
+                    cs.Status = AttackExecutionStatus.None;
+                }
+
+                if (attacker.Moving || cs.Stance == FireStance.HoldFire)
+                {
+                    // Moving units do not fire. A unit driving off keeps its gun on the target it was
+                    // engaging while that target stays valid (a tank pulling back watches the enemy over
+                    // its rear deck); otherwise the gun goes back over the front.
+                    if (targetRetained && world.TryGetUnit(cs.TargetEntityId, out UnitState watched))
+                        TurnTurret(ref cs, attacker.Position, watched.Position, profile.TurretTraverseRate);
                     else
-                    {
-                        cs.TargetContactId = default;
-                        cs.TargetEntityId = default;
-                        cs.Status = AttackExecutionStatus.None;
-                    }
+                        ReturnTurretToFront(ref cs, profile.TurretTraverseRate);
+                    world.SetCombatState(attacker.Id, cs);
+                    continue;
                 }
 
                 // Pick new target if not retained: scan only when weapon is ready to fire
@@ -495,6 +504,7 @@ public sealed class CombatSystem : ISimulationSystem
                 {
                     if (cs.ReloadTicksRemaining > 0 || cs.Ammunition <= 0)
                     {
+                        ReturnTurretToFront(ref cs, profile.TurretTraverseRate);
                         world.SetCombatState(attacker.Id, cs);
                         continue;
                     }
@@ -591,6 +601,7 @@ public sealed class CombatSystem : ISimulationSystem
                 }
                 else
                 {
+                    ReturnTurretToFront(ref cs, profile.TurretTraverseRate);
                     world.SetCombatState(attacker.Id, cs);
                 }
             }
