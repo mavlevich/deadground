@@ -92,6 +92,7 @@ internal sealed partial class SelectionCard : PanelContainer
     private ushort _cachedSingleReloadTicks;
     private AttackExecutionStatus _cachedSingleAttackStatus;
     private ContactId _cachedSingleTargetContact;
+    private FireStance _cachedSingleStance;
     private int _cachedSingleControlGroup = -1;
 
     // Multiple units cached state
@@ -130,6 +131,7 @@ internal sealed partial class SelectionCard : PanelContainer
             _cachedSingleReloadTicks == ownUnit.ReloadTicksRemaining &&
             _cachedSingleAttackStatus == ownUnit.AttackStatus &&
             _cachedSingleTargetContact == ownUnit.TargetContactId &&
+            _cachedSingleStance == ownUnit.Stance &&
             _cachedSingleControlGroup == controlGroup)
         {
             return;
@@ -143,6 +145,7 @@ internal sealed partial class SelectionCard : PanelContainer
         _cachedSingleReloadTicks = ownUnit.ReloadTicksRemaining;
         _cachedSingleAttackStatus = ownUnit.AttackStatus;
         _cachedSingleTargetContact = ownUnit.TargetContactId;
+        _cachedSingleStance = ownUnit.Stance;
         _cachedSingleControlGroup = controlGroup;
 
         UnitDefinition? def = ownUnit.Definition < _catalog.Units.Length ? _catalog.Units[ownUnit.Definition] : null;
@@ -192,7 +195,7 @@ internal sealed partial class SelectionCard : PanelContainer
             _ => ownUnit.AttackStatus.ToString()
         };
 
-        _line3Label.Text = $"Attack Order: {attackStr}";
+        _line3Label.Text = $"Stance: {FormatStance(ownUnit.Stance)} | Attack Order: {attackStr}";
         _line3Label.Modulate = ownUnit.AttackStatus switch
         {
             AttackExecutionStatus.Aiming => new Color("edc76b"),
@@ -201,6 +204,14 @@ internal sealed partial class SelectionCard : PanelContainer
             _ => new Color("9bc4e2")
         };
     }
+
+    private static string FormatStance(FireStance stance) => stance switch
+    {
+        FireStance.FireAtWill => "Fire at will",
+        FireStance.ReturnFire => "Return fire",
+        FireStance.HoldFire => "Hold fire",
+        _ => "Fire at will"
+    };
 
     public void UpdateMultipleOwnUnits(int totalCount, int tankCount, int reconCount, int otherCount, int controlGroup = 0)
     {

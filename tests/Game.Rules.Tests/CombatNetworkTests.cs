@@ -37,7 +37,12 @@ public sealed class CombatNetworkTests
 
         using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 2);
         int port = serverTransport.Port;
-        using SimulationHost host = new(CombatScenario.CreateSimulation(geometry, catalog), serverTransport, setup);
+        // This test follows one explicit attack order. Auto-fire is the default, so without HoldFire
+        // every tank in range fires on its own and the shot and damage checks below race against it.
+        Simulation simulation = CombatScenario.CreateSimulation(geometry, catalog);
+        for (int i = 0; i < simulation.World.Count; i++)
+            simulation.World.SetFireStance(simulation.World.GetUnitAt(i).Id, FireStance.HoldFire);
+        using SimulationHost host = new(simulation, serverTransport, setup);
 
         using ClientSession client1 = ClientSession.Connect("127.0.0.1", port, setup);
         using ClientSession client2 = ClientSession.Connect("127.0.0.1", port, setup);
@@ -275,6 +280,8 @@ public sealed class CombatNetworkTests
         EntityId p1Tank = world.CreateUnit(1, tankIdx, new Vector2(12f, 25f), tankDef.Speed, 100, 10);
         EntityId p2Tank = world.CreateUnit(2, tankIdx, new Vector2(33f, 25f), tankDef.Speed, 50, 10); // 50 HP (destroyed in 1 hit)
         EntityId p3Tank = world.CreateUnit(3, tankIdx, new Vector2(100f, 100f), tankDef.Speed, 100, 10); // Isolated far away
+        world.SetFireStance(p1Tank, FireStance.HoldFire);
+        world.SetFireStance(p2Tank, FireStance.HoldFire);
 
         OpsRules rules = new(geometry, catalog);
         using Simulation simulation = new(world, rules);
@@ -531,12 +538,12 @@ public sealed class CombatNetworkTests
     }
 
     [Fact]
-    public void WireProtocol_Version10_Preserves3DEndpointsAndShooterIdentity()
+    public void WireProtocol_Version11_Preserves3DEndpointsAndShooterIdentity()
     {
-        Assert.Equal(10, WireProtocol.Version);
+        Assert.Equal(11, WireProtocol.Version);
         Assert.Equal(32, WireProtocol.MissionSize);
         Assert.Equal(48, WireProtocol.SnapshotHeaderSize);
-        Assert.Equal(30, WireProtocol.UnitSize);
+        Assert.Equal(31, WireProtocol.UnitSize);
         Assert.Equal(20, WireProtocol.ContactSize);
         Assert.Equal(39, WireProtocol.EventSize);
 
@@ -796,5 +803,204 @@ public sealed class CombatNetworkTests
         invalidBuffer[eventKindOffset] = 99; // Invalid kind
         ClientReplica badReplica = new();
         Assert.False(badReplica.TryApply(invalidBuffer));
+    }
+
+    [Fact]
+    public void WireProtocol_SetFireStance_RoundTrip_AndValidation()
+    {
+        Assert.Equal(11, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(11, WireProtocol.Version);
+
+        byte[] buffer = new byte[32];
+        SetFireStanceCommand cmd = new(42, 10, new EntityId(5), FireStance.ReturnFire);
+
+        WireProtocol.WriteSetFireStance(buffer, cmd);
+        Assert.True(WireProtocol.TryReadSetFireStance(buffer.AsSpan(0, WireProtocol.SetFireStanceSize), out SetFireStanceCommand readCmd));
+        Assert.Equal(42u, readCmd.Sequence);
+        Assert.Equal(10, readCmd.ClientTick);
+        Assert.Equal(5u, readCmd.Unit.Value);
+        Assert.Equal(FireStance.ReturnFire, readCmd.Stance);
+
+        // Out of range stance byte rejected
+        byte[] invalidStanceBuffer = new byte[WireProtocol.SetFireStanceSize];
+        buffer.AsSpan(0, WireProtocol.SetFireStanceSize).CopyTo(invalidStanceBuffer);
+        invalidStanceBuffer[14] = 3; // > HoldFire (2)
+        Assert.False(WireProtocol.TryReadSetFireStance(invalidStanceBuffer, out _));
+
+        invalidStanceBuffer[14] = 255;
+        Assert.False(WireProtocol.TryReadSetFireStance(invalidStanceBuffer, out _));
+
+        // Sequence == 0 rejected
+        byte[] invalidSeqBuffer = new byte[WireProtocol.SetFireStanceSize];
+        buffer.AsSpan(0, WireProtocol.SetFireStanceSize).CopyTo(invalidSeqBuffer);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(invalidSeqBuffer.AsSpan(2), 0);
+        Assert.False(WireProtocol.TryReadSetFireStance(invalidSeqBuffer, out _));
+
+        // Unit == 0 rejected
+        byte[] invalidUnitBuffer = new byte[WireProtocol.SetFireStanceSize];
+        buffer.AsSpan(0, WireProtocol.SetFireStanceSize).CopyTo(invalidUnitBuffer);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(invalidUnitBuffer.AsSpan(10), 0);
+        Assert.False(WireProtocol.TryReadSetFireStance(invalidUnitBuffer, out _));
+
+        // Snapshot round-trip preserves Stance in OwnUnitObservation
+        OwnUnitObservation unit = new(
+            new EntityId(5),
+            Definition: 1,
+            Position: new Vector2(10f, 10f),
+            SupportSurface: 0,
+            NavStatus: PathRequestStatus.None,
+            Health: 100,
+            Ammunition: 10,
+            ReloadTicksRemaining: 0,
+            AttackStatus: AttackExecutionStatus.None,
+            TargetContactId: default,
+            Stance: FireStance.HoldFire);
+
+        byte[] snapBuffer = new byte[WireProtocol.MaxMessageSize];
+        int snapSize = WireProtocol.WriteSnapshot(snapBuffer, 1, 10, [unit], [], []);
+        ClientReplica replica = new();
+        Assert.True(replica.TryApply(snapBuffer.AsSpan(0, snapSize)));
+        Assert.Equal(1, replica.OwnUnits.Length);
+        Assert.Equal(FireStance.HoldFire, replica.OwnUnits[0].Stance);
+    }
+
+    [Fact]
+    public void AutoFire_TargetChoice_PrefersTankOverApcAtSimilarRange()
+    {
+        UnitCatalog catalog = PrototypeScenario.LoadCatalog();
+        const int size = 65;
+        HeightMap map = new(size, size, 2f, 0.01f, new ushort[size * size]);
+        StaticGeometry geo = new(map, []);
+        OpsRules rules = new(geo, catalog, null);
+        WorldState world = new(map);
+        using Simulation sim = new(world, rules);
+
+        UnitDefinition tankDef = catalog.RequireDefinition("prototype_tank");
+        ushort tankIdx = catalog.RequireDefinitionIndex("prototype_tank");
+        UnitDefinition apcDef = catalog.RequireDefinition("apc");
+        ushort apcIdx = catalog.RequireDefinitionIndex("apc");
+        int ammo = catalog.GetAmmoCapacity(tankDef);
+
+        // Player 1 armed tank at (10, 10) with default FireAtWill
+        EntityId shooter = world.CreateUnit(1, tankIdx, new Vector2(10f, 10f), tankDef.Speed, tankDef.MaxHealth, ammo);
+        world.SetFireStance(shooter, FireStance.HoldFire); // hold during warmup
+
+        // Player 2 tank at (35, 10) (dist 25m) and APC at (34, 10) (dist 24m, slightly closer!)
+        EntityId enemyTank = world.CreateUnit(2, tankIdx, new Vector2(35f, 10f), tankDef.Speed, tankDef.MaxHealth, ammo);
+        EntityId enemyApc = world.CreateUnit(2, apcIdx, new Vector2(34f, 10f), apcDef.Speed, apcDef.MaxHealth, 0);
+        world.SetFireStance(enemyTank, FireStance.HoldFire);
+        world.SetFireStance(enemyApc, FireStance.HoldFire);
+
+        // Warmup detection so contacts exist
+        for (int i = 0; i < 4; i++) sim.Step();
+
+        DetectionSystem detection = rules.FindSystem<DetectionSystem>()!;
+        Assert.True(detection.TryGetContactByEntity(1, enemyTank, out ContactObservation cTank));
+        Assert.True(detection.TryGetContactByEntity(1, enemyApc, out ContactObservation cApc));
+
+        // Switch shooter to FireAtWill: auto-fire engages
+        world.SetFireStance(shooter, FireStance.FireAtWill);
+        sim.Step();
+
+        // Shooter chooses the tank even though the APC was closer
+        Assert.True(world.TryGetCombatState(shooter, out WorldState.CombatState cs));
+        Assert.Equal(cTank.Id, cs.TargetContactId);
+        Assert.Equal(enemyTank, cs.TargetEntityId);
+        world.TryGetCombatState(enemyTank, out WorldState.CombatState enemyTankCs);
+        Assert.True(enemyTankCs.CurrentHealth < tankDef.MaxHealth, "Enemy tank must have taken damage.");
+        world.TryGetCombatState(enemyApc, out WorldState.CombatState enemyApcCs);
+        Assert.Equal(apcDef.MaxHealth, enemyApcCs.CurrentHealth); // APC untouched
+    }
+
+    [Fact]
+    public void CuedFire_T62HitsTargetOnlyBtrDetects_BlockedWithoutOwnLineOfSight()
+    {
+        UnitCatalog baseCat = ColdWarContent.LoadCatalog();
+        // Create catalog where T-62 has restricted sensor range (400m), but full weapon range (1600m).
+        // BTR-70 has sensor range 1500m.
+        UnitDefinition baseT62 = baseCat.RequireDefinition("t62");
+        UnitDefinition restrictedT62 = baseT62 with { SensorRange = 400f };
+
+        UnitDefinition[] modifiedUnits = (UnitDefinition[])baseCat.Units.Clone();
+        int t62Idx = baseCat.RequireDefinitionIndex("t62");
+        modifiedUnits[t62Idx] = restrictedT62;
+        UnitCatalog testCatalog = new(
+            baseCat.SchemaVersion,
+            modifiedUnits,
+            baseCat.Detection,
+            baseCat.Weapons,
+            baseCat.Factions);
+
+        const int size = 201;
+        HeightMap map = new(size, size, 10f, 0.01f, new ushort[size * size]); // 2000m x 2000m flat map
+        StaticGeometry geo = new(map, []);
+        OpsRules rules = new(geo, testCatalog, null);
+        WorldState world = new(map);
+        using Simulation sim = new(world, rules);
+
+        UnitDefinition t62Def = testCatalog.RequireDefinition("t62");
+        ushort t62DefIdx = testCatalog.RequireDefinitionIndex("t62");
+        UnitDefinition btrDef = testCatalog.RequireDefinition("btr70");
+        ushort btrDefIdx = testCatalog.RequireDefinitionIndex("btr70");
+        UnitDefinition m60Def = testCatalog.RequireDefinition("m60a1");
+        ushort m60DefIdx = testCatalog.RequireDefinitionIndex("m60a1");
+
+        // Player 1: T-62 at (200, 500), BTR-70 at (800, 500)
+        EntityId t62 = world.CreateUnit(1, t62DefIdx, new Vector2(200f, 500f), t62Def.Speed, t62Def.MaxHealth, testCatalog.GetAmmoCapacity(t62Def));
+        EntityId btr = world.CreateUnit(1, btrDefIdx, new Vector2(800f, 500f), btrDef.Speed, btrDef.MaxHealth, 0);
+        world.SetFireStance(t62, FireStance.HoldFire);
+        world.SetFireStance(btr, FireStance.HoldFire);
+
+        // Player 2: Target M60A1 at (1000, 500)
+        // Distance to T-62 is 800m (> T-62's sensor range 400m, but <= weapon range 1600m).
+        // Distance to BTR-70 is 200m (<= BTR-70's sensor range 1500m).
+        EntityId targetM60 = world.CreateUnit(2, m60DefIdx, new Vector2(1000f, 500f), m60Def.Speed, m60Def.MaxHealth, testCatalog.GetAmmoCapacity(m60Def));
+        world.SetFireStance(targetM60, FireStance.HoldFire);
+
+        for (int i = 0; i < 4; i++) sim.Step();
+
+        DetectionSystem detection = rules.FindSystem<DetectionSystem>()!;
+        // Target is spotted by Player 1 (via BTR-70)
+        Assert.True(detection.TryGetContactByEntity(1, targetM60, out ContactObservation contact));
+        Assert.Equal(ContactState.Current, contact.State);
+
+        // T-62 issues attack order on contact spotted only by BTR-70
+        Assert.True(sim.TryEnqueue(1, new AttackCommand(1, sim.Tick, t62, contact.Id)));
+        sim.Step();
+
+        // T-62 fires cued shot and damages the target
+        world.TryGetCombatState(t62, out WorldState.CombatState t62Cs);
+        Assert.Equal(testCatalog.GetAmmoCapacity(t62Def) - 1, t62Cs.Ammunition);
+        world.TryGetCombatState(targetM60, out WorldState.CombatState m60Cs);
+        Assert.True(m60Cs.CurrentHealth < m60Def.MaxHealth, "Target must take damage from cued fire.");
+
+        // Part 2: If line of sight is obstructed by a wall between T-62 and target, cued fire is blocked
+        OpaqueStructure wall = new(
+            new StructureId(1), minX: 490f, minY: 0f, minZ: 490f, maxX: 510f, maxY: 6f, maxZ: 510f, isGrounded: true);
+        StaticGeometry blockedGeo = new(map, [wall]);
+        OpsRules blockedRules = new(blockedGeo, testCatalog, null);
+        WorldState blockedWorld = new(map);
+        using Simulation blockedSim = new(blockedWorld, blockedRules);
+
+        EntityId blockedT62 = blockedWorld.CreateUnit(1, t62DefIdx, new Vector2(200f, 500f), t62Def.Speed, t62Def.MaxHealth, testCatalog.GetAmmoCapacity(t62Def));
+        // BTR-70 placed to the side at (800, 480) with clear view to target
+        EntityId blockedBtr = blockedWorld.CreateUnit(1, btrDefIdx, new Vector2(800f, 480f), btrDef.Speed, btrDef.MaxHealth, 0);
+        EntityId blockedTarget = blockedWorld.CreateUnit(2, m60DefIdx, new Vector2(1000f, 500f), m60Def.Speed, m60Def.MaxHealth, testCatalog.GetAmmoCapacity(m60Def));
+        blockedWorld.SetFireStance(blockedT62, FireStance.HoldFire);
+        blockedWorld.SetFireStance(blockedBtr, FireStance.HoldFire);
+        blockedWorld.SetFireStance(blockedTarget, FireStance.HoldFire);
+
+        for (int i = 0; i < 4; i++) blockedSim.Step();
+
+        DetectionSystem blockedDetection = blockedRules.FindSystem<DetectionSystem>()!;
+        Assert.True(blockedDetection.TryGetContactByEntity(1, blockedTarget, out ContactObservation blockedContact));
+
+        // T-62 attack order is accepted, but cannot fire because direct LOS is obstructed
+        Assert.True(blockedSim.TryEnqueue(1, new AttackCommand(1, blockedSim.Tick, blockedT62, blockedContact.Id)));
+        blockedSim.Step();
+
+        blockedWorld.TryGetCombatState(blockedT62, out WorldState.CombatState csBlocked);
+        Assert.Equal(testCatalog.GetAmmoCapacity(t62Def), csBlocked.Ammunition); // Holds fire!
+        Assert.Equal(AttackExecutionStatus.Obstructed, csBlocked.Status);
     }
 }

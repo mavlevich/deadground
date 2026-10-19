@@ -94,7 +94,7 @@ stores a control group, `Shift+1..9` adds to it, `1..9` selects it, and pressing
 within 0.35 s centers the camera on the group. WASD or arrow keys smoothly pan the
 camera with normalized diagonal speed scaled by zoom. The mouse wheel smoothly zooms, Space restores
 the overview, and Escape closes open dialogs or clears unit selection. F10, O, or the HUD SETTINGS button
-opens display settings (VSync toggle and FPS cap). F9 or V toggles fog of war on the map. The HUD shows connection state, tick time, allocations and traffic.
+opens display settings (VSync toggle and FPS cap). F9 or V toggles fog of war on the map. Keys Z (Fire at will), X (Return fire), and C (Hold fire) set the fire stance of selected units. The HUD shows connection state, tick time, allocations and traffic.
 The host reports whether a valid command was queued or rejected. Rejections give
 no hidden-world details. Queue admission does not guarantee arrival at the target.
 

@@ -167,6 +167,16 @@ public sealed class ClientSession : IGameSession
         return true;
     }
 
+    public bool SetFireStance(EntityId unit, FireStance stance)
+    {
+        if (State != SessionConnectionState.Connected) return false;
+        SetFireStanceCommand command = new(_nextCommand, Replica.LatestTick, unit, stance);
+        WireProtocol.WriteSetFireStance(_command, command);
+        if (!_transport.TrySend(_command.AsSpan(0, WireProtocol.SetFireStanceSize))) return false;
+        _nextCommand = checked(_nextCommand + 1);
+        return true;
+    }
+
     private void Poll()
     {
         while (_transport.TryReceive(_receive, out int length))

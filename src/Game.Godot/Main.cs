@@ -588,6 +588,7 @@ public partial class Main : Node3D
                 };
                 string token = prefix + (ok ? "_OK" : "_FAILED");
                 GD.Print(token);
+                _combatEffects?.Clear();
                 GetTree().Quit(ok ? 0 : 1);
             }
         }
@@ -752,6 +753,40 @@ public partial class Main : Node3D
                         : $"Attack order submitted / {sent} units -> Contact #{target.Value}";
                 _orderNotification?.ShowNotification(attackMsg);
                 _status.Text = attackMsg;
+            }
+
+            if (key.Keycode is Key.Z or Key.X or Key.C && _unitViews.Selected.Count > 0)
+            {
+                FireStance stance = key.Keycode switch
+                {
+                    Key.Z => FireStance.FireAtWill,
+                    Key.X => FireStance.ReturnFire,
+                    Key.C => FireStance.HoldFire,
+                    _ => FireStance.FireAtWill
+                };
+                string stanceLabel = stance switch
+                {
+                    FireStance.FireAtWill => "Fire at will",
+                    FireStance.ReturnFire => "Return fire",
+                    FireStance.HoldFire => "Hold fire",
+                    _ => "Fire at will"
+                };
+
+                int totalUnits = _unitViews.Selected.Count;
+                int sent = 0;
+                foreach (EntityId id in _unitViews.Selected)
+                {
+                    if (_session.SetFireStance(id, stance)) sent++;
+                }
+
+                string stanceMsg = sent == 1
+                    ? $"Fire stance set to {stanceLabel} for 1 unit"
+                    : $"Fire stance set to {stanceLabel} for {sent} units";
+                _orderNotification?.ShowNotification(stanceMsg);
+                _status.Text = stanceMsg;
+                UpdateSelectionPresentation();
+                GetViewport().SetInputAsHandled();
+                return;
             }
             return;
         }
@@ -1306,13 +1341,14 @@ public partial class Main : Node3D
 
     internal static string FormatControlsHelpText(bool isMacOs) =>
         isMacOs
-            ? "  LMB click/box  /  2xLMB type  /  Cmd/Ctrl+1-9 set  /  Shift+1-9 add  /  1-9 select (twice: center)  /  RMB order  /  WASD pan"
-            : "  LMB click/box  /  2xLMB type  /  Ctrl/Cmd+1-9 set  /  Shift+1-9 add  /  1-9 select (twice: center)  /  RMB order  /  WASD pan";
+            ? "  LMB click/box  /  2xLMB type  /  Cmd/Ctrl+1-9 set  /  Shift+1-9 add  /  1-9 select (twice: center)  /  Z/X/C stance  /  RMB order  /  WASD pan"
+            : "  LMB click/box  /  2xLMB type  /  Ctrl/Cmd+1-9 set  /  Shift+1-9 add  /  1-9 select (twice: center)  /  Z/X/C stance  /  RMB order  /  WASD pan";
 
     public string TitleText => _title?.Text ?? string.Empty;
 
     public override void _ExitTree()
     {
+        _combatEffects?.Clear();
         _fogOfWar?.Dispose();
         _missionPanel?.Cleanup();
         _session?.Dispose();

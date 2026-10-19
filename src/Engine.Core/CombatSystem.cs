@@ -77,6 +77,129 @@ public sealed class CombatSystem : ISimulationSystem
     /// Validates and executes an explicit attack order from a client targeting a ContactId.
     /// Never accepts enemy EntityIds from a client.
     /// </summary>
+    private void OrderUnitToMove(int player, EntityId unitId, Vector2 destination, WorldState world)
+    {
+        if (_navigation is not null)
+        {
+            _navigation.EnqueueCommand(player, new MoveCommand(0, 0, unitId, destination), world);
+        }
+        else
+        {
+            world.SetMoveTarget(player, unitId, destination);
+        }
+    }
+
+    private bool HasLineOfSightToTarget(UnitState attacker, WeaponDefinition weapon, UnitState targetUnit, out Vector3 hitPoint, out Vector3 muzzlePos)
+    {
+        float attackerGroundY = _geometry.HeightMap.GetHeight(attacker.Position.X, attacker.Position.Y);
+        muzzlePos = new Vector3(attacker.Position.X, attackerGroundY + weapon.MuzzleHeight, attacker.Position.Y);
+
+        float targetGroundY = _geometry.HeightMap.GetHeight(targetUnit.Position.X, targetUnit.Position.Y);
+        hitPoint = Vector3.Zero;
+
+        if (_perceptionCatalog.TryGetProfile(targetUnit.Definition, out UnitPerceptionProfile targetPerception) &&
+            targetPerception.TargetPoints is { RelativeHeights.Length: > 0 } points)
+        {
+            for (int p = points.RelativeHeights.Length - 1; p >= 0; p--)
+            {
+                Vector3 testPoint = new(targetUnit.Position.X, targetGroundY + points.RelativeHeights[p], targetUnit.Position.Y);
+                if (_geometry.IsLineOfSightClear(muzzlePos, testPoint, _losContext, out _))
+                {
+                    hitPoint = testPoint;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        Vector3 fallbackTarget = new(targetUnit.Position.X, targetGroundY + 1.5f, targetUnit.Position.Y);
+        if (_geometry.IsLineOfSightClear(muzzlePos, fallbackTarget, _losContext, out _))
+        {
+            hitPoint = fallbackTarget;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static int GetTargetClassPriority(ContactClassification classification) => classification switch
+    {
+        ContactClassification.Tank => 0,
+        ContactClassification.Apc => 1,
+        ContactClassification.Recon => 2,
+        _ => 3
+    };
+
+    public void OnUnitStanceChanged(EntityId unitId, FireStance stance, WorldState world)
+    {
+        if (!world.TryGetCombatState(unitId, out WorldState.CombatState cs))
+            return;
+
+        if (!cs.HasAttackOrder && stance == FireStance.HoldFire)
+        {
+            cs.TargetContactId = default;
+            cs.TargetEntityId = default;
+            cs.Status = AttackExecutionStatus.None;
+            world.SetCombatState(unitId, cs);
+        }
+        else if (!cs.HasAttackOrder && stance == FireStance.ReturnFire && cs.TargetEntityId.Value != 0)
+        {
+            if (cs.LastTookFireAttacker.Value == 0 || cs.TargetEntityId.Value != cs.LastTookFireAttacker.Value)
+            {
+                cs.TargetContactId = default;
+                cs.TargetEntityId = default;
+                cs.Status = AttackExecutionStatus.None;
+                world.SetCombatState(unitId, cs);
+            }
+        }
+    }
+
+    private void TryPursueTarget(int tick, UnitState attacker, Vector2 targetPos, ref WorldState.CombatState cs, WorldState world)
+    {
+        float distToTarget = Vector2.Distance(attacker.Position, targetPos);
+        if (distToTarget <= 1.0f)
+        {
+            return;
+        }
+
+        bool hasPreviousDestination = cs.PursuitDestination != Vector2.Zero;
+        float destinationMoved = hasPreviousDestination ? Vector2.Distance(cs.PursuitDestination, targetPos) : float.MaxValue;
+        bool targetMovedSignificantly = destinationMoved > 3.0f;
+
+        PathRequestStatus navStatus = _navigation?.GetUnitStatus(attacker.Id) ?? PathRequestStatus.None;
+        bool isUnreachable = navStatus is PathRequestStatus.InvalidDestination or PathRequestStatus.NoPath;
+
+        if (isUnreachable && !targetMovedSignificantly)
+        {
+            // Stop retrying after an InvalidDestination or NoPath result until the target moves.
+            return;
+        }
+
+        if (navStatus is PathRequestStatus.Searching or PathRequestStatus.Pending && !targetMovedSignificantly)
+        {
+            return;
+        }
+
+        if (attacker.Moving && !targetMovedSignificantly)
+        {
+            return;
+        }
+
+        if (!targetMovedSignificantly && cs.LastPursuitRequestTick >= 0 && (tick - cs.LastPursuitRequestTick) < Simulation.TickRate)
+        {
+            return;
+        }
+
+        OrderUnitToMove(attacker.Owner, attacker.Id, targetPos, world);
+        cs.PursuitDestination = targetPos;
+        cs.LastPursuitRequestTick = tick;
+    }
+
+    /// <summary>
+    /// Validates and executes an attack order from a client targeting a ContactId.
+    /// Orders out of range are accepted; the unit drives into range and fires.
+    /// Never accepts enemy EntityIds from a client.
+    /// </summary>
     public bool TryExecuteAttackOrder(int player, AttackCommand command, WorldState world)
     {
         if (player < 1 || player > _maxSides || command.Sequence == 0 || command.Target.Value == 0)
@@ -101,14 +224,6 @@ public sealed class CombatSystem : ISimulationSystem
             return false;
         }
 
-        // Range boundary check on order issue: reject orders on targets beyond weapon range plus margin.
-        // Rejection preserves existing valid orders (including active attack or ongoing movement).
-        float distToContact = Vector2.Distance(attacker.Position, contact.Position);
-        if (distToContact > attackerProfile.Weapon.Range + RangeToleranceMargin)
-        {
-            return false;
-        }
-
         // Resolve internal truth link on the server only
         if (!tracker.TryGetBoundEntity(command.Target, out EntityId targetEntityId))
             return false;
@@ -116,9 +231,22 @@ public sealed class CombatSystem : ISimulationSystem
         if (!world.TryGetUnit(targetEntityId, out UnitState targetUnit) || !world.AreHostile(player, targetUnit.Owner))
             return false;
 
-        // Cancel existing movement order on attacker and stop immediately
-        world.UpdateUnitNavigation(command.Unit, attacker.Position, attacker.Position, false);
-        _navigation?.ClearUnit(command.Unit);
+        // Attack orders out of range are accepted.
+        // If already within weapon range and has clear line of sight: stop moving immediately.
+        // Otherwise: drive toward target position.
+        float dist = Vector2.Distance(attacker.Position, targetUnit.Position);
+        bool inRange = dist <= attackerProfile.Weapon.Range + RangeToleranceMargin;
+        bool hasClearShot = inRange && HasLineOfSightToTarget(attacker, attackerProfile.Weapon, targetUnit, out _, out _);
+
+        if (inRange && hasClearShot)
+        {
+            world.UpdateUnitNavigation(command.Unit, attacker.Position, attacker.Position, false);
+            _navigation?.ClearUnit(command.Unit);
+        }
+        else
+        {
+            OrderUnitToMove(player, command.Unit, contact.Position, world);
+        }
 
         // Apply validated attack order
         if (world.TryGetCombatState(command.Unit, out WorldState.CombatState cs))
@@ -126,7 +254,9 @@ public sealed class CombatSystem : ISimulationSystem
             cs.HasAttackOrder = true;
             cs.TargetContactId = command.Target;
             cs.TargetEntityId = targetEntityId;
-            cs.Status = AttackExecutionStatus.Aiming;
+            cs.Status = hasClearShot ? AttackExecutionStatus.Aiming : (inRange ? AttackExecutionStatus.Obstructed : AttackExecutionStatus.OutOfRange);
+            cs.PursuitDestination = (inRange && hasClearShot) ? Vector2.Zero : contact.Position;
+            cs.LastPursuitRequestTick = -1;
             world.SetCombatState(command.Unit, cs);
             return true;
         }
@@ -141,7 +271,7 @@ public sealed class CombatSystem : ISimulationSystem
 
         int unitCount = world.Count;
 
-        // Step 1: Advance reload timers and resolve direct weapons fire
+        // Step 1: Advance reload timers and resolve weapons fire / pursuit / auto-fire
         for (int i = 0; i < unitCount; i++)
         {
             UnitState attacker = world.GetUnitAt(i);
@@ -162,172 +292,243 @@ public sealed class CombatSystem : ISimulationSystem
                 cs.ReloadTicksRemaining--;
             }
 
-            if (!cs.HasAttackOrder)
+            if (cs.HasAttackOrder)
             {
-                world.SetCombatState(attacker.Id, cs);
-                continue;
-            }
+                ActiveAttackersCount++;
 
-            ActiveAttackersCount++;
+                SideContactTracker tracker = _detection.GetTracker(attacker.Owner);
 
-            // Stationary firing only: a moving attacker cannot fire
-            if (attacker.Moving)
-            {
-                cs.Status = AttackExecutionStatus.None;
-                world.SetCombatState(attacker.Id, cs);
-                continue;
-            }
-
-            // Contact check:
-            // Drop order only when contact is expired/removed (e.g. MemoryDurationTicks elapsed or destroyed)
-            SideContactTracker tracker = _detection.GetTracker(attacker.Owner);
-            if (!tracker.TryGetContact(cs.TargetContactId, out ContactObservation contact))
-            {
-                cs.HasAttackOrder = false;
-                cs.TargetContactId = default;
-                cs.TargetEntityId = default;
-                cs.Status = AttackExecutionStatus.None;
-                world.SetCombatState(attacker.Id, cs);
-                continue;
-            }
-
-            // On LastKnown, keep the order and hold fire with status TargetLost
-            if (contact.State != ContactState.Current)
-            {
-                cs.Status = AttackExecutionStatus.TargetLost;
-                world.SetCombatState(attacker.Id, cs);
-                continue;
-            }
-
-            // When contact is Current again: re-resolve bound entity (it may have been re-correlated)
-            if (!tracker.TryGetBoundEntity(cs.TargetContactId, out EntityId targetEntityId) ||
-                !world.TryGetUnit(targetEntityId, out UnitState targetUnit) ||
-                !world.AreHostile(attacker.Owner, targetUnit.Owner))
-            {
-                cs.HasAttackOrder = false;
-                cs.TargetContactId = default;
-                cs.TargetEntityId = default;
-                cs.Status = AttackExecutionStatus.None;
-                world.SetCombatState(attacker.Id, cs);
-                continue;
-            }
-
-            cs.TargetEntityId = targetEntityId;
-
-            // Ammunition check
-            if (cs.Ammunition <= 0)
-            {
-                cs.Status = AttackExecutionStatus.NoAmmo;
-                world.SetCombatState(attacker.Id, cs);
-                continue;
-            }
-
-            // Range boundary check: out of range maintains order but holds fire
-            float dist = Vector2.Distance(attacker.Position, targetUnit.Position);
-            if (dist > weapon.Range)
-            {
-                cs.Status = AttackExecutionStatus.OutOfRange;
-                world.SetCombatState(attacker.Id, cs);
-                continue;
-            }
-
-            // Revalidate line of sight from muzzle to vertical target observation points
-            float attackerGroundY = _geometry.HeightMap.GetHeight(attacker.Position.X, attacker.Position.Y);
-            Vector3 muzzlePos = new(attacker.Position.X, attackerGroundY + weapon.MuzzleHeight, attacker.Position.Y);
-
-            float targetGroundY = _geometry.HeightMap.GetHeight(targetUnit.Position.X, targetUnit.Position.Y);
-            bool hasClearShot = false;
-            Vector3 hitPoint = Vector3.Zero;
-
-            if (_perceptionCatalog.TryGetProfile(targetUnit.Definition, out UnitPerceptionProfile targetPerception) &&
-                targetPerception.TargetPoints is { RelativeHeights.Length: > 0 } points)
-            {
-                // Prioritize top target point (turret/roof), then lower points
-                for (int p = points.RelativeHeights.Length - 1; p >= 0; p--)
+                // Check 1: Has contact expired/removed?
+                if (!tracker.TryGetContact(cs.TargetContactId, out ContactObservation contact))
                 {
-                    Vector3 testPoint = new(targetUnit.Position.X, targetGroundY + points.RelativeHeights[p], targetUnit.Position.Y);
-                    if (_geometry.IsLineOfSightClear(muzzlePos, testPoint, _losContext, out _))
+                    cs.HasAttackOrder = false;
+                    cs.TargetContactId = default;
+                    cs.TargetEntityId = default;
+                    cs.Status = AttackExecutionStatus.None;
+                    cs.PursuitDestination = Vector2.Zero;
+                    cs.LastPursuitRequestTick = -1;
+                    world.SetCombatState(attacker.Id, cs);
+                    continue;
+                }
+
+                // Check 2: Is contact LastKnown?
+                if (contact.State != ContactState.Current)
+                {
+                    cs.Status = AttackExecutionStatus.TargetLost;
+                    TryPursueTarget(tick, attacker, contact.Position, ref cs, world);
+                    world.SetCombatState(attacker.Id, cs);
+                    continue;
+                }
+
+                // Contact is Current: re-resolve bound entity
+                if (!tracker.TryGetBoundEntity(cs.TargetContactId, out EntityId targetEntityId) ||
+                    !world.TryGetUnit(targetEntityId, out UnitState targetUnit) ||
+                    !world.AreHostile(attacker.Owner, targetUnit.Owner))
+                {
+                    cs.HasAttackOrder = false;
+                    cs.TargetContactId = default;
+                    cs.TargetEntityId = default;
+                    cs.Status = AttackExecutionStatus.None;
+                    cs.PursuitDestination = Vector2.Zero;
+                    cs.LastPursuitRequestTick = -1;
+                    world.SetCombatState(attacker.Id, cs);
+                    continue;
+                }
+
+                cs.TargetEntityId = targetEntityId;
+
+                float dist = Vector2.Distance(attacker.Position, targetUnit.Position);
+
+                // Check if within weapon range
+                if (dist <= weapon.Range + RangeToleranceMargin)
+                {
+                    if (HasLineOfSightToTarget(attacker, weapon, targetUnit, out Vector3 hitPoint, out Vector3 muzzlePos))
                     {
-                        hasClearShot = true;
-                        hitPoint = testPoint;
-                        break;
+                        // Within range and clear line of sight: stop moving and engage
+                        if (attacker.Moving)
+                        {
+                            world.UpdateUnitNavigation(attacker.Id, attacker.Position, attacker.Position, false);
+                            _navigation?.ClearUnit(attacker.Id);
+                            attacker = world.GetUnitAt(i);
+                        }
+
+                        cs.PursuitDestination = Vector2.Zero;
+                        cs.LastPursuitRequestTick = -1;
+
+                        if (cs.Ammunition <= 0)
+                        {
+                            cs.Status = AttackExecutionStatus.NoAmmo;
+                            world.SetCombatState(attacker.Id, cs);
+                            continue;
+                        }
+
+                        if (cs.ReloadTicksRemaining > 0)
+                        {
+                            cs.Status = AttackExecutionStatus.Aiming;
+                            world.SetCombatState(attacker.Id, cs);
+                            continue;
+                        }
+
+                        // Fire shot!
+                        ExecuteShot(tick, attacker, weapon, targetUnit, muzzlePos, hitPoint, ref cs, world);
+                        continue;
                     }
+                    else
+                    {
+                        // Obstructed line of sight: drive toward contact position
+                        cs.Status = AttackExecutionStatus.Obstructed;
+                        TryPursueTarget(tick, attacker, contact.Position, ref cs, world);
+                        world.SetCombatState(attacker.Id, cs);
+                        continue;
+                    }
+                }
+                else
+                {
+                    // Out of range: drive toward contact position
+                    cs.Status = AttackExecutionStatus.OutOfRange;
+                    TryPursueTarget(tick, attacker, contact.Position, ref cs, world);
+                    world.SetCombatState(attacker.Id, cs);
+                    continue;
                 }
             }
             else
             {
-                Vector3 fallbackTarget = new(targetUnit.Position.X, targetGroundY + 1.5f, targetUnit.Position.Y);
-                if (_geometry.IsLineOfSightClear(muzzlePos, fallbackTarget, _losContext, out _))
+                // Unit has NO attack order: evaluate Auto-Fire
+                if (attacker.Moving || cs.Stance == FireStance.HoldFire)
                 {
-                    hasClearShot = true;
-                    hitPoint = fallbackTarget;
-                }
-            }
-
-            if (!hasClearShot)
-            {
-                cs.Status = AttackExecutionStatus.Obstructed;
-                world.SetCombatState(attacker.Id, cs);
-                continue;
-            }
-
-            // Firing line is clear; check reload readiness
-            if (cs.ReloadTicksRemaining > 0)
-            {
-                cs.Status = AttackExecutionStatus.Aiming;
-                world.SetCombatState(attacker.Id, cs);
-                continue;
-            }
-
-            // Execute shot: consume round, start reload, apply damage exactly once
-            cs.Ammunition--;
-            cs.ReloadTicksRemaining = weapon.ReloadDurationTicks;
-            cs.Status = AttackExecutionStatus.Aiming;
-            world.SetCombatState(attacker.Id, cs);
-
-            TotalShotsFired++;
-
-            // Apply fixed damage
-            world.ApplyDamage(targetUnit.Id, weapon.Damage, out bool isDestroyed);
-            TotalDamageApplied += weapon.Damage;
-
-            // Record knowledge-filtered ShotFired / TookFire presentation event
-            RecordShotEvent(
-                tick,
-                weapon.PresentationId,
-                attacker.Id,
-                attacker.Owner,
-                muzzlePos,
-                targetUnit.Id,
-                targetUnit.Owner,
-                hitPoint);
-
-            if (isDestroyed)
-            {
-                bool alreadyDestroyed = false;
-                for (int d = 0; d < _destroyedCount; d++)
-                {
-                    if (_destroyedBuffer[d].Value == targetUnit.Id.Value)
+                    if (cs.TargetContactId.Value != 0)
                     {
-                        alreadyDestroyed = true;
-                        break;
+                        cs.TargetContactId = default;
+                        cs.TargetEntityId = default;
+                        cs.Status = AttackExecutionStatus.None;
+                    }
+                    world.SetCombatState(attacker.Id, cs);
+                    continue;
+                }
+
+                SideContactTracker tracker = _detection.GetTracker(attacker.Owner);
+
+                // Target retention
+                bool targetRetained = false;
+                Vector3 currentHitPoint = Vector3.Zero;
+                Vector3 currentMuzzlePos = Vector3.Zero;
+
+                if (cs.TargetContactId.Value != 0 && cs.TargetEntityId.Value != 0)
+                {
+                    if (tracker.TryGetContact(cs.TargetContactId, out ContactObservation currentContact) &&
+                        currentContact.State == ContactState.Current &&
+                        tracker.TryGetBoundEntity(cs.TargetContactId, out EntityId boundId) &&
+                        boundId.Value == cs.TargetEntityId.Value &&
+                        world.TryGetUnit(cs.TargetEntityId, out UnitState currentTargetUnit) &&
+                        world.AreHostile(attacker.Owner, currentTargetUnit.Owner) &&
+                        Vector2.Distance(attacker.Position, currentTargetUnit.Position) <= weapon.Range + RangeToleranceMargin &&
+                        (cs.Stance != FireStance.ReturnFire || (cs.LastTookFireAttacker.Value != 0 && cs.TargetEntityId.Value == cs.LastTookFireAttacker.Value)) &&
+                        HasLineOfSightToTarget(attacker, weapon, currentTargetUnit, out currentHitPoint, out currentMuzzlePos))
+                    {
+                        targetRetained = true;
+                    }
+                    else
+                    {
+                        cs.TargetContactId = default;
+                        cs.TargetEntityId = default;
+                        cs.Status = AttackExecutionStatus.None;
                     }
                 }
 
-                if (!alreadyDestroyed)
+                // Pick new target if not retained: scan only when weapon is ready to fire
+                if (!targetRetained)
                 {
-                    TotalUnitsDestroyed++;
-                    RecordDestroyedEvent(
-                        tick,
-                        targetUnit.Definition,
-                        targetUnit.Id,
-                        targetUnit.Owner,
-                        targetUnit.Position);
-
-                    if (_destroyedCount < _destroyedBuffer.Length)
+                    if (cs.ReloadTicksRemaining > 0 || cs.Ammunition <= 0)
                     {
-                        _destroyedBuffer[_destroyedCount++] = targetUnit.Id;
+                        world.SetCombatState(attacker.Id, cs);
+                        continue;
                     }
+
+                    ReadOnlySpan<ContactObservation> contacts = tracker.Contacts;
+                    ContactId bestContactId = default;
+                    EntityId bestEntityId = default;
+                    int bestPriority = int.MaxValue;
+                    float bestDistSq = float.MaxValue;
+                    Vector3 bestHit = Vector3.Zero;
+                    Vector3 bestMuzzle = Vector3.Zero;
+
+                    for (int c = 0; c < contacts.Length; c++)
+                    {
+                        ContactObservation candidate = contacts[c];
+                        if (candidate.State != ContactState.Current)
+                            continue;
+
+                        if (!tracker.TryGetBoundEntity(candidate.Id, out EntityId candidateEntityId) ||
+                            !world.TryGetUnit(candidateEntityId, out UnitState candidateUnit) ||
+                            !world.AreHostile(attacker.Owner, candidateUnit.Owner))
+                        {
+                            continue;
+                        }
+
+                        float distToCandidate = Vector2.Distance(attacker.Position, candidateUnit.Position);
+                        if (distToCandidate > weapon.Range + RangeToleranceMargin)
+                            continue;
+
+                        if (cs.Stance == FireStance.ReturnFire && (cs.LastTookFireAttacker.Value == 0 || candidateEntityId.Value != cs.LastTookFireAttacker.Value))
+                            continue;
+
+                        if (!HasLineOfSightToTarget(attacker, weapon, candidateUnit, out Vector3 candHit, out Vector3 candMuzzle))
+                            continue;
+
+                        int priority = GetTargetClassPriority(candidate.Classification);
+                        float distSq = distToCandidate * distToCandidate;
+
+                        bool isBetter = priority < bestPriority ||
+                            (priority == bestPriority && distSq < bestDistSq) ||
+                            (priority == bestPriority && MathF.Abs(distSq - bestDistSq) < 0.001f && candidate.Id.Value < bestContactId.Value);
+
+                        if (isBetter)
+                        {
+                            bestContactId = candidate.Id;
+                            bestEntityId = candidateEntityId;
+                            bestPriority = priority;
+                            bestDistSq = distSq;
+                            bestHit = candHit;
+                            bestMuzzle = candMuzzle;
+                        }
+                    }
+
+                    if (bestContactId.Value != 0)
+                    {
+                        cs.TargetContactId = bestContactId;
+                        cs.TargetEntityId = bestEntityId;
+                        cs.Status = AttackExecutionStatus.Aiming;
+                        targetRetained = true;
+                        currentHitPoint = bestHit;
+                        currentMuzzlePos = bestMuzzle;
+                    }
+                }
+
+                if (targetRetained)
+                {
+                    ActiveAttackersCount++;
+
+                    if (cs.Ammunition <= 0)
+                    {
+                        cs.Status = AttackExecutionStatus.NoAmmo;
+                        world.SetCombatState(attacker.Id, cs);
+                        continue;
+                    }
+
+                    if (cs.ReloadTicksRemaining > 0)
+                    {
+                        cs.Status = AttackExecutionStatus.Aiming;
+                        world.SetCombatState(attacker.Id, cs);
+                        continue;
+                    }
+
+                    world.TryGetUnit(cs.TargetEntityId, out UnitState targetUnit);
+                    ExecuteShot(tick, attacker, weapon, targetUnit, currentMuzzlePos, currentHitPoint, ref cs, world);
+                    continue;
+                }
+                else
+                {
+                    world.SetCombatState(attacker.Id, cs);
                 }
             }
         }
@@ -335,7 +536,6 @@ public sealed class CombatSystem : ISimulationSystem
         // Step 2: Deterministic destruction pass
         if (_destroyedCount > 0)
         {
-            // Sort by EntityId ascending using in-place insertion sort to guarantee zero allocations
             if (_destroyedCount > 1)
             {
                 for (int i = 1; i < _destroyedCount; i++)
@@ -363,7 +563,6 @@ public sealed class CombatSystem : ISimulationSystem
                 {
                     UnitState survivor = world.GetUnitAt(u);
                     if (world.TryGetCombatState(survivor.Id, out WorldState.CombatState survivorCs) &&
-                        survivorCs.HasAttackOrder &&
                         survivorCs.TargetEntityId.Value == destroyedId.Value)
                     {
                         SideContactTracker survivorTracker = _detection.GetTracker(survivor.Owner);
@@ -374,6 +573,10 @@ public sealed class CombatSystem : ISimulationSystem
                             survivorCs.TargetContactId = default;
                             survivorCs.TargetEntityId = default;
                             survivorCs.Status = AttackExecutionStatus.None;
+                            survivorCs.PursuitDestination = Vector2.Zero;
+                            survivorCs.LastPursuitRequestTick = -1;
+                            world.UpdateUnitNavigation(survivor.Id, survivor.Position, survivor.Position, false);
+                            _navigation?.ClearUnit(survivor.Id);
                             world.SetCombatState(survivor.Id, survivorCs);
                         }
                         else
@@ -385,6 +588,76 @@ public sealed class CombatSystem : ISimulationSystem
                             world.SetCombatState(survivor.Id, survivorCs);
                         }
                     }
+                }
+            }
+        }
+    }
+
+    private void ExecuteShot(
+        int tick,
+        UnitState attacker,
+        WeaponDefinition weapon,
+        UnitState targetUnit,
+        Vector3 muzzlePos,
+        Vector3 hitPoint,
+        ref WorldState.CombatState cs,
+        WorldState world)
+    {
+        cs.Ammunition--;
+        cs.ReloadTicksRemaining = weapon.ReloadDurationTicks;
+        cs.Status = AttackExecutionStatus.Aiming;
+        world.SetCombatState(attacker.Id, cs);
+
+        TotalShotsFired++;
+
+        // Apply fixed damage
+        world.ApplyDamage(targetUnit.Id, weapon.Damage, out bool isDestroyed);
+        TotalDamageApplied += weapon.Damage;
+
+        // Record TookFire attribution in server memory for ReturnFire stance
+        if (world.TryGetCombatState(targetUnit.Id, out WorldState.CombatState victimCs))
+        {
+            victimCs.LastTookFireAttacker = attacker.Id;
+            victimCs.LastTookFireTick = tick;
+            world.SetCombatState(targetUnit.Id, victimCs);
+        }
+
+        // Record knowledge-filtered ShotFired / TookFire presentation event
+        RecordShotEvent(
+            tick,
+            weapon.PresentationId,
+            attacker.Id,
+            attacker.Owner,
+            muzzlePos,
+            targetUnit.Id,
+            targetUnit.Owner,
+            hitPoint);
+
+        if (isDestroyed)
+        {
+            bool alreadyDestroyed = false;
+            for (int d = 0; d < _destroyedCount; d++)
+            {
+                if (_destroyedBuffer[d].Value == targetUnit.Id.Value)
+                {
+                    alreadyDestroyed = true;
+                    break;
+                }
+            }
+
+            if (!alreadyDestroyed)
+            {
+                TotalUnitsDestroyed++;
+                RecordDestroyedEvent(
+                    tick,
+                    targetUnit.Definition,
+                    targetUnit.Id,
+                    targetUnit.Owner,
+                    targetUnit.Position);
+
+                if (_destroyedCount < _destroyedBuffer.Length)
+                {
+                    _destroyedBuffer[_destroyedCount++] = targetUnit.Id;
                 }
             }
         }

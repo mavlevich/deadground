@@ -146,10 +146,194 @@ internal sealed class UnitView
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
         };
         Root.AddChild(_healthBarFg);
+
+        _weaponRangeRing = new MeshInstance3D
+        {
+            Mesh = _weaponRangeMesh,
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+            Visible = false
+        };
+        Root.AddChild(_weaponRangeRing);
+
+        _sensorRangeRing = new MeshInstance3D
+        {
+            Mesh = _sensorRangeMesh,
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+            Visible = false
+        };
+        Root.AddChild(_sensorRangeRing);
+
+        DeadGround.Rules.Ops.UnitCatalog defaultCat = UnitViewSet.GetDefaultCatalog();
+        if (unitId is not null)
+        {
+            for (ushort i = 0; i < defaultCat.Units.Length; i++)
+            {
+                if (defaultCat.Units[i].Id == unitId)
+                {
+                    var (sensorRange, weaponRange) = UnitViewSet.GetRanges(defaultCat, i);
+                    ConfigureRanges(sensorRange, weaponRange, null);
+                    break;
+                }
+            }
+        }
     }
+
+    private static readonly StandardMaterial3D WeaponRangeMaterial = new()
+    {
+        AlbedoColor = new Color(0.9294118f, 0.7803922f, 0.41960785f, 0.8f),
+        Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+        ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+        CullMode = BaseMaterial3D.CullModeEnum.Disabled
+    };
+
+    private static readonly StandardMaterial3D SensorRangeMaterial = new()
+    {
+        AlbedoColor = new Color(0.60784316f, 0.76862746f, 0.8862745f, 0.35f),
+        Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+        ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+        CullMode = BaseMaterial3D.CullModeEnum.Disabled
+    };
 
     private readonly MeshInstance3D _healthBarBg;
     private readonly MeshInstance3D _healthBarFg;
+    private readonly MeshInstance3D _weaponRangeRing;
+    private readonly MeshInstance3D _sensorRangeRing;
+    private readonly ImmediateMesh _weaponRangeMesh = new();
+    private readonly ImmediateMesh _sensorRangeMesh = new();
+    private float _weaponRange;
+    private float _sensorRange;
+    private DeadGround.Engine.HeightMap? _map;
+    private Vector3 _lastDrapedPosition;
+    private bool _ringsDraped;
+    private bool _isSelected;
+    internal const float MinRedrapeDistance = 3.0f;
+    private const float MinRedrapeDistanceSquared = MinRedrapeDistance * MinRedrapeDistance;
+    internal int RingsRebuildCount { get; private set; }
+
+    public float WeaponRange => _weaponRange;
+    public float SensorRange => _sensorRange;
+    public bool IsArmed => _weaponRange > 0f;
+    internal MeshInstance3D WeaponRangeRing => _weaponRangeRing;
+    internal MeshInstance3D SensorRangeRing => _sensorRangeRing;
+
+    public void ConfigureRanges(float sensorRange, float weaponRange, DeadGround.Engine.HeightMap? map)
+    {
+        _sensorRange = sensorRange;
+        _weaponRange = weaponRange;
+        _map = map;
+        _ringsDraped = false;
+        if (_isSelected)
+        {
+            _weaponRangeRing.Visible = _weaponRange > 0f;
+            _sensorRangeRing.Visible = _sensorRange > 0f;
+            DrapeRings();
+        }
+    }
+
+    private void DrapeRings()
+    {
+        if (!_isSelected) return;
+        if (_weaponRange > 0f)
+        {
+            BuildRing(_weaponRangeMesh, WeaponRangeMaterial, _weaponRange);
+        }
+        if (_sensorRange > 0f)
+        {
+            BuildRing(_sensorRangeMesh, SensorRangeMaterial, _sensorRange);
+        }
+        _lastDrapedPosition = Root.Position;
+        _ringsDraped = true;
+        RingsRebuildCount++;
+    }
+
+    internal static bool ClipSegmentToMap(
+        float x0, float z0, float x1, float z1,
+        float width, float depth,
+        out float cx0, out float cz0, out float cx1, out float cz1)
+    {
+        float dx = x1 - x0;
+        float dz = z1 - z0;
+        float t0 = 0.0f;
+        float t1 = 1.0f;
+
+        if (!ClipTest(-dx, x0, ref t0, ref t1)) goto Rejected;
+        if (!ClipTest(dx, width - x0, ref t0, ref t1)) goto Rejected;
+        if (!ClipTest(-dz, z0, ref t0, ref t1)) goto Rejected;
+        if (!ClipTest(dz, depth - z0, ref t0, ref t1)) goto Rejected;
+
+        cx0 = x0 + t0 * dx;
+        cz0 = z0 + t0 * dz;
+        cx1 = x0 + t1 * dx;
+        cz1 = z0 + t1 * dz;
+        return true;
+
+    Rejected:
+        cx0 = cz0 = cx1 = cz1 = 0f;
+        return false;
+
+        static bool ClipTest(float p, float q, ref float t0, ref float t1)
+        {
+            if (p < 0.0f)
+            {
+                float r = q / p;
+                if (r > t1) return false;
+                if (r > t0) t0 = r;
+            }
+            else if (p > 0.0f)
+            {
+                float r = q / p;
+                if (r < t0) return false;
+                if (r < t1) t1 = r;
+            }
+            else if (q < 0.0f)
+            {
+                return false;
+            }
+            return true;
+        }
+    }
+
+    private void BuildRing(ImmediateMesh mesh, StandardMaterial3D material, float radius)
+    {
+        mesh.ClearSurfaces();
+        if (radius <= 0f) return;
+
+        mesh.SurfaceBegin(Mesh.PrimitiveType.Lines, material);
+        const int segments = 72;
+        const float step = Mathf.Tau / segments;
+        float cx = Root.Position.X;
+        float cy = Root.Position.Y;
+        float cz = Root.Position.Z;
+
+        for (int i = 0; i < segments; i++)
+        {
+            float theta0 = i * step;
+            float theta1 = (i + 1) * step;
+            float wx0 = cx + radius * Mathf.Cos(theta0);
+            float wz0 = cz + radius * Mathf.Sin(theta0);
+            float wx1 = cx + radius * Mathf.Cos(theta1);
+            float wz1 = cz + radius * Mathf.Sin(theta1);
+
+            if (_map is not null)
+            {
+                if (!ClipSegmentToMap(wx0, wz0, wx1, wz1, _map.Width, _map.Depth, out float cwx0, out float cwz0, out float cwx1, out float cwz1))
+                {
+                    continue;
+                }
+
+                float wy0 = _map.GetHeight(cwx0, cwz0) + 0.12f;
+                float wy1 = _map.GetHeight(cwx1, cwz1) + 0.12f;
+                mesh.SurfaceAddVertex(new Vector3(cwx0 - cx, wy0 - cy, cwz0 - cz));
+                mesh.SurfaceAddVertex(new Vector3(cwx1 - cx, wy1 - cy, cwz1 - cz));
+            }
+            else
+            {
+                mesh.SurfaceAddVertex(new Vector3(wx0 - cx, 0.12f, wz0 - cz));
+                mesh.SurfaceAddVertex(new Vector3(wx1 - cx, 0.12f, wz1 - cz));
+            }
+        }
+        mesh.SurfaceEnd();
+    }
     private readonly Node3D? _gunPitch;
     private readonly Node3D? _barrelRecoil;
     private readonly Node3D? _muzzle;
@@ -300,6 +484,14 @@ internal sealed class UnitView
         _previousPosition = position;
         _hasPosition = true;
         Root.Position = position;
+        if (!_ringsDraped || (position - _lastDrapedPosition).LengthSquared() >= MinRedrapeDistanceSquared)
+        {
+            _ringsDraped = false;
+            if (_isSelected)
+            {
+                DrapeRings();
+            }
+        }
     }
 
     public void AimAt(Vector3 observedPosition)
@@ -485,5 +677,15 @@ internal sealed class UnitView
 
     public float HealthBarScaleX => _healthBarFg.Scale.X;
 
-    public void SetSelected(bool selected) => _selection.Visible = selected;
+    public void SetSelected(bool selected)
+    {
+        _isSelected = selected;
+        _selection.Visible = selected;
+        _weaponRangeRing.Visible = selected && _weaponRange > 0f;
+        _sensorRangeRing.Visible = selected && _sensorRange > 0f;
+        if (selected && (!_ringsDraped || (Root.Position - _lastDrapedPosition).LengthSquared() >= MinRedrapeDistanceSquared))
+        {
+            DrapeRings();
+        }
+    }
 }
