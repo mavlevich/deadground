@@ -470,7 +470,7 @@ public partial class Main : Node3D
         _unitViews.UpdateRecoil(delta);
         _unitViews.UpdateEffects(delta);
         _combatEffects.Update(delta);
-        _combatEffects.ProcessEvents(_session.Replica.Events, _unitViews, _session.Tick);
+        _combatEffects.ProcessEvents(_session.Replica.Events, _unitViews, _session.Tick, _contactViews);
         _combatEffects.UpdateListener(_cameraRig.Focus);
         _missionPanel?.UpdateMission(_session.Mission, _session.Tick);
 

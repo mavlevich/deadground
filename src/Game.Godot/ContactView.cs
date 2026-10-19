@@ -12,6 +12,9 @@ internal sealed class ContactView
     private readonly MeshInstance3D _selection;
 
     private Node3D? _enemyModel;
+    // Found once per model: a tree search per frame and per shot would cost every visible contact.
+    private Node3D? _turret;
+    private Node3D? _muzzle;
     private ushort _currentModelType = ushort.MaxValue;
     private ContactClassification _currentModelClassification = ContactClassification.Unknown;
 
@@ -63,10 +66,10 @@ internal sealed class ContactView
         Root.AddChild(_selection);
     }
 
-    public void Update(ContactObservation contact, float groundY, bool isSelected) =>
-        Update(contact, contact.Position, groundY, isSelected);
+    public void Update(ContactObservation contact, float groundY, bool isSelected, float turretYaw = 0f) =>
+        Update(contact, contact.Position, groundY, isSelected, turretYaw);
 
-    public void Update(ContactObservation contact, System.Numerics.Vector2 position, float groundY, bool isSelected)
+    public void Update(ContactObservation contact, System.Numerics.Vector2 position, float groundY, bool isSelected, float turretYaw = 0f)
     {
         Observation = contact;
         Root.Position = new Vector3(position.X, groundY, position.Y);
@@ -87,12 +90,15 @@ internal sealed class ContactView
                 if (_enemyModel is not null)
                 {
                     Root.AddChild(_enemyModel);
+                    _turret = _enemyModel.FindChild("TurretYaw", recursive: true, owned: false) as Node3D;
+                    _muzzle = _enemyModel.FindChild("Muzzle", recursive: true, owned: false) as Node3D;
                 }
             }
 
             if (_enemyModel is not null)
             {
                 _enemyModel.Visible = true;
+                SetTurretYaw(turretYaw);
             }
         }
         else
@@ -108,6 +114,25 @@ internal sealed class ContactView
         _selection.Visible = isSelected;
     }
 
+    // Contact models carry no hull heading, so the world yaw is the turret's local yaw.
+    public void SetTurretYaw(float worldYaw)
+    {
+        if (_turret is not null) _turret.Rotation = new Vector3(0, worldYaw, 0);
+    }
+
+    internal Node3D? Turret => _turret;
+
+    public bool TryGetMuzzleTransform(out Transform3D transform)
+    {
+        if (_enemyModel is not null && _enemyModel.Visible && _muzzle is not null)
+        {
+            transform = _muzzle.GlobalTransform;
+            return true;
+        }
+        transform = default;
+        return false;
+    }
+
     private void ClearEnemyModel()
     {
         if (_enemyModel is not null)
@@ -116,6 +141,8 @@ internal sealed class ContactView
             _enemyModel.QueueFree();
             _enemyModel = null;
         }
+        _turret = null;
+        _muzzle = null;
         _currentModelType = ushort.MaxValue;
         _currentModelClassification = ContactClassification.Unknown;
     }

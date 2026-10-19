@@ -100,7 +100,8 @@ public sealed record UnitDefinition(
     float SpeedRoad = 0f,
     float SpeedOffroad = 0f,
     float ReverseSpeed = 0f,
-    float WaterSpeed = 0f);
+    float WaterSpeed = 0f,
+    float TurretTraverseRate = 0f);
 
 public sealed record FactionData(string Id, string? Name = null);
 
@@ -288,7 +289,7 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
             WeaponDefinition? weapon = unit.Weapon is not null && weapons.TryGetValue(unit.Weapon, out WeaponDefinition? def)
                 ? def
                 : null;
-            _profiles[i] = new UnitCombatProfile(unit.MaxHealth, weapon);
+            _profiles[i] = new UnitCombatProfile(unit.MaxHealth, weapon, unit.TurretTraverseRate);
         }
     }
 
@@ -430,6 +431,8 @@ public static class PrototypeScenario
                 throw new InvalidOperationException($"Unit '{unit.Id}' is faster off-road than on the road.");
             if (unit.ReverseSpeed > 0 && unit.ReverseSpeed >= Math.Max(unit.SpeedRoad, unit.Speed))
                 throw new InvalidOperationException($"Unit '{unit.Id}' reverses as fast as it drives forward.");
+            if (!float.IsFinite(unit.TurretTraverseRate) || unit.TurretTraverseRate < 0)
+                throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid turret traverse rate.");
         }
         return data;
     }
@@ -936,19 +939,22 @@ public static class CombatScenario
 
         int tankAmmo = catalog.GetAmmoCapacity(tankDef);
 
+        float side1Yaw = -MathF.PI / 2f;
+        float side2Yaw = MathF.PI / 2f;
+
         // Side 1: 2 tanks and 1 recon vehicle
-        world.CreateUnit(1, reconIdx, new Vector2(15f, 25f), reconDef.Speed, reconDef.MaxHealth, 0);
-        world.CreateUnit(1, tankIdx, new Vector2(12f, 25f), tankDef.Speed, tankDef.MaxHealth, tankAmmo);
-        world.CreateUnit(1, tankIdx, new Vector2(15f, 50f), tankDef.Speed, tankDef.MaxHealth, tankAmmo);
+        world.CreateUnit(1, reconIdx, new Vector2(15f, 25f), reconDef.Speed, reconDef.MaxHealth, 0, side1Yaw);
+        world.CreateUnit(1, tankIdx, new Vector2(12f, 25f), tankDef.Speed, tankDef.MaxHealth, tankAmmo, side1Yaw);
+        world.CreateUnit(1, tankIdx, new Vector2(15f, 50f), tankDef.Speed, tankDef.MaxHealth, tankAmmo, side1Yaw);
 
         // Side 2: 2 tanks and 1 recon vehicle
-        world.CreateUnit(2, tankIdx, new Vector2(33f, 25f), tankDef.Speed, tankDef.MaxHealth, tankAmmo); // behind low wall
-        world.CreateUnit(2, tankIdx, new Vector2(65f, 50f), tankDef.Speed, tankDef.MaxHealth, tankAmmo); // behind building
-        world.CreateUnit(2, reconIdx, new Vector2(65f, 80f), reconDef.Speed, reconDef.MaxHealth, 0);
+        world.CreateUnit(2, tankIdx, new Vector2(33f, 25f), tankDef.Speed, tankDef.MaxHealth, tankAmmo, side2Yaw); // behind low wall
+        world.CreateUnit(2, tankIdx, new Vector2(65f, 50f), tankDef.Speed, tankDef.MaxHealth, tankAmmo, side2Yaw); // behind building
+        world.CreateUnit(2, reconIdx, new Vector2(65f, 80f), reconDef.Speed, reconDef.MaxHealth, 0, side2Yaw);
 
         // One unarmed APC per side, created last so earlier entity IDs stay the same.
-        world.CreateUnit(1, apcIdx, new Vector2(8f, 38f), apcDef.Speed, apcDef.MaxHealth, 0);
-        world.CreateUnit(2, apcIdx, new Vector2(75f, 65f), apcDef.Speed, apcDef.MaxHealth, 0);
+        world.CreateUnit(1, apcIdx, new Vector2(8f, 38f), apcDef.Speed, apcDef.MaxHealth, 0, side1Yaw);
+        world.CreateUnit(2, apcIdx, new Vector2(75f, 65f), apcDef.Speed, apcDef.MaxHealth, 0, side2Yaw);
 
         return new Simulation(world, rules);
     }

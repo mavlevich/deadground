@@ -50,7 +50,8 @@
       "target_points": [0.9, 2.2],
       "radius": 1.65,
       "max_health": 100,
-      "weapon": "gun_115mm_u5ts"
+      "weapon": "gun_115mm_u5ts",
+      "turret_traverse_rate": 18.0
     },
     {
       "id": "m60a1",
@@ -65,7 +66,8 @@
       "target_points": [1.0, 2.9],
       "radius": 1.8,
       "max_health": 100,
-      "weapon": "gun_105mm_m68"
+      "weapon": "gun_105mm_m68",
+      "turret_traverse_rate": 22.5
     },
     {
       "id": "btr70",

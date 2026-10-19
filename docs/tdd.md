@@ -379,6 +379,19 @@ State and convention:
 - Spawns set an initial heading. Scenarios state it explicitly instead of relying on a default.
 - Infantry squads do not use hull heading.
 
+Turret yaw and traverse:
+
+- Armed units have a turret yaw as simulation state, stored as an angle in radians wrapped to (-pi, pi].
+  Heading 0 faces -Z (map north); positive angles turn counterclockwise seen from above. The forward
+  vector on the (X, Z) plane is `(-sin yaw, -cos yaw)`.
+- Today the simulation has no hull heading, so turret yaw is stored as a world angle. Once hull heading
+  lands (section 9.5), turret yaw will become hull-relative: world turret yaw will be `HullHeading + TurretYaw`.
+- Turret turning follows the shorter arc across the -pi / +pi wrap.
+- Armed units specify a powered turret traverse rate in degrees per second from period sources:
+  - T-62: 18.0 deg/s (full 360 degree powered traverse in 20.0 s, US Army TRADOC Bulletin 10 / DTIC ADA392790).
+  - M60A1: 22.5 deg/s (full 360 degree powered traverse in 16.0 s, TM 9-2350-215-10).
+  - Prototype tank: 24.0 deg/s (full 360 degree turn in 15.0 s, plausible estimate for 128 m prototype test map).
+
 Unit data (section 17):
 
 - `turn_rate`: degrees per second for a turn in place.
@@ -459,13 +472,13 @@ same commands gives the same headings. Stage 2 adds the wheeled tests listed abo
   - Expiration: `LastKnown` contacts age out and are permanently removed once unobserved for longer than `MemoryDurationTicks` (default 100 ticks / 5.0 s).
   - Overflow eviction policy: each side supports up to 256 contacts. If capacity is exceeded, the oldest `LastKnown` contact is evicted first. `Current` contacts are never evicted in favor of `LastKnown` markers.
   - Canonical export: exported contacts are sorted deterministically by `ContactId` for consistent network serialization.
-- Snapshot wire protocol v10:
-  - Protocol version incremented to 10.
+- Snapshot wire protocol:
+  - Protocol version incremented to 12.
   - Header is 48 bytes: `Version` (1 byte), `SnapshotKind` (1 byte), `uint Sequence` (4 bytes), `int ServerTick` (4 bytes), `ushort UnitCount` (2 bytes), `ushort ContactCount` (2 bytes), `ushort EventCount` (2 bytes), plus session header fields.
-  - Own unit record is 30 bytes: `uint Id` (4 bytes), `ushort Definition` (2 bytes), `Vector2 Position` (8 bytes), `uint SupportSurface` (4 bytes), `byte NavStatus` (1 byte), `ushort Health` (2 bytes), `ushort Ammunition` (2 bytes), `ushort ReloadTicksRemaining` (2 bytes), `byte AttackStatus` (1 byte), `uint TargetContactId` (4 bytes).
-  - Contact record is 20 bytes: `uint ContactId` (4 bytes), `byte State` (1 byte), `byte Classification` (1 byte), `ushort Type` (2 bytes), `Vector2 Position` (8 bytes), `int LastSeenTick` (4 bytes).
+  - Own unit record is 33 bytes: `uint Id` (4 bytes), `ushort Definition` (2 bytes), `Vector2 Position` (8 bytes), `uint SupportSurface` (4 bytes), `byte NavStatus` (1 byte), `ushort Health` (2 bytes), `ushort Ammunition` (2 bytes), `ushort ReloadTicksRemaining` (2 bytes), `byte AttackStatus` (1 byte), `uint TargetContactId` (4 bytes), `byte Stance` (1 byte), `ushort TurretYaw` (2 bytes).
+  - Contact record is 22 bytes: `uint ContactId` (4 bytes), `byte State` (1 byte), `byte Classification` (1 byte), `ushort Type` (2 bytes), `Vector2 Position` (8 bytes), `int LastSeenTick` (4 bytes), `ushort TurretYaw` (2 bytes).
   - Combat event record is 39 bytes: `uint EventId` (4 bytes), `int ServerTick` (4 bytes), `byte Kind` (1 byte), `ushort PresentationId` (2 bytes), `Vector3 Origin` (12 bytes), `Vector3 Target` (12 bytes), `uint ShooterUnitId` (4 bytes).
-  - Commands: `MoveCommand` is 22 bytes (`MoveKind = 1`), `AttackCommand` is 18 bytes (`AttackKind = 7`: `Version` (1), `Kind` (1), `Sequence` (4), `ClientTick` (4), `Unit` (4), `TargetContactId` (4)). Both commands share a single sequence stream per player.
+  - Commands: `MoveCommand` is 22 bytes (`MoveKind = 1`), `AttackCommand` is 18 bytes (`AttackKind = 7`: `Version` (1), `Kind` (1), `Sequence` (4), `ClientTick` (4), `Unit` (4), `TargetContactId` (4)), `SetFireStanceCommand` is 15 bytes (`SetFireStanceKind = 8`). All commands share a single sequence stream per player.
   - Information isolation: server-filtered snapshots only contain permitted observations and knowledge-filtered events for the recipient player. Foreign truth state and hidden firing origins are never transmitted.
 
 Detection is a measured CPU hotspot that fits the per-tick simulation budget: steady-state detection, combat resolution, and snapshot serialization execute with zero managed heap allocations.
@@ -540,6 +553,13 @@ Every unit has a fire stance: `FireAtWill` (default), `ReturnFire`, or `HoldFire
 - A new movement order cancels an active attack order.
 - Firing line of sight and weapon range are rechecked before each shot. Moving units do not fire.
 - Invalid commands are rejected and never cancel an existing valid order.
+
+#### Turret traverse and alignment
+
+- With an active target (attack order or auto-fire), the turret turns toward the target at most at its traverse rate per tick, along the shorter arc.
+- A shot is fired only when the turret points at the target within `TurretAlignmentTolerance` (0.05 radians, about 2.86 degrees).
+- Reload continues while turning. If the weapon is loaded and line of sight is clear, firing occurs on the tick the turret enters alignment tolerance.
+- Without a target, the turret keeps its yaw. Spawned units start facing a direction given by the scenario (toward the enemy side by default in battle and combat scenarios).
 
 #### Cued fire
 
@@ -657,7 +677,7 @@ Status: planned for M2. M1 units keep one weapon each, so the M1 exit does not d
 - Map objects use `MapObjectId`. Their static geometry stays in the map package; snapshots carry allowed mutable fields such as bridge condition and objective ownership. A missing knowledge entry does not mean the object was destroyed or restored to its initial state.
 - Clients apply a full snapshot only after the complete message is received. On reconnect the same state blocks restore the allowed view without needing earlier presentation events.
 - Budget estimate: 100 unit records at about 16 bytes are 1.6 KB, or 16 KB/s at 10 Hz. This estimates only unit records. Measurements include contacts, world state, headers and transport overhead against the 30 KB/s budget.
-- Protocol version 10: contact records are 20 bytes (`ContactId` (4), `State` (1), `Classification` (1), `ushort Type` (2), `Position` (8), `LastSeenTick` (4)). Own units are 30 bytes.
+- Protocol version 12: own unit records are 33 bytes (`ushort TurretYaw` (2) at offset 31, quantized to 16 bits). Contact records are 22 bytes (`ushort TurretYaw` (2) at offset 20, quantized to 16 bits). Contacts carry the turret yaw observed at the moment of sighting; `LastKnown` contacts freeze the last observed yaw.
 - Delta compression (acknowledged baselines, dirty fields) is added only if measurements exceed the budget.
 - Quantization: ground units send X, Z and support surface. Height is computed on the client (section 8.3). 10 cm precision on a 16 km map is 18 bits per axis.
 - Clients render about 100 to 150 ms behind the server and interpolate.
@@ -765,6 +785,7 @@ Numbers and sources:
   or reverses as fast as it drives. `turn_rate` comes with hull heading (section 9.5).
 - Weapons: effective range from period sources. Hit probability by range is section 12.3, not the
   range field. Armor values by side are stored now and used when section 12.3 lands.
+- Turret traverse: powered traverse rate in degrees per second from period sources (`docs/unit-sources.md`). T-62 has 18.0 deg/s (full turn in 20.0 s, source [15]), M60A1 has 22.5 deg/s (full turn in 16.0 s, source [6]), prototype tank has 24.0 deg/s estimate.
 - Sensors: visual sensor range per observer type, for a clear day, open ground and a moving target.
   Cover, a halted target, dust, smoke and weather reduce them later (section 10). Seen means known:
   any visible unit reveals its vehicle type at once.

@@ -128,11 +128,8 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
             }
             System.Numerics.Vector2 position = replica.SamplePosition(unit.Id, renderTick);
             view.UpdatePosition(new Vector3(position.X, map.GetHeight(position.X, position.Y), position.Y));
-            if (replica.TryGetContact(unit.TargetContactId, out ContactObservation target) && target.IsCurrent)
-            {
-                System.Numerics.Vector2 targetPosition = replica.SampleContactPosition(target.Id, renderTick);
-                view.AimAt(new Vector3(targetPosition.X, 0, targetPosition.Y));
-            }
+            float turretYaw = replica.SampleTurretYaw(unit.Id, renderTick);
+            view.SetTurretYaw(turretYaw);
             int maxHealth = _maxHealthProvider?.Invoke(unit.Definition) ?? GetDefaultMaxHealth(unit.Definition);
             view.UpdateHealth(unit.Health, maxHealth);
             view.SetSelected(Selected.Contains(unit.Id));
