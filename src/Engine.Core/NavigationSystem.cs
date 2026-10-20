@@ -48,6 +48,7 @@ public sealed class NavigationSystem : ISimulationSystem
     // Global planning state
     private readonly Vector2[] _activeGlobalPortals;
     private int _activeGlobalPortalCount;
+    private int _currentTick;
 
     // Local window definition
     private float _localWinMinX;
@@ -567,6 +568,7 @@ public sealed class NavigationSystem : ISimulationSystem
     {
         ArgumentNullException.ThrowIfNull(world);
 
+        _currentTick = tick;
         SweepRemovedUnits(world);
 
         GlobalExpansionsThisTick = 0;
@@ -1579,7 +1581,7 @@ public sealed class NavigationSystem : ISimulationSystem
             {
                 if (unit.Moving)
                 {
-                    world.UpdateUnitNavigation(unit.Id, unit.Position, unit.Position, false);
+                    world.UpdateUnitNavigation(unit.Id, unit.Position, unit.Position, false, _currentTick);
                 }
                 continue;
             }
@@ -1672,7 +1674,7 @@ public sealed class NavigationSystem : ISimulationSystem
                 _routeCounts[slot] = 0;
                 _routeIndices[slot] = 0;
                 _unitStatuses[slot] = PathRequestStatus.PathFound;
-                world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, false);
+                world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, false, _currentTick);
                 continue;
             }
 
@@ -1689,11 +1691,11 @@ public sealed class NavigationSystem : ISimulationSystem
             {
                 _unitChunkWaitTicks[slot]++;
                 ChunkWaitTicks++;
-                world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, false);
+                world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, false, _currentTick);
             }
             else
             {
-                world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, true);
+                world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, true, _currentTick);
             }
         }
     }

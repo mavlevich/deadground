@@ -19,7 +19,7 @@ public sealed class OpsRules : RuleSet
         IUnitMovementCatalog movementCatalog,
         NavigationTuning? navTuning = null,
         DetectionTuning? detTuning = null)
-        : this(geometry, perceptionCatalog, movementCatalog, null, navTuning, detTuning)
+        : this(geometry, perceptionCatalog, movementCatalog, null, navTuning, detTuning, null)
     { }
 
     public OpsRules(
@@ -28,21 +28,23 @@ public sealed class OpsRules : RuleSet
         IUnitMovementCatalog movementCatalog,
         IUnitCombatCatalog? combatCatalog,
         NavigationTuning? navTuning = null,
-        DetectionTuning? detTuning = null)
-        : base(CreateSystems(geometry, perceptionCatalog, movementCatalog, combatCatalog, navTuning, detTuning))
+        DetectionTuning? detTuning = null,
+        DeterministicRandom? combatRandom = null)
+        : base(CreateSystems(geometry, perceptionCatalog, movementCatalog, combatCatalog, navTuning, detTuning, combatRandom))
     { }
 
-    public OpsRules(StaticGeometry geometry, UnitCatalog catalog)
-        : this(geometry, new OpsPerceptionCatalog(catalog), new OpsMovementCatalog(catalog), new OpsCombatCatalog(catalog), null, PrototypeScenario.CreateDetectionTuning(catalog)) { }
+    public OpsRules(StaticGeometry geometry, UnitCatalog catalog, DeterministicRandom? combatRandom = null)
+        : this(geometry, new OpsPerceptionCatalog(catalog), new OpsMovementCatalog(catalog), new OpsCombatCatalog(catalog), null, PrototypeScenario.CreateDetectionTuning(catalog), combatRandom) { }
 
-    public OpsRules(StaticGeometry geometry, UnitCatalog catalog, NavigationTuning? navTuning, DetectionTuning? detTuning = null)
+    public OpsRules(StaticGeometry geometry, UnitCatalog catalog, NavigationTuning? navTuning, DetectionTuning? detTuning = null, DeterministicRandom? combatRandom = null)
         : this(
             geometry,
             new OpsPerceptionCatalog(catalog),
             new OpsMovementCatalog(catalog),
             new OpsCombatCatalog(catalog),
             navTuning,
-            detTuning ?? PrototypeScenario.CreateDetectionTuning(catalog))
+            detTuning ?? PrototypeScenario.CreateDetectionTuning(catalog),
+            combatRandom)
     { }
 
     private static ISimulationSystem[] CreateSystems(
@@ -51,13 +53,14 @@ public sealed class OpsRules : RuleSet
         IUnitMovementCatalog movementCatalog,
         IUnitCombatCatalog? combatCatalog,
         NavigationTuning? navTuning,
-        DetectionTuning? detTuning)
+        DetectionTuning? detTuning,
+        DeterministicRandom? combatRandom = null)
     {
         NavigationSystem nav = new(new NavigationGrid(geometry, navTuning?.CellSize ?? NavigationTuning.DefaultCellSize, enableHierarchical: true), movementCatalog, navTuning);
         DetectionSystem det = new(geometry, perceptionCatalog, detTuning);
         if (combatCatalog is not null)
         {
-            CombatSystem combat = new(geometry, combatCatalog, perceptionCatalog, det, nav);
+            CombatSystem combat = new(geometry, combatCatalog, perceptionCatalog, det, nav, combatRandom: combatRandom);
             return [nav, det, combat];
         }
         return [nav, det];
@@ -87,7 +90,13 @@ public sealed record WeaponData(
     float PenetrationFar = 0f,
     float PenetrationNearRange = 0f,
     float PenetrationFarRange = 0f,
-    int RoundsPerBurst = 1);
+    int RoundsPerBurst = 1,
+    AccuracyPoint[]? AccuracyCurve = null,
+    float DispersionMils = 3.0f,
+    float Dispersion = 0f,
+    float TargetMovementPenalty = 0.20f,
+    float RangingBonus = 0.08f,
+    float MaxRangingBonus = 0.24f);
 
 public sealed record UnitDefinition(
     string Id,
@@ -296,6 +305,7 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
                 float penFarRange = w.PenetrationFarRange > 0f ? w.PenetrationFarRange : w.Range;
                 int burst = Math.Max(1, w.RoundsPerBurst);
 
+                float dispersion = w.DispersionMils > 0f ? w.DispersionMils : (w.Dispersion > 0f ? w.Dispersion : 3.0f);
                 weapons[w.Id] = new WeaponDefinition(
                     w.Id,
                     w.Range,
@@ -308,7 +318,12 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
                     penFar,
                     penNearRange,
                     penFarRange,
-                    burst);
+                    burst,
+                    w.AccuracyCurve,
+                    dispersion,
+                    w.TargetMovementPenalty,
+                    w.RangingBonus,
+                    w.MaxRangingBonus);
             }
         }
 
@@ -325,7 +340,7 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
                 unit.ArmorRear,
                 unit.FrontSectorAngle > 0f ? unit.FrontSectorAngle : 90f,
                 unit.RearSectorAngle > 0f ? unit.RearSectorAngle : 90f);
-            _profiles[i] = new UnitCombatProfile(unit.MaxHealth, weapon, unit.TurretTraverseRate, armor);
+            _profiles[i] = new UnitCombatProfile(unit.MaxHealth, weapon, unit.TurretTraverseRate, armor, unit.Radius > 0f ? unit.Radius : 1.0f);
         }
     }
 
@@ -348,6 +363,8 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
 [JsonSerializable(typeof(DetectionSettings))]
 [JsonSerializable(typeof(WeaponData))]
 [JsonSerializable(typeof(WeaponData[]))]
+[JsonSerializable(typeof(AccuracyPoint))]
+[JsonSerializable(typeof(AccuracyPoint[]))]
 [JsonSerializable(typeof(FactionData))]
 [JsonSerializable(typeof(FactionData[]))]
 [JsonSerializable(typeof(float[]))]
@@ -446,6 +463,29 @@ public static class PrototypeScenario
                     throw new InvalidOperationException("Invalid weapon penetration range.");
                 if (weapon.RoundsPerBurst < 1 || weapon.RoundsPerBurst > ushort.MaxValue)
                     throw new InvalidOperationException("Invalid weapon rounds per burst.");
+                if (weapon.AccuracyCurve is not null)
+                {
+                    float prevRange = -1f;
+                    foreach (AccuracyPoint pt in weapon.AccuracyCurve)
+                    {
+                        if (!float.IsFinite(pt.Range) || pt.Range < 0)
+                            throw new InvalidOperationException("Invalid accuracy curve range.");
+                        if (!float.IsFinite(pt.HitProbability) || pt.HitProbability < 0f || pt.HitProbability > 1f)
+                            throw new InvalidOperationException("Invalid accuracy curve hit probability.");
+                        if (pt.Range < prevRange)
+                            throw new InvalidOperationException("Accuracy curve ranges must be monotonically non-decreasing.");
+                        prevRange = pt.Range;
+                    }
+                }
+                float disp = weapon.DispersionMils > 0f ? weapon.DispersionMils : weapon.Dispersion;
+                if (!float.IsFinite(disp) || disp < 0)
+                    throw new InvalidOperationException("Invalid weapon dispersion.");
+                if (!float.IsFinite(weapon.TargetMovementPenalty) || weapon.TargetMovementPenalty < 0f || weapon.TargetMovementPenalty > 1f)
+                    throw new InvalidOperationException("Invalid target movement penalty.");
+                if (!float.IsFinite(weapon.RangingBonus) || weapon.RangingBonus < 0f || weapon.RangingBonus > 1f)
+                    throw new InvalidOperationException("Invalid ranging bonus.");
+                if (!float.IsFinite(weapon.MaxRangingBonus) || weapon.MaxRangingBonus < 0f || weapon.MaxRangingBonus > 1f)
+                    throw new InvalidOperationException("Invalid max ranging bonus.");
             }
         }
 
@@ -989,7 +1029,7 @@ public static class CombatScenario
         return new StaticGeometry(map, [building, lowWall]);
     }
 
-    public static Simulation CreateSimulation(StaticGeometry? geometry = null, UnitCatalog? catalog = null, NavigationTuning? navTuning = null)
+    public static Simulation CreateSimulation(StaticGeometry? geometry = null, UnitCatalog? catalog = null, NavigationTuning? navTuning = null, ulong matchSeed = 2024UL)
     {
         geometry ??= CreateStaticGeometry();
         catalog ??= PrototypeScenario.LoadCatalog();
@@ -1023,7 +1063,7 @@ public static class CombatScenario
         world.CreateUnit(1, apcIdx, new Vector2(8f, 38f), apcDef.Speed, apcDef.MaxHealth, 0, side1Yaw);
         world.CreateUnit(2, apcIdx, new Vector2(75f, 65f), apcDef.Speed, apcDef.MaxHealth, 0, side2Yaw);
 
-        return new Simulation(world, rules);
+        return new Simulation(world, rules, matchSeed);
     }
 
     public static MatchSetup CreateMatchSetup(StaticGeometry? geometry = null, string ruleSetId = "Combat", UnitCatalog? catalog = null)

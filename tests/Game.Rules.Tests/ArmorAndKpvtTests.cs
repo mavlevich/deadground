@@ -275,7 +275,7 @@ public sealed class ArmorAndKpvtTests
     {
         byte[] buffer = new byte[WireProtocol.MaxMessageSize];
 
-        foreach (HitResult expectedResult in new[] { HitResult.None, HitResult.Penetrated, HitResult.Deflected })
+        foreach (HitResult expectedResult in new[] { HitResult.None, HitResult.Penetrated, HitResult.Deflected, HitResult.Miss })
         {
             ClientReplica replica = new();
             CombatEventObservation ev = new(

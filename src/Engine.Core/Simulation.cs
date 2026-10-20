@@ -1,6 +1,6 @@
 namespace DeadGround.Engine;
 
-public sealed class Simulation : IDisposable
+public sealed class Simulation : IDisposable, IRandomStreamProvider
 {
     public const int TickRate = 20;
     public const int MaxPlayers = 4;
@@ -11,6 +11,7 @@ public sealed class Simulation : IDisposable
     private readonly NavigationSystem? _navigation;
     private readonly CombatSystem? _combat;
     private readonly IMissionSystem? _mission;
+    private readonly DeterministicRandom[] _domainStreams = new DeterministicRandom[4];
 
     private readonly QueuedCommand[] _commands = new QueuedCommand[256];
     private readonly uint[] _lastAccepted = new uint[MaxPlayers];
@@ -50,10 +51,27 @@ public sealed class Simulation : IDisposable
             new(player, CommandKind.SetFireStance, default, default, stance);
     }
 
-    public Simulation(WorldState world, ISimulationRules rules)
+    public ulong MatchSeed { get; }
+
+    public DeterministicRandom GetStream(RandomDomain domain)
+    {
+        int index = (int)domain;
+        if (index < 0 || index >= _domainStreams.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(domain));
+        }
+        return _domainStreams[index] ??= DeterministicRandom.CreateDomainStream(MatchSeed, domain);
+    }
+
+    public Simulation(WorldState world, ISimulationRules rules, ulong matchSeed = 2024UL)
     {
         _world = world ?? throw new ArgumentNullException(nameof(world));
         _rules = rules ?? throw new ArgumentNullException(nameof(rules));
+        MatchSeed = matchSeed;
+        if (_rules is IRandomStreamsAware awareRules)
+        {
+            awareRules.InitializeRandomStreams(this);
+        }
         _detection = (_rules as RuleSet)?.FindSystem<DetectionSystem>();
         _navigation = (_rules as RuleSet)?.FindSystem<NavigationSystem>();
         _combat = (_rules as RuleSet)?.FindSystem<CombatSystem>();

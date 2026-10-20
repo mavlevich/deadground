@@ -284,7 +284,8 @@ public static class ReconRaidScenario
         UnitCatalog? catalog = null,
         NavigationTuning? navTuning = null,
         DetectionTuning? detTuning = null,
-        int timeLimitTicks = ReconRaidMissionSystem.DefaultTimeLimitTicks)
+        int timeLimitTicks = ReconRaidMissionSystem.DefaultTimeLimitTicks,
+        ulong matchSeed = 1337UL)
     {
         geometry ??= CreateStaticGeometry();
         catalog ??= PrototypeScenario.LoadCatalog();
@@ -374,7 +375,7 @@ public static class ReconRaidScenario
             world.Capacity);
 
         OpsRules rules = new(nav, det, combat, mission);
-        Simulation sim = new(world, rules);
+        Simulation sim = new(world, rules, matchSeed);
 
         // Wire simulation reference into bot command sink
         botSink.SetSimulation(sim);

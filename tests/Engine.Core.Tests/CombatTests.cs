@@ -1409,4 +1409,25 @@ public sealed class CombatTests
             Assert.True(csReady.Ammunition < 10);
         }
     }
+
+    [Fact]
+    public void CombatSystem_WithoutStreamOrSimulation_ThrowsInvalidOperationExceptionOnRoll()
+    {
+        StaticGeometry geometry = new(HeightMap.CreatePrototype(), Array.Empty<OpaqueStructure>());
+        TestCombatCatalog combatCat = new();
+        combatCat.Register(1, 100, new WeaponDefinition("gun", 50f, 20, 25, 10, 1.5f, 1));
+        TestPerceptionCatalog perceptCat = new();
+        perceptCat.Register(1, sensor: new VisualSensorProfile(100f, 1.8f), points: new TargetObservationPoints(0.8f, 1.8f));
+        DetectionSystem detection = new(geometry, perceptCat);
+        CombatSystem combat = new(geometry, combatCat, perceptCat, detection);
+
+        WorldState world = new(geometry.HeightMap);
+        world.CreateUnit(1, 1, new Vector2(10f, 10f), 6f, 100, 10);
+        world.CreateUnit(2, 1, new Vector2(20f, 10f), 6f, 100, 10);
+
+        // Update detection first so contact exists for attacker
+        detection.Update(world, 1);
+
+        Assert.Throws<InvalidOperationException>(() => combat.Update(world, 1));
+    }
 }

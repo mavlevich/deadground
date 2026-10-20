@@ -64,7 +64,11 @@ public sealed class WorldState : IDisposable
         int LastTookFireTick = -1,
         int LastPursuitRequestTick = -1,
         float TurretYaw = 0f,
-        float HullHeading = 0f);
+        float HullHeading = 0f,
+        int ConsecutiveShotsOnTarget = 0,
+        EntityId LastTargetEntityId = default,
+        Vector2 LastTargetPosition = default,
+        int LastMovedTick = -1);
 
     public EntityId CreateUnit(int owner, ushort definition, Vector2 position, float speed, int maxHealth = 100, int ammo = 0, float initialTurretYaw = 0f)
     {
@@ -147,13 +151,23 @@ public sealed class WorldState : IDisposable
         return true;
     }
 
-    internal bool UpdateUnitNavigation(EntityId id, Vector2 position, Vector2 target, bool active)
+    internal bool UpdateUnitNavigation(EntityId id, Vector2 position, Vector2 target, bool active, int tick = -1)
     {
         if (!_indices.TryGetValue(id, out int index)) return false;
         Entity entity = _entities[index];
         ref Position pos = ref _storage.Get<Position>(entity);
         ref Motion motion = ref _storage.Get<Motion>(entity);
-        TurnHullAlong(ref _storage.Get<CombatState>(entity), position - pos.Value);
+        ref CombatState combat = ref _storage.Get<CombatState>(entity);
+        Vector2 step = position - pos.Value;
+        if (step.LengthSquared() > 0.0001f)
+        {
+            TurnHullAlong(ref combat, step);
+            if (tick >= 0)
+            {
+                combat.LastMovedTick = tick;
+            }
+            combat.ConsecutiveShotsOnTarget = 0;
+        }
         pos.Value = position;
         motion.Target = target;
         motion.Active = active;

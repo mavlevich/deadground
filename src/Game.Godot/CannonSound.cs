@@ -11,6 +11,7 @@ internal static class CannonSound
     internal const int SampleRate = 44100;
     internal const float Duration = 3.0f;
     internal const float BurstDuration = 1.0f;
+    internal const float GroundImpactDuration = 0.4f;
     internal const float Peak = 0.95f;
 
     // Delay in seconds, gain and low-pass cutoff in Hz of each echo of the dry blast.
@@ -117,6 +118,94 @@ internal static class CannonSound
             float norm = Peak / MathF.Tanh(1.3f);
             for (int i = 0; i < count; i++)
                 output[i] = MathF.Tanh(output[i] * drive) * norm;
+        }
+
+        return output;
+    }
+
+    internal static AudioStreamWav CreateGroundImpactStream(int seed)
+    {
+        float[] samples = RenderGroundImpact(seed);
+        byte[] data = new byte[samples.Length * 2];
+        for (int i = 0; i < samples.Length; i++)
+        {
+            short pcm = (short)MathF.Round(samples[i] * 32767f);
+            data[i * 2] = (byte)(pcm & 0xFF);
+            data[i * 2 + 1] = (byte)((pcm >> 8) & 0xFF);
+        }
+        return new AudioStreamWav
+        {
+            Format = AudioStreamWav.FormatEnum.Format16Bits,
+            MixRate = SampleRate,
+            Stereo = false,
+            Data = data
+        };
+    }
+
+    internal static float[] RenderGroundImpact(int seed)
+    {
+        int count = (int)(SampleRate * GroundImpactDuration);
+        Random rand = new(seed);
+        float[] output = new float[count];
+
+        float b1 = 0f, b2 = 0f;
+        float p1 = 0f, p2 = 0f;
+        float d1 = 0f, d2 = 0f;
+        float hp = 0f, hpPrev = 0f;
+
+        for (int i = 0; i < count; i++)
+        {
+            float t = (float)i / SampleRate;
+            float white = (float)rand.NextDouble() * 2f - 1f;
+
+            // Remove sub-60Hz rumble with a gentle highpass so small speakers can play it
+            hp = 0.88f * (hp + white - hpPrev);
+            hpPrev = white;
+
+            // Initial impact punch: filtered noise sweeping from 750 Hz down to 180 Hz
+            float punchCutoff = 180f + 570f * MathF.Exp(-t / 0.02f);
+            float pk = Coefficient(punchCutoff);
+            p1 += (hp - p1) * pk;
+            p2 += (p1 - p2) * pk;
+            float punch = p2 * MathF.Exp(-t / 0.04f) * 2.2f;
+
+            // Dull earth displacement thud: two-pole low-pass sweeping from 320 Hz down to 160 Hz
+            float thudCutoff = 160f + 160f * MathF.Exp(-t / 0.07f);
+            float tk = Coefficient(thudCutoff);
+            b1 += (hp - b1) * tk;
+            b2 += (hp - b2) * tk;
+            float thud = b2 * MathF.Exp(-t / 0.14f) * 2.8f;
+
+            // Loose soil / debris scatter: gentle mid-frequency noise
+            float dk = Coefficient(850f);
+            d1 += (hp - d1) * dk;
+            d2 += (d1 - d2) * dk;
+            float debris = d2 * MathF.Exp(-t / 0.20f) * 0.45f;
+
+            output[i] = punch + thud + debris;
+        }
+
+        // Fade the last 0.08 s so the sample ends in silence.
+        int fade = (int)(0.08f * SampleRate);
+        for (int i = count - fade; i < count; i++)
+        {
+            output[i] *= (float)(count - i) / fade;
+        }
+
+        float peak = 0f;
+        foreach (float sample in output)
+        {
+            peak = MathF.Max(peak, MathF.Abs(sample));
+        }
+
+        if (peak > 1e-5f)
+        {
+            float drive = 1.2f / peak;
+            float norm = Peak / MathF.Tanh(1.2f);
+            for (int i = 0; i < count; i++)
+            {
+                output[i] = MathF.Tanh(output[i] * drive) * norm;
+            }
         }
 
         return output;

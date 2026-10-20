@@ -134,7 +134,11 @@ internal partial class CombatEffects : Node3D
     internal AudioStreamWav[] MgBurstVariants => _mgBurstVariants;
     internal SoundPriority GetVoicePriority(int index) => _activeVoices[index].Priority;
     private AudioStreamWav? _tookFireAudio;
+    private AudioStreamWav? _groundImpactAudio;
     private AudioStreamWav? _explosionAudio;
+
+    internal AudioStreamWav? TookFireAudio => _tookFireAudio;
+    internal AudioStreamWav? GroundImpactAudio => _groundImpactAudio;
 
     private int _droppedMeshEffectsCount;
     private int _droppedAudioVoicesCount;
@@ -353,6 +357,7 @@ internal partial class CombatEffects : Node3D
         for (int i = 0; i < MgBurstVariantCount; i++)
             _mgBurstVariants[i] = CannonSound.CreateBurstStream(2000 + i * 17);
         _tookFireAudio = SynthesizeTookFireSound();
+        _groundImpactAudio = CannonSound.CreateGroundImpactStream(1337);
         _explosionAudio = SynthesizeExplosionSound();
 
         for (int i = 0; i < MaxAudioPlayers; i++)
@@ -418,6 +423,7 @@ internal partial class CombatEffects : Node3D
             Data = data
         };
     }
+
 
     private static AudioStreamWav SynthesizeExplosionSound()
     {
@@ -629,6 +635,10 @@ internal partial class CombatEffects : Node3D
                         {
                             TriggerRicochetFeedback(target, shotDir, hitElapsed, isMachineGun: isMg);
                         }
+                        else if (ev.Result == HitResult.Miss)
+                        {
+                            TriggerGroundImpactFeedback(target, hitElapsed);
+                        }
                         else
                         {
                             TriggerImpactFeedback(target, hitElapsed);
@@ -677,6 +687,10 @@ internal partial class CombatEffects : Node3D
                     if (ev.Result == HitResult.Deflected)
                     {
                         TriggerRicochetFeedback(target, shotDir, ageSeconds, isMachineGun: isMg);
+                    }
+                    else if (ev.Result == HitResult.Miss)
+                    {
+                        TriggerGroundImpactFeedback(target, ageSeconds);
                     }
                     else
                     {
@@ -743,6 +757,20 @@ internal partial class CombatEffects : Node3D
         if (elapsedOffset < 0.1f)
         {
             PlaySound(_tookFireAudio, position, SoundPriority.TookFire);
+        }
+    }
+
+    internal void TriggerGroundImpactFeedback(Vector3 position, float elapsedOffset = 0f)
+    {
+        if (elapsedOffset >= SmokePuffLifetime)
+        {
+            return;
+        }
+
+        SpawnSmokePuff(position, isImpactSmoke: true, elapsedOffset);
+        if (elapsedOffset < 0.1f)
+        {
+            PlaySound(_groundImpactAudio, position, SoundPriority.TookFire);
         }
     }
 
@@ -1197,6 +1225,10 @@ internal partial class CombatEffects : Node3D
                 if (pi.Result == HitResult.Deflected)
                 {
                     TriggerRicochetFeedback(pi.Target, pi.IncomingDirection, overshoot, isMachineGun: pi.IsMachineGun);
+                }
+                else if (pi.Result == HitResult.Miss)
+                {
+                    TriggerGroundImpactFeedback(pi.Target, overshoot);
                 }
                 else
                 {
