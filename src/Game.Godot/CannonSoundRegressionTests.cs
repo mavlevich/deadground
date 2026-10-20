@@ -11,6 +11,7 @@ internal static class CannonSoundRegressionTests
     {
         CheckRender();
         CheckBurstRender();
+        CheckGroundImpactRender();
         CheckAudibleRange();
         CheckVariants(scene);
     }
@@ -35,6 +36,26 @@ internal static class CannonSoundRegressionTests
             Require(MathF.Abs(a[i]) < 0.01f, "Burst sound must end in silence, without a click.");
     }
 
+    private static void CheckGroundImpactRender()
+    {
+        float[] a = CannonSound.RenderGroundImpact(42);
+        float[] b = CannonSound.RenderGroundImpact(42);
+        Require(a.Length == (int)(CannonSound.SampleRate * CannonSound.GroundImpactDuration), "Ground impact sound has the wrong length.");
+
+        float peak = 0f;
+        bool same = true;
+        for (int i = 0; i < a.Length; i++)
+        {
+            peak = MathF.Max(peak, MathF.Abs(a[i]));
+            same &= a[i] == b[i];
+        }
+        Require(same, "The same seed must give the same ground impact sound.");
+        Require(peak <= CannonSound.Peak + 1e-4f && peak > CannonSound.Peak * 0.8f, $"Ground impact sound peak {peak} is out of range.");
+
+        for (int i = a.Length - 100; i < a.Length; i++)
+            Require(MathF.Abs(a[i]) < 0.01f, "Ground impact sound must end in silence, without a click.");
+    }
+
     private static void CheckRender()
     {
         float[] a = CannonSound.Render(7);
@@ -57,7 +78,12 @@ internal static class CannonSoundRegressionTests
 
     private static void CheckAudibleRange()
     {
-        float[] samples = CannonSound.Render(1337);
+        CheckAudibleRangeFor(CannonSound.Render(1337), "cannon sound");
+        CheckAudibleRangeFor(CannonSound.RenderGroundImpact(1337), "ground impact sound");
+    }
+
+    private static void CheckAudibleRangeFor(float[] samples, string label)
+    {
         float k = 1f - MathF.Exp(-MathF.Tau * 60f / CannonSound.SampleRate);
         float s1 = 0f, s2 = 0f;
         double low = 0, total = 0;
@@ -69,7 +95,7 @@ internal static class CannonSoundRegressionTests
             total += sample * sample;
         }
         double share = low / total;
-        Require(share < 0.25, $"{share:P0} of the cannon sound is below 60 Hz; small speakers would lose it.");
+        Require(share < 0.25, $"{share:P0} of the {label} is below 60 Hz; small speakers would lose it.");
     }
 
     private static void CheckVariants(Node3D scene)

@@ -501,7 +501,7 @@ public static class WireProtocol
                 (kindByte != (byte)CombatEventKind.ShotFired &&
                  kindByte != (byte)CombatEventKind.UnitDestroyed &&
                  kindByte != (byte)CombatEventKind.TookFire) ||
-                resultByte > (byte)HitResult.Deflected ||
+                resultByte > (byte)HitResult.Miss ||
                 !float.IsFinite(origin.X) || !float.IsFinite(origin.Y) || !float.IsFinite(origin.Z) ||
                 !float.IsFinite(target.X) || !float.IsFinite(target.Y) || !float.IsFinite(target.Z))
             {

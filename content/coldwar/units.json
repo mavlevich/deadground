@@ -30,7 +30,17 @@
       "penetration_far": 200.0,
       "penetration_near_range": 0.0,
       "penetration_far_range": 1600.0,
-      "rounds_per_burst": 1
+      "rounds_per_burst": 1,
+      "accuracy_curve": [
+        { "range": 500.0, "hit_probability": 0.90 },
+        { "range": 1000.0, "hit_probability": 0.80 },
+        { "range": 1500.0, "hit_probability": 0.58 },
+        { "range": 1600.0, "hit_probability": 0.50 }
+      ],
+      "dispersion_mils": 3.0,
+      "target_movement_penalty": 0.20,
+      "ranging_bonus": 0.08,
+      "max_ranging_bonus": 0.24
     },
     {
       "id": "gun_105mm_m68",
@@ -45,7 +55,17 @@
       "penetration_far": 155.0,
       "penetration_near_range": 0.0,
       "penetration_far_range": 2000.0,
-      "rounds_per_burst": 1
+      "rounds_per_burst": 1,
+      "accuracy_curve": [
+        { "range": 500.0, "hit_probability": 0.92 },
+        { "range": 1000.0, "hit_probability": 0.82 },
+        { "range": 1500.0, "hit_probability": 0.62 },
+        { "range": 2000.0, "hit_probability": 0.40 }
+      ],
+      "dispersion_mils": 2.8,
+      "target_movement_penalty": 0.20,
+      "ranging_bonus": 0.08,
+      "max_ranging_bonus": 0.24
     },
     {
       "id": "mg_14_5mm_kpvt",
@@ -60,7 +80,17 @@
       "penetration_far": 18.0,
       "penetration_near_range": 0.0,
       "penetration_far_range": 1000.0,
-      "rounds_per_burst": 5
+      "rounds_per_burst": 5,
+      "accuracy_curve": [
+        { "range": 200.0, "hit_probability": 0.88 },
+        { "range": 500.0, "hit_probability": 0.68 },
+        { "range": 800.0, "hit_probability": 0.48 },
+        { "range": 1000.0, "hit_probability": 0.35 }
+      ],
+      "dispersion_mils": 3.5,
+      "target_movement_penalty": 0.15,
+      "ranging_bonus": 0.06,
+      "max_ranging_bonus": 0.18
     },
     {
       "id": "mg_12_7mm_m2hb",
@@ -75,7 +105,17 @@
       "penetration_far": 14.0,
       "penetration_near_range": 0.0,
       "penetration_far_range": 1000.0,
-      "rounds_per_burst": 5
+      "rounds_per_burst": 5,
+      "accuracy_curve": [
+        { "range": 200.0, "hit_probability": 0.88 },
+        { "range": 500.0, "hit_probability": 0.68 },
+        { "range": 800.0, "hit_probability": 0.48 },
+        { "range": 1000.0, "hit_probability": 0.35 }
+      ],
+      "dispersion_mils": 3.8,
+      "target_movement_penalty": 0.15,
+      "ranging_bonus": 0.06,
+      "max_ranging_bonus": 0.18
     },
     {
       "id": "mg_7_62mm_m60",
@@ -90,7 +130,17 @@
       "penetration_far": 4.0,
       "penetration_near_range": 0.0,
       "penetration_far_range": 800.0,
-      "rounds_per_burst": 5
+      "rounds_per_burst": 5,
+      "accuracy_curve": [
+        { "range": 200.0, "hit_probability": 0.82 },
+        { "range": 400.0, "hit_probability": 0.60 },
+        { "range": 600.0, "hit_probability": 0.42 },
+        { "range": 800.0, "hit_probability": 0.28 }
+      ],
+      "dispersion_mils": 4.0,
+      "target_movement_penalty": 0.15,
+      "ranging_bonus": 0.05,
+      "max_ranging_bonus": 0.15
     }
   ],
   "units": [

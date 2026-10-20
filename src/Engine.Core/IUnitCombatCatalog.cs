@@ -48,6 +48,8 @@ public static class WeaponPresentation
         GetKind(presentationId) == WeaponPresentationKind.Cannon;
 }
 
+public readonly record struct AccuracyPoint(float Range, float HitProbability);
+
 /// <summary>
 /// Data-driven weapon specification for direct-fire combat.
 /// </summary>
@@ -63,8 +65,43 @@ public sealed record WeaponDefinition(
     float PenetrationFar = float.MaxValue,
     float PenetrationNearRange = 0f,
     float PenetrationFarRange = 0f,
-    int RoundsPerBurst = 1)
+    int RoundsPerBurst = 1,
+    AccuracyPoint[]? AccuracyCurve = null,
+    float DispersionMils = 3.0f,
+    float TargetMovementPenalty = 0.20f,
+    float RangingBonus = 0.08f,
+    float MaxRangingBonus = 0.24f)
 {
+    public float Dispersion => DispersionMils;
+
+    public float GetAccuracyAt(float distance)
+    {
+        if (AccuracyCurve is null || AccuracyCurve.Length == 0)
+            return 1.0f;
+
+        if (distance <= AccuracyCurve[0].Range)
+            return AccuracyCurve[0].HitProbability;
+
+        if (distance >= AccuracyCurve[^1].Range)
+            return AccuracyCurve[^1].HitProbability;
+
+        for (int i = 0; i < AccuracyCurve.Length - 1; i++)
+        {
+            AccuracyPoint p0 = AccuracyCurve[i];
+            AccuracyPoint p1 = AccuracyCurve[i + 1];
+            if (distance >= p0.Range && distance <= p1.Range)
+            {
+                if (p1.Range <= p0.Range)
+                    return p0.HitProbability;
+
+                float t = (distance - p0.Range) / (p1.Range - p0.Range);
+                return p0.HitProbability + t * (p1.HitProbability - p0.HitProbability);
+            }
+        }
+
+        return AccuracyCurve[^1].HitProbability;
+    }
+
     public float GetPenetrationAt(float distance)
     {
         if (PenetrationNear == float.MaxValue && PenetrationFar == float.MaxValue)
@@ -88,7 +125,8 @@ public readonly record struct UnitCombatProfile(
     int MaxHealth,
     WeaponDefinition? Weapon,
     float TurretTraverseRate = 0f,
-    UnitArmor Armor = default);
+    UnitArmor Armor = default,
+    float Radius = 1.0f);
 
 /// <summary>
 /// Catalog interface providing combat profiles to combat systems.

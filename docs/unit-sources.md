@@ -31,6 +31,20 @@ Gameplay tuning differences are marked "balance, revisit after play".
 | 12.7 mm M2HB | M113A1 | 1,000 m, estimate | 30.0 deg/s, estimate | 30.0 deg/s | 25.4 mm (200 m) / 13 mm (1,000 m), unverified, no checked source | 28 mm (0 m) / 14 mm (1,000 m) | 2,000 rounds [10], 5 rounds per burst, 1.5 s interval, estimate | 2,000 rounds, 5 rounds per burst, 1.5 s interval | M13 cupola manual traverse (estimate: 12.0 s for full 360 deg turn). .50 cal AP M2 / M8 API figures of 25.4 mm at 200 m and about 13 mm at 1,000 m were not found in a checked source. Penetration tuned for APC balance; balance, revisit after play. |
 | 7.62 mm M60 MG | M151A2 | 800 m, estimate | 60.0 deg/s, estimate | 60.0 deg/s | 9.0 mm (0-100 m) / 4.0 mm (800 m), estimate, no checked source | 9.0 mm (0 m) / 4.0 mm (800 m) | 1,000 rounds, 5 rounds per burst, 1.5 s interval, estimate | 1,000 rounds, 5 rounds per burst, 1.5 s interval | Pedestal pintle mount, manual traverse (mount type not verified; estimate: 6.0 s for full 360 deg turn). 7.62 mm NATO M80 Ball / M61 AP penetration is an estimate. Added for armed recon balance; balance, revisit after play. |
 
+## Fire accuracy and dispersion
+
+Direct fire accuracy for halted units (TDD section 12.3). Values in `content/coldwar/units.json` define a piecewise linear hit probability curve by range against a fully exposed, stationary target, plus target motion penalties, ranging bonuses, and dispersion for misses.
+
+Period gunnery data: FM 17-12 Tank Gunnery [12] gives stationary tank gun first-round hit probabilities against stationary tank targets around 80% to 85% at 1,000 m for 105 mm guns with optical coincidence rangefinders, dropping sharply past 1,500 m. Soviet 115 mm U-5TS with TSh2B-41 stadiametric sight achieves comparable accuracy out to its 1,600 m effective sabot range (FAS [2]). Machine gun bursts are modeled with one roll per burst, with wider short-range forgiveness.
+
+| Weapon | Mounted on | Accuracy Curve [Range (m): Hit Prob] | Dispersion (mils) | Target Move Penalty | Ranging Bonus (per shot / max) | Source / Rationale |
+|---|---|---|---|---|---|---|
+| 115 mm U-5TS (2A20) | T-62 | 500: 0.90, 1000: 0.80, 1500: 0.58, 1600: 0.50 | 3.0 | 0.20 | 0.08 / 0.24 | Sourced from FM 17-12 [12] and FAS [2]; APFSDS flat trajectory out to 1,600 m stadiametric limit; 80% first-round hit chance at 1,000 m. |
+| 105 mm M68 | M60A1 | 500: 0.92, 1000: 0.82, 1500: 0.62, 2000: 0.40 | 2.8 | 0.20 | 0.08 / 0.24 | Sourced from FM 17-12 [12]; M17 coincidence optical rangefinder provides ~82% first-round hit chance at 1,000 m (pinned within 2% of T-62). |
+| 14.5 mm KPVT | BTR-70, BRDM-2 | 200: 0.88, 500: 0.68, 800: 0.48, 1000: 0.35 | 3.5 | 0.15 | 0.06 / 0.18 | Estimate for 5-round bursts against vehicle targets; manual turret mount. |
+| 12.7 mm M2HB | M113A1 | 200: 0.88, 500: 0.68, 800: 0.48, 1000: 0.35 | 3.8 | 0.15 | 0.06 / 0.18 | Estimate for 5-round bursts against vehicle targets; cupola mount. |
+| 7.62 mm M60 MG | M151A2 | 200: 0.82, 400: 0.60, 600: 0.42, 800: 0.28 | 4.0 | 0.15 | 0.05 / 0.15 | Estimate for 5-round bursts against vehicle targets; pintle mount. |
+
 ## Placement estimates
 
 These numbers place sensors and targets on the hull. They come from the vehicle heights and widths
@@ -68,8 +82,8 @@ dust, smoke and weather reduce them later (section 10).
 ## Duel ranges and balance (pinned in tests)
 
 The following engagement matrix defines the gameplay balance between factions across armor classes.
-Both sides are tuned to roughly equal capability in direct duels. These values are pinned in test
-`ArmorAndKpvtTests.DuelRanges_TanksApcAndRecon_Pinned` so regressions fail the build.
+Both sides are tuned to roughly equal capability in direct duels. These values are pinned in tests
+`ArmorAndKpvtTests.DuelRanges_TanksApcAndRecon_Pinned` and `FireAccuracyTests.PinnedDuelAccuracy_ColdWarTanksAt1000m_WithinTenPercentagePoints` so regressions fail the build.
 Balance, revisit after play.
 
 | Duel Matchup | Shooter Weapon | Target Aspect & Armor | Penetration Falloff Curve | Penetration Cutoff Range | Penetration at Max Range | Balance Gameplay Outcome |
@@ -87,6 +101,8 @@ Balance, revisit after play.
 | Recon duel (M151A2 shooter) | 7.62 mm M60 | BRDM-2 Side: 8 mm | 9 mm (0 m) to 4 mm (800 m) | 160 m | n/a | M151A2 penetrates BRDM-2 flanks at close ambush range (< 160 m). |
 | Recon vs armored front | 7.62 mm M60 | APC or Tank Front | 9 mm (0 m) to 4 mm (800 m) | 0 m (never) | n/a | 7.62 mm never penetrates front armor of any armored vehicle (16 to 220 mm). |
 | Recon vs soft skin | 7.62 mm M60 | M151A2: 0 mm | 9 mm (0 m) to 4 mm (800 m) | > 800 m | 4 mm vs 0 mm | Penetrates unarmored soft skin targets at all effective ranges. |
+
+- Tank first-shot accuracy duel: at 1,000 m against a halted, fully exposed enemy tank, T-62 first-shot hit probability is 80.0% and M60A1 is 82.0% (difference 2.0%, pinned within 10 percentage points in test `FireAccuracyTests.PinnedDuelAccuracy_ColdWarTanksAt1000m_WithinTenPercentagePoints`).
 
 ## Notes
 

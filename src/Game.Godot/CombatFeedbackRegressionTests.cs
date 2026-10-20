@@ -28,7 +28,8 @@ internal static class CombatFeedbackRegressionTests
         CheckMachineGunBurstFeedback(scene);
         CheckNonPenetratingRicochetFeedback(scene);
         CheckMachineGunBurstSoundPriority(scene);
-        GD.Print("COMBAT_FEEDBACK_REGRESSIONS_OK 15/15 passed");
+        CheckMissFeedback(scene);
+        GD.Print("COMBAT_FEEDBACK_REGRESSIONS_OK 16/16 passed");
         return true;
     }
 
@@ -972,4 +973,85 @@ internal static class CombatFeedbackRegressionTests
             parent.QueueFree();
         }
     }
+
+    private static void CheckMissFeedback(Node3D scene)
+    {
+        Node3D parent = new();
+        scene.AddChild(parent);
+        try
+        {
+            HeightMap map = HeightMap.CreatePrototype();
+            UnitViewSet unitViews = new(parent, map);
+            CombatEffects effects = new(map);
+            parent.AddChild(effects);
+
+            // 1. TookFire event with HitResult.Miss: triggers ground impact feedback (dust puff),
+            // but no metal sparks and no vehicle penetration mesh
+            CombatEventObservation missTookFire = new(
+                EventId: 8001,
+                ServerTick: 5,
+                Kind: CombatEventKind.TookFire,
+                PresentationId: CannonPresentationId,
+                Origin: new NumericsVector3(20, 1.9f, 20),
+                Target: new NumericsVector3(40, 0.0f, 20),
+                ShooterUnitId: default,
+                Result: HitResult.Miss);
+
+            effects.ProcessEvents([missTookFire], unitViews);
+
+            Require(effects.ActiveSmokePuffsCount >= 1, "Miss took-fire must spawn ground impact smoke or dust puff.");
+            Require(effects.ActiveSparksCount == 0, "Miss took-fire must not spawn vehicle sparks.");
+            Require(effects.ActiveImpactsCount == 0, "Miss took-fire must not spawn vehicle impact mesh.");
+
+            // Ground impact sound must play GroundImpactAudio, never the metallic TookFireAudio
+            bool playedGroundAudio = false;
+            bool playedMetallicAudio = false;
+            for (int i = 0; i < effects.AudioPlayers.Length; i++)
+            {
+                if (effects.AudioPlayers[i].Stream == effects.GroundImpactAudio)
+                {
+                    playedGroundAudio = true;
+                }
+                if (effects.AudioPlayers[i].Stream == effects.TookFireAudio)
+                {
+                    playedMetallicAudio = true;
+                }
+            }
+            Require(playedGroundAudio, "Miss took-fire must play ground impact audio stream.");
+            Require(!playedMetallicAudio, "Miss took-fire must never play metallic took-fire audio stream.");
+
+            // 2. ShotFired with HitResult.Miss: tracer flies to impact point, pending impact triggers ground puff
+            CombatEffects shotEffects = new(map);
+            parent.AddChild(shotEffects);
+
+            CombatEventObservation missShot = new(
+                EventId: 8002,
+                ServerTick: 5,
+                Kind: CombatEventKind.ShotFired,
+                PresentationId: CannonPresentationId,
+                Origin: new NumericsVector3(20, 1.9f, 20),
+                Target: new NumericsVector3(45, 0.0f, 22),
+                ShooterUnitId: default,
+                Result: HitResult.Miss);
+
+            shotEffects.ProcessEvents([missShot], unitViews);
+
+            Require(shotEffects.ActiveTracersCount == 1, "Miss shot must spawn tracer.");
+            Require(shotEffects.PendingImpactsCount == 1, "Miss shot must queue pending ground impact.");
+
+            for (int i = 0; i < 15; i++)
+            {
+                shotEffects.Update(0.016);
+            }
+
+            Require(shotEffects.ActiveSmokePuffsCount >= 1, "Miss pending impact must trigger ground smoke or dust puff.");
+            Require(shotEffects.ActiveSparksCount == 0, "Miss pending impact must not spawn vehicle sparks.");
+            Require(shotEffects.ActiveImpactsCount == 0, "Miss pending impact must not spawn vehicle impact mesh.");
+        }
+        finally
+        {
+            parent.QueueFree();
+        }
+    }
 }
+

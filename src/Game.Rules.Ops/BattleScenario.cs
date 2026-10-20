@@ -105,25 +105,38 @@ public static class BattleScenario
         return new StaticGeometry(map, structures);
     }
 
-    public static Simulation CreateSimulation(StaticGeometry? geometry = null, UnitCatalog? catalog = null)
+    public static Simulation CreateSimulation(
+        StaticGeometry? geometry = null,
+        UnitCatalog? catalog = null,
+        ulong matchSeed = 1337UL,
+        bool swapSides = false,
+        bool excludeRecon = false)
     {
         geometry ??= CreateStaticGeometry();
         catalog ??= ScenarioContent.LoadCatalog("battle");
-        OpsRules rules = new(geometry, catalog, null);
+        OpsRules rules = new(geometry, catalog);
         WorldState world = new(geometry.HeightMap);
-        foreach ((string soviet, string us, Vector2 offset) in Order)
+        Vector2 p1Start = swapSides ? UsStart : SovietStart;
+        Vector2 p2Start = swapSides ? SovietStart : UsStart;
+        Vector2 p1Enemy = swapSides ? SovietStart : UsStart;
+        Vector2 p2Enemy = swapSides ? UsStart : SovietStart;
+
+        ReadOnlySpan<(string Soviet, string Us, Vector2 Offset)> spawnOrder =
+            excludeRecon ? Order.AsSpan(0, 5) : Order.AsSpan();
+
+        foreach ((string soviet, string us, Vector2 offset) in spawnOrder)
         {
-            Spawn(world, catalog, 1, soviet, SovietStart + offset);
-            // Player 2 faces the other way, so its formation is mirrored.
-            Spawn(world, catalog, 2, us, UsStart - offset);
+            Vector2 p1Offset = swapSides ? -offset : offset;
+            Vector2 p2Offset = swapSides ? offset : -offset;
+            Spawn(world, catalog, 1, soviet, p1Start + p1Offset, p1Enemy);
+            Spawn(world, catalog, 2, us, p2Start + p2Offset, p2Enemy);
         }
-        return new Simulation(world, rules);
+        return new Simulation(world, rules, matchSeed);
     }
 
-    private static void Spawn(WorldState world, UnitCatalog catalog, int player, string type, Vector2 position)
+    private static void Spawn(WorldState world, UnitCatalog catalog, int player, string type, Vector2 position, Vector2 enemySide)
     {
         UnitDefinition def = catalog.RequireDefinition(type);
-        Vector2 enemySide = player == 1 ? UsStart : SovietStart;
         Vector2 dir = enemySide - position;
         float initialYaw = MathF.Atan2(-dir.X, -dir.Y);
         world.CreateUnit(player, catalog.RequireDefinitionIndex(type), position, def.Speed, def.MaxHealth, catalog.GetAmmoCapacity(def), initialYaw);

@@ -541,41 +541,44 @@ public sealed class CombatNetworkTests
     }
 
     [Fact]
-    public void WireProtocol_Version14_PreservesHitResultAndEventProperties()
+    public void WireProtocol_Version15_PreservesHitResultAndEventProperties()
     {
-        Assert.Equal(14, WireProtocol.Version);
+        Assert.Equal(15, WireProtocol.Version);
         Assert.Equal(32, WireProtocol.MissionSize);
         Assert.Equal(48, WireProtocol.SnapshotHeaderSize);
         Assert.Equal(35, WireProtocol.UnitSize);
         Assert.Equal(24, WireProtocol.ContactSize);
         Assert.Equal(40, WireProtocol.EventSize);
 
-        ClientReplica replica = new();
         byte[] bytes = new byte[WireProtocol.MaxMessageSize];
 
-        CombatEventObservation ev = new(
-            EventId: 42,
-            ServerTick: 15,
-            Kind: CombatEventKind.ShotFired,
-            PresentationId: 7,
-            Origin: new Vector3(15.5f, 2.1f, 30.2f),
-            Target: new Vector3(45.8f, 1.75f, 60.1f),
-            ShooterUnitId: new EntityId(101),
-            Result: HitResult.Deflected);
+        foreach (HitResult result in new[] { HitResult.None, HitResult.Penetrated, HitResult.Deflected, HitResult.Miss })
+        {
+            ClientReplica replica = new();
+            CombatEventObservation ev = new(
+                EventId: 42,
+                ServerTick: 15,
+                Kind: CombatEventKind.ShotFired,
+                PresentationId: 7,
+                Origin: new Vector3(15.5f, 2.1f, 30.2f),
+                Target: new Vector3(45.8f, 1.75f, 60.1f),
+                ShooterUnitId: new EntityId(101),
+                Result: result);
 
-        int size = WireProtocol.WriteSnapshot(bytes, 1, 15, [], [], [ev]);
-        Assert.True(replica.TryApply(bytes.AsSpan(0, size)));
-        Assert.Equal(1, replica.EventCount);
+            int size = WireProtocol.WriteSnapshot(bytes, 1, 15, [], [], [ev]);
+            Assert.True(replica.TryApply(bytes.AsSpan(0, size)));
+            Assert.Equal(1, replica.EventCount);
 
-        CombatEventObservation deserialized = replica.Events[0];
-        Assert.Equal(42u, deserialized.EventId);
-        Assert.Equal(15, deserialized.ServerTick);
-        Assert.Equal(CombatEventKind.ShotFired, deserialized.Kind);
-        Assert.Equal((ushort)7, deserialized.PresentationId);
-        Assert.Equal(new EntityId(101), deserialized.ShooterUnitId);
-        Assert.Equal(new Vector3(15.5f, 2.1f, 30.2f), deserialized.Origin);
-        Assert.Equal(new Vector3(45.8f, 1.75f, 60.1f), deserialized.Target);
-        Assert.Equal(HitResult.Deflected, deserialized.Result);
+            CombatEventObservation deserialized = replica.Events[0];
+            Assert.Equal(42u, deserialized.EventId);
+            Assert.Equal(15, deserialized.ServerTick);
+            Assert.Equal(CombatEventKind.ShotFired, deserialized.Kind);
+            Assert.Equal((ushort)7, deserialized.PresentationId);
+            Assert.Equal(new EntityId(101), deserialized.ShooterUnitId);
+            Assert.Equal(new Vector3(15.5f, 2.1f, 30.2f), deserialized.Origin);
+            Assert.Equal(new Vector3(45.8f, 1.75f, 60.1f), deserialized.Target);
+            Assert.Equal(result, deserialized.Result);
+        }
     }
 
     [Fact]
@@ -816,8 +819,8 @@ public sealed class CombatNetworkTests
     [Fact]
     public void WireProtocol_SetFireStance_RoundTrip_AndValidation()
     {
-        Assert.Equal(14, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(14, WireProtocol.Version);
+        Assert.Equal(15, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(15, WireProtocol.Version);
 
         byte[] buffer = new byte[32];
         SetFireStanceCommand cmd = new(42, 10, new EntityId(5), FireStance.ReturnFire);

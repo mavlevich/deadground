@@ -194,9 +194,13 @@ The order is fixed and covered by a test.
 
 ### 6.5 Randomness
 
-- One match seed.
-- Separate streams per domain: combat, artillery, AI, map events. Changing the AI must not change artillery spread.
-- No `Random.Shared`, no `GetHashCode` based logic, no dependency on thread completion order.
+Status: landed in Engine.Core (DeterministicRandom based on SplitMix64).
+
+- One match seed, set when the simulation is created (stored in Simulation.MatchSeed).
+- Separate streams per domain: combat, artillery, AI, map events. Changing the AI does not change artillery spread or combat rolls.
+- Derived domain streams use domain-specific 64-bit prime salts.
+- The PRNG is allocation-free and exposes explicit state (ulong State) that can be read and restored for saves and replays.
+- No System.Random, no Random.Shared, no GetHashCode based logic, no dependency on thread completion order.
 
 ## 7. Three views of the game
 
@@ -597,17 +601,21 @@ Status: planned, together with or after section 9.5.
 
 ### 12.3 Direct fire accuracy and armor
 
-Status: armor by side, penetration falloff, and deflection landed. Accuracy curves and fire on the move are planned.
+Status: armor by side, penetration falloff, deflection, and static direct fire accuracy landed. Fire on the move, move-and-engage orders, and short halts are planned for a later PR.
 
-- Hit probability depends on range, shooter movement, target movement, the visible share of the
-  target and a ranging bonus for repeated shots at the same target. Values live in weapon data.
-- The visible share is computed from the firing vehicle's own sight, not from the side's detection
-  result: a recon unit may see the whole tank while the shooter sees only the turret. It reuses the
-  target points of the unit data, tested from the shooter's eye height. It is the share of visible
-  points weighted by data, not a claim that the visible area is fully known; two visible points do not
-  mean the whole target is exposed.
-- Rolls use the combat random stream (section 6.5), so a replay gives the same result.
-- A miss still produces an impact: the round lands at a dispersed point, and observers see it.
+- Hit probability depends on range, target movement, the visible share of the target, and a ranging bonus for repeated shots at the same target:
+  - Base hit chance: defined as a piece-wise linear curve in weapon data (`accuracy_curve`), clamped to the near value at short range and far value at long range.
+  - Target movement penalty: if the target moved during the last `TargetRecentlyMovedWindowTicks` (20 ticks / 1.0 s), weapon `target_movement_penalty` is subtracted from the hit chance. Movement tracking updates on real displacement in both `MovementSystem` and `WorldState.UpdateUnitNavigation`.
+  - Visible share: computed from the weapon muzzle height to the target observation points (`target_points`). Both visible share and line of sight checks evaluate from the weapon muzzle position (`weapon.MuzzleHeight`), ensuring consistency. If all target points are blocked (visible share is 0), firing is skipped without expending ammunition and weapon status reports `AttackExecutionStatus.Obstructed`. Obscured points reduce visible share proportionally (`baseAccuracy * visibleShare`), so a hull-down tank showing only its turret is significantly harder to hit.
+  - Ranging bonus: consecutive shots at the same target accumulate `ranging_bonus` up to `max_ranging_bonus`. This bonus resets to 0 if the target changes, the target moves more than `TargetMovedRangingResetDistance` (10.0 meters), or the shooter moves (real displacement in `MovementSystem` or `UpdateUnitNavigation`).
+  - Clamping: when visible share is positive, final hit probability is clamped to [`MinHitProbability` (0.02), `MaxHitProbability` (0.98)].
+  - Machine gun bursts: one accuracy roll is made per burst using its own curve.
+  - Rolls use the combat random stream only, guaranteeing deterministic replays across clients and servers.
+- Misses:
+  - A miss calculates an angular dispersed impact point along the line of fire and lateral offset based on weapon `dispersion_mils`. One mil corresponds to 1 meter lateral or vertical displacement per 1000 meters range, so dispersion grows linearly with range. The impact lands strictly outside the target bounding radius (`targetRadius + 0.3 m` margin), hitting the ground or an obstacle.
+  - Misses deal zero damage and produce a miss result (`HitResult.Miss`). Target retention is preserved so units and bots continue firing without dropping the target.
+  - Combat events carry `HitResult.Miss` and the real impact point. Protocol version is 15.
+  - Client presentation shows a ground impact dust puff with synthesized dull ground thud audio (filtered noise thump distinct from metallic armor impacts), and flies tracers to the true miss coordinates, with zero vehicle sparks and zero penetration mesh.
 - Fire on the move is allowed with a large accuracy penalty. A "short halt" behavior stops, fires and
   continues, as period crews did with weak stabilizers.
 - Moving and firing changes the section 12.1 contract, so the new rules replace these points of it:
@@ -628,7 +636,7 @@ Status: armor by side, penetration falloff, and deflection landed. Accuracy curv
   - Penetration exceeding the target's armor applies weapon damage. Non-penetrating hits do zero damage and produce a deflection result (`HitResult.Deflected`).
   - Burst weapons: heavy machine guns and light machine guns fire in bursts (`rounds_per_burst`, burst reload interval, ammunition). One combat event is recorded per burst. Partial bursts scale damage proportionally to rounds fired: `Math.Max(1, (damage * roundsFired) / burstRounds)`.
   - Presentation kinds: weapon catalog definitions require explicit `presentation_kind` (`"cannon"` or `"machine_gun"`), encoded into opaque presentation IDs (`WeaponPresentationKind`). Content validation rejects missing, invalid kinds, or non-positive penetration values.
-  - Combat events carry `HitResult` (1 Penetrated, 2 Deflected) replicated over the wire protocol (offset 39 of the 40-byte event record, protocol version 14).
+  - Combat events carry `HitResult` (1 Penetrated, 2 Deflected, 3 Miss) replicated over the wire protocol (offset 39 of the 40-byte event record, protocol version 15).
   - Information isolation: enemy armor thickness and remaining health are never leaked to contacts or foreign players. Observers receive only the visual hit result at the impact point. Deflections produce ricochet sparks and deflected tracer lines angled forward and away from the target; audio priorities ensure heavy cannon shots are never evicted by rapid machine gun bursts.
 - Blind fire: area fire at a ground point or at a `LastKnown` position has a low hit chance and needs
   no contact. The shooter sees only impacts it can observe. It never learns that an unseen target was
@@ -688,7 +696,7 @@ Status: planned for M2. M1 units keep one weapon each, so the M1 exit does not d
 - M1 sends sparse full snapshots: the complete allowed view each time, no deltas. A unit or contact missing from a complete snapshot is gone from the client's view. World state blocks are also complete for that side, including facts kept from earlier observations.
 - Map objects use `MapObjectId`. Their static geometry stays in the map package; snapshots carry allowed mutable fields such as bridge condition and objective ownership. A missing knowledge entry does not mean the object was destroyed or restored to its initial state.
 - Clients apply a full snapshot only after the complete message is received. On reconnect the same state blocks restore the allowed view without needing earlier presentation events.
-- Protocol version 14: own unit records are 35 bytes (`ushort TurretYaw` (2) at offset 31, `ushort HullHeading` (2) at offset 33). Contact records are 24 bytes (`ushort TurretYaw` (2) at offset 20, `ushort HullHeading` (2) at offset 22). Both angles are quantized to 65536 steps per turn. Contacts carry the turret yaw and hull heading observed at the moment of sighting; `LastKnown` contacts freeze the last observed values. Combat event records are 40 bytes (`byte Result` (1) at offset 39: 0 None, 1 Penetrated, 2 Deflected).
+- Protocol version 15: own unit records are 35 bytes (`ushort TurretYaw` (2) at offset 31, `ushort HullHeading` (2) at offset 33). Contact records are 24 bytes (`ushort TurretYaw` (2) at offset 20, `ushort HullHeading` (2) at offset 22). Both angles are quantized to 65536 steps per turn. Contacts carry the turret yaw and hull heading observed at the moment of sighting; `LastKnown` contacts freeze the last observed values. Combat event records are 40 bytes (`byte Result` (1) at offset 39: 0 None, 1 Penetrated, 2 Deflected, 3 Miss).
 - Delta compression (acknowledged baselines, dirty fields) is added only if measurements exceed the budget.
 - Quantization: ground units send X, Z and support surface. Height is computed on the client (section 8.3). 10 cm precision on a 16 km map is 18 bits per axis.
 - Clients render about 100 to 150 ms behind the server and interpolate.
@@ -728,7 +736,7 @@ Every save, replay and command log starts with the same header:
 
 Loading checks the header first. A mismatch is an explicit error, never a silent load with different rules or data. The network handshake uses the same header.
 
-Implemented now: `MatchSetup.PlayerFactions` holds one faction content ID per player, next to `PlayerTeams`. Scenarios assign `soviet` to player 1 and `us` to player 2, and fail if the catalog lacks either faction. Like teams, factions are compared when both setups carry them, but the network handshake does not send them yet. Factions are public match information: a client may use the enemy faction for presentation without learning anything a contact does not already reveal.
+Implemented now: `MatchSetup.PlayerFactions` holds one faction content ID per player, next to `PlayerTeams`. Scenarios assign `soviet` to player 1 and `us` to player 2, and fail if the catalog lacks either faction. Like teams, factions are compared when both setups carry them, but the network handshake does not send them yet. Factions are public match information: a client may use the enemy faction for presentation without learning anything a contact does not already reveal. The match seed is chosen per match by the server, exposed on `Simulation.MatchSeed`, and logged at startup; full save and replay format serialization of `MatchSeed` is reserved for when disk persistence lands.
 
 ## 16. AI
 
@@ -942,7 +950,7 @@ Planned controls (client only unless a section is named):
 - Spatial audio and voice stealing:
   - `AudioListener3D` is positioned at the camera ground focus point (`CameraRig.Focus`), completely eliminating volume loss from RTS camera altitude offset (~140 m) while maintaining horizontal stereo panning.
   - Priority-based voice stealing: `Explosion (3) > Cannon (2) > TookFire (1)`. When all 6 audio channels are occupied, incoming requests can only preempt active voices of strictly lower priority; equal or lower priority requests are dropped cleanly without disrupting playing voices.
-  - Procedural sound synthesis: `CannonSound` builds the cannon report from filtered noise: a blast wave, a short crack, a boom that sweeps from bright to dull, a short low thump, two quiet dull echoes and a rolling rumble over 3 s. There are no sine beeps, and most energy sits above 60 Hz so small speakers can play it. Three seeds give three variants, picked at random per shot. Metallic impact snap and explosion rumble are synthesized in `CombatEffects`. All sounds get random pitch variation (+-4%), and Godot's default distance filter on `AudioStreamPlayer3D` makes far shots duller.
+  - Procedural sound synthesis: `CannonSound` builds the cannon report from filtered noise: a blast wave, a short crack, a boom that sweeps from bright to dull, a short low thump, two quiet dull echoes and a rolling rumble over 3 s. Ground impact thuds are likewise built from swept filtered noise with punch, thud and debris layers, no tonal sine oscillators, and over 99% of energy above 60 Hz so small speakers can play them. There are no sine beeps, and most energy sits above 60 Hz so small speakers can play it. Three seeds give three variants, picked at random per shot. Metallic impact snap and explosion rumble are synthesized in `CombatEffects`. All sounds get random pitch variation (+-4%), and Godot's default distance filter on `AudioStreamPlayer3D` makes far shots duller.
 - Frame pacing and stall resilience:
   - Frame delta clamping and elapsed overshoot compensation prevent stuck effects or visual artifacts after large frame stalls or backgrounding. If overshoot exceeds effect lifetime during stalls, mesh instances are discarded immediately without spawning.
 

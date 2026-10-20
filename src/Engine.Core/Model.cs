@@ -39,7 +39,8 @@ public enum HitResult : byte
 {
     None = 0,
     Penetrated = 1,
-    Deflected = 2
+    Deflected = 2,
+    Miss = 3
 }
 
 public readonly record struct CombatEventObservation(
