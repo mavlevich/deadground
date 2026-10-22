@@ -127,7 +127,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         }
     }
 
-    private bool HasLineOfSightToTarget(UnitState attacker, WeaponDefinition weapon, UnitState targetUnit, out Vector3 hitPoint, out Vector3 muzzlePos)
+    public bool HasLineOfSightToTarget(UnitState attacker, WeaponDefinition weapon, UnitState targetUnit, out Vector3 hitPoint, out Vector3 muzzlePos)
     {
         float attackerGroundY = _geometry.HeightMap.GetHeight(attacker.Position.X, attacker.Position.Y);
         muzzlePos = new Vector3(attacker.Position.X, attackerGroundY + weapon.MuzzleHeight, attacker.Position.Y);
@@ -244,7 +244,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         return !los.IsClear ? los.HitPoint : miss3D;
     }
 
-    private static int GetTargetClassPriority(ContactClassification classification) => classification switch
+    public static int GetTargetClassPriority(ContactClassification classification) => classification switch
     {
         ContactClassification.Tank => 0,
         ContactClassification.Apc => 1,
@@ -353,6 +353,87 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         float armorThickness = GetArmorThickness(targetProfile.Armor, hitSide);
         float penetration = weapon.GetPenetrationAt(dist);
         return penetration > armorThickness;
+    }
+
+    /// <summary>
+    /// Checks whether an observed contact is eligible for auto-fire engagement by the attacker.
+    /// Evaluates attacker weapon existence, ammunition, stance, distance, aspect penetration against
+    /// observed catalog armor, line of sight, and visible share.
+    /// </summary>
+    public bool IsContactEligibleForAutoFire(
+        UnitState attacker,
+        WeaponDefinition weapon,
+        in WorldState.CombatState cs,
+        in ContactObservation contact,
+        SideContactTracker tracker,
+        WorldState world)
+    {
+        if (cs.Stance == FireStance.HoldFire || cs.Ammunition <= 0)
+        {
+            return false;
+        }
+
+        if (contact.State != ContactState.Current)
+        {
+            return false;
+        }
+
+        if (!tracker.TryGetBoundEntity(contact.Id, out EntityId candidateEntityId) ||
+            !world.TryGetUnit(candidateEntityId, out UnitState candidateUnit) ||
+            !world.AreHostile(attacker.Owner, candidateUnit.Owner))
+        {
+            return false;
+        }
+
+        if (cs.Stance == FireStance.ReturnFire &&
+            (cs.LastTookFireAttacker.Value == 0 || candidateEntityId.Value != cs.LastTookFireAttacker.Value))
+        {
+            return false;
+        }
+
+        float distToCandidate = Vector2.Distance(attacker.Position, candidateUnit.Position);
+        if (distToCandidate > weapon.Range + RangeToleranceMargin)
+        {
+            return false;
+        }
+
+        if (!CanPenetrateObservedContact(attacker.Position, weapon, contact, _combatCatalog))
+        {
+            return false;
+        }
+
+        if (!HasLineOfSightToTarget(attacker, weapon, candidateUnit, out _, out _))
+        {
+            return false;
+        }
+
+        if (ComputeVisibleShare(attacker, candidateUnit) <= 0f)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Checks whether an attacker observing contacts has at least one target eligible for auto-fire engagement.
+    /// </summary>
+    public bool HasEligibleAutoFireTarget(
+        UnitState attacker,
+        WeaponDefinition weapon,
+        in WorldState.CombatState cs,
+        SideContactTracker tracker,
+        WorldState world)
+    {
+        ReadOnlySpan<ContactObservation> contacts = tracker.Contacts;
+        for (int c = 0; c < contacts.Length; c++)
+        {
+            if (IsContactEligibleForAutoFire(attacker, weapon, cs, contacts[c], tracker, world))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     public void OnUnitStanceChanged(EntityId unitId, FireStance stance, WorldState world)
@@ -643,6 +724,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                 bool targetRetained = false;
                 Vector3 currentHitPoint = Vector3.Zero;
                 Vector3 currentMuzzlePos = Vector3.Zero;
+                ContactObservation retainedContact = default;
 
                 if (cs.Stance != FireStance.HoldFire && cs.TargetContactId.Value != 0 && cs.TargetEntityId.Value != 0)
                 {
@@ -658,6 +740,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                         HasLineOfSightToTarget(attacker, weapon, currentTargetUnit, out currentHitPoint, out currentMuzzlePos))
                     {
                         targetRetained = true;
+                        retainedContact = currentContact;
                     }
                 }
                 if (!targetRetained && cs.TargetContactId.Value != 0)
@@ -665,6 +748,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                     cs.TargetContactId = default;
                     cs.TargetEntityId = default;
                     cs.Status = AttackExecutionStatus.None;
+                    cs.HasSwitchedTargetThisReload = false;
                 }
 
                 if (attacker.Moving || cs.Stance == FireStance.HoldFire)
@@ -680,28 +764,37 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                     continue;
                 }
 
-                // Pick new target if not retained: scan only when weapon is ready to fire
-                if (!targetRetained)
-                {
-                    if (cs.ReloadTicksRemaining > 0 || cs.Ammunition <= 0)
-                    {
-                        ReturnTurretToFront(ref cs, profile.TurretTraverseRate);
-                        world.SetCombatState(attacker.Id, cs);
-                        continue;
-                    }
+                // Auto-fire target selection and threat-based re-evaluation
+                bool shouldScan = !targetRetained
+                    ? (cs.ReloadTicksRemaining == 0 && cs.Ammunition > 0)
+                    : (cs.ReloadTicksRemaining == 0 && cs.Ammunition > 0 && !cs.HasSwitchedTargetThisReload && GetTargetClassPriority(retainedContact.Classification) > 0);
 
-                    ReadOnlySpan<ContactObservation> contacts = tracker.Contacts;
+                if (!targetRetained && !shouldScan)
+                {
+                    ReturnTurretToFront(ref cs, profile.TurretTraverseRate);
+                    world.SetCombatState(attacker.Id, cs);
+                    continue;
+                }
+
+                if (shouldScan)
+                {
+                    int currentPriority = targetRetained ? GetTargetClassPriority(retainedContact.Classification) : int.MaxValue;
+                    int bestPriority = currentPriority;
+                    float bestDistSq = float.MaxValue;
                     ContactId bestContactId = default;
                     EntityId bestEntityId = default;
-                    int bestPriority = int.MaxValue;
-                    float bestDistSq = float.MaxValue;
                     Vector3 bestHit = Vector3.Zero;
                     Vector3 bestMuzzle = Vector3.Zero;
+                    Vector2 bestCandidatePos = Vector2.Zero;
 
+                    ReadOnlySpan<ContactObservation> contacts = tracker.Contacts;
                     for (int c = 0; c < contacts.Length; c++)
                     {
                         ContactObservation candidate = contacts[c];
                         if (candidate.State != ContactState.Current)
+                            continue;
+
+                        if (targetRetained && candidate.Id == cs.TargetContactId)
                             continue;
 
                         if (!tracker.TryGetBoundEntity(candidate.Id, out EntityId candidateEntityId) ||
@@ -724,12 +817,15 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                         if (!HasLineOfSightToTarget(attacker, weapon, candidateUnit, out Vector3 candHit, out Vector3 candMuzzle))
                             continue;
 
+                        if (ComputeVisibleShare(attacker, candidateUnit) <= 0f)
+                            continue;
+
                         int priority = GetTargetClassPriority(candidate.Classification);
                         float distSq = distToCandidate * distToCandidate;
 
                         bool isBetter = priority < bestPriority ||
-                            (priority == bestPriority && distSq < bestDistSq) ||
-                            (priority == bestPriority && MathF.Abs(distSq - bestDistSq) < 0.001f && candidate.Id.Value < bestContactId.Value);
+                            (priority == bestPriority && priority < currentPriority && distSq < bestDistSq) ||
+                            (priority == bestPriority && priority < currentPriority && MathF.Abs(distSq - bestDistSq) < 0.001f && candidate.Id.Value < bestContactId.Value);
 
                         if (isBetter)
                         {
@@ -739,17 +835,28 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                             bestDistSq = distSq;
                             bestHit = candHit;
                             bestMuzzle = candMuzzle;
+                            bestCandidatePos = candidateUnit.Position;
                         }
                     }
 
                     if (bestContactId.Value != 0)
                     {
+                        if (targetRetained)
+                        {
+                            cs.HasSwitchedTargetThisReload = true;
+                        }
                         cs.TargetContactId = bestContactId;
                         cs.TargetEntityId = bestEntityId;
                         cs.Status = AttackExecutionStatus.Aiming;
                         targetRetained = true;
                         currentHitPoint = bestHit;
                         currentMuzzlePos = bestMuzzle;
+                        if (bestEntityId != cs.LastTargetEntityId)
+                        {
+                            cs.ConsecutiveShotsOnTarget = 0;
+                            cs.LastTargetEntityId = bestEntityId;
+                            cs.LastTargetPosition = bestCandidatePos;
+                        }
                     }
                 }
 
@@ -788,6 +895,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                         continue;
                     }
 
+                    // Fire auto-fire shot!
                     ExecuteShot(tick, attacker, weapon, targetUnit, currentMuzzlePos, currentHitPoint, ref cs, world);
                     continue;
                 }
@@ -795,6 +903,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                 {
                     ReturnTurretToFront(ref cs, profile.TurretTraverseRate);
                     world.SetCombatState(attacker.Id, cs);
+                    continue;
                 }
             }
         }
@@ -869,6 +978,22 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         ref WorldState.CombatState cs,
         WorldState world)
     {
+        if (cs.Ammunition <= 0)
+        {
+            cs.Status = AttackExecutionStatus.NoAmmo;
+            world.SetCombatState(attacker.Id, cs);
+            return;
+        }
+
+        int burstRounds = Math.Max(1, weapon.RoundsPerBurst);
+        int roundsFired = Math.Min(cs.Ammunition, burstRounds);
+        if (roundsFired <= 0)
+        {
+            cs.Status = AttackExecutionStatus.NoAmmo;
+            world.SetCombatState(attacker.Id, cs);
+            return;
+        }
+
         // 0. Visible share calculation from muzzle height
         float visibleShare = ComputeVisibleShare(attacker, targetUnit);
         if (visibleShare <= 0f)
@@ -876,10 +1001,9 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
             return;
         }
 
-        int burstRounds = Math.Max(1, weapon.RoundsPerBurst);
-        int roundsFired = Math.Min(cs.Ammunition, burstRounds);
         cs.Ammunition -= roundsFired;
         cs.ReloadTicksRemaining = weapon.ReloadDurationTicks;
+        cs.HasSwitchedTargetThisReload = false;
         cs.Status = AttackExecutionStatus.Aiming;
 
         TotalShotsFired++;

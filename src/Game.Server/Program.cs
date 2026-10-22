@@ -7,6 +7,7 @@ int port = 7777;
 int maxClients = 2;
 bool smokeTest = false;
 bool battleReport = false;
+bool diagnose = false;
 int battleRuns = 50;
 string scenario = "prototype";
 ulong? customSeed = null;
@@ -37,6 +38,10 @@ for (int i = 0; i < args.Length; i++)
     {
         battleReport = true;
     }
+    else if (args[i] == "--diagnose")
+    {
+        diagnose = true;
+    }
     else if (args[i] == "--runs" && i + 1 < args.Length && int.TryParse(args[i + 1], out int r))
     {
         battleRuns = r;
@@ -56,6 +61,12 @@ for (int i = 0; i < args.Length; i++)
 if (battleReport)
 {
     ExecuteBattleReport(battleRuns, excludeRecon);
+    return;
+}
+
+if (diagnose)
+{
+    ExecuteDiagnosis(battleRuns, excludeRecon);
     return;
 }
 
@@ -288,6 +299,7 @@ static BattleBatchStats RunPlacementBatch(int runs, bool swapSides, bool exclude
     BattleBatchStats stats = new() { Runs = runs, ExcludeRecon = excludeRecon };
     StaticGeometry geometry = BattleScenario.CreateStaticGeometry();
     UnitCatalog catalog = ScenarioContent.LoadCatalog("battle");
+    OpsCombatCatalog combatCatalog = new(catalog);
 
     for (int r = 0; r < runs; r++)
     {
@@ -365,18 +377,28 @@ static BattleBatchStats RunPlacementBatch(int runs, bool swapSides, bool exclude
                     SideContactTracker tracker = detection.GetTracker(unit.Owner);
                     if (tracker.Contacts.Length > 0)
                     {
-                        ContactId bestContact = tracker.Contacts[0].Id;
-                        float bestDist = float.MaxValue;
-                        for (int c = 0; c < tracker.Contacts.Length; c++)
+                        bool hasTargetInSight = false;
+                        if (combatCatalog.TryGetProfile(unit.Definition, out UnitCombatProfile prof) && prof.Weapon is not null &&
+                            world.TryGetCombatState(unit.Id, out WorldState.CombatState cs))
                         {
-                            float d = Vector2.Distance(unit.Position, tracker.Contacts[c].Position);
-                            if (d < bestDist)
+                            hasTargetInSight = combat.HasEligibleAutoFireTarget(unit, prof.Weapon, cs, tracker, world);
+                        }
+
+                        if (hasTargetInSight)
+                        {
+                            if (unit.Moving)
                             {
-                                bestDist = d;
-                                bestContact = tracker.Contacts[c].Id;
+                                sim.TryEnqueue(unit.Owner, new MoveCommand((uint)(10000 + tick * 50 + u), tick, unit.Id, unit.Position));
                             }
                         }
-                        sim.TryEnqueue(unit.Owner, new AttackCommand((uint)(10000 + tick * 50 + u), tick, unit.Id, bestContact));
+                        else
+                        {
+                            if (!unit.Moving)
+                            {
+                                Vector2 dest = unit.Owner == 1 ? p1Target : p2Target;
+                                sim.TryEnqueue(unit.Owner, new MoveCommand((uint)(10000 + tick * 50 + u), tick, unit.Id, dest));
+                            }
+                        }
                     }
                 }
             }
@@ -502,6 +524,360 @@ static void PrintReport(string placementName, BattleBatchStats stats)
         Console.WriteLine($"  {kvp.Key.Killer,-8} -> {kvp.Key.Victim,-8} : {kvp.Value,4} total ({avg:F2} per match)");
     }
     Console.WriteLine();
+}
+
+static void ExecuteDiagnosis(int runs, bool excludeRecon)
+{
+    string reconNote = excludeRecon ? " (Recon Pair Excluded)" : " (Full Order with Recon Pair)";
+    Console.WriteLine($"Running diagnosis{reconNote}: {runs} runs per placement ({runs * 2} matches total)...");
+
+    DiagnosisStats standard = RunDiagnosisBatch(runs, swapSides: false, excludeRecon);
+    DiagnosisStats swapped = RunDiagnosisBatch(runs, swapSides: true, excludeRecon);
+
+    PrintDiagnosisReport($"Standard Placement (Soviet SW -> NE, US NE -> SW){reconNote}", standard);
+    PrintDiagnosisReport($"Swapped Placement (Soviet NE -> SW, US SW -> NE){reconNote}", swapped);
+
+    DiagnosisStats combined = CombineDiagnosis(standard, swapped);
+    PrintDiagnosisReport($"Combined Placement Summary{reconNote}", combined);
+}
+
+static DiagnosisStats RunDiagnosisBatch(int runs, bool swapSides, bool excludeRecon)
+{
+    DiagnosisStats stats = new() { Runs = runs, ExcludeRecon = excludeRecon };
+    StaticGeometry geometry = BattleScenario.CreateStaticGeometry();
+    UnitCatalog catalog = ScenarioContent.LoadCatalog("battle");
+    OpsCombatCatalog combatCatalog = new(catalog);
+
+    for (int r = 0; r < runs; r++)
+    {
+        ulong seed = 1000UL + (ulong)r * 1013904223UL;
+        using Simulation sim = BattleScenario.CreateSimulation(geometry, catalog, seed, swapSides, excludeRecon);
+
+        OpsRules rules = (OpsRules)sim.Rules;
+        CombatSystem combat = rules.FindSystem<CombatSystem>()!;
+        DetectionSystem detection = rules.FindSystem<DetectionSystem>()!;
+        WorldState world = sim.World;
+
+        Vector2 p1Target = swapSides ? BattleScenario.SovietStart : BattleScenario.UsStart;
+        Vector2 p2Target = swapSides ? BattleScenario.UsStart : BattleScenario.SovietStart;
+
+        for (int i = 0; i < world.Count; i++)
+        {
+            UnitState unit = world.GetUnitAt(i);
+            Vector2 dest = unit.Owner == 1 ? p1Target : p2Target;
+            sim.TryEnqueue(unit.Owner, new MoveCommand((uint)(i + 1), 0, unit.Id, dest));
+        }
+
+        int maxTicks = 20 * 60 * 10;
+        int firstContactTick = -1;
+        int firstSovietDetectTick = -1;
+        int firstUsDetectTick = -1;
+
+        HashSet<uint> detectedP1 = new();
+        HashSet<uint> detectedP2 = new();
+        Dictionary<string, (int Tick, float Range)> matchFirstDetection = new();
+
+        detection.OnObservationEstablished = (obsTick, side, observerId, obsPos, targetId, targetPos, classification, targetType) =>
+        {
+            HashSet<uint> seenSet = side == 1 ? detectedP1 : detectedP2;
+            if (seenSet.Add(targetId.Value))
+            {
+                if (side == 1 && firstSovietDetectTick < 0) firstSovietDetectTick = obsTick;
+                if (side == 2 && firstUsDetectTick < 0) firstUsDetectTick = obsTick;
+
+                if (targetType < catalog.Units.Length)
+                {
+                    UnitDefinition targetDef = catalog.Units[targetType];
+                    float distance = Vector2.Distance(obsPos, targetPos);
+                    matchFirstDetection.TryAdd(targetDef.Id, (obsTick, distance));
+                }
+            }
+        };
+
+        HashSet<uint> seenShotEvents = new();
+
+        for (int tick = 1; tick <= maxTicks; tick++)
+        {
+            sim.Step();
+
+            // Track lower priority target retention
+            for (int u = 0; u < world.Count; u++)
+            {
+                UnitState unit = world.GetUnitAt(u);
+                if (!world.TryGetCombatState(unit.Id, out WorldState.CombatState cs)) continue;
+                if (cs.TargetContactId.Value == 0) continue;
+
+                SideContactTracker tracker = detection.GetTracker(unit.Owner);
+                if (!tracker.TryGetContact(cs.TargetContactId, out ContactObservation currentTarget)) continue;
+
+                int curPri = CombatSystem.GetTargetClassPriority(currentTarget.Classification);
+                if (curPri > 0)
+                {
+                    if (catalog.Units[unit.Definition].Weapon is not null &&
+                        combatCatalog.TryGetProfile(unit.Definition, out UnitCombatProfile prof) &&
+                        prof.Weapon is not null)
+                    {
+                        ReadOnlySpan<ContactObservation> contacts = tracker.Contacts;
+                        bool higherPriorityVisible = false;
+
+                        for (int c = 0; c < contacts.Length; c++)
+                        {
+                            ContactObservation cand = contacts[c];
+                            if (cand.Id == cs.TargetContactId || cand.State != ContactState.Current) continue;
+
+                            int candPri = CombatSystem.GetTargetClassPriority(cand.Classification);
+                            if (candPri >= curPri) continue;
+
+                            if (!CombatSystem.CanPenetrateObservedContact(unit.Position, prof.Weapon, cand, combatCatalog)) continue;
+                            if (!tracker.TryGetBoundEntity(cand.Id, out EntityId candEid) || !world.TryGetUnit(candEid, out UnitState candUnit)) continue;
+                            if (Vector2.Distance(unit.Position, candUnit.Position) > prof.Weapon.Range) continue;
+                            if (!combat.HasLineOfSightToTarget(unit, prof.Weapon, candUnit, out _, out _)) continue;
+                            if (combat.ComputeVisibleShare(unit, candUnit) <= 0f) continue;
+
+                            higherPriorityVisible = true;
+                            break;
+                        }
+
+                        if (higherPriorityVisible)
+                        {
+                            string shooterType = catalog.Units[unit.Definition].Id;
+                            stats.TotalLowerPriorityHeldTicks++;
+                            stats.LowerPriorityHeldTicksByType[shooterType] = stats.LowerPriorityHeldTicksByType.GetValueOrDefault(shooterType) + 1;
+                        }
+                    }
+                }
+            }
+
+            // Commands loop (standard attack command bot behavior)
+            if (firstContactTick < 0)
+            {
+                if (detection.GetTracker(1).Contacts.Length > 0 || detection.GetTracker(2).Contacts.Length > 0)
+                {
+                    firstContactTick = tick;
+                }
+            }
+
+            if (firstContactTick > 0 && tick >= firstContactTick && (tick % 20 == 0))
+            {
+                for (int u = 0; u < world.Count; u++)
+                {
+                    UnitState unit = world.GetUnitAt(u);
+                    SideContactTracker tracker = detection.GetTracker(unit.Owner);
+                    if (tracker.Contacts.Length > 0)
+                    {
+                        bool hasTargetInSight = false;
+                        if (combatCatalog.TryGetProfile(unit.Definition, out UnitCombatProfile prof) && prof.Weapon is not null &&
+                            world.TryGetCombatState(unit.Id, out WorldState.CombatState cs))
+                        {
+                            hasTargetInSight = combat.HasEligibleAutoFireTarget(unit, prof.Weapon, cs, tracker, world);
+                        }
+
+                        if (hasTargetInSight)
+                        {
+                            if (unit.Moving)
+                            {
+                                sim.TryEnqueue(unit.Owner, new MoveCommand((uint)(10000 + tick * 50 + u), tick, unit.Id, unit.Position));
+                            }
+                        }
+                        else
+                        {
+                            if (!unit.Moving)
+                            {
+                                Vector2 dest = unit.Owner == 1 ? p1Target : p2Target;
+                                sim.TryEnqueue(unit.Owner, new MoveCommand((uint)(10000 + tick * 50 + u), tick, unit.Id, dest));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Check if match over
+            int p1Remaining = 0;
+            int p2Remaining = 0;
+            for (int u = 0; u < world.Count; u++)
+            {
+                UnitState unit = world.GetUnitAt(u);
+                if (unit.Owner == 1) p1Remaining++;
+                else if (unit.Owner == 2) p2Remaining++;
+            }
+
+            if (p1Remaining == 0 || p2Remaining == 0)
+            {
+                break;
+            }
+        }
+
+        // Record per match detection metrics
+        foreach (var kvp in matchFirstDetection)
+        {
+            if (!stats.PerTypeDetectionTicks.TryGetValue(kvp.Key, out List<float>? tickList))
+            {
+                tickList = new List<float>();
+                stats.PerTypeDetectionTicks[kvp.Key] = tickList;
+                stats.PerTypeDetectionRanges[kvp.Key] = new List<float>();
+            }
+            tickList.Add(kvp.Value.Tick * (float)Simulation.TickSeconds);
+            stats.PerTypeDetectionRanges[kvp.Key].Add(kvp.Value.Range);
+        }
+
+        // Side detection winner
+        if (firstSovietDetectTick > 0 && firstUsDetectTick > 0)
+        {
+            if (firstSovietDetectTick < firstUsDetectTick) stats.SovietSawFirstCount++;
+            else if (firstUsDetectTick < firstSovietDetectTick) stats.UsSawFirstCount++;
+            else stats.SideSimultaneousCount++;
+        }
+        else if (firstSovietDetectTick > 0) stats.SovietSawFirstCount++;
+        else if (firstUsDetectTick > 0) stats.UsSawFirstCount++;
+
+        // Tank detection comparison
+        bool hasT62 = matchFirstDetection.TryGetValue("t62", out var t62Det);
+        bool hasM60 = matchFirstDetection.TryGetValue("m60a1", out var m60Det);
+        if (hasT62 && hasM60)
+        {
+            if (t62Det.Tick < m60Det.Tick) stats.T62SpottedFirstCount++;
+            else if (m60Det.Tick < t62Det.Tick) stats.M60A1SpottedFirstCount++;
+            else stats.TanksSimultaneousCount++;
+        }
+
+        // Recon detection comparison
+        bool hasBrdm = matchFirstDetection.TryGetValue("brdm2", out var brdmDet);
+        bool hasM151 = matchFirstDetection.TryGetValue("m151a2", out var m151Det);
+        if (hasBrdm && hasM151)
+        {
+            if (brdmDet.Tick < m151Det.Tick) stats.Brdm2SpottedFirstCount++;
+            else if (m151Det.Tick < brdmDet.Tick) stats.M151A2SpottedFirstCount++;
+            else stats.ReconSimultaneousCount++;
+        }
+    }
+
+    return stats;
+}
+
+static void PrintDiagnosisReport(string title, DiagnosisStats stats)
+{
+    Console.WriteLine($"--- {title} ---");
+    Console.WriteLine($"Runs: {stats.Runs}");
+
+    Console.WriteLine("Per Type First Detection (Average Time and Distance when spotted by enemy):");
+    foreach (var kvp in stats.PerTypeDetectionTicks.OrderBy(k => k.Key))
+    {
+        float avgSec = kvp.Value.Count > 0 ? kvp.Value.Average() : 0f;
+        float avgRange = stats.PerTypeDetectionRanges.TryGetValue(kvp.Key, out var ranges) && ranges.Count > 0 ? ranges.Average() : 0f;
+        Console.WriteLine($"  {kvp.Key,-8} : First seen at {avgSec,5:F1}s, range {avgRange,6:F1}m ({kvp.Value.Count} matches)");
+    }
+    Console.WriteLine();
+
+    Console.WriteLine("Who Sees Whom First:");
+    Console.WriteLine($"  Overall First Contact: Soviet first: {stats.SovietSawFirstCount,2}, US first: {stats.UsSawFirstCount,2}, Simultaneous: {stats.SideSimultaneousCount,2}");
+    Console.WriteLine($"  Tanks (T-62 vs M60A1): T-62 spotted first: {stats.T62SpottedFirstCount,2}, M60A1 spotted first: {stats.M60A1SpottedFirstCount,2}, Simultaneous: {stats.TanksSimultaneousCount,2}");
+    if (!stats.ExcludeRecon)
+    {
+        Console.WriteLine($"  Recon (BRDM-2 vs M151A2): BRDM-2 spotted first: {stats.Brdm2SpottedFirstCount,2}, M151A2 spotted first: {stats.M151A2SpottedFirstCount,2}, Simultaneous: {stats.ReconSimultaneousCount,2}");
+    }
+    Console.WriteLine();
+
+    Console.WriteLine("Lower Priority Target Retention (Ticks holding APC or Recon while higher priority penetrable target in sight):");
+    float avgHeldTicks = (float)stats.TotalLowerPriorityHeldTicks / stats.Runs;
+    Console.WriteLine($"  Total Unit-Ticks Held: {stats.TotalLowerPriorityHeldTicks} ({avgHeldTicks:F1} ticks / match)");
+    foreach (var kvp in stats.LowerPriorityHeldTicksByType.OrderByDescending(k => k.Value))
+    {
+        float perMatch = (float)kvp.Value / stats.Runs;
+        Console.WriteLine($"    {kvp.Key,-8} : {kvp.Value,5} ticks ({perMatch,5:F1} per match)");
+    }
+    Console.WriteLine();
+}
+
+static DiagnosisStats CombineDiagnosis(DiagnosisStats a, DiagnosisStats b)
+{
+    DiagnosisStats combined = new()
+    {
+        Runs = a.Runs + b.Runs,
+        ExcludeRecon = a.ExcludeRecon,
+        SovietSawFirstCount = a.SovietSawFirstCount + b.SovietSawFirstCount,
+        UsSawFirstCount = a.UsSawFirstCount + b.UsSawFirstCount,
+        SideSimultaneousCount = a.SideSimultaneousCount + b.SideSimultaneousCount,
+        T62SpottedFirstCount = a.T62SpottedFirstCount + b.T62SpottedFirstCount,
+        M60A1SpottedFirstCount = a.M60A1SpottedFirstCount + b.M60A1SpottedFirstCount,
+        TanksSimultaneousCount = a.TanksSimultaneousCount + b.TanksSimultaneousCount,
+        Brdm2SpottedFirstCount = a.Brdm2SpottedFirstCount + b.Brdm2SpottedFirstCount,
+        M151A2SpottedFirstCount = a.M151A2SpottedFirstCount + b.M151A2SpottedFirstCount,
+        ReconSimultaneousCount = a.ReconSimultaneousCount + b.ReconSimultaneousCount,
+        TotalLowerPriorityHeldTicks = a.TotalLowerPriorityHeldTicks + b.TotalLowerPriorityHeldTicks
+    };
+
+    foreach (var kvp in a.PerTypeDetectionTicks)
+    {
+        if (!combined.PerTypeDetectionTicks.TryGetValue(kvp.Key, out List<float>? list))
+        {
+            list = new List<float>();
+            combined.PerTypeDetectionTicks[kvp.Key] = list;
+        }
+        list.AddRange(kvp.Value);
+    }
+    foreach (var kvp in b.PerTypeDetectionTicks)
+    {
+        if (!combined.PerTypeDetectionTicks.TryGetValue(kvp.Key, out List<float>? list))
+        {
+            list = new List<float>();
+            combined.PerTypeDetectionTicks[kvp.Key] = list;
+        }
+        list.AddRange(kvp.Value);
+    }
+
+    foreach (var kvp in a.PerTypeDetectionRanges)
+    {
+        if (!combined.PerTypeDetectionRanges.TryGetValue(kvp.Key, out List<float>? list))
+        {
+            list = new List<float>();
+            combined.PerTypeDetectionRanges[kvp.Key] = list;
+        }
+        list.AddRange(kvp.Value);
+    }
+    foreach (var kvp in b.PerTypeDetectionRanges)
+    {
+        if (!combined.PerTypeDetectionRanges.TryGetValue(kvp.Key, out List<float>? list))
+        {
+            list = new List<float>();
+            combined.PerTypeDetectionRanges[kvp.Key] = list;
+        }
+        list.AddRange(kvp.Value);
+    }
+
+    foreach (var kvp in a.LowerPriorityHeldTicksByType)
+    {
+        combined.LowerPriorityHeldTicksByType[kvp.Key] = combined.LowerPriorityHeldTicksByType.GetValueOrDefault(kvp.Key) + kvp.Value;
+    }
+    foreach (var kvp in b.LowerPriorityHeldTicksByType)
+    {
+        combined.LowerPriorityHeldTicksByType[kvp.Key] = combined.LowerPriorityHeldTicksByType.GetValueOrDefault(kvp.Key) + kvp.Value;
+    }
+
+    return combined;
+}
+
+sealed class DiagnosisStats
+{
+    public int Runs;
+    public bool ExcludeRecon;
+
+    public int SovietSawFirstCount;
+    public int UsSawFirstCount;
+    public int SideSimultaneousCount;
+
+    public int T62SpottedFirstCount;
+    public int M60A1SpottedFirstCount;
+    public int TanksSimultaneousCount;
+
+    public int Brdm2SpottedFirstCount;
+    public int M151A2SpottedFirstCount;
+    public int ReconSimultaneousCount;
+
+    public long TotalLowerPriorityHeldTicks;
+    public readonly Dictionary<string, long> LowerPriorityHeldTicksByType = new();
+
+    public readonly Dictionary<string, List<float>> PerTypeDetectionTicks = new();
+    public readonly Dictionary<string, List<float>> PerTypeDetectionRanges = new();
 }
 
 sealed class BattleBatchStats

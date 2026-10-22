@@ -44,6 +44,18 @@ public sealed class DetectionSystem : ISimulationSystem
     public int LosQueriesCount { get; private set; }
     public int ObservationsCount { get; private set; }
 
+    public delegate void ObservationEstablishedDelegate(
+        int tick,
+        int observerSide,
+        EntityId observerId,
+        Vector2 observerPos,
+        EntityId targetId,
+        Vector2 targetPos,
+        ContactClassification classification,
+        ushort targetType);
+
+    public ObservationEstablishedDelegate? OnObservationEstablished { get; set; }
+
     public DetectionSystem(
         StaticGeometry geometry,
         IUnitPerceptionCatalog catalog,
@@ -239,11 +251,11 @@ public sealed class DetectionSystem : ISimulationSystem
                 {
                     ObservationsCount++;
                     _observedBitmask[word] |= bit;
+                    ContactClassification targetClass = _unitClassifications[targetUnitIndex];
+                    ushort targetType = _unitDefinitions[targetUnitIndex];
                     int count = _observedCounts[sideIndex];
                     if (count < _maxUnits)
                     {
-                        ContactClassification targetClass = _unitClassifications[targetUnitIndex];
-                        ushort targetType = _unitDefinitions[targetUnitIndex];
                         _observedTargetsBuffer[sideIndex * _maxUnits + count] = new SideContactTracker.ObservedTarget(
                             _unitIds[targetUnitIndex],
                             _unitPositions[targetUnitIndex],
@@ -253,6 +265,16 @@ public sealed class DetectionSystem : ISimulationSystem
                             _unitHullHeadings[targetUnitIndex]);
                         _observedCounts[sideIndex] = count + 1;
                     }
+
+                    OnObservationEstablished?.Invoke(
+                        tick,
+                        observerOwner,
+                        _unitIds[i],
+                        obsPos,
+                        _unitIds[targetUnitIndex],
+                        _unitPositions[targetUnitIndex],
+                        targetClass,
+                        targetType);
                 }
             }
         }

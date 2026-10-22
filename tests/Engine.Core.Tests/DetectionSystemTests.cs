@@ -876,4 +876,59 @@ public sealed class DetectionSystemTests
         Assert.Equal(new Vector2(35, 20), p1Contacts[0].Position);
         Assert.Equal(ContactClassification.Tank, p1Contacts[0].Classification);
     }
+
+    [Fact]
+    public void FirstDetection_WithOpaqueWall_AttributesDistanceToActualObservingUnit_NotBlindCloserUnit()
+    {
+        // Map 1000m x 1000m
+        HeightMap map = CreateFlatMap(size: 501, cellSize: 2.0f);
+        // Opaque wall between x=245..255, z=400..600, height=50
+        OpaqueStructure wall = new(new StructureId(1), new Vector3(245f, 0f, 400f), new Vector3(255f, 50f, 600f));
+        StaticGeometry geometry = new(map, [wall]);
+        TestCatalog catalog = new();
+        catalog.Register(0, new VisualSensorProfile(range: 1500.0f, eyeHeight: 2.0f), new TargetObservationPoints(0.5f, 1.5f));
+
+        DetectionSystem detection = new(geometry, catalog);
+        WorldState world = new(map);
+
+        // Friendly tank at (200, 500) behind the wall relative to target
+        EntityId tank = world.CreateUnit(1, 0, new Vector2(200f, 500f), 5.0f);
+        // Friendly scout at (900, 700) with unobstructed line of sight to target
+        EntityId scout = world.CreateUnit(1, 0, new Vector2(900f, 700f), 5.0f);
+        // Enemy APC at (300, 500)
+        EntityId apc = world.CreateUnit(2, 0, new Vector2(300f, 500f), 5.0f);
+
+        EntityId recordedObserverId = default;
+        Vector2 recordedObserverPos = default;
+        EntityId recordedTargetId = default;
+        float recordedDistance = 0f;
+        int observationsCount = 0;
+
+        detection.OnObservationEstablished = (tick, side, observerId, obsPos, targetId, targetPos, classification, targetType) =>
+        {
+            if (side == 1 && targetId == apc && observationsCount == 0)
+            {
+                recordedObserverId = observerId;
+                recordedObserverPos = obsPos;
+                recordedTargetId = targetId;
+                recordedDistance = Vector2.Distance(obsPos, targetPos);
+                observationsCount++;
+            }
+        };
+
+        detection.Update(world, tick: 1);
+        detection.Update(world, tick: 2);
+
+        Assert.Equal(1, observationsCount);
+        Assert.Equal(scout, recordedObserverId);
+        Assert.NotEqual(tank, recordedObserverId);
+        Assert.Equal(new Vector2(900f, 700f), recordedObserverPos);
+        Assert.Equal(apc, recordedTargetId);
+        // Actual observing distance from scout (900, 700) to APC (300, 500) is sqrt(600^2 + 200^2) = 632.46 m
+        Assert.InRange(recordedDistance, 632.4f, 632.5f);
+        // Blind closer tank was only 100 m away but blocked by the wall
+        float tankDistance = Vector2.Distance(new Vector2(200f, 500f), new Vector2(300f, 500f));
+        Assert.Equal(100f, tankDistance);
+        Assert.NotEqual(tankDistance, recordedDistance);
+    }
 }
