@@ -12,7 +12,8 @@ public enum HandshakeReason : byte
     ContentMismatch = 2,
     MapMismatch = 3,
     RuleSetMismatch = 4,
-    ServerFull = 5
+    ServerFull = 5,
+    Timeout = 6
 }
 
 public static class WireProtocol

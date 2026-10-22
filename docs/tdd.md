@@ -688,6 +688,8 @@ Status: planned for M2. M1 units keep one weapon each, so the M1 exit does not d
 - Transport behind `ITransport`. Implementations: in-memory (single player, tests) and LiteNetLib (UDP). Steam Networking Sockets later.
 - No Godot high-level multiplayer or RPC.
 - Handshake compares the `MatchSetup` header (section 15.1): protocol version, content hash, map hash, rule set.
+- Handshake timeout: connections that do not complete admission within the timeout window (default 5.0 s) are disconnected with `HandshakeReason.Timeout`, freeing the slot for other clients.
+- Reserved bot slots reject incoming client handshakes with `HandshakeReason.ServerFull` without resetting the local bot simulation state.
 - Commands, snapshots and saves use explicit message types, not serialized game classes.
 
 ### 14.1 Snapshots

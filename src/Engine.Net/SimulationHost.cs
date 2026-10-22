@@ -5,19 +5,23 @@ namespace DeadGround.Engine.Net;
 public sealed class SimulationHost : IDisposable
 {
     public const int MaxTicksPerAdvance = 5;
+    public const double DefaultHandshakeTimeoutSeconds = 5.0;
     private readonly Simulation _simulation;
     private readonly IServerTransport _transport;
     private readonly MatchSetup? _matchSetup;
     private readonly int _reservedBotPlayer;
+    private readonly double _handshakeTimeoutSeconds;
     private readonly PlayerKnowledge[] _knowledge;
     private readonly long[] _admittedConnectionIds = new long[Simulation.MaxPlayers];
     private readonly long[] _peerConnectionIds = new long[Simulation.MaxPlayers];
+    private readonly double[] _peerConnectionTimes = new double[Simulation.MaxPlayers];
     private readonly byte[] _receive = new byte[WireProtocol.MaxMessageSize];
     private readonly byte[] _send = new byte[WireProtocol.MaxMessageSize];
     private readonly byte[] _reply = new byte[WireProtocol.CommandResultSize];
     private readonly byte[] _fragmentBuffer = new byte[WireProtocol.FragmentHeaderSize + WireProtocol.MaxFragmentPayloadSize];
     private uint _snapshotSequence;
     private double _accumulator;
+    private double _sessionElapsedTime;
 
     public int Tick => _simulation.Tick;
     public long BytesSent { get; private set; }
@@ -26,11 +30,20 @@ public sealed class SimulationHost : IDisposable
     public double PendingSeconds => Math.Max(0, _accumulator);
     public long DroppedCommandResults { get; private set; }
     public int ConnectedPlayerCount => _transport.ConnectedPlayerCount;
+    public double HandshakeTimeoutSeconds => _handshakeTimeoutSeconds;
 
-    public SimulationHost(Simulation simulation, IServerTransport transport, MatchSetup? matchSetup = null, int reservedBotPlayer = 0)
+    public SimulationHost(
+        Simulation simulation,
+        IServerTransport transport,
+        MatchSetup? matchSetup = null,
+        int reservedBotPlayer = 0,
+        double handshakeTimeoutSeconds = DefaultHandshakeTimeoutSeconds)
     {
         ArgumentNullException.ThrowIfNull(simulation);
         ArgumentNullException.ThrowIfNull(transport);
+        if (handshakeTimeoutSeconds <= 0 || !double.IsFinite(handshakeTimeoutSeconds))
+            throw new ArgumentOutOfRangeException(nameof(handshakeTimeoutSeconds),
+                "Handshake timeout must be positive and finite.");
         if (simulation.Capacity > WireProtocol.MaxUnits)
             throw new ArgumentOutOfRangeException(nameof(simulation),
                 $"M0 world capacity must not exceed the snapshot limit of {WireProtocol.MaxUnits} units.");
@@ -39,6 +52,7 @@ public sealed class SimulationHost : IDisposable
         _transport = transport;
         _matchSetup = matchSetup;
         _reservedBotPlayer = reservedBotPlayer;
+        _handshakeTimeoutSeconds = handshakeTimeoutSeconds;
         if (matchSetup?.PlayerTeams is { Length: > 0 } teams)
         {
             for (int p = 1; p <= teams.Length; p++)
@@ -69,8 +83,13 @@ public sealed class SimulationHost : IDisposable
         PublishAll();
     }
 
-    public SimulationHost(Simulation simulation, ITransport transport, int player = 1, int reservedBotPlayer = 0)
-        : this(simulation, CreateSingleTransport(simulation, transport, player), matchSetup: null, reservedBotPlayer: reservedBotPlayer)
+    public SimulationHost(
+        Simulation simulation,
+        ITransport transport,
+        int player = 1,
+        int reservedBotPlayer = 0,
+        double handshakeTimeoutSeconds = DefaultHandshakeTimeoutSeconds)
+        : this(simulation, CreateSingleTransport(simulation, transport, player), matchSetup: null, reservedBotPlayer: reservedBotPlayer, handshakeTimeoutSeconds: handshakeTimeoutSeconds)
     {
     }
 
@@ -95,6 +114,7 @@ public sealed class SimulationHost : IDisposable
         if (!double.IsFinite(elapsedSeconds) || elapsedSeconds < 0)
             throw new ArgumentOutOfRangeException(nameof(elapsedSeconds));
 
+        _sessionElapsedTime += elapsedSeconds;
         _transport.Poll();
 
         for (int p = 1; p <= Simulation.MaxPlayers; p++)
@@ -103,11 +123,29 @@ public sealed class SimulationHost : IDisposable
             if (currentConnId != _peerConnectionIds[p - 1])
             {
                 _peerConnectionIds[p - 1] = currentConnId;
+                _peerConnectionTimes[p - 1] = currentConnId != 0 ? _sessionElapsedTime : 0;
                 if (_admittedConnectionIds[p - 1] != 0 && _admittedConnectionIds[p - 1] != currentConnId)
                 {
                     _admittedConnectionIds[p - 1] = 0;
                     _simulation.SetPlayerAdmitted(p, false);
                     _simulation.ResetPlayer(p);
+                }
+            }
+
+            if (_reservedBotPlayer != 0 && p == _reservedBotPlayer)
+            {
+                if (currentConnId != 0)
+                {
+                    RejectHandshake(p, HandshakeReason.ServerFull);
+                }
+                continue;
+            }
+
+            if (currentConnId != 0 && _admittedConnectionIds[p - 1] != currentConnId)
+            {
+                if (_sessionElapsedTime - _peerConnectionTimes[p - 1] + 1e-9 >= _handshakeTimeoutSeconds)
+                {
+                    RejectHandshake(p, HandshakeReason.Timeout);
                 }
             }
         }
@@ -195,6 +233,18 @@ public sealed class SimulationHost : IDisposable
             return;
         }
 
+        if (connectionId == 0 || _peerConnectionIds[player - 1] != connectionId)
+        {
+            return;
+        }
+
+        if (_admittedConnectionIds[player - 1] != connectionId &&
+            _sessionElapsedTime - _peerConnectionTimes[player - 1] + 1e-9 >= _handshakeTimeoutSeconds)
+        {
+            RejectHandshake(player, HandshakeReason.Timeout);
+            return;
+        }
+
         if (!WireProtocol.TryReadHandshakeRequest(message, out MatchSetup clientSetup))
         {
             RejectHandshake(player, HandshakeReason.ProtocolVersionMismatch);
@@ -246,8 +296,13 @@ public sealed class SimulationHost : IDisposable
     private void RejectHandshake(int player, HandshakeReason reason)
     {
         _admittedConnectionIds[player - 1] = 0;
-        _simulation.SetPlayerAdmitted(player, false);
-        _simulation.ResetPlayer(player);
+        _peerConnectionIds[player - 1] = 0;
+        _peerConnectionTimes[player - 1] = 0;
+        if (_reservedBotPlayer == 0 || player != _reservedBotPlayer)
+        {
+            _simulation.SetPlayerAdmitted(player, false);
+            _simulation.ResetPlayer(player);
+        }
         WireProtocol.WriteHandshakeResponse(_reply, accepted: false, player, reason);
         _transport.DisconnectPlayer(player, _reply.AsSpan(0, WireProtocol.HandshakeResponseSize));
     }
