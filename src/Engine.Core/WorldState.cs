@@ -68,7 +68,8 @@ public sealed class WorldState : IDisposable
         int ConsecutiveShotsOnTarget = 0,
         EntityId LastTargetEntityId = default,
         Vector2 LastTargetPosition = default,
-        int LastMovedTick = -1);
+        int LastMovedTick = -1,
+        bool HasSwitchedTargetThisReload = false);
 
     public EntityId CreateUnit(int owner, ushort definition, Vector2 position, float speed, int maxHealth = 100, int ammo = 0, float initialTurretYaw = 0f)
     {
