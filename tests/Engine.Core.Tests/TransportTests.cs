@@ -809,4 +809,737 @@ public sealed class TransportTests
         public bool TryReceive(Span<byte> destination, out int length) { length = 0; return false; }
         public void Dispose() { }
     }
+
+    [Fact]
+    public void ReceiveBufferPool_AcquiresReleasesAndRejectsOversized()
+    {
+        ReceiveBufferPool pool = new(standardCount: 2, largeCount: 1, standardSize: 100, largeSize: 500);
+
+        Assert.Equal(2, pool.StandardCapacity);
+        Assert.Equal(1, pool.LargeCapacity);
+        Assert.Equal(2, pool.StandardAvailable);
+        Assert.Equal(1, pool.LargeAvailable);
+
+        Assert.True(pool.TryAcquire(50, out ReceiveBuffer? b1));
+        Assert.NotNull(b1);
+        Assert.False(b1.IsLarge);
+        Assert.Equal(1, pool.StandardAvailable);
+
+        Assert.True(pool.TryAcquire(100, out ReceiveBuffer? b2));
+        Assert.NotNull(b2);
+        Assert.False(b2.IsLarge);
+        Assert.Equal(0, pool.StandardAvailable);
+
+        // Standard request borrows large buffer when standard is exhausted
+        Assert.True(pool.TryAcquire(80, out ReceiveBuffer? b3));
+        Assert.NotNull(b3);
+        Assert.True(b3.IsLarge);
+        Assert.Equal(0, pool.LargeAvailable);
+
+        // Pool is now exhausted
+        Assert.False(pool.TryAcquire(50, out ReceiveBuffer? b4));
+        Assert.Null(b4);
+
+        // Invalid lengths rejected
+        Assert.False(pool.TryAcquire(0, out _));
+        Assert.False(pool.TryAcquire(-1, out _));
+        Assert.False(pool.TryAcquire(501, out _));
+
+        // Return buffers to pool
+        pool.Return(b1);
+        Assert.Equal(1, pool.StandardAvailable);
+
+        // Double return guard prevents extra count
+        pool.Return(b1);
+        Assert.Equal(1, pool.StandardAvailable);
+
+        pool.Return(b2);
+        Assert.Equal(2, pool.StandardAvailable);
+
+        pool.Return(b3);
+        Assert.Equal(1, pool.LargeAvailable);
+    }
+
+    [Fact]
+    public void ReceiveBufferQueue_FifoOrderingAndPayloadIntegrity()
+    {
+        ReceiveBufferQueue queue = new(maxPackets: 10, maxBytes: 10000);
+
+        byte[] payload1 = [0x01, 0x02, 0x03, 0x04];
+        byte[] payload2 = [0x10, 0x20, 0x30, 0x40, 0x50];
+        byte[] payload3 = [0xAA, 0xBB, 0xCC];
+
+        Assert.Equal(ReceiveBufferQueue.EnqueueResult.Enqueued, queue.TryEnqueue(payload1, 1, 101, isReliable: true));
+        Assert.Equal(ReceiveBufferQueue.EnqueueResult.Enqueued, queue.TryEnqueue(payload2, 2, 102, isReliable: false));
+        Assert.Equal(ReceiveBufferQueue.EnqueueResult.Enqueued, queue.TryEnqueue(payload3, 1, 101, isReliable: true));
+
+        Assert.Equal(3, queue.QueuedPacketCount);
+        Assert.Equal(12, queue.QueuedPayloadBytes);
+        Assert.Equal(3, queue.PeakQueuedPackets);
+        Assert.Equal(12, queue.PeakQueuedPayloadBytes);
+
+        Assert.True(queue.TryDequeue(out ReceiveBuffer? d1));
+        Assert.NotNull(d1);
+        Assert.Equal(1, d1.Player);
+        Assert.Equal(101, d1.ConnectionId);
+        Assert.True(d1.IsReliable);
+        Assert.Equal(4, d1.Length);
+        Assert.True(payload1.AsSpan().SequenceEqual(d1.Data.AsSpan(0, d1.Length)));
+        queue.Release(d1);
+
+        Assert.Equal(2, queue.QueuedPacketCount);
+        Assert.Equal(8, queue.QueuedPayloadBytes);
+        Assert.Equal(3, queue.PeakQueuedPackets);
+
+        Assert.True(queue.TryDequeue(out ReceiveBuffer? d2));
+        Assert.NotNull(d2);
+        Assert.Equal(2, d2.Player);
+        Assert.Equal(102, d2.ConnectionId);
+        Assert.False(d2.IsReliable);
+        Assert.Equal(5, d2.Length);
+        Assert.True(payload2.AsSpan().SequenceEqual(d2.Data.AsSpan(0, d2.Length)));
+        queue.Release(d2);
+
+        Assert.True(queue.TryDequeue(out ReceiveBuffer? d3));
+        Assert.NotNull(d3);
+        Assert.Equal(1, d3.Player);
+        Assert.Equal(101, d3.ConnectionId);
+        Assert.True(d3.IsReliable);
+        Assert.Equal(3, d3.Length);
+        Assert.True(payload3.AsSpan().SequenceEqual(d3.Data.AsSpan(0, d3.Length)));
+        queue.Release(d3);
+
+        Assert.Equal(0, queue.QueuedPacketCount);
+        Assert.Equal(0, queue.QueuedPayloadBytes);
+        Assert.False(queue.TryDequeue(out _));
+    }
+
+    [Fact]
+    public void ReceiveBufferQueue_OverloadPolicy_PacketCountLimit()
+    {
+        ReceiveBufferQueue queue = new(maxPackets: 3, maxBytes: 10000);
+        byte[] payload = [0x01, 0x02, 0x03, 0x04];
+
+        Assert.Equal(ReceiveBufferQueue.EnqueueResult.Enqueued, queue.TryEnqueue(payload, 1, 1, false));
+        Assert.Equal(ReceiveBufferQueue.EnqueueResult.Enqueued, queue.TryEnqueue(payload, 1, 1, false));
+        Assert.Equal(ReceiveBufferQueue.EnqueueResult.Enqueued, queue.TryEnqueue(payload, 1, 1, false));
+        Assert.Equal(3, queue.QueuedPacketCount);
+
+        Assert.Equal(ReceiveBufferQueue.EnqueueResult.DroppedUnreliable, queue.TryEnqueue(payload, 1, 1, false));
+        Assert.Equal(1, queue.DroppedUnreliablePackets);
+        Assert.Equal(4, queue.DroppedUnreliableBytes);
+        Assert.Equal(0, queue.ReliableOverflowFailures);
+
+        Assert.Equal(ReceiveBufferQueue.EnqueueResult.ReliableOverflow, queue.TryEnqueue(payload, 1, 1, true));
+        Assert.Equal(1, queue.DroppedUnreliablePackets);
+        Assert.Equal(1, queue.ReliableOverflowFailures);
+
+        Assert.True(queue.TryDequeue(out ReceiveBuffer? b));
+        Assert.NotNull(b);
+        queue.Release(b);
+        Assert.Equal(2, queue.QueuedPacketCount);
+
+        Assert.Equal(ReceiveBufferQueue.EnqueueResult.Enqueued, queue.TryEnqueue(payload, 1, 1, true));
+        Assert.Equal(3, queue.QueuedPacketCount);
+    }
+
+    [Fact]
+    public void ReceiveBufferQueue_OverloadPolicy_ByteLimit()
+    {
+        ReceiveBufferQueue queue = new(maxPackets: 100, maxBytes: 20);
+        byte[] eightBytes = [1, 2, 3, 4, 5, 6, 7, 8];
+
+        Assert.Equal(ReceiveBufferQueue.EnqueueResult.Enqueued, queue.TryEnqueue(eightBytes, 1, 1, false));
+        Assert.Equal(ReceiveBufferQueue.EnqueueResult.Enqueued, queue.TryEnqueue(eightBytes, 1, 1, false));
+        Assert.Equal(16, queue.QueuedPayloadBytes);
+
+        Assert.Equal(ReceiveBufferQueue.EnqueueResult.DroppedUnreliable, queue.TryEnqueue(eightBytes, 1, 1, false));
+        Assert.Equal(1, queue.DroppedUnreliablePackets);
+        Assert.Equal(8, queue.DroppedUnreliableBytes);
+
+        Assert.Equal(ReceiveBufferQueue.EnqueueResult.ReliableOverflow, queue.TryEnqueue(eightBytes, 1, 1, true));
+        Assert.Equal(1, queue.ReliableOverflowFailures);
+
+        Assert.True(queue.TryDequeue(out ReceiveBuffer? b));
+        Assert.NotNull(b);
+        queue.Release(b);
+        Assert.Equal(8, queue.QueuedPayloadBytes);
+
+        Assert.Equal(ReceiveBufferQueue.EnqueueResult.Enqueued, queue.TryEnqueue(eightBytes, 1, 1, true));
+        Assert.Equal(16, queue.QueuedPayloadBytes);
+    }
+
+    [Fact]
+    public void ReceiveBufferQueue_Clear_ReleasesAllBuffersToPool()
+    {
+        ReceiveBufferPool pool = new(standardCount: 4, largeCount: 1, standardSize: 100, largeSize: 500);
+        ReceiveBufferQueue queue = new(maxPackets: 4, maxBytes: 1000, pool: pool);
+
+        byte[] payload = [1, 2, 3, 4];
+        Assert.Equal(ReceiveBufferQueue.EnqueueResult.Enqueued, queue.TryEnqueue(payload, 1, 1, false));
+        Assert.Equal(ReceiveBufferQueue.EnqueueResult.Enqueued, queue.TryEnqueue(payload, 1, 1, false));
+        Assert.Equal(ReceiveBufferQueue.EnqueueResult.Enqueued, queue.TryEnqueue(payload, 1, 1, false));
+
+        Assert.Equal(3, queue.QueuedPacketCount);
+        Assert.Equal(1, pool.StandardAvailable);
+
+        queue.Clear();
+
+        Assert.Equal(0, queue.QueuedPacketCount);
+        Assert.Equal(0, queue.QueuedPayloadBytes);
+        Assert.Equal(4, pool.StandardAvailable);
+    }
+
+    [Fact]
+    public void SimulationHost_Advance_BoundsMessagesProcessedPerCall()
+    {
+        HeightMap map = HeightMap.CreatePrototype();
+        FloodServerTransport flood = new();
+        using SimulationHost host = new(new Simulation(new WorldState(map), new RuleSet()), flood);
+
+        host.Advance(0);
+        Assert.Equal(SimulationHost.MaxMessagesPerAdvance, flood.ReceivedCount);
+
+        host.Advance(0);
+        Assert.Equal(SimulationHost.MaxMessagesPerAdvance * 2, flood.ReceivedCount);
+    }
+
+    [Fact]
+    public void ClientSession_Poll_BoundsMessagesProcessedPerCall()
+    {
+        FloodClientTransport flood = new();
+        using ClientSession client = new(flood);
+
+        Assert.Equal(ClientSession.MaxMessagesPerPoll, flood.ReceivedCount);
+
+        client.Advance(0);
+        Assert.Equal(ClientSession.MaxMessagesPerPoll * 2, flood.ReceivedCount);
+    }
+
+    private static void WaitUntil(Func<bool> condition, int timeoutMs = 3000, string message = "Timed out", Action? pump = null)
+    {
+        long deadline = System.Diagnostics.Stopwatch.GetTimestamp() + (long)(timeoutMs * System.Diagnostics.Stopwatch.Frequency / 1000.0);
+        while (!condition())
+        {
+            pump?.Invoke();
+            if (System.Diagnostics.Stopwatch.GetTimestamp() >= deadline)
+                throw new TimeoutException(message);
+            Thread.Sleep(2);
+        }
+    }
+
+    [Fact]
+    public void ServerTransport_StaleConnectionMessage_DiscardedOnSlotReuse()
+    {
+        using LiteNetLibServerTransport server = LiteNetLibTransport.CreateServer(0, maxPlayers: 2);
+        ReceiveBufferQueue queue1 = server.GetPlayerQueue(1);
+
+        byte[] payloadStale = [WireProtocol.Version, WireProtocol.MoveKind, 1, 2, 3, 4];
+        Assert.Equal(ReceiveBufferQueue.EnqueueResult.Enqueued, queue1.TryEnqueue(payloadStale, 1, connectionId: 999, isReliable: true));
+        Assert.Equal(1, queue1.QueuedPacketCount);
+
+        // TryReceive must detect stale connectionId (slot 1 currently has connectionId 0) and discard it safely
+        Span<byte> rx = stackalloc byte[WireProtocol.MaxMessageSize];
+        Assert.False(server.TryReceive(out _, out _, rx, out _));
+        Assert.Equal(0, queue1.QueuedPacketCount);
+
+        // Connect a real client to slot 1
+        using LiteNetLibClientTransport client = LiteNetLibTransport.CreateClient("127.0.0.1", server.Port);
+        WaitUntil(() => client.IsConnected && server.ConnectedPlayerCount > 0, 3000, "Client did not connect", () =>
+        {
+            server.Poll();
+            client.Poll();
+        });
+        Assert.True(client.IsConnected);
+        Assert.Equal(1, server.ConnectedPlayerCount);
+        long activeConnId = server.GetPlayerConnectionId(1);
+        Assert.True(activeConnId > 0);
+
+        // Enqueue another stale message with old connectionId (activeConnId - 1)
+        Assert.Equal(ReceiveBufferQueue.EnqueueResult.Enqueued, queue1.TryEnqueue(payloadStale, 1, connectionId: activeConnId - 1, isReliable: true));
+        Assert.Equal(1, queue1.QueuedPacketCount);
+
+        // TryReceive must discard the stale message because connectionId does not match activeConnId
+        Assert.False(server.TryReceive(out _, out _, rx, out _));
+        Assert.Equal(0, queue1.QueuedPacketCount);
+
+        // Now send a valid message from the connected client
+        byte[] validMove = new byte[WireProtocol.MoveSize];
+        WireProtocol.WriteMove(validMove, new MoveCommand(1, 1, new EntityId(1), new Vector2(5, 5)));
+        client.TrySend(validMove);
+
+        WaitUntil(() => server.GetPlayerQueuedPacketCount(1) > 0, 3000, "Server did not receive message", () =>
+        {
+            server.Poll();
+            client.Poll();
+        });
+
+        Assert.True(server.TryReceive(out int p, out long connId, rx, out int len));
+        Assert.Equal(1, p);
+        Assert.Equal(activeConnId, connId);
+        Assert.Equal(WireProtocol.MoveSize, len);
+    }
+
+    [Fact]
+    public void ServerTransport_FairRoundRobin_ServicingAcrossPlayers()
+    {
+        using LiteNetLibServerTransport server = LiteNetLibTransport.CreateServer(0, maxPlayers: 2);
+        using LiteNetLibClientTransport client1 = LiteNetLibTransport.CreateClient("127.0.0.1", server.Port);
+        using LiteNetLibClientTransport client2 = LiteNetLibTransport.CreateClient("127.0.0.1", server.Port);
+
+        WaitUntil(() => client1.IsConnected && client2.IsConnected && server.ConnectedPlayerCount == 2, 3000, "Both clients did not connect", () =>
+        {
+            server.Poll();
+            client1.Poll();
+            client2.Poll();
+        });
+        Assert.True(client1.IsConnected);
+        Assert.True(client2.IsConnected);
+        Assert.Equal(2, server.ConnectedPlayerCount);
+
+        ReceiveBufferQueue q1 = server.GetPlayerQueue(1);
+        ReceiveBufferQueue q2 = server.GetPlayerQueue(2);
+        long conn1 = server.GetPlayerConnectionId(1);
+        long conn2 = server.GetPlayerConnectionId(2);
+
+        byte[] cmd1 = [WireProtocol.Version, WireProtocol.MoveKind, 1, 0, 0, 0];
+        byte[] cmd2 = [WireProtocol.Version, WireProtocol.MoveKind, 2, 0, 0, 0];
+
+        // Populate both player queues directly to test fair round-robin scheduling deterministically
+        for (int i = 0; i < 5; i++)
+        {
+            Assert.Equal(ReceiveBufferQueue.EnqueueResult.Enqueued, q1.TryEnqueue(cmd1, 1, conn1, isReliable: true));
+            Assert.Equal(ReceiveBufferQueue.EnqueueResult.Enqueued, q2.TryEnqueue(cmd2, 2, conn2, isReliable: true));
+        }
+
+        List<int> servicedOrder = [];
+        Span<byte> rx = stackalloc byte[WireProtocol.MaxMessageSize];
+        while (server.TryReceive(out int player, out _, rx, out _))
+        {
+            servicedOrder.Add(player);
+        }
+
+        Assert.Equal(10, servicedOrder.Count);
+        int[] expectedOrder = [1, 2, 1, 2, 1, 2, 1, 2, 1, 2];
+        Assert.Equal(expectedOrder, servicedOrder);
+    }
+
+    [Fact]
+    public void ServerTransport_ReliableOverflow_DisconnectsPeer()
+    {
+        using LiteNetLibServerTransport server = LiteNetLibTransport.CreateServer(0, maxPlayers: 2, maxPacketsPerPeer: 3);
+        using LiteNetLibClientTransport client = LiteNetLibTransport.CreateClient("127.0.0.1", server.Port);
+
+        WaitUntil(() => client.IsConnected && server.ConnectedPlayerCount == 1, 3000, "Client did not connect", () =>
+        {
+            server.Poll();
+            client.Poll();
+        });
+        Assert.True(client.IsConnected);
+        Assert.Equal(1, server.ConnectedPlayerCount);
+
+        byte[] commandBytes = new byte[WireProtocol.MoveSize];
+        WireProtocol.WriteMove(commandBytes, new MoveCommand(1, 1, new EntityId(1), new Vector2(1, 1)));
+
+        // Send 10 reliable packets exceeding capacity of 3
+        for (int i = 0; i < 10; i++)
+        {
+            client.TrySend(commandBytes);
+        }
+
+        WaitUntil(() => server.ReliableOverflowDisconnects >= 1, 3000, "Reliable overflow disconnect not triggered", () =>
+        {
+            server.Poll();
+            client.Poll();
+        });
+
+        Assert.True(server.ReliableOverflowFailures >= 1);
+        Assert.Equal(0, server.ConnectedPlayerCount);
+    }
+
+    [Fact]
+    public void ServerTransport_PendingNativeEvents_BoundedByPollBudget()
+    {
+        using LiteNetLibServerTransport server = LiteNetLibTransport.CreateServer(0, maxPlayers: 2);
+        using LiteNetLibClientTransport client = LiteNetLibTransport.CreateClient("127.0.0.1", server.Port);
+
+        WaitUntil(() => client.IsConnected && server.ConnectedPlayerCount > 0, 3000, "Client did not connect", () =>
+        {
+            server.Poll();
+            client.Poll();
+        });
+
+        byte[] smallPayload = [WireProtocol.Version, WireProtocol.MoveKind, 1, 2, 3, 4];
+
+        // Burst 1: client sends 200 unreliable packets while server does not poll
+        for (int i = 0; i < 200; i++)
+        {
+            Assert.True(client.TrySend(smallPayload, reliable: false));
+        }
+        Thread.Sleep(50);
+
+        // Server Poll with explicit budget 100
+        server.Poll(100);
+        int handled1 = server.QueuedPacketCount + (int)server.DroppedUnreliablePackets;
+
+        // Native callback dispatch is strictly bounded by the poll budget (100)
+        Assert.Equal(100, handled1);
+        Assert.Equal(64, server.QueuedPacketCount);
+        Assert.Equal(36L, server.DroppedUnreliablePackets);
+
+        // Burst 2: send another 100 unreliable packets to verify remaining work on a subsequent poll
+        for (int i = 0; i < 100; i++)
+        {
+            Assert.True(client.TrySend(smallPayload, reliable: false));
+        }
+        Thread.Sleep(50);
+
+        server.Poll(50);
+        int handled2 = server.QueuedPacketCount + (int)server.DroppedUnreliablePackets;
+
+        // Second poll with budget 50 dispatches 50 additional native callbacks
+        Assert.Equal(150, handled2);
+        Assert.Equal(64, server.QueuedPacketCount);
+        Assert.Equal(86L, server.DroppedUnreliablePackets);
+    }
+
+    [Fact]
+    public void ClientTransport_PendingNativeEvents_BoundedByPollBudget()
+    {
+        using LiteNetLibServerTransport server = LiteNetLibTransport.CreateServer(0, maxPlayers: 2);
+        using LiteNetLibClientTransport client = LiteNetLibTransport.CreateClient("127.0.0.1", server.Port, maxPackets: 128);
+
+        WaitUntil(() => client.IsConnected && server.ConnectedPlayerCount > 0, 3000, "Client did not connect", () =>
+        {
+            server.Poll();
+            client.Poll();
+        });
+
+        byte[] smallPayload = [WireProtocol.Version, WireProtocol.MoveKind, 1, 2, 3, 4];
+
+        // Burst 1: server sends 100 unreliable packets to client while client does not poll
+        for (int i = 0; i < 100; i++)
+        {
+            Assert.True(server.TrySend(1, smallPayload, reliable: false));
+        }
+        Thread.Sleep(50);
+
+        // First client poll with budget 50
+        client.Poll(50);
+
+        Assert.True(client.IsConnected);
+        Assert.Equal(50, client.QueuedPacketCount);
+        Assert.Equal(0L, client.DroppedUnreliablePackets);
+
+        // Burst 2: server sends another 50 unreliable packets to client
+        for (int i = 0; i < 50; i++)
+        {
+            Assert.True(server.TrySend(1, smallPayload, reliable: false));
+        }
+        Thread.Sleep(50);
+
+        // Second client poll with budget 50 verifies subsequent progress
+        client.Poll(50);
+        Assert.Equal(100, client.QueuedPacketCount);
+        Assert.Equal(0L, client.DroppedUnreliablePackets);
+
+        // Burst 3: server sends 50 more unreliable packets, filling client queue (capacity 128) and dropping excess
+        for (int i = 0; i < 50; i++)
+        {
+            Assert.True(server.TrySend(1, smallPayload, reliable: false));
+        }
+        Thread.Sleep(50);
+
+        client.Poll(50);
+        Assert.Equal(128, client.QueuedPacketCount);
+        Assert.Equal(22L, client.DroppedUnreliablePackets);
+    }
+
+    [Fact]
+    public void ClientTransport_DisconnectAndReliableOverflow_ClearsQueueAndStorage()
+    {
+        // 1. Reliable overflow on client immediately clears queue and storage
+        using LiteNetLibServerTransport server1 = LiteNetLibTransport.CreateServer(0, maxPlayers: 2);
+        using LiteNetLibClientTransport client1 = LiteNetLibTransport.CreateClient("127.0.0.1", server1.Port, maxPackets: 2);
+
+        WaitUntil(() => client1.IsConnected && server1.ConnectedPlayerCount > 0, 3000, "Client 1 did not connect", () =>
+        {
+            server1.Poll();
+            client1.Poll();
+        });
+
+        byte[] payload = [WireProtocol.Version, WireProtocol.MoveKind, 1, 2, 3, 4];
+        for (int i = 0; i < 5; i++)
+        {
+            server1.TrySend(1, payload, reliable: true);
+        }
+
+        WaitUntil(() => !client1.IsConnected, 3000, "Client 1 did not disconnect on overflow", () =>
+        {
+            server1.Poll();
+            client1.Poll(10);
+        });
+
+        Assert.False(client1.IsConnected);
+        Assert.True(client1.HasTerminalEvent);
+        Assert.Equal(0, client1.QueuedPacketCount);
+        Assert.Equal(0, client1.QueuedPayloadBytes);
+        Assert.True(client1.ReliableOverflowFailures >= 1);
+        Span<byte> rx = stackalloc byte[WireProtocol.MaxMessageSize];
+        Assert.False(client1.TryReceive(rx, out _));
+
+        // 2. Normal remote disconnect clears queue and delivers terminal response
+        using LiteNetLibServerTransport server2 = LiteNetLibTransport.CreateServer(0, maxPlayers: 2);
+        using LiteNetLibClientTransport client2 = LiteNetLibTransport.CreateClient("127.0.0.1", server2.Port, maxPackets: 10);
+
+        WaitUntil(() => client2.IsConnected && server2.ConnectedPlayerCount > 0, 3000, "Client 2 did not connect", () =>
+        {
+            server2.Poll();
+            client2.Poll();
+        });
+
+        for (int i = 0; i < 3; i++)
+        {
+            server2.TrySend(1, payload, reliable: true);
+        }
+
+        WaitUntil(() => client2.QueuedPacketCount == 3, 3000, "Client 2 did not receive 3 packets", () =>
+        {
+            server2.Poll();
+            client2.Poll(10);
+        });
+
+        byte[] reasonBuffer = new byte[WireProtocol.HandshakeResponseSize];
+        WireProtocol.WriteHandshakeResponse(reasonBuffer, false, 1, HandshakeReason.Timeout);
+        server2.DisconnectPlayer(1, reasonBuffer);
+
+        WaitUntil(() => !client2.IsConnected && client2.TerminalData is not null, 3000, "Client 2 did not receive terminal reason", () =>
+        {
+            server2.Poll();
+            client2.Poll(10);
+        });
+
+        Assert.False(client2.IsConnected);
+        Assert.NotNull(client2.TerminalData);
+        Assert.True(WireProtocol.TryReadHandshakeResponse(client2.TerminalData, out bool accepted, out _, out HandshakeReason reason));
+        Assert.False(accepted);
+        Assert.Equal(HandshakeReason.Timeout, reason);
+
+        // Terminal response is readable once, old pre-disconnect packets are cleared
+        Assert.True(client2.TryReceive(rx, out int termLen));
+        Assert.Equal(WireProtocol.HandshakeResponseSize, termLen);
+        Assert.False(client2.TryReceive(rx, out _));
+        Assert.Equal(0, client2.QueuedPacketCount);
+    }
+
+    [Fact]
+    public void ClientSession_DisconnectedHandshakeBacklog_BoundedPerPoll()
+    {
+        BacklogTransport transport = new(300);
+        MatchSetup setup = new(1, 1, 1, "Movement");
+        using ClientSession client = new(transport, setup);
+
+        // Constructor Poll must be bounded by MaxMessagesPerPoll (128)
+        Assert.Equal(ClientSession.MaxMessagesPerPoll, transport.ReceivedCount);
+
+        // Next Advance processes the next 128
+        client.Advance(0);
+        Assert.Equal(ClientSession.MaxMessagesPerPoll * 2, transport.ReceivedCount);
+    }
+
+    [Fact]
+    public void RealUdp_BurstAndSnapshotDelivery_WithZeroUnreliableDrops()
+    {
+        HeightMap map = HeightMap.CreatePrototype();
+        MatchSetup setup = new(1, 1, 1, "Movement");
+        WorldState world = new(map);
+        EntityId unitId = world.CreateUnit(1, 0, new Vector2(100, 100), 10f);
+        Simulation sim = new(world, new RuleSet(new MovementSystem()));
+        sim.SetPlayerAdmitted(1, true);
+
+        using LiteNetLibServerTransport server = LiteNetLibTransport.CreateServer(0, maxPlayers: 2);
+        using SimulationHost host = new(sim, server, setup);
+        using ClientSession client = ClientSession.Connect("127.0.0.1", server.Port, setup);
+
+        WaitUntil(() => client.IsConnected && client.Replica.OwnUnits.Length > 0, 3000, "Client did not connect or receive initial unit", () =>
+        {
+            host.Advance(0.05);
+            client.Advance(0.05);
+        });
+
+        Assert.True(client.IsConnected);
+        Assert.Equal(1, client.Replica.OwnUnits.Length);
+        Vector2 startPos = client.Replica.OwnUnits[0].Position;
+
+        for (uint seq = 1; seq <= 10; seq++)
+        {
+            client.Move(unitId, new Vector2(100 + seq * 10, 100));
+        }
+
+        int initialTick = client.Replica.LatestTick;
+        WaitUntil(() => client.Replica.LatestTick > initialTick + 2 && client.Replica.OwnUnits[0].Position.X > startPos.X, 3000, "Client replica did not advance under move burst", () =>
+        {
+            host.Advance(0.05);
+            client.Advance(0.05);
+        });
+
+        Assert.NotNull(client.LastCommandResult);
+        Assert.True(client.BytesReceived > 0);
+        Assert.Equal(0L, server.DroppedUnreliablePackets);
+        Assert.Equal(0L, server.ReliableOverflowFailures);
+    }
+
+    [Fact]
+    public void RealUdp_SteadyStateReceive_ZeroManagedAllocations()
+    {
+        const int packetCount = 100;
+        const int payloadSize = 100;
+        byte[] payload = new byte[payloadSize];
+        for (int i = 0; i < payload.Length; i++) payload[i] = (byte)(i & 0xFF);
+        payload[0] = WireProtocol.Version;
+        payload[1] = WireProtocol.MoveKind;
+
+        using LiteNetLibServerTransport server = LiteNetLibTransport.CreateServer(0, maxPlayers: 2);
+        using LiteNetLibClientTransport client = LiteNetLibTransport.CreateClient("127.0.0.1", server.Port);
+
+        WaitUntil(() => client.IsConnected && server.ConnectedPlayerCount > 0, 3000, "Client did not connect", () =>
+        {
+            server.Poll();
+            client.Poll();
+        });
+
+        Span<byte> rxBuffer = stackalloc byte[WireProtocol.MaxMessageSize];
+
+        // Warm up queues, socket buffers and JIT
+        for (int i = 0; i < 20; i++)
+        {
+            client.TrySend(payload);
+            server.Poll();
+            while (server.TryReceive(out _, out _, rxBuffer, out _)) { }
+
+            server.TrySend(1, payload, reliable: false);
+            client.Poll();
+            while (client.TryReceive(rxBuffer, out _)) { }
+            Thread.Sleep(2);
+        }
+
+        // Measure Server steady-state receive path over UDP for 100 packets of 100 bytes
+        for (int i = 0; i < packetCount; i++)
+        {
+            client.TrySend(payload);
+        }
+
+        long serverBefore = GC.GetAllocatedBytesForCurrentThread();
+        int serverReceived = 0;
+        long serverBytes = 0;
+        long serverDeadline = System.Diagnostics.Stopwatch.GetTimestamp() + (long)(3000 * System.Diagnostics.Stopwatch.Frequency / 1000.0);
+        while (serverReceived < packetCount && System.Diagnostics.Stopwatch.GetTimestamp() < serverDeadline)
+        {
+            server.Poll(packetCount - serverReceived);
+            while (server.TryReceive(out _, out _, rxBuffer, out int len))
+            {
+                serverReceived++;
+                serverBytes += len;
+            }
+            if (serverReceived < packetCount) Thread.Sleep(1);
+        }
+        long serverAllocated = GC.GetAllocatedBytesForCurrentThread() - serverBefore;
+
+        Assert.Equal(packetCount, serverReceived);
+        Assert.Equal(packetCount * payloadSize, serverBytes);
+        Assert.Equal(0L, serverAllocated);
+
+        // Measure Client steady-state receive path over UDP for 100 packets of 100 bytes
+        for (int i = 0; i < packetCount; i++)
+        {
+            server.TrySend(1, payload, reliable: false);
+        }
+
+        long clientBefore = GC.GetAllocatedBytesForCurrentThread();
+        int clientReceived = 0;
+        long clientBytes = 0;
+        long clientDeadline = System.Diagnostics.Stopwatch.GetTimestamp() + (long)(3000 * System.Diagnostics.Stopwatch.Frequency / 1000.0);
+        while (clientReceived < packetCount && System.Diagnostics.Stopwatch.GetTimestamp() < clientDeadline)
+        {
+            client.Poll(packetCount - clientReceived);
+            while (client.TryReceive(rxBuffer, out int len))
+            {
+                clientReceived++;
+                clientBytes += len;
+            }
+            if (clientReceived < packetCount) Thread.Sleep(1);
+        }
+        long clientAllocated = GC.GetAllocatedBytesForCurrentThread() - clientBefore;
+
+        Assert.Equal(packetCount, clientReceived);
+        Assert.Equal(packetCount * payloadSize, clientBytes);
+        Assert.Equal(0L, clientAllocated);
+    }
+
+    private sealed class BacklogTransport(int initialCount) : ITransport
+    {
+        private int _remaining = initialCount;
+        public int ReceivedCount { get; private set; }
+        public bool IsConnected => false;
+        public byte[]? TerminalData => null;
+        public bool TrySend(ReadOnlySpan<byte> message) => false;
+        public bool TryReceive(Span<byte> destination, out int length)
+        {
+            if (_remaining <= 0)
+            {
+                length = 0;
+                return false;
+            }
+            _remaining--;
+            ReceivedCount++;
+            destination[0] = WireProtocol.Version;
+            destination[1] = WireProtocol.MoveKind;
+            length = WireProtocol.MoveSize;
+            return true;
+        }
+        public void Dispose() { }
+    }
+
+    private sealed class FloodServerTransport : IServerTransport
+    {
+        public int ReceivedCount { get; private set; }
+        public int InitialAdmittedPlayer => 1;
+        public int ConnectedPlayerCount => 1;
+        public void Poll() { }
+        public bool TrySend(int player, ReadOnlySpan<byte> message, bool reliable = true) => true;
+        public bool TryReceive(out int player, out long connectionId, Span<byte> destination, out int length)
+        {
+            ReceivedCount++;
+            player = 1;
+            connectionId = 1;
+            destination[0] = WireProtocol.Version;
+            destination[1] = WireProtocol.MoveKind;
+            MoveCommand cmd = new(1, 1, new EntityId(1), new Vector2(10, 10));
+            WireProtocol.WriteMove(destination, cmd);
+            length = WireProtocol.MoveSize;
+            return true;
+        }
+        public bool IsPlayerConnected(int player) => true;
+        public long GetPlayerConnectionId(int player) => 1;
+        public void DisconnectPlayer(int player, ReadOnlySpan<byte> reason = default) { }
+        public void Dispose() { }
+    }
+
+    private sealed class FloodClientTransport : ITransport
+    {
+        public int ReceivedCount { get; private set; }
+        public bool IsConnected => true;
+        public byte[]? TerminalData => null;
+        public bool TrySend(ReadOnlySpan<byte> message) => true;
+        public bool TryReceive(Span<byte> destination, out int length)
+        {
+            ReceivedCount++;
+            destination[0] = WireProtocol.Version;
+            destination[1] = WireProtocol.CommandResultKind;
+            WireProtocol.WriteCommandResult(destination, new CommandResult(1, 1, true));
+            length = WireProtocol.CommandResultSize;
+            return true;
+        }
+        public void Dispose() { }
+    }
 }

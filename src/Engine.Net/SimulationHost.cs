@@ -5,6 +5,7 @@ namespace DeadGround.Engine.Net;
 public sealed class SimulationHost : IDisposable
 {
     public const int MaxTicksPerAdvance = 5;
+    public const int MaxMessagesPerAdvance = 128;
     public const double DefaultHandshakeTimeoutSeconds = 5.0;
     private readonly Simulation _simulation;
     private readonly IServerTransport _transport;
@@ -31,6 +32,7 @@ public sealed class SimulationHost : IDisposable
     public long DroppedCommandResults { get; private set; }
     public int ConnectedPlayerCount => _transport.ConnectedPlayerCount;
     public double HandshakeTimeoutSeconds => _handshakeTimeoutSeconds;
+    public IServerTransport Transport => _transport;
 
     public SimulationHost(
         Simulation simulation,
@@ -115,7 +117,7 @@ public sealed class SimulationHost : IDisposable
             throw new ArgumentOutOfRangeException(nameof(elapsedSeconds));
 
         _sessionElapsedTime += elapsedSeconds;
-        _transport.Poll();
+        _transport.Poll(MaxMessagesPerAdvance);
 
         for (int p = 1; p <= Simulation.MaxPlayers; p++)
         {
@@ -150,8 +152,10 @@ public sealed class SimulationHost : IDisposable
             }
         }
 
-        while (_transport.TryReceive(out int player, out long connectionId, _receive, out int length))
+        int messagesProcessed = 0;
+        while (messagesProcessed < MaxMessagesPerAdvance && _transport.TryReceive(out int player, out long connectionId, _receive, out int length))
         {
+            messagesProcessed++;
             if (length < 2 || player < 1 || player > Simulation.MaxPlayers) continue;
             if (_reservedBotPlayer != 0 && player == _reservedBotPlayer) continue;
 

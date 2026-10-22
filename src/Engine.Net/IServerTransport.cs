@@ -3,6 +3,7 @@ namespace DeadGround.Engine.Net;
 public interface IServerTransport : IDisposable
 {
     void Poll();
+    void Poll(int maxProcessedEvents) => Poll();
     bool TrySend(int player, ReadOnlySpan<byte> message, bool reliable = true);
     bool TryReceive(out int player, out long connectionId, Span<byte> destination, out int length);
     bool TryReceive(out int player, Span<byte> destination, out int length) =>
