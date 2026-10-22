@@ -5,6 +5,8 @@ public interface ITransport : IDisposable
     bool IsConnected { get; }
     byte[]? TerminalData => null;
     bool HasTerminalEvent => false;
+    void Poll() { }
+    void Poll(int maxProcessedEvents) { }
     bool TrySend(ReadOnlySpan<byte> message);
     bool TryReceive(Span<byte> destination, out int length);
 }

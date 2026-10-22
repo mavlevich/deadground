@@ -27,6 +27,7 @@ public sealed class ClientSession : IGameSession
 
     public const double InterpolationBufferTicks = 3.0;
     public const double MaxClockLagTicks = 6.0;
+    public const int MaxMessagesPerPoll = 128;
     private double _renderTick;
     private bool _clockInitialized;
 
@@ -44,6 +45,7 @@ public sealed class ClientSession : IGameSession
     public SessionConnectionState State { get; private set; }
     public string StatusDescription { get; private set; }
     public bool IsConnected => State == SessionConnectionState.Connected;
+    public ITransport Transport => _transport;
 
     public ClientSession(ITransport transport, MatchSetup? setup = null, int replicaCapacity = WireProtocol.MaxUnits)
     {
@@ -179,8 +181,11 @@ public sealed class ClientSession : IGameSession
 
     private void Poll()
     {
-        while (_transport.TryReceive(_receive, out int length))
+        _transport.Poll(MaxMessagesPerPoll);
+        int messagesProcessed = 0;
+        while (messagesProcessed < MaxMessagesPerPoll && _transport.TryReceive(_receive, out int length))
         {
+            messagesProcessed++;
             if (length < 2) continue;
             BytesReceived += length;
             byte kind = _receive[1];
@@ -266,8 +271,9 @@ public sealed class ClientSession : IGameSession
                     return;
                 }
 
-                while (_transport.TryReceive(_receive, out int length))
+                while (messagesProcessed < MaxMessagesPerPoll && _transport.TryReceive(_receive, out int length))
                 {
+                    messagesProcessed++;
                     if (length >= 2 && _receive[1] == WireProtocol.HandshakeResponseKind &&
                         WireProtocol.TryReadHandshakeResponse(_receive.AsSpan(0, length), out bool acc, out _, out HandshakeReason r) &&
                         !acc)
