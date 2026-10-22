@@ -16,7 +16,8 @@ public sealed class InMemoryTransport : ITransport
     private readonly MessageRing _outgoing;
 
     public bool IsConnected => !_incoming.IsClosed && !_outgoing.IsClosed;
-    public bool HasTerminalEvent => !IsConnected;
+    public byte[]? TerminalData { get; internal set; }
+    public bool HasTerminalEvent => TerminalData is not null || !IsConnected;
 
     private InMemoryTransport(MessageRing incoming, MessageRing outgoing)
     {

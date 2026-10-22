@@ -100,6 +100,10 @@ public sealed class InMemoryServerTransport : IServerTransport
         if (player < 1 || player > _maxPlayers) return;
         int index = player - 1;
         _connected[index] = false;
+        if (_clients[index] is InMemoryTransport client && !reason.IsEmpty)
+        {
+            client.TerminalData = reason.ToArray();
+        }
         _servers[index]?.Dispose();
         _clients[index]?.Dispose();
         _servers[index] = null;
@@ -167,6 +171,10 @@ internal sealed class SinglePlayerServerTransport : IServerTransport
         if (player == _player)
         {
             _connected = false;
+            if (_transport is InMemoryTransport client && !reason.IsEmpty)
+            {
+                client.TerminalData = reason.ToArray();
+            }
             _transport.Dispose();
         }
     }

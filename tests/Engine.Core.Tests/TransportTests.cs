@@ -340,6 +340,413 @@ public sealed class TransportTests
         Assert.Equal(new Vector2(10, 10), unit.Position);
     }
 
+    [Fact]
+    public void UnauthenticatedConnection_TimesOutAndFreesSlot_AllowingSubsequentClientToConnect()
+    {
+        HeightMap map = HeightMap.CreatePrototype();
+        WorldState world = new(map, capacity: 16);
+        using Simulation sim = new(world, new RuleSet(new MovementSystem()));
+        using InMemoryServerTransport transport = new(maxPlayers: 1);
+        using ITransport client1 = transport.CreateClientTransport(1);
+        using SimulationHost host = new(sim, transport);
+
+        // Advance past default handshake timeout (5.0s, say 6.0s in 120 ticks) without sending handshake
+        for (int i = 0; i < 120; i++)
+        {
+            host.Advance(0.05);
+        }
+
+        // Slot 1 must be freed and client 1 disconnected
+        Assert.False(transport.IsPlayerConnected(1));
+        Assert.Equal(0, transport.ConnectedPlayerCount);
+
+        // Subsequent client connects and completes handshake
+        using ITransport client2 = transport.CreateClientTransport(1);
+        MatchSetup setup = new(1, 1, 1, "Movement");
+        byte[] hsReq = new byte[WireProtocol.MaxMessageSize];
+        int hsLen = WireProtocol.WriteHandshakeRequest(hsReq, setup);
+        Assert.True(client2.TrySend(hsReq.AsSpan(0, hsLen)));
+
+        host.Advance(0.05);
+
+        byte[] hsResp = new byte[64];
+        Assert.True(client2.TryReceive(hsResp, out int respLen));
+        Assert.True(WireProtocol.TryReadHandshakeResponse(hsResp.AsSpan(0, respLen), out bool accepted, out int assignedPlayer, out HandshakeReason reason));
+        Assert.True(accepted);
+        Assert.Equal(1, assignedPlayer);
+        Assert.Equal(HandshakeReason.Accepted, reason);
+    }
+
+    [Fact]
+    public void AuthenticatedConnection_WithinTimeout_SucceedsAndDoesNotTimeOut()
+    {
+        HeightMap map = HeightMap.CreatePrototype();
+        WorldState world = new(map, capacity: 16);
+        using Simulation sim = new(world, new RuleSet(new MovementSystem()));
+        using InMemoryServerTransport transport = new(maxPlayers: 1);
+        using ITransport client = transport.CreateClientTransport(1);
+        using SimulationHost host = new(sim, transport);
+
+        MatchSetup setup = new(1, 1, 1, "Movement");
+        byte[] hsReq = new byte[WireProtocol.MaxMessageSize];
+        int hsLen = WireProtocol.WriteHandshakeRequest(hsReq, setup);
+        Assert.True(client.TrySend(hsReq.AsSpan(0, hsLen)));
+
+        host.Advance(0.05);
+
+        byte[] hsResp = new byte[64];
+        Assert.True(client.TryReceive(hsResp, out int respLen));
+        Assert.True(WireProtocol.TryReadHandshakeResponse(hsResp.AsSpan(0, respLen), out bool accepted, out int assignedPlayer, out HandshakeReason reason));
+        Assert.True(accepted);
+        Assert.Equal(1, assignedPlayer);
+
+        // Run past default timeout (6.0s in 120 ticks)
+        for (int i = 0; i < 120; i++)
+        {
+            host.Advance(0.05);
+        }
+
+        // Client must remain connected
+        Assert.True(transport.IsPlayerConnected(1));
+        Assert.Equal(1, transport.ConnectedPlayerCount);
+    }
+
+    [Fact]
+    public void CustomHandshakeTimeout_TimesOutAtConfiguredThreshold()
+    {
+        HeightMap map = HeightMap.CreatePrototype();
+        WorldState world = new(map, capacity: 16);
+        using Simulation sim = new(world, new RuleSet(new MovementSystem()));
+        using InMemoryServerTransport transport = new(maxPlayers: 1);
+        using ITransport client = transport.CreateClientTransport(1);
+        using SimulationHost host = new(sim, transport, handshakeTimeoutSeconds: 1.0);
+
+        // Advance 0.8s (16 ticks at 0.05s) - still connected
+        for (int i = 0; i < 16; i++)
+        {
+            host.Advance(0.05);
+        }
+        Assert.True(transport.IsPlayerConnected(1));
+
+        // Advance another 0.3s (6 ticks, total 1.1s > 1.0s) - should time out
+        for (int i = 0; i < 6; i++)
+        {
+            host.Advance(0.05);
+        }
+        Assert.False(transport.IsPlayerConnected(1));
+        Assert.Equal(0, transport.ConnectedPlayerCount);
+    }
+
+    [Fact]
+    public void ReservedBotSlot_RejectsClientHandshakeWithServerFull_AndPreservesBotAdmitted()
+    {
+        HeightMap map = HeightMap.CreatePrototype();
+        WorldState world = new(map, capacity: 16);
+        using Simulation sim = new(world, new RuleSet(new MovementSystem()));
+        using InMemoryServerTransport transport = new(maxPlayers: 2);
+        MatchSetup setup = new(1, 1, 1, "Movement");
+        using SimulationHost host = new(sim, transport, setup, reservedBotPlayer: 2);
+
+        // Verify bot is admitted in simulation initially
+        Assert.True(sim.IsPlayerAdmitted(2));
+
+        // Client connects to player 2 slot and sends handshake request
+        using ITransport client2 = transport.CreateClientTransport(2);
+        byte[] hsReq = new byte[WireProtocol.MaxMessageSize];
+        int hsLen = WireProtocol.WriteHandshakeRequest(hsReq, setup);
+        Assert.True(client2.TrySend(hsReq.AsSpan(0, hsLen)));
+
+        host.Advance(0.05);
+
+        // Slot 2 must be disconnected, bot must still be admitted in simulation
+        Assert.False(transport.IsPlayerConnected(2));
+        Assert.True(sim.IsPlayerAdmitted(2));
+        Assert.NotNull(client2.TerminalData);
+        Assert.True(WireProtocol.TryReadHandshakeResponse(client2.TerminalData, out bool accepted, out int assignedPlayer, out HandshakeReason reason));
+        Assert.False(accepted);
+        Assert.Equal(2, assignedPlayer);
+        Assert.Equal(HandshakeReason.ServerFull, reason);
+    }
+
+    [Fact]
+    public void LateHandshake_DeliveredAtOrAfterDeadline_IsRejectedWithTimeout()
+    {
+        HeightMap map = HeightMap.CreatePrototype();
+        WorldState world = new(map, capacity: 16);
+        using Simulation sim = new(world, new RuleSet(new MovementSystem()));
+        using InMemoryServerTransport transport = new(maxPlayers: 1);
+        using ITransport client = transport.CreateClientTransport(1);
+        using SimulationHost host = new(sim, transport, handshakeTimeoutSeconds: 1.0);
+
+        // Register the connection at session time 0.0
+        host.Advance(0);
+        Assert.True(transport.IsPlayerConnected(1));
+
+        // Advance 0.99s without handshake
+        host.Advance(0.99);
+        Assert.True(transport.IsPlayerConnected(1));
+        Assert.False(sim.IsPlayerAdmitted(1));
+
+        // Deliver a valid handshake during the next advance that crosses the 1.0s deadline
+        MatchSetup setup = new(1, 1, 1, "Movement");
+        byte[] hsReq = new byte[WireProtocol.MaxMessageSize];
+        int hsLen = WireProtocol.WriteHandshakeRequest(hsReq, setup);
+        Assert.True(client.TrySend(hsReq.AsSpan(0, hsLen)));
+
+        // Advance 0.11s (session time 1.10s > 1.0s timeout)
+        host.Advance(0.11);
+
+        // Client must be rejected with Timeout, not admitted
+        Assert.False(sim.IsPlayerAdmitted(1));
+        Assert.False(transport.IsPlayerConnected(1));
+        Assert.NotNull(client.TerminalData);
+        Assert.True(WireProtocol.TryReadHandshakeResponse(client.TerminalData, out bool accepted, out int assignedPlayer, out HandshakeReason reason));
+        Assert.False(accepted);
+        Assert.Equal(HandshakeReason.Timeout, reason);
+    }
+
+    [Fact]
+    public void Handshake_DeliveredJustBeforeDeadline_SucceedsAndRemainsAdmitted()
+    {
+        HeightMap map = HeightMap.CreatePrototype();
+        WorldState world = new(map, capacity: 16);
+        using Simulation sim = new(world, new RuleSet(new MovementSystem()));
+        using InMemoryServerTransport transport = new(maxPlayers: 1);
+        using ITransport client = transport.CreateClientTransport(1);
+        using SimulationHost host = new(sim, transport, handshakeTimeoutSeconds: 1.0);
+
+        host.Advance(0);
+        host.Advance(0.90);
+        Assert.True(transport.IsPlayerConnected(1));
+        Assert.False(sim.IsPlayerAdmitted(1));
+
+        // Deliver handshake at session time 0.90s + 0.05s = 0.95s (< 1.0s)
+        MatchSetup setup = new(1, 1, 1, "Movement");
+        byte[] hsReq = new byte[WireProtocol.MaxMessageSize];
+        int hsLen = WireProtocol.WriteHandshakeRequest(hsReq, setup);
+        Assert.True(client.TrySend(hsReq.AsSpan(0, hsLen)));
+
+        host.Advance(0.05);
+
+        // Client must be admitted successfully
+        Assert.True(sim.IsPlayerAdmitted(1));
+        Assert.True(transport.IsPlayerConnected(1));
+
+        // Further advances well past 1.0s must keep client admitted
+        for (int i = 0; i < 40; i++)
+        {
+            host.Advance(0.05);
+        }
+        Assert.True(sim.IsPlayerAdmitted(1));
+        Assert.True(transport.IsPlayerConnected(1));
+    }
+
+    [Fact]
+    public void RepeatedHandshakes_DoNotExtendOriginalDeadline()
+    {
+        HeightMap map = HeightMap.CreatePrototype();
+        WorldState world = new(map, capacity: 16);
+        using Simulation sim = new(world, new RuleSet(new MovementSystem()));
+        using InMemoryServerTransport transport = new(maxPlayers: 1);
+        using ITransport client = transport.CreateClientTransport(1);
+        MatchSetup serverSetup = new(1, 1, 1, "Movement");
+        using SimulationHost host = new(sim, transport, serverSetup, handshakeTimeoutSeconds: 1.0);
+
+        host.Advance(0);
+
+        // Send a mismatched handshake at 0.5s that fails validation
+        host.Advance(0.50);
+        MatchSetup badSetup = new((byte)255, 1, 1, "Movement");
+        byte[] badReq = new byte[WireProtocol.MaxMessageSize];
+        int badLen = WireProtocol.WriteHandshakeRequest(badReq, badSetup);
+        Assert.True(client.TrySend(badReq.AsSpan(0, badLen)));
+
+        // Advance 0.05s: rejection occurs for protocol mismatch
+        host.Advance(0.05);
+        Assert.False(transport.IsPlayerConnected(1));
+        Assert.False(sim.IsPlayerAdmitted(1));
+    }
+
+    [Fact]
+    public void ConnectionIdReplacement_ReceivesFreshFullTimeoutWindow()
+    {
+        HeightMap map = HeightMap.CreatePrototype();
+        WorldState world = new(map, capacity: 16);
+        using Simulation sim = new(world, new RuleSet(new MovementSystem()));
+        using InMemoryServerTransport transport = new(maxPlayers: 1);
+        using SimulationHost host = new(sim, transport, handshakeTimeoutSeconds: 1.0);
+
+        // Client 1 connects and times out after 1.1s
+        using (ITransport client1 = transport.CreateClientTransport(1))
+        {
+            host.Advance(0);
+            host.Advance(1.10);
+            Assert.False(transport.IsPlayerConnected(1));
+        }
+
+        // Advance 0.5s with empty slot (session time is now 1.6s)
+        host.Advance(0.50);
+
+        // Client 2 connects to the freed slot (new connection id)
+        using ITransport client2 = transport.CreateClientTransport(1);
+        host.Advance(0.05); // session time 1.65s, client 2 connected at 1.65s
+        Assert.True(transport.IsPlayerConnected(1));
+
+        // Advance 0.8s without handshake (session time 2.45s, 0.8s into client 2 window)
+        host.Advance(0.80);
+        Assert.True(transport.IsPlayerConnected(1));
+        Assert.False(sim.IsPlayerAdmitted(1));
+
+        // Client 2 completes handshake at 0.85s into its own window (< 1.0s window)
+        MatchSetup setup = new(1, 1, 1, "Movement");
+        byte[] hsReq = new byte[WireProtocol.MaxMessageSize];
+        int hsLen = WireProtocol.WriteHandshakeRequest(hsReq, setup);
+        Assert.True(client2.TrySend(hsReq.AsSpan(0, hsLen)));
+
+        host.Advance(0.05);
+
+        Assert.True(sim.IsPlayerAdmitted(1));
+        Assert.True(transport.IsPlayerConnected(1));
+    }
+
+    [Fact]
+    public void SilentPeerOnReservedBotSlot_IsImmediatelyDisconnectedWithServerFull_AndPreservesBot()
+    {
+        HeightMap map = HeightMap.CreatePrototype();
+        WorldState world = new(map, capacity: 16);
+        using Simulation sim = new(world, new RuleSet(new MovementSystem()));
+        using InMemoryServerTransport transport = new(maxPlayers: 2);
+        MatchSetup setup = new(1, 1, 1, "Movement");
+        using SimulationHost host = new(sim, transport, setup, reservedBotPlayer: 2, handshakeTimeoutSeconds: 1.0);
+
+        Assert.True(sim.IsPlayerAdmitted(2));
+
+        // Silent peer connects to slot 2 and sends nothing
+        using ITransport client2 = transport.CreateClientTransport(2);
+
+        // Advance 0: connection detected and immediately rejected with ServerFull
+        host.Advance(0);
+
+        Assert.False(transport.IsPlayerConnected(2));
+        Assert.True(sim.IsPlayerAdmitted(2));
+        Assert.NotNull(client2.TerminalData);
+        Assert.True(WireProtocol.TryReadHandshakeResponse(client2.TerminalData, out bool accepted, out int assignedPlayer, out HandshakeReason reason));
+        Assert.False(accepted);
+        Assert.Equal(2, assignedPlayer);
+        Assert.Equal(HandshakeReason.ServerFull, reason);
+
+        // Advance 10 seconds: bot remains admitted and slot remains free
+        for (int i = 0; i < 200; i++)
+        {
+            host.Advance(0.05);
+        }
+        Assert.False(transport.IsPlayerConnected(2));
+        Assert.True(sim.IsPlayerAdmitted(2));
+    }
+
+    [Fact]
+    public void PeerOnReservedBotSlot_SendingNonHandshakePackets_IsDisconnectedWithServerFull_AndPreservesBot()
+    {
+        HeightMap map = HeightMap.CreatePrototype();
+        WorldState world = new(map, capacity: 16);
+        using Simulation sim = new(world, new RuleSet(new MovementSystem()));
+        using InMemoryServerTransport transport = new(maxPlayers: 2);
+        MatchSetup setup = new(1, 1, 1, "Movement");
+        using SimulationHost host = new(sim, transport, setup, reservedBotPlayer: 2);
+
+        Assert.True(sim.IsPlayerAdmitted(2));
+
+        // Peer connects to slot 2 and sends a Move command instead of handshake
+        using ITransport client2 = transport.CreateClientTransport(2);
+        byte[] movePacket = new byte[WireProtocol.MoveSize];
+        WireProtocol.WriteMove(movePacket, new MoveCommand(1, 0, new EntityId(1), new Vector2(10, 10)));
+        Assert.True(client2.TrySend(movePacket));
+
+        host.Advance(0.05);
+
+        Assert.False(transport.IsPlayerConnected(2));
+        Assert.True(sim.IsPlayerAdmitted(2));
+        Assert.NotNull(client2.TerminalData);
+        Assert.True(WireProtocol.TryReadHandshakeResponse(client2.TerminalData, out bool accepted, out int assignedPlayer, out HandshakeReason reason));
+        Assert.False(accepted);
+        Assert.Equal(2, assignedPlayer);
+        Assert.Equal(HandshakeReason.ServerFull, reason);
+    }
+
+    [Fact]
+    public void RealUdp_HandshakeTimeout_FreesSlot_AndDeliversTimeoutTerminalReason()
+    {
+        HeightMap map = HeightMap.CreatePrototype();
+        WorldState world = new(map, capacity: 16);
+        using Simulation sim = new(world, new RuleSet(new MovementSystem()));
+        using LiteNetLibServerTransport server = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
+        MatchSetup setup = new(1, 1, 1, "Movement");
+        using SimulationHost host = new(sim, server, setup, handshakeTimeoutSeconds: 0.3);
+
+        // Connect raw UDP client without completing handshake
+        using LiteNetLibClientTransport client1 = LiteNetLibTransport.CreateClient("127.0.0.1", server.Port);
+
+        // Advance until client is connected on transport level
+        byte[] rx = new byte[64];
+        for (int i = 0; i < 40 && !client1.IsConnected; i++)
+        {
+            server.Poll();
+            client1.TryReceive(rx, out _);
+            Thread.Sleep(5);
+        }
+        Assert.True(client1.IsConnected);
+
+        // Host registers the unadmitted connection
+        host.Advance(0.05);
+        Assert.Equal(1, host.ConnectedPlayerCount);
+
+        // Advance host past 0.3s timeout
+        for (int i = 0; i < 20; i++)
+        {
+            host.Advance(0.05);
+            client1.TryReceive(rx, out _);
+            Thread.Sleep(5);
+        }
+
+        // Slot 1 must be freed and client1 disconnected
+        Assert.Equal(0, host.ConnectedPlayerCount);
+        Assert.False(client1.IsConnected);
+        Assert.NotNull(client1.TerminalData);
+        Assert.True(WireProtocol.TryReadHandshakeResponse(client1.TerminalData, out bool accepted, out int assignedPlayer, out HandshakeReason reason));
+        Assert.False(accepted);
+        Assert.Equal(HandshakeReason.Timeout, reason);
+
+        // Replacement client connects and succeeds
+        using ClientSession client2 = ClientSession.Connect("127.0.0.1", server.Port, setup);
+        for (int i = 0; i < 50 && !client2.IsConnected; i++)
+        {
+            host.Advance(0.05);
+            client2.Advance(0.05);
+            Thread.Sleep(5);
+        }
+
+        Assert.True(client2.IsConnected);
+        Assert.Equal(1, client2.AssignedPlayerId);
+    }
+
+    [Fact]
+    public void ClientSession_DisconnectWithTimeoutReason_TransitionsToFailed()
+    {
+        DeferredTerminalTransport transport = new();
+        MatchSetup setup = new(1, 1, 1, "Movement");
+        using ClientSession client = new(transport, setup);
+
+        client.Advance(0.05);
+        Assert.Equal(SessionConnectionState.HandshakePending, client.State);
+
+        transport.DeliverReason(HandshakeReason.Timeout);
+        transport.Connected = false;
+
+        client.Advance(0.05);
+        Assert.Equal(SessionConnectionState.Failed, client.State);
+        Assert.Contains("Timeout", client.StatusDescription);
+    }
+
     private sealed class DeferredTerminalTransport : ITransport
     {
         public bool Connected = true;
