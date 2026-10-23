@@ -14,7 +14,7 @@ Status: M1 network session implemented. Dedicated server runs two clients over L
 
 - C# with the .NET 10 SDK. Projects target `net10.0` by default.
 - If the Godot client needs the `net8.0` fallback, `Engine.Core`, `Engine.Net` and `Game.Rules.*` also target `net8.0`. Server, tools and tests may stay on `net10.0`. Follow TDD section 20; never make a `net8.0` client reference a `net10.0`-only library.
-- Godot 4.7.2 (.NET build) for rendering, UI, audio and input.
+- Godot .NET (version pinned in `src/Game.Godot/Game.Godot.csproj`) for rendering, UI, audio and input.
 - Clients: macOS and Windows. Dedicated server: Linux.
 
 ## Layout

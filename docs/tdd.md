@@ -1065,6 +1065,49 @@ still require large-battle render validation before setting production GPU budge
 - Vehicles, contacts, ghost markers, role badges, projectile tracers, and combat effects remain fully visible regardless of map fog.
 - The overlay can be toggled in game using F9 or V for comparative inspection and debugging.
 
+### 18.10 Local tank battle observer experiment
+
+The separate `TankBattleDemo.tscn` scene runs 100 T-62 against 100 M60A1 on an open 3.2 x 3.2 km map.
+The Game.Rules.Ops scenario owns spawning, bot decisions and elimination/time-limit termination.
+Godot owns presentation and a local composition root with two normal ClientSessions and one
+SimulationHost. The two private side views are shown together only in this local observer scene;
+network player knowledge and wire messages are unchanged. Each bot consults only its own
+PlayerKnowledge and submits ordinary movement commands. Auto-fire uses the existing combat rules.
+A fixed seed and deterministic initial reload offsets provide a reproducible opening. Restart uses
+the same seed. Pause freezes simulation and effects while leaving the camera active. Cosmetic
+lighting presets do not introduce night detection rules. The observer shares fractional wheel/pinch
+handling with the normal client. Middle drag, Alt+mouse or Q/E rotates the view; T/G changes pitch within
+8 to 85 degrees. Right/down mouse motion increases yaw/pitch. V toggles perspective for
+cinematic horizon views and the orthographic RTS view. Perspective camera height is clamped
+above the visual terrain. Health bars face the camera, preserving their left fill anchor. Panning follows the rotated screen axes. Zoom size is limited to 35 to 3200 m.
+A visual terrain apron continues beyond the playable boundary and fades into atmospheric haze;
+it supplies neither navigation nor spotting cover. The normal client's initial fixed view is preserved.
+Two staggered rows of 50 tanks per side start 2.5 km apart, outside catalog sensor range.
+Bots advance each formation slot up to 900 m toward the center. They interrupt movement with a
+normal move-to-current-position command when a Current contact is within their weapon range,
+penetrable according to the existing observed-contact armor check, and has clear LOS from the
+muzzle to a known target observation point. These checks use only PlayerKnowledge, catalog data
+and static geometry. Normal auto-fire retains target selection, aiming, reload and damage rules.
+Tanks hold through reloads, without repeating accepted halt commands. After one second without
+a usable target, they resume their original formation destination. The planned front-row destinations
+are 700 m apart, but engagement can halt units earlier. The existing rules prevent fire on the move.
+The 3.2 km extent stays below the current 8192-portal hierarchical navigation limit;
+a 4 km map exceeds it with the default 50 m sectors. This is a scripted formation experiment, without dynamic
+formation management or coordinated target assignment.
+Two existing FogOfWarView instances consume only each side's own replica, catalog and static
+geometry at 40 m resolution. The ground shader shows amber/cyan viewshed boundaries and dims
+unseen ground. F cycles combined, Soviet, US and off. This is an approximate ground viewshed;
+unit detection still comes from authoritative contacts. All vehicle models remain visible to this
+local observer regardless of the selected ground layer. Lighting haze is separate from visibility.
+The renderer reserves 262144 sixteen-byte global shader slots (4 MiB). Each instance using
+instance uniforms reserves 16 slots, giving an upper bound of 16384 instances before other
+consumers. The real-renderer regression loads all vehicle LODs and three deferred restarts:
+200 tanks retain 4400 motion mesh instances and peak at 8800 during restart overlap. It requires
+25 percent slot headroom and fails on engine errors. Headless smoke does not replace this check.
+The separate `tests/vehicle-rendering-smoke.sh` opens an actual rendering window.
+The demo does not implement dynamic
+avoidance, a network spectator protocol, unlimited ammunition, artillery or aircraft.
+
 ## 19. Rule sets and modularity
 
 A rule set is a list of systems plus data. Replaceable points:
@@ -1151,7 +1194,7 @@ hull heading and collision, artillery, air, minimap and interface.
 
 Implementation checkpoint:
 
-- .NET SDK 10.0.401 and Godot 4.7.2 .NET are pinned. All projects target `net10.0`.
+- The .NET SDK is pinned in `global.json` and Godot .NET in the client project SDK attribute. All projects target `net10.0`.
   The macOS Apple Silicon development client runs on .NET runtime 10.0.12.
   No framework fallback is needed on this machine.
 - Arch stores entities behind `WorldState`. Public IDs do not expose Arch handles.

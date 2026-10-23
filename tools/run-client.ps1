@@ -1,10 +1,12 @@
 param([string]$GodotBin = $env:GODOT_BIN, [Parameter(ValueFromRemainingArguments=$true)][string[]]$GodotArgs)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
+. (Join-Path $PSScriptRoot 'godot-version.ps1')
+$godotVersion = Get-GodotVersion -RepositoryRoot $repoRoot
 if (-not $GodotBin) { $GodotBin = (Get-Command godot -ErrorAction Stop).Source }
 $version = & $GodotBin --version
-if ($LASTEXITCODE -ne 0 -or $version -notlike '4.7.2.*.mono.*') {
-    throw 'This project requires Godot 4.7.2 .NET. Set GODOT_BIN to its executable.'
+if ($LASTEXITCODE -ne 0 -or $version -notlike "$godotVersion.stable.mono.*") {
+    throw "This project requires Godot $godotVersion .NET. Set GODOT_BIN to its executable."
 }
 Push-Location $repoRoot
 try {

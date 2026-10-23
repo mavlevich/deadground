@@ -1,0 +1,26 @@
+name: Dependency update configuration
+
+on:
+  pull_request:
+    paths:
+      - renovate.json
+      - .github/workflows/dependency-config.yml
+  push:
+    paths:
+      - renovate.json
+      - .github/workflows/dependency-config.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+      - name: Validate Renovate configuration
+        run: npm exec --yes --package=renovate@44.178.5 -- renovate-config-validator --strict renovate.json

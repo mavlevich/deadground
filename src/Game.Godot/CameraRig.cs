@@ -12,12 +12,55 @@ internal sealed class CameraRig
 {
     private readonly Camera3D _camera;
     private readonly CameraModel _model;
+    private readonly OrbitCameraPose _orbit = new();
     private Vector3 _defaultFocus;
     private float _defaultSize;
 
     public CameraModel Model => _model;
     public Vector3 Focus => new(_model.Focus.X, _model.Focus.Y, _model.Focus.Z);
     public float Size => _model.CurrentSize;
+    public float ViewYaw => _orbit.Yaw;
+    public float ViewPitch => _orbit.Pitch;
+    public bool IsPerspective => _camera.Projection == Camera3D.ProjectionType.Perspective;
+    public Func<float, float, float>? GroundHeight { get; set; }
+
+    public void SetPerspective(bool enabled)
+    {
+        _camera.Projection = enabled ? Camera3D.ProjectionType.Perspective : Camera3D.ProjectionType.Orthogonal;
+        _camera.Fov = 55f;
+        SyncCamera();
+    }
+
+    public void DragOrbit(Vector2 relative)
+    {
+        _orbit.Drag(relative.X, relative.Y);
+        SyncCamera();
+    }
+
+    public float FarClipMargin { get; set; } = 1000f;
+
+    public void Orbit(float yawDelta, float pitchDelta)
+    {
+        _orbit.Rotate(yawDelta, pitchDelta);
+        SyncCamera();
+    }
+
+    public bool HandleZoomInput(InputEvent input)
+    {
+        if (input is InputEventMagnifyGesture magnify)
+        {
+            ZoomByScale(magnify.Factor);
+            return true;
+        }
+        if (input is InputEventMouseButton { Pressed: true } wheel &&
+            wheel.ButtonIndex is MouseButton.WheelUp or MouseButton.WheelDown)
+        {
+            float steps = wheel.Factor > 0f ? wheel.Factor : 1f;
+            ZoomSteps(wheel.ButtonIndex == MouseButton.WheelUp ? steps : -steps);
+            return true;
+        }
+        return false;
+    }
 
     public CameraRig(Camera3D camera, Vector3 initialFocus, float initialSize, float mapWidth, float mapDepth)
     {
@@ -41,6 +84,7 @@ internal sealed class CameraRig
 
     public void ResetToDefault()
     {
+        _orbit.Reset();
         _model.Reset(new NumericsVector3(_defaultFocus.X, _defaultFocus.Y, _defaultFocus.Z), _defaultSize);
         SyncCamera();
     }
@@ -84,7 +128,8 @@ internal sealed class CameraRig
             if (Input.IsPhysicalKeyPressed(Key.D) || Input.IsKeyPressed(Key.D) || Input.IsPhysicalKeyPressed(Key.Right) || Input.IsKeyPressed(Key.Right)) dx++;
             if (Input.IsPhysicalKeyPressed(Key.W) || Input.IsKeyPressed(Key.W) || Input.IsPhysicalKeyPressed(Key.Up) || Input.IsKeyPressed(Key.Up)) dz--;
             if (Input.IsPhysicalKeyPressed(Key.S) || Input.IsKeyPressed(Key.S) || Input.IsPhysicalKeyPressed(Key.Down) || Input.IsKeyPressed(Key.Down)) dz++;
-            _model.SetInput(dx, dz);
+            System.Numerics.Vector2 direction = _orbit.GroundInput(dx, dz);
+            _model.SetInput(direction.X, direction.Y);
         }
         else
         {
@@ -95,28 +140,22 @@ internal sealed class CameraRig
         SyncCamera();
     }
 
-    // The camera looks down at the focus along a fixed direction (up 115, back 80 at the closest
-    // zoom). An orthographic view of height Size starts its bottom rows Size/2 * cot(pitch) closer to
-    // the ground than the focus, so the camera backs off with the zoom; otherwise the near half of a
-    // wide view falls behind the camera and is clipped.
-    internal const float BaseDistance = 140f;
-    private static readonly Vector3 ViewOffsetDirection = new Vector3(0f, 115f, 80f).Normalized();
-    private const float TerrainMargin = 150f;
-
-    internal static float CameraDistance(float size)
-    {
-        float cotPitch = ViewOffsetDirection.Z / ViewOffsetDirection.Y;
-        return Mathf.Max(BaseDistance, size * 0.5f * cotPitch + TerrainMargin);
-    }
+    internal static float CameraDistance(float size) => OrbitCameraPose.Distance(size, OrbitCameraPose.DefaultPitch);
 
     private void SyncCamera()
     {
         float size = _model.CurrentSize;
-        float distance = CameraDistance(size);
+        float distance = IsPerspective
+            ? MathF.Max(size / (2f * MathF.Tan(_camera.Fov * MathF.PI / 360f)), 12f / MathF.Sin(_orbit.Pitch))
+            : OrbitCameraPose.Distance(size, _orbit.Pitch);
         _camera.Size = size;
         Vector3 focus = new(_model.Focus.X, _model.Focus.Y, _model.Focus.Z);
-        _camera.Position = focus + ViewOffsetDirection * distance;
-        _camera.Far = distance + size + 1000f;
+        System.Numerics.Vector3 offset = _orbit.OffsetDirection;
+        Vector3 position = focus + new Vector3(offset.X, offset.Y, offset.Z) * distance;
+        if (GroundHeight is not null)
+            position.Y = MathF.Max(position.Y, GroundHeight(position.X, position.Z) + 6f);
+        _camera.Position = position;
+        _camera.Far = distance + size / MathF.Sin(_orbit.Pitch) + FarClipMargin;
         _camera.LookAt(focus, Vector3.Up);
     }
 }

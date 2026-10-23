@@ -121,10 +121,12 @@ internal sealed class UnitView
         };
         Root.AddChild(_selection);
 
+        _healthBarRoot = new Node3D { Position = new Vector3(0, 3.4f, 0) };
+        Root.AddChild(_healthBarRoot);
         _healthBarBg = new MeshInstance3D
         {
             Mesh = new BoxMesh { Size = new Vector3(1.8f, 0.12f, 0.12f) },
-            Position = new Vector3(0, 3.4f, 0),
+            Position = Vector3.Zero,
             MaterialOverride = new StandardMaterial3D
             {
                 AlbedoColor = new Color("1a1a1a"),
@@ -132,12 +134,12 @@ internal sealed class UnitView
             },
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
         };
-        Root.AddChild(_healthBarBg);
+        _healthBarRoot.AddChild(_healthBarBg);
 
         _healthBarFg = new MeshInstance3D
         {
             Mesh = new BoxMesh { Size = new Vector3(1.8f, 0.12f, 0.14f) },
-            Position = new Vector3(0, 3.4f, 0),
+            Position = new Vector3(0, 0, 0.03f),
             MaterialOverride = new StandardMaterial3D
             {
                 AlbedoColor = new Color("44bb44"),
@@ -145,7 +147,7 @@ internal sealed class UnitView
             },
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
         };
-        Root.AddChild(_healthBarFg);
+        _healthBarRoot.AddChild(_healthBarFg);
 
         _weaponRangeRing = new MeshInstance3D
         {
@@ -194,7 +196,12 @@ internal sealed class UnitView
         CullMode = BaseMaterial3D.CullModeEnum.Disabled
     };
 
+    private readonly Node3D _healthBarRoot;
     private readonly MeshInstance3D _healthBarBg;
+    internal Node3D HealthBarRoot => _healthBarRoot;
+    internal MeshInstance3D HealthBarFill => _healthBarFg;
+
+    internal void FaceHealthBar(Basis cameraBasis) => _healthBarRoot.GlobalBasis = cameraBasis;
     private readonly MeshInstance3D _healthBarFg;
     private readonly MeshInstance3D _weaponRangeRing;
     private readonly MeshInstance3D _sensorRangeRing;
@@ -394,6 +401,17 @@ internal sealed class UnitView
     internal Node3D? GetLod(int index) => _rigs[index] is null ? null : LodNode(index);
     internal int LeftMotionMeshCount => ActiveRig.LeftMotion.Length;
     internal int RightMotionMeshCount => ActiveRig.RightMotion.Length;
+
+    internal int LoadedMotionMeshCount
+    {
+        get
+        {
+            int count = 0;
+            foreach (Rig? rig in _rigs)
+                if (rig is not null) count += rig.LeftMotion.Length + rig.RightMotion.Length;
+            return count;
+        }
+    }
 
     // The travel value the shader sees on the active LOD, for regression checks.
     internal float GetShaderTrackTravel(bool left)
@@ -689,7 +707,7 @@ internal sealed class UnitView
         if (maxHealth <= 0) return;
         float ratio = Mathf.Clamp(health / (float)maxHealth, 0f, 1f);
         _healthBarFg.Scale = new Vector3(ratio, 1f, 1f);
-        _healthBarFg.Position = new Vector3(-0.9f * (1f - ratio), 3.4f, 0);
+        _healthBarFg.Position = new Vector3(-0.9f * (1f - ratio), 0, 0.03f);
     }
 
     public float HealthBarScaleX => _healthBarFg.Scale.X;

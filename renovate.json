@@ -1,0 +1,88 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "enabledManagers": [
+    "nuget",
+    "github-actions",
+    "custom.regex"
+  ],
+  "timezone": "Europe/Warsaw",
+  "schedule": [
+    "before 8am on monday"
+  ],
+  "ignoreUnstable": true,
+  "automerge": false,
+  "dependencyDashboard": true,
+  "prConcurrentLimit": 4,
+  "packageRules": [
+    {
+      "description": "Keep stable Godot SDK, editor, templates and launcher versions coherent through Game.Godot.csproj.",
+      "matchPackageNames": [
+        "Godot.NET.Sdk"
+      ],
+      "groupName": "Godot toolchain",
+      "prBodyNotes": [
+        "Editor, export templates and launchers derive their version from Game.Godot.csproj. Run the exported client and the real-renderer vehicle stress check before merging."
+      ]
+    },
+    {
+      "matchManagers": [
+        "nuget"
+      ],
+      "rangeStrategy": "bump"
+    },
+    {
+      "matchManagers": [
+        "nuget"
+      ],
+      "matchDepTypes": [
+        "nuget"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": ".NET libraries"
+    },
+    {
+      "matchManagers": [
+        "nuget"
+      ],
+      "matchDepTypes": [
+        "dotnet-sdk"
+      ],
+      "groupName": ".NET SDK"
+    },
+    {
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": "GitHub Actions"
+    },
+    {
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "dependencyDashboardApproval": true
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/dependency-config\\.yml$/"
+      ],
+      "matchStrings": [
+        "--package=renovate@(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "renovate",
+      "datasourceTemplate": "npm"
+    }
+  ]
+}

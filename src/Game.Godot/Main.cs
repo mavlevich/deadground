@@ -476,6 +476,7 @@ public partial class Main : Node3D
         _session.Advance(delta);
         _fogOfWar?.Update((float)delta, _session.Replica, _catalog);
         UpdateViews();
+        _unitViews.FaceHealthBars(_camera.GlobalTransform.Basis);
         _unitViews.UpdateLod(_cameraRig.Size);
         _unitViews.UpdateRecoil(delta);
         _unitViews.UpdateEffects(delta);
@@ -816,9 +817,8 @@ public partial class Main : Node3D
             return;
         }
 
-        if (@event is InputEventMagnifyGesture magnify)
+        if (_cameraRig.HandleZoomInput(@event))
         {
-            _cameraRig.ZoomByScale(magnify.Factor);
             GetViewport().SetInputAsHandled();
             return;
         }
@@ -835,14 +835,6 @@ public partial class Main : Node3D
         }
 
         if (!mouse.Pressed) return;
-
-        if (mouse.ButtonIndex is MouseButton.WheelUp or MouseButton.WheelDown)
-        {
-            // Smooth wheels and trackpads report a fractional amount per event; plain wheels report 0.
-            float steps = mouse.Factor > 0f ? mouse.Factor : 1f;
-            _cameraRig.ZoomSteps(mouse.ButtonIndex == MouseButton.WheelUp ? steps : -steps);
-            return;
-        }
 
         if (mouse.ButtonIndex == MouseButton.Left)
         {

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+export EXPECTED_GODOT_VERSION="$(bash "$repo_root/tools/godot-version.sh").stable.mono.test"
 fixture="$(mktemp -d)"
 trap 'rm -rf "$fixture"' EXIT
 
@@ -15,7 +16,7 @@ MOCK
 cat > "$fixture/Godot With Spaces/Godot" <<'MOCK'
 #!/usr/bin/env bash
 if [[ "$*" == '--version' ]]; then
-  echo '4.7.2.stable.mono.test'
+  echo "$EXPECTED_GODOT_VERSION"
   exit 0
 fi
 

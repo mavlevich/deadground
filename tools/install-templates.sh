@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="4.7.2.stable.mono"
-RELEASE_TAG="4.7.2-stable"
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+godot_version="$(bash "$repo_root/tools/godot-version.sh")"
+VERSION="$godot_version.stable.mono"
+RELEASE_TAG="$godot_version-stable"
 TEMPLATES_URL="https://github.com/godotengine/godot-builds/releases/download/${RELEASE_TAG}/Godot_v${RELEASE_TAG}_mono_export_templates.tpz"
 
 force=0
