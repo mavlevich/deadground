@@ -713,6 +713,32 @@ Status: planned for M2. M1 units keep one weapon each, so the M1 exit does not d
 - Commands older than a short limit are dropped instead of resent, because the situation has changed.
 - The server then sends a full snapshot of the player's allowed view and current orders.
 
+### 14.3 Transport receive buffers and overload policy
+
+- Application-owned transport receive storage is strictly bounded and preallocated. Steady-state packet reception and queue operations perform zero heap allocations in application receive storage. The configured limits bound application-owned receive queues and buffer pools; they do not bound internal LiteNetLib library buffers (such as socket receive buffers, reliable retransmission state, or internal packet pools).
+- Fixed storage allocation per peer:
+  - Server maintains an isolated `ReceiveBufferQueue` for each player slot (default 64 packets, 64 KB payload budget per peer).
+  - Client transport maintains a dedicated `ReceiveBufferQueue` (default 128 packets, 256 KB payload budget).
+  - Preallocated pools use standard buffers (1,280 bytes) and large buffers (44,592 bytes for `WireProtocol.MaxMessageSize`).
+  - Total memory footprint:
+    - Server per peer: 64 standard buffers (81,920 bytes) + 2 large buffers (89,184 bytes) + queue descriptors (~6 KB) = ~177 KB. For 2 players: ~354 KB.
+    - Client: 128 standard buffers (163,840 bytes) + 4 large buffers (178,368 bytes) + queue descriptors (~8 KB) = ~350 KB.
+- Overload behavior:
+  - When either packet count limit or payload byte limit is reached, incoming packets cannot be queued.
+  - Unreliable packets (such as state snapshots) are dropped. Counters `DroppedUnreliablePackets` and `DroppedUnreliableBytes` are incremented.
+  - Reliable packets (such as handshakes, commands, and command results) trigger reliable overflow handling: the offending peer is disconnected to prevent protocol desynchronization, and counters `ReliableOverflowFailures` and `ReliableOverflowDisconnects` are incremented.
+- Fair scheduling:
+  - `LiteNetLibServerTransport.TryReceive` polls connected player queues using round-robin scheduling. A flood of traffic on one slot cannot starve reception from another player.
+- Slot reuse and stale connection protection:
+  - Player disconnection immediately clears the slot queue and returns all buffers to the pool.
+  - Any packets delivered with an obsolete connection ID on slot reassignment are discarded before surfacing to the game simulation.
+- Bounded processing loops:
+  - `SimulationHost.Advance` bounds incoming transport messages to `MaxMessagesPerAdvance = 128` per call.
+  - `ClientSession.Poll` bounds incoming transport messages to `MaxMessagesPerPoll = 128` per call.
+  - Remaining messages stay queued in the bounded receive ring for subsequent calls, preventing frame stalling during network bursts.
+- Diagnostic counters:
+  - Transports expose diagnostic counters for queued packets, queued payload bytes, peak watermarks, dropped unreliable packets and bytes, and reliable overflow events.
+
 ## 15. Saves, replays, debug logs
 
 Three different goals with three formats:
