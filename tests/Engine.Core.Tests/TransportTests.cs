@@ -1389,8 +1389,10 @@ public sealed class TransportTests
         Assert.Equal(0L, server.ReliableOverflowFailures);
     }
 
-    [Fact]
-    public void RealUdp_SteadyStateReceive_ZeroManagedAllocations()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(64)]
+    public void RealUdp_SteadyStateReceive_ZeroManagedAllocations(int maxPacketsPerPeer)
     {
         const int packetCount = 100;
         const int payloadSize = 100;
@@ -1399,7 +1401,8 @@ public sealed class TransportTests
         payload[0] = WireProtocol.Version;
         payload[1] = WireProtocol.MoveKind;
 
-        using LiteNetLibServerTransport server = LiteNetLibTransport.CreateServer(0, maxPlayers: 2);
+        using LiteNetLibServerTransport server = LiteNetLibTransport.CreateServer(0, maxPlayers: 2,
+            maxPacketsPerPeer: maxPacketsPerPeer);
         using LiteNetLibClientTransport client = LiteNetLibTransport.CreateClient("127.0.0.1", server.Port);
 
         WaitUntil(() => client.IsConnected && server.ConnectedPlayerCount > 0, 3000, "Client did not connect", () =>
@@ -1410,41 +1413,58 @@ public sealed class TransportTests
 
         Span<byte> rxBuffer = stackalloc byte[WireProtocol.MaxMessageSize];
 
-        // Warm up queues, socket buffers and JIT
+        // Wait for and drain every warmup packet so no pending delivery enters the measurement.
+        Action pumpWarmup = () =>
+        {
+            server.Poll();
+            client.Poll();
+        };
         for (int i = 0; i < 20; i++)
         {
-            client.TrySend(payload);
-            server.Poll();
-            while (server.TryReceive(out _, out _, rxBuffer, out _)) { }
+            Assert.True(client.TrySend(payload));
+            WaitUntil(() => server.QueuedPacketCount > 0, message: "Server warmup packet did not arrive", pump: pumpWarmup);
+            Assert.True(server.TryReceive(out _, out _, rxBuffer, out int serverWarmupLength));
+            Assert.True(rxBuffer[..serverWarmupLength].SequenceEqual(payload));
+            Assert.False(server.TryReceive(out _, out _, rxBuffer, out _));
 
-            server.TrySend(1, payload, reliable: false);
-            client.Poll();
-            while (client.TryReceive(rxBuffer, out _)) { }
-            Thread.Sleep(2);
+            Assert.True(server.TrySend(1, payload, reliable: false));
+            WaitUntil(() => client.QueuedPacketCount > 0, message: "Client warmup packet did not arrive", pump: pumpWarmup);
+            Assert.True(client.TryReceive(rxBuffer, out int clientWarmupLength));
+            Assert.True(rxBuffer[..clientWarmupLength].SequenceEqual(payload));
+            Assert.False(client.TryReceive(rxBuffer, out _));
         }
 
-        // Measure Server steady-state receive path over UDP for 100 packets of 100 bytes
-        for (int i = 0; i < packetCount; i++)
-        {
-            client.TrySend(payload);
-        }
-
-        long serverBefore = GC.GetAllocatedBytesForCurrentThread();
+        // Drain each batch before sending another, including when the queue holds only one packet.
+        // Do not reduce Poll's event budget: LiteNetLib 1.3.5 discards an unprocessed event tail.
+        // Only Poll/TryReceive belong to the receive allocation measurement, not the sends.
+        int serverSent = 0;
         int serverReceived = 0;
         long serverBytes = 0;
+        long serverAllocated = 0;
         long serverDeadline = System.Diagnostics.Stopwatch.GetTimestamp() + (long)(3000 * System.Diagnostics.Stopwatch.Frequency / 1000.0);
         while (serverReceived < packetCount && System.Diagnostics.Stopwatch.GetTimestamp() < serverDeadline)
         {
-            server.Poll(packetCount - serverReceived);
+            if (serverSent == serverReceived)
+            {
+                int batchSize = Math.Min(server.MaxPacketsPerPeer, packetCount - serverSent);
+                for (int i = 0; i < batchSize; i++) Assert.True(client.TrySend(payload));
+                serverSent += batchSize;
+            }
+
+            long serverBefore = GC.GetAllocatedBytesForCurrentThread();
+            server.Poll();
             while (server.TryReceive(out _, out _, rxBuffer, out int len))
             {
                 serverReceived++;
                 serverBytes += len;
             }
+            serverAllocated += GC.GetAllocatedBytesForCurrentThread() - serverBefore;
             if (serverReceived < packetCount) Thread.Sleep(1);
         }
-        long serverAllocated = GC.GetAllocatedBytesForCurrentThread() - serverBefore;
 
+        Assert.True(server.IsPlayerConnected(1));
+        Assert.Equal(0L, server.ReliableOverflowFailures);
+        Assert.Equal(0L, server.ReliableOverflowDisconnects);
         Assert.Equal(packetCount, serverReceived);
         Assert.Equal(packetCount * payloadSize, serverBytes);
         Assert.Equal(0L, serverAllocated);
@@ -1452,7 +1472,7 @@ public sealed class TransportTests
         // Measure Client steady-state receive path over UDP for 100 packets of 100 bytes
         for (int i = 0; i < packetCount; i++)
         {
-            server.TrySend(1, payload, reliable: false);
+            Assert.True(server.TrySend(1, payload, reliable: false));
         }
 
         long clientBefore = GC.GetAllocatedBytesForCurrentThread();
@@ -1461,7 +1481,7 @@ public sealed class TransportTests
         long clientDeadline = System.Diagnostics.Stopwatch.GetTimestamp() + (long)(3000 * System.Diagnostics.Stopwatch.Frequency / 1000.0);
         while (clientReceived < packetCount && System.Diagnostics.Stopwatch.GetTimestamp() < clientDeadline)
         {
-            client.Poll(packetCount - clientReceived);
+            client.Poll();
             while (client.TryReceive(rxBuffer, out int len))
             {
                 clientReceived++;
@@ -1471,6 +1491,8 @@ public sealed class TransportTests
         }
         long clientAllocated = GC.GetAllocatedBytesForCurrentThread() - clientBefore;
 
+        Assert.True(client.IsConnected);
+        Assert.Equal(0L, client.DroppedUnreliablePackets);
         Assert.Equal(packetCount, clientReceived);
         Assert.Equal(packetCount * payloadSize, clientBytes);
         Assert.Equal(0L, clientAllocated);

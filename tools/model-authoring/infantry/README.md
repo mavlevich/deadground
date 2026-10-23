@@ -26,6 +26,23 @@ soldier from the RTS camera.
   stay on their grip of the rifle.
 - Facing: -Z forward like the vehicle models (Blender +Y before export), +Y up, meters, feet on Y = 0.
 
+## Godot import
+
+The checked-in `.glb.import` runs `Assets/Infantry/US/import_rifleman.gd` after import. It enables
+vertex colors as albedo on colored surfaces and makes all six clips loop, including the breathing
+cycles in the aiming poses. These settings survive a fresh checkout and GLB regeneration; the game
+does not need to repair materials or animation resources at runtime.
+
+The normal headless client smoke test checks the imported materials, clip looping over two cycles,
+and actual skeleton motion in Walk and Run. Run from the repository root:
+
+```sh
+./tools/run-client.sh --headless -- --smoke-test
+```
+
+Success includes `INFANTRY_ASSET_REGRESSIONS_OK`. This check also runs in the existing exported
+client smoke tests in CI. It complements the structural GLB checks below.
+
 ## Requirements
 
 - Blender 5.2.
