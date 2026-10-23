@@ -44,6 +44,9 @@ public sealed class LiteNetLibClientTransport : ITransport, INetEventListener
     public long DroppedUnreliablePackets { get { lock (_lock) { return _queue.DroppedUnreliablePackets; } } }
     public long DroppedUnreliableBytes { get { lock (_lock) { return _queue.DroppedUnreliableBytes; } } }
     public long ReliableOverflowFailures { get { lock (_lock) { return _queue.ReliableOverflowFailures; } } }
+    public int PendingEventCount => _netManager.PendingEventsCount;
+    public int PendingReceiveCount => _netManager.PendingReceiveCount;
+    internal NetManager NetManager => _netManager;
     public int MaxPackets => _queue.MaxPackets;
     public int MaxBytes => _queue.MaxBytes;
 
@@ -151,7 +154,6 @@ public sealed class LiteNetLibClientTransport : ITransport, INetEventListener
                 _queue.Release(buffer);
                 return true;
             }
-            _hasPolledInCycle = false;
             return false;
         }
     }
@@ -249,6 +251,9 @@ public sealed class LiteNetLibServerTransport : IServerTransport, INetEventListe
     public int InitialAdmittedPlayer => 0;
     public int MaxPacketsPerPeer => _maxPacketsPerPeer;
     public int MaxBytesPerPeer => _maxBytesPerPeer;
+    public int PendingEventCount => _netManager.PendingEventsCount;
+    public int PendingReceiveCount => _netManager.PendingReceiveCount;
+    internal NetManager NetManager => _netManager;
     public long ReliableOverflowDisconnects { get { lock (_lock) { return _reliableOverflowDisconnects; } } }
 
     public int QueuedPacketCount

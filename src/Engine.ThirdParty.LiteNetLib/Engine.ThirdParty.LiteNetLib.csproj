@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>disable</Nullable>
+    <NoWarn>$(NoWarn);CS8600;CS8601;CS8602;CS8603;CS8604;CS8618;CS8625;CS8765;CS8767;CS1591;CS0169;CS0649;CS0414</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Engine.Net" />
+    <InternalsVisibleTo Include="Engine.Core.Tests" />
+    <InternalsVisibleTo Include="Game.Rules.Tests" />
+    <InternalsVisibleTo Include="Benchmarks" />
+  </ItemGroup>
+</Project>

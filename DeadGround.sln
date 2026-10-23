@@ -27,6 +27,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Benchmarks", "tests\Benchma
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Game.Sandbox", "src\Game.Sandbox\Game.Sandbox.csproj", "{C5894818-C540-4117-B7AA-F1218BB809B8}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Engine.ThirdParty.LiteNetLib", "src\Engine.ThirdParty.LiteNetLib\Engine.ThirdParty.LiteNetLib.csproj", "{0440FFB8-9D27-41D1-BECE-15E25DABE459}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -157,6 +159,18 @@ Global
 		{C5894818-C540-4117-B7AA-F1218BB809B8}.Release|x64.Build.0 = Release|Any CPU
 		{C5894818-C540-4117-B7AA-F1218BB809B8}.Release|x86.ActiveCfg = Release|Any CPU
 		{C5894818-C540-4117-B7AA-F1218BB809B8}.Release|x86.Build.0 = Release|Any CPU
+		{0440FFB8-9D27-41D1-BECE-15E25DABE459}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0440FFB8-9D27-41D1-BECE-15E25DABE459}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0440FFB8-9D27-41D1-BECE-15E25DABE459}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{0440FFB8-9D27-41D1-BECE-15E25DABE459}.Debug|x64.Build.0 = Debug|Any CPU
+		{0440FFB8-9D27-41D1-BECE-15E25DABE459}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{0440FFB8-9D27-41D1-BECE-15E25DABE459}.Debug|x86.Build.0 = Debug|Any CPU
+		{0440FFB8-9D27-41D1-BECE-15E25DABE459}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0440FFB8-9D27-41D1-BECE-15E25DABE459}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0440FFB8-9D27-41D1-BECE-15E25DABE459}.Release|x64.ActiveCfg = Release|Any CPU
+		{0440FFB8-9D27-41D1-BECE-15E25DABE459}.Release|x64.Build.0 = Release|Any CPU
+		{0440FFB8-9D27-41D1-BECE-15E25DABE459}.Release|x86.ActiveCfg = Release|Any CPU
+		{0440FFB8-9D27-41D1-BECE-15E25DABE459}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -172,5 +186,6 @@ Global
 		{A1E3BE80-A564-4458-AB86-502F836D535F} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{2DFAC45A-ECFA-444E-A5D7-D8F98010ABB6} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{C5894818-C540-4117-B7AA-F1218BB809B8} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{0440FFB8-9D27-41D1-BECE-15E25DABE459} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal

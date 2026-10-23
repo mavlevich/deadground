@@ -62,6 +62,9 @@ generated_code = true
 [**/BenchmarkDotNet.Artifacts/**]
 generated_code = true
 
+[src/Engine.ThirdParty.LiteNetLib/**]
+generated_code = true
+
 # C# source files
 [*.cs]
 indent_style = space
