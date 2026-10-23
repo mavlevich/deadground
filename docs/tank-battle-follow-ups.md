@@ -115,6 +115,8 @@ Tests and measurements:
 
 ## 3. Jerky movement presentation
 
+In progress: client clock-boundary stall defect resolved. Diagnosed and fixed in `ClientSession.UpdateRenderClock` without modifying authoritative simulation timing or adding secondary smoothing filters. The client clock controller was running with zero deadband, aggressive proportional speedup (`lag * 0.5`), and hard clamping against `clampedTarget`, forcing collisions on snapshot arrivals. In addition, frame-phase mismatch was corrected by comparing ideal target time against predicted nominal progression (`prevRenderTick + deltaTicks`). The fix establishes a deadband (`ClockDeadbandTicks = 0.25`), gentle drift correction, clamping against `Replica.LatestTick`, and waits for the initial buffer to fill before starting playback, ensuring consistent 150 ms effective delay across all framerates. On lost packets, the clock holds cleanly on buffer underflow and recovers without rewinding. Unit and integration coverage verifies clock pacing, buffer headroom, spatial motion diagnostics, and packet loss recovery in `MotionSmoothingTests.cs`. Real-view transform, full combat pacing, and hardware presentation checks remain open. The original investigation notes below are retained for context.
+
 User reports slight repeated movement jerks instead of smooth driving. Root cause is not yet reproduced
 or isolated. Do not label this as missing interpolation: the client already interpolates positions and angles.
 

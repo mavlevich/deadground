@@ -50,6 +50,8 @@ public partial class TankBattleDemo : Node3D
     private int _exitCode;
     private float _initialPitch = OrbitCameraPose.DefaultPitch;
     private float _initialYaw;
+    private MotionDiagnostics? _motionDiagnostics;
+    private System.Numerics.Vector2? _prevLeadPos;
 
     public override void _Ready()
     {
@@ -60,6 +62,7 @@ public partial class TankBattleDemo : Node3D
             if (args[i] == "--perspective") startPerspective = true;
             else if (args[i] == "--view-yaw" && i + 1 < args.Length && int.TryParse(args[++i], out int yaw)) _initialYaw = yaw * MathF.PI / 180f;
             else if (args[i] == "--demo-smoke-test") _smoke = true;
+            else if (args[i] == "--motion-diagnostics") _motionDiagnostics = new MotionDiagnostics(4000);
             else if (args[i] == "--seed" && i + 1 < args.Length && ulong.TryParse(args[++i], out ulong seed)) _seed = seed;
             else if (args[i] == "--view-pitch" && i + 1 < args.Length && int.TryParse(args[++i], out int pitch)) _initialPitch = Math.Clamp(pitch, 8, 85) * MathF.PI / 180f;
             else if (args[i] == "--capture" && i + 1 < args.Length) _capturePath = args[++i];
@@ -163,6 +166,8 @@ public partial class TankBattleDemo : Node3D
         foreach (UnitView view in _sovietViews.Views.Values) if (view.HasVehicleModel) _initialModels++;
         foreach (UnitView view in _usViews.Views.Values) if (view.HasVehicleModel) _initialModels++;
         _captured = false;
+        _prevLeadPos = null;
+        _motionDiagnostics?.Reset();
         UpdateHud();
     }
 
@@ -185,6 +190,28 @@ public partial class TankBattleDemo : Node3D
         double elapsed = _paused ? 0 : _smoke ? Simulation.TickSeconds : Math.Min(delta, 0.1) * (_fast ? 2 : 1);
         if (!_paused) _session.Advance(elapsed);
         SyncViews(elapsed);
+        if (_motionDiagnostics is not null && !_paused)
+        {
+            EntityId leadId = new(1);
+            System.Numerics.Vector2 pos = _session.Soviet.Replica.SamplePosition(leadId, _session.Soviet.RenderTick,
+                out int leftTick, out int rightTick, out float alpha);
+            float disp = _prevLeadPos.HasValue ? (pos - _prevLeadPos.Value).Length() : 0f;
+            _prevLeadPos = pos;
+            _session.Soviet.Replica.SampleYaws(leadId, _session.Soviet.RenderTick, out _, out float heading);
+            int lod = _sovietViews.Views.TryGetValue(leadId, out UnitView? leadView) ? leadView.ActiveLod : 0;
+            _motionDiagnostics.Record(
+                elapsed,
+                _session.Tick,
+                _session.Soviet.RenderTick,
+                leftTick,
+                rightTick,
+                alpha,
+                pos,
+                disp,
+                heading,
+                lod,
+                rawDeltaSeconds: delta);
+        }
         _sovietFog!.Update((float)elapsed, _session.Soviet.Replica, _catalog);
         _usFog!.Update((float)elapsed, _session.Us.Replica, _catalog);
         _effects.Update(elapsed);
@@ -269,6 +296,11 @@ public partial class TankBattleDemo : Node3D
 
     private void BeginQuit(int exitCode)
     {
+        if (_motionDiagnostics is not null && _motionDiagnostics.Count > 30)
+        {
+            MotionDiagnostics.Analysis analysis = _motionDiagnostics.Analyze(warmupFrames: 30);
+            GD.Print($"MOTION_DIAGNOSTICS samples={analysis.SampleCount} clock_stalls={analysis.ClockStallFrames} clock_jumps={analysis.ClockJumpFrames} pos_stalls={analysis.PositionStallFrames} pos_jumps={analysis.PositionJumpFrames} max_disp={analysis.MaxDisplacement:F4} min_disp={analysis.MinDisplacement:F4} mean_disp={analysis.MeanDisplacement:F4}");
+        }
         _effects.Clear();
         _closingFrames = 0;
         _exitCode = exitCode;

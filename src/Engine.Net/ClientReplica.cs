@@ -13,6 +13,8 @@ public sealed class ClientReplica
     private SnapshotFrame _incoming;
     private int _next, _count;
     private SnapshotFrame Latest => _frames[(_next + _frames.Length - 1) % _frames.Length];
+    public int SnapshotCount => _count;
+    public bool HasSnapshots => _count > 0;
     public int LatestTick => _count == 0 ? 0 : Latest.Tick;
     public uint LatestSequence => _count == 0 ? 0 : Latest.Sequence;
     public ReadOnlySpan<OwnUnitObservation> OwnUnits => _count == 0 ? [] : Latest.Units.AsSpan(0, Latest.Count);
@@ -115,23 +117,47 @@ public sealed class ClientReplica
         return false;
     }
 
-    public Vector2 SamplePosition(EntityId id, double renderTick)
+    public Vector2 SamplePosition(EntityId id, double renderTick, out int leftTick, out int rightTick, out float alpha)
     {
-        if (_count == 0 || !Latest.Indices.TryGetValue(id, out int index)) return default;
-        FindBracket(renderTick, out SnapshotFrame left, out SnapshotFrame right, out float alpha);
+        if (_count == 0 || !Latest.Indices.TryGetValue(id, out int index))
+        {
+            leftTick = 0;
+            rightTick = 0;
+            alpha = 1f;
+            return default;
+        }
+        FindBracket(renderTick, out SnapshotFrame left, out SnapshotFrame right, out alpha);
+        leftTick = left.Tick;
+        rightTick = right.Tick;
         if (!left.Indices.TryGetValue(id, out int li) || !right.Indices.TryGetValue(id, out int ri))
             return Latest.Units[index].Position;
         return Vector2.Lerp(left.Units[li].Position, right.Units[ri].Position, alpha);
     }
 
-    public Vector2 SampleContactPosition(ContactId id, double renderTick)
+    public Vector2 SamplePosition(EntityId id, double renderTick) =>
+        SamplePosition(id, renderTick, out _, out _, out _);
+
+    public Vector2 SampleContactPosition(ContactId id, double renderTick, out int leftTick, out int rightTick, out float alpha)
     {
-        if (_count == 0 || !Latest.ContactIndices.TryGetValue(id, out int index)) return default;
+        if (_count == 0 || !Latest.ContactIndices.TryGetValue(id, out int index))
+        {
+            leftTick = 0;
+            rightTick = 0;
+            alpha = 1f;
+            return default;
+        }
         ref readonly ContactObservation latestContact = ref Latest.Contacts[index];
         if (latestContact.State != ContactState.Current)
+        {
+            leftTick = latestContact.LastSeenTick;
+            rightTick = latestContact.LastSeenTick;
+            alpha = 1f;
             return latestContact.Position;
+        }
 
-        FindBracket(renderTick, out SnapshotFrame left, out SnapshotFrame right, out float alpha);
+        FindBracket(renderTick, out SnapshotFrame left, out SnapshotFrame right, out alpha);
+        leftTick = left.Tick;
+        rightTick = right.Tick;
         if (!left.ContactIndices.TryGetValue(id, out int li) || !right.ContactIndices.TryGetValue(id, out int ri))
             return latestContact.Position;
 
@@ -144,6 +170,9 @@ public sealed class ClientReplica
 
         return Vector2.Lerp(leftContact.Position, rightContact.Position, alpha);
     }
+
+    public Vector2 SampleContactPosition(ContactId id, double renderTick) =>
+        SampleContactPosition(id, renderTick, out _, out _, out _);
 
     public static float InterpolateYaw(float fromYaw, float toYaw, float alpha)
     {
@@ -159,13 +188,20 @@ public sealed class ClientReplica
     /// Turret yaw and hull heading of an own unit, both sampled from the same snapshot pair so a
     /// turret that rides on the hull stays fixed to it on screen.
     /// </summary>
-    public void SampleYaws(EntityId id, double renderTick, out float turretYaw, out float hullHeading)
+    public void SampleYaws(EntityId id, double renderTick, out float turretYaw, out float hullHeading,
+        out int leftTick, out int rightTick, out float alpha)
     {
         turretYaw = 0f;
         hullHeading = 0f;
-        if (_count == 0 || !Latest.Indices.TryGetValue(id, out int index)) return;
+        if (_count == 0 || !Latest.Indices.TryGetValue(id, out int index))
+        {
+            leftTick = 0; rightTick = 0; alpha = 1f;
+            return;
+        }
         ref readonly OwnUnitObservation latest = ref Latest.Units[index];
-        FindBracket(renderTick, out SnapshotFrame left, out SnapshotFrame right, out float alpha);
+        FindBracket(renderTick, out SnapshotFrame left, out SnapshotFrame right, out alpha);
+        leftTick = left.Tick;
+        rightTick = right.Tick;
         if (!left.Indices.TryGetValue(id, out int li) || !right.Indices.TryGetValue(id, out int ri))
         {
             turretYaw = latest.TurretYaw;
@@ -176,20 +212,34 @@ public sealed class ClientReplica
         hullHeading = InterpolateYaw(left.Units[li].HullHeading, right.Units[ri].HullHeading, alpha);
     }
 
+    public void SampleYaws(EntityId id, double renderTick, out float turretYaw, out float hullHeading) =>
+        SampleYaws(id, renderTick, out turretYaw, out hullHeading, out _, out _, out _);
+
     /// <summary>
     /// Turret yaw and hull heading of a contact. A contact that is not current keeps its last seen pose.
     /// </summary>
-    public void SampleContactYaws(ContactId id, double renderTick, out float turretYaw, out float hullHeading)
+    public void SampleContactYaws(ContactId id, double renderTick, out float turretYaw, out float hullHeading,
+        out int leftTick, out int rightTick, out float alpha)
     {
         turretYaw = 0f;
         hullHeading = 0f;
-        if (_count == 0 || !Latest.ContactIndices.TryGetValue(id, out int index)) return;
+        if (_count == 0 || !Latest.ContactIndices.TryGetValue(id, out int index))
+        {
+            leftTick = 0; rightTick = 0; alpha = 1f;
+            return;
+        }
         ref readonly ContactObservation latest = ref Latest.Contacts[index];
         turretYaw = latest.TurretYaw;
         hullHeading = latest.HullHeading;
-        if (latest.State != ContactState.Current) return;
+        if (latest.State != ContactState.Current)
+        {
+            leftTick = latest.LastSeenTick; rightTick = latest.LastSeenTick; alpha = 1f;
+            return;
+        }
 
-        FindBracket(renderTick, out SnapshotFrame left, out SnapshotFrame right, out float alpha);
+        FindBracket(renderTick, out SnapshotFrame left, out SnapshotFrame right, out alpha);
+        leftTick = left.Tick;
+        rightTick = right.Tick;
         if (!left.ContactIndices.TryGetValue(id, out int li) || !right.ContactIndices.TryGetValue(id, out int ri))
             return;
 
@@ -201,6 +251,9 @@ public sealed class ClientReplica
         turretYaw = InterpolateYaw(leftContact.TurretYaw, rightContact.TurretYaw, alpha);
         hullHeading = InterpolateYaw(leftContact.HullHeading, rightContact.HullHeading, alpha);
     }
+
+    public void SampleContactYaws(ContactId id, double renderTick, out float turretYaw, out float hullHeading) =>
+        SampleContactYaws(id, renderTick, out turretYaw, out hullHeading, out _, out _, out _);
 
     private void FindBracket(double renderTick, out SnapshotFrame left, out SnapshotFrame right, out float alpha)
     {
