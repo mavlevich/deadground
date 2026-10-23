@@ -21,6 +21,8 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
     private readonly Func<string?>? _factionProvider = factionProvider;
     private readonly UnitCatalog? _catalog;
     private float _cameraSize;
+    private Basis _healthBarBasis;
+    private bool _hasHealthBarBasis;
     private static readonly Lazy<UnitCatalog> DefaultCatalog = new(() => PrototypeScenario.LoadCatalog());
 
     public UnitViewSet(Node3D parent, HeightMap map, UnitCatalog catalog, Func<string?>? factionProvider = null)
@@ -125,6 +127,7 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
                 view.UpdateLod(_cameraSize);
                 Views.Add(unit.Id, view);
                 parent.AddChild(view.Root);
+                if (_hasHealthBarBasis) view.FaceHealthBar(_healthBarBasis);
             }
             System.Numerics.Vector2 position = replica.SamplePosition(unit.Id, renderTick);
             view.UpdatePosition(new Vector3(position.X, map.GetHeight(position.X, position.Y), position.Y));
@@ -148,6 +151,14 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
             for (int i = 0; i < ControlGroupCount; i++)
                 _controlGroups[i].Remove(id);
         }
+    }
+
+    internal void FaceHealthBars(Basis cameraBasis)
+    {
+        if (_hasHealthBarBasis && _healthBarBasis.IsEqualApprox(cameraBasis)) return;
+        _healthBarBasis = cameraBasis;
+        _hasHealthBarBasis = true;
+        foreach (UnitView view in Views.Values) view.FaceHealthBar(cameraBasis);
     }
 
     internal void UpdateLod(float cameraSize)

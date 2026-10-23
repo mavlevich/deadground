@@ -6,12 +6,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
+. (Join-Path $PSScriptRoot 'godot-version.ps1')
+$godotVersion = Get-GodotVersion -RepositoryRoot $repoRoot
 
 if (-not $GodotBin) {
     if (Get-Command godot -ErrorAction SilentlyContinue) {
         $GodotBin = (Get-Command godot).Source
     } else {
-        throw 'Set GODOT_BIN to the Godot 4.7.2 .NET executable.'
+        throw "Set GODOT_BIN to the Godot $godotVersion .NET executable."
     }
 }
 
@@ -25,8 +27,8 @@ if ([System.IO.Path]::GetExtension($GodotBin) -eq '.exe' -and $GodotBin -notlike
 $versionOutput = & $GodotBin --version 2>&1
 $versionExitCode = $LASTEXITCODE
 $version = ($versionOutput | Out-String).Trim()
-if ($versionExitCode -ne 0 -or $version -notmatch '(?m)^4\.7\.2\.[^\r\n]*\.mono\.') {
-    throw "This project requires Godot 4.7.2 .NET. Executable: $GodotBin; exit: $versionExitCode; output: $version"
+if ($versionExitCode -ne 0 -or $version -notmatch ('(?m)^' + [regex]::Escape($godotVersion) + '\.stable\.mono\.')) {
+    throw "This project requires Godot $godotVersion .NET. Executable: $GodotBin; exit: $versionExitCode; output: $version"
 }
 
 if ($Preset -eq 'windows' -or $Preset -eq 'win') {

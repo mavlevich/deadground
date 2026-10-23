@@ -33,7 +33,8 @@ Native interactive Windows gameplay remains unverified.
 
 ## Run the prototype
 
-Install .NET SDK 10.0.401 and Godot 4.7.2 **.NET**. The standard Godot build cannot
+Install the .NET SDK pinned in `global.json` and the Godot **.NET** version pinned in
+`src/Game.Godot/Game.Godot.csproj`. The standard Godot build cannot
 run C# projects. Package versions are pinned in the project files.
 
 ### Local play
@@ -49,7 +50,7 @@ On macOS:
 On Windows:
 
 ```powershell
-./tools/run-client.ps1 -GodotBin 'C:\Tools\Godot\Godot_v4.7.2-stable_mono_win64.exe'
+./tools/run-client.ps1 -GodotBin 'C:\Tools\Godot\Godot.exe'
 ```
 
 ### Dedicated server and two clients
@@ -344,6 +345,57 @@ local scenario with the enemy holding fire:
 ./tools/run-client.sh -- --scenario battle --enemy-hold-fire
 ```
 
+### Tank autobattle observer demo
+Run a local 100 T-62 vs 100 M60A1 battle with the existing vehicle models, combat effects and sound:
+
+```sh
+./tools/run-tank-battle.sh
+```
+
+This is a local viewing sandbox. Two ordinary client replicas share a single authoritative host;
+only the observer sees both armies. Each bot uses its own side's normal knowledge and movement
+commands. Weapons, ammunition, armor, spotting and damage use the Cold War rules and data.
+The opening reload offsets spread shots across a reload cycle. No ammunition is replenished.
+The 3.2 x 3.2 km map starts the armies about 2.5 km apart, outside spotting range. Each side has
+50 tanks in each of two staggered rows, 55 m apart. Each tank advances toward its formation slot,
+but halts early when a current observed contact is within its cannon range, penetrable under the
+existing auto-fire rules, and visible from the muzzle. It holds through reloads and resumes the
+original advance after one second without a usable target. A distant contact alone does not halt it.
+Terrain visibility uses the existing client viewshed: amber for Soviet, cyan for US.
+F cycles both sides, Soviet, US and off. The observer always sees all units. Ground shading
+is an approximate terrain viewshed, not a promise that every tank inside it is detected.
+The HUD reports current contacts from the authoritative side replicas.
+
+Controls: WASD or arrows to pan, wheel to zoom, 1/2 to inspect Soviet/US at closer zoom, 3 for the overview,
+middle drag, Alt+mouse or Q/E to orbit, T/G to tilt (8 to 85 degrees), V to toggle perspective/RTS view, Space to pause, R to restart the same seed,
+Tab to toggle 1x/2x, L to cycle dusk/night/day,
+and Esc to quit. Lighting is cosmetic and does not change detection. Starts at dusk.
+The battle ends on elimination or after ten simulated minutes. A draw reaches the time limit.
+
+```sh
+./tools/run-tank-battle.sh --seed 42
+./tools/run-tank-battle.sh --perspective --view-pitch 8 --view-yaw 115
+./tools/run-client.sh --headless res://TankBattleDemo.tscn -- --demo-smoke-test
+```
+
+The smoke test verifies 200 initial vehicle models, actual shots and casualties, pause and restart,
+terrain visibility, and no rejected bot orders. Allow an approach before firing, or use Tab for 2x speed. Tanks halt for usable targets during the advance.
+For a rendered capture, use `./tools/run-tank-battle.sh --capture /absolute/path/battle.png`.
+This demo is a starting point for measuring client load, not a guarantee of a particular frame rate.
+
+The real-renderer vehicle regression opens a window, loads all three LODs for 200 tanks and
+performs three deferred restarts. It rejects headless mode and checks the engine log for errors:
+
+```sh
+bash tests/vehicle-rendering-smoke.sh
+```
+
+The shader instance budget is 262144 sixteen-byte slots (4 MiB, up to 16384 instances).
+The measured 200-tank peak is 8800 instances, including overlapping old and new batches.
+This is a validated demo budget; larger unit counts need another measured resource budget.
+
+Dependency update policy and Renovate activation: [dependency-updates.md](docs/dependency-updates.md).
+
 ### Combat scenario and combat feedback
 
 To run the direct-fire combat scenario with tank and reconnaissance firefights. Each side also has
@@ -473,7 +525,7 @@ dotnet run --project tests/Benchmarks --configuration Release -- --probe
 
 ## Export the client
 
-Godot export templates for version 4.7.2 .NET are required. macOS exports use the
+Godot .NET export templates matching the pinned client SDK are required. macOS exports use the
 native `codesign` tool for ad-hoc signing and must be created on macOS. Install them once:
 
 ```sh
@@ -570,5 +622,5 @@ Follow this checklist to verify an exported client interactively:
 
 ## Stack
 
-- Godot 4.7.2 (.NET) for rendering, UI, audio and input
+- Godot .NET, pinned in `src/Game.Godot/Game.Godot.csproj`, for rendering, UI, audio and input
 - C# / .NET 10 for simulation, networking, AI and tools

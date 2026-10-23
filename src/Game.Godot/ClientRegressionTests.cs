@@ -20,6 +20,7 @@ internal static class ClientRegressionTests
             CheckRectangularGrid(3, 5);
             CheckCombatEffectsAndLifecycle(scene);
             CheckConfiguredUnitHealthBars(scene);
+            CheckHealthBarsFaceCamera(scene);
             CheckVehicleModels(scene);
             CheckCameraRig(scene);
             CheckDisplaySettings(scene);
@@ -466,9 +467,40 @@ internal static class ClientRegressionTests
         finally { camera.QueueFree(); }
     }
 
+    private static void CheckHealthBarsFaceCamera(Node3D scene)
+    {
+        UnitView unit = new();
+        Camera3D camera = new() { Projection = Camera3D.ProjectionType.Orthogonal, Size = 35f };
+        scene.AddChild(unit.Root);
+        scene.AddChild(camera);
+        try
+        {
+            unit.UpdateHealth(50, 100);
+            foreach (float yaw in new[] { 0f, MathF.PI / 2f, MathF.PI })
+            {
+                camera.Position = new Vector3(MathF.Sin(yaw) * 35f, 22f, MathF.Cos(yaw) * 35f);
+                camera.LookAt(new Vector3(0, 2f, 0), Vector3.Up);
+                unit.FaceHealthBar(camera.GlobalTransform.Basis);
+                Require(unit.HealthBarRoot.GlobalBasis.IsEqualApprox(camera.GlobalTransform.Basis),
+                    "Health bar does not follow camera orientation.");
+                Vector2 left = camera.UnprojectPosition(unit.HealthBarRoot.GlobalTransform * new Vector3(-0.9f, 0, 0));
+                Vector2 right = camera.UnprojectPosition(unit.HealthBarRoot.GlobalTransform * new Vector3(0.9f, 0, 0));
+                Vector2 fillLeft = camera.UnprojectPosition(unit.HealthBarFill.GlobalTransform * new Vector3(-0.9f, 0, 0));
+                Vector2 fillRight = camera.UnprojectPosition(unit.HealthBarFill.GlobalTransform * new Vector3(0.9f, 0, 0));
+                Require(MathF.Abs(left.Y - right.Y) < 0.05f && right.X > left.X,
+                    "Health bar is no longer horizontal on screen after orbiting.");
+                Require(MathF.Abs(left.X - fillLeft.X) < 0.05f,
+                    "Health bar fill lost its left anchor after orbiting.");
+                Require(MathF.Abs((fillRight.X - fillLeft.X) / (right.X - left.X) - 0.5f) < 0.01f,
+                    "Half health must still cover half the bar after orbiting.");
+            }
+        }
+        finally { unit.Root.QueueFree(); camera.QueueFree(); }
+    }
+
     private static void CheckCameraRig(Node3D scene)
     {
-        Camera3D camera = new();
+        Camera3D camera = new() { Projection = Camera3D.ProjectionType.Orthogonal };
         scene.AddChild(camera);
         try
         {
@@ -485,6 +517,19 @@ internal static class ClientRegressionTests
             rig.Update(0.1, allowInput: false);
             Require(rig.Size < 112f, "Camera size did not decrease after zoom in update.");
 
+            // The normal client and observer must share fractional wheel and pinch handling.
+            rig.ResetToDefault();
+            using InputEventMouseButton wheel = new() { Pressed = true, ButtonIndex = MouseButton.WheelUp, Factor = 0.05f };
+            for (int i = 0; i < 20; i++) Require(rig.HandleZoomInput(wheel), "Fractional wheel not handled.");
+            Require(MathF.Abs(rig.Model.TargetSize - 112f * CameraModel.DefaultZoomStepFactor) < 0.01f,
+                "A smooth scroll gesture was expanded into full wheel steps.");
+            using InputEventMagnifyGesture pinch = new() { Factor = 1.25f };
+            float beforePinch = rig.Model.TargetSize;
+            Require(rig.HandleZoomInput(pinch), "Pinch not handled.");
+            Require(MathF.Abs(rig.Model.TargetSize - beforePinch / 1.25f) < 0.01f, "Pinch scale ignored.");
+            rig.Orbit(0.8f, -100f);
+            Require(MathF.Abs(rig.ViewPitch - OrbitCameraPose.MinPitch) < 0.001f, "Observer pitch limit ignored.");
+            Require(MathF.Abs(camera.GlobalTransform.Basis.Z.X) > 0.1f, "Camera yaw did not change.");
             // Test reset to default view
             rig.ResetToDefault();
             Require(rig.Focus == new Vector3(64, 0, 64), "Reset did not restore focus.");

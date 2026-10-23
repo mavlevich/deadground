@@ -3,8 +3,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$version = '4.7.2.stable.mono'
-$releaseTag = '4.7.2-stable'
+$repoRoot = Split-Path $PSScriptRoot -Parent
+. (Join-Path $PSScriptRoot 'godot-version.ps1')
+$godotVersion = Get-GodotVersion -RepositoryRoot $repoRoot
+$version = "$godotVersion.stable.mono"
+$releaseTag = "$godotVersion-stable"
 $templatesUrl = "https://github.com/godotengine/godot-builds/releases/download/$releaseTag/Godot_v${releaseTag}_mono_export_templates.tpz"
 
 $appData = $env:APPDATA

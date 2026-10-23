@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+godot_version="$(bash "$repo_root/tools/godot-version.sh")"
 
 godot_bin="${GODOT_BIN:-}"
 if [[ -z "$godot_bin" ]]; then
@@ -10,13 +11,13 @@ if [[ -z "$godot_bin" ]]; then
   elif [[ -x /Applications/Godot_mono.app/Contents/MacOS/Godot ]]; then
     godot_bin=/Applications/Godot_mono.app/Contents/MacOS/Godot
   else
-    echo 'Set GODOT_BIN to the Godot 4.7.2 .NET executable.' >&2
+    echo "Set GODOT_BIN to the Godot $godot_version .NET executable." >&2
     exit 1
   fi
 fi
 
-if [[ "$("$godot_bin" --version)" != 4.7.2.*.mono.* ]]; then
-  echo 'This project requires Godot 4.7.2 .NET. Check GODOT_BIN.' >&2
+if [[ "$("$godot_bin" --version)" != "$godot_version".stable.mono.* ]]; then
+  echo "This project requires Godot $godot_version .NET. Check GODOT_BIN." >&2
   exit 1
 fi
 

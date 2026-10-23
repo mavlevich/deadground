@@ -33,7 +33,7 @@ public sealed class ArchitectureBuildTests
     public async Task BuildRejectsTheGodotSdkEvenWithItsImplicitReferencesDisabled()
     {
         using Fixture fixture = new();
-        string project = fixture.Project("Game.Rules.InvalidSdk", sdk: "Godot.NET.Sdk/4.7.2", guarded: true);
+        string project = fixture.Project("Game.Rules.InvalidSdk", sdk: fixture.GodotSdk, guarded: true);
         (int code, string output) = await Build(project, "-target:CheckArchitecture",
             "-property:DisableImplicitGodotSharpReferences=true", "-property:DisableImplicitGodotGeneratorReferences=true");
         Assert.NotEqual(0, code);
@@ -60,13 +60,17 @@ public sealed class ArchitectureBuildTests
     {
         private readonly string _path = Path.Combine(Path.GetTempPath(), "deadground architecture " + Guid.NewGuid().ToString("N"));
         private readonly string _targets;
+        internal string GodotSdk { get; }
 
         internal Fixture()
         {
             DirectoryInfo? root = new(AppContext.BaseDirectory);
             while (root is not null && !File.Exists(Path.Combine(root.FullName, "DeadGround.sln"))) root = root.Parent;
             _targets = Path.Combine(root!.FullName, "Directory.Build.targets");
+            GodotSdk = XDocument.Load(Path.Combine(root.FullName, "src", "Game.Godot", "Game.Godot.csproj"))
+                .Root!.Attribute("Sdk")!.Value;
             Directory.CreateDirectory(_path);
+            File.Copy(Path.Combine(root.FullName, "global.json"), Path.Combine(_path, "global.json"));
         }
 
         internal string Project(string name, string properties = "", string references = "", bool guarded = false,
