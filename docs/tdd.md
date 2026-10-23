@@ -508,6 +508,10 @@ Squad
 - A single sniper or observer is a squad of one.
 - Clients draw individual soldiers around the squad position.
 - The same pattern works for any group with many visual members.
+- Soldier models: `Assets/Infantry/US/us_rifleman.glb` (low-poly, faceted, one skinned mesh, clips
+  for idle, aiming standing, kneeling and prone, walk and run) is built by
+  `tools/model-authoring/infantry`. It is not used in the game yet. A Soviet rifleman in the same
+  style comes next.
 
 ### 11.2 Containers
 
