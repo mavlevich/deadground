@@ -719,9 +719,7 @@ Status: planned for M2. M1 units keep one weapon each, so the M1 exit does not d
 
 ### 14.3 Transport receive buffers and overload policy
 
-Known dependency limitation: LiteNetLib 1.3.5 can discard unread native events when its polling
-budget is exhausted. The bounded application rings below do not prevent that loss. The reproduction
-and required networking follow-up are recorded in [network-polling-follow-ups.md](network-polling-follow-ups.md).
+Bounded native event polling: LiteNetLib 1.3.5 is vendored in a dedicated project `src/Engine.ThirdParty.LiteNetLib/` with a reproducible patch that restores the unread event tail when `PollEvents(maxProcessedEvents)` hits its budget. Restoring preserves the detached tail pointer in O(1) time without scanning the backlog under lock. Lifecycle transitions on Stop recycle unread events and packet buffers immediately without resurrecting callbacks. Application transport code in `src/Engine.Net/` remains fully checked under the repository warnings-as-errors and nullable rules. Unread events are preserved for subsequent polls in strict FIFO order, with zero managed heap allocations. The diagnosis, patch details and verification are recorded in [network-polling-follow-ups.md](network-polling-follow-ups.md).
 
 - Application-owned transport receive storage is strictly bounded and preallocated. Steady-state packet reception and queue operations perform zero heap allocations in application receive storage. The configured limits bound application-owned receive queues and buffer pools; they do not bound internal LiteNetLib library buffers (such as socket receive buffers, reliable retransmission state, or internal packet pools).
 - Fixed storage allocation per peer:
