@@ -27,6 +27,7 @@ public sealed class ClientSession : IGameSession
 
     public const double InterpolationBufferTicks = 3.0;
     public const double MaxClockLagTicks = 6.0;
+    public const double ClockDeadbandTicks = 0.25;
     public const int MaxMessagesPerPoll = 128;
     private double _renderTick;
     private bool _clockInitialized;
@@ -34,6 +35,9 @@ public sealed class ClientSession : IGameSession
     public ClientReplica Replica { get; }
     public MissionObservation Mission => Replica.LatestMission;
     public double RenderTick => _renderTick;
+    public double TargetTick => !Replica.HasSnapshots ? 0.0 :
+        Replica.LatestTick + (_time - _receivedAt) * Simulation.TickRate - InterpolationBufferTicks;
+    public double ClampedTargetTick => Math.Clamp(TargetTick, 0.0, (double)Replica.LatestTick);
     public int Tick => Replica.LatestTick;
     public double LastTickMilliseconds => 0;
     public long LastTickAllocatedBytes => 0;
@@ -108,38 +112,53 @@ public sealed class ClientSession : IGameSession
 
         if (!_clockInitialized)
         {
-            _renderTick = Math.Max(0.0, Replica.LatestTick - InterpolationBufferTicks);
+            // Wait for initial interpolation buffer to fill before starting playback
+            if (TargetTick <= 0.0)
+            {
+                _renderTick = 0.0;
+                return;
+            }
+
+            _renderTick = ClampedTargetTick;
             _clockInitialized = true;
             return;
         }
 
         double prevRenderTick = _renderTick;
-        double targetTick = Replica.LatestTick + (_time - _receivedAt) * Simulation.TickRate - InterpolationBufferTicks;
-        double clampedTarget = Math.Min(targetTick, (double)Replica.LatestTick);
+        double clampedTarget = ClampedTargetTick;
         double deltaTicks = elapsedSeconds * Simulation.TickRate;
+        double nominalNextTick = prevRenderTick + deltaTicks;
 
-        if (prevRenderTick < clampedTarget)
+        // Large stall recovery: if the client fell far behind (e.g. background tab or prolonged freeze),
+        // snap directly to clampedTarget to re-synchronize rather than lagging in the past.
+        if (clampedTarget - prevRenderTick > MaxClockLagTicks)
         {
-            double lag = clampedTarget - prevRenderTick;
-            if (lag > MaxClockLagTicks)
-            {
-                // After a network stall or pause, snap directly to target time to avoid
-                // lagging in the past and exceeding the replica buffer history.
-                _renderTick = clampedTarget;
-            }
-            else
-            {
-                double speed = Math.Clamp(1.0 + lag * 0.5, 1.0, 1.5);
-                _renderTick = Math.Min(prevRenderTick + deltaTicks * speed, clampedTarget);
-            }
+            _renderTick = clampedTarget;
         }
         else
         {
-            // Clock is ahead of ideal target (e.g. delayed snapshot just arrived).
-            // Retain monotonic progress and slow down or hold until target catches up.
-            double error = clampedTarget - prevRenderTick;
-            double speed = Math.Max(0.0, 1.0 + error * 0.5);
-            _renderTick = Math.Min(prevRenderTick + deltaTicks * speed, (double)Replica.LatestTick);
+            // Evaluate phase-matched drift at the end of the frame:
+            // clampedTarget represents ideal presentation time at the end of this frame,
+            // and nominalNextTick represents nominal progression at the end of this frame.
+            double drift = clampedTarget - nominalNextTick;
+
+            if (drift > ClockDeadbandTicks)
+            {
+                // Client is lagging behind target: gently speed up to catch up.
+                double speed = Math.Clamp(1.0 + (drift - ClockDeadbandTicks) * 0.2, 1.0, 1.25);
+                _renderTick = Math.Min(prevRenderTick + deltaTicks * speed, (double)Replica.LatestTick);
+            }
+            else if (drift < -ClockDeadbandTicks)
+            {
+                // Client is leading ahead of target: gently slow down.
+                double speed = Math.Clamp(1.0 + (drift + ClockDeadbandTicks) * 0.2, 0.75, 1.0);
+                _renderTick = Math.Min(prevRenderTick + deltaTicks * speed, (double)Replica.LatestTick);
+            }
+            else
+            {
+                // Within deadband: advance at exact real-time playback speed
+                _renderTick = Math.Min(nominalNextTick, (double)Replica.LatestTick);
+            }
         }
 
         // Monotonic invariant: presentation clock must never rewind
