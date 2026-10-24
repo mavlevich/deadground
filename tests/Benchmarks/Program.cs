@@ -7,6 +7,12 @@ using DeadGround.Engine.Net;
 using DeadGround.Rules.Ops;
 using DeadGround.Rules.Sandbox;
 
+if (args.Length > 0 && args[0] == "--navigation-5km")
+{
+    Environment.ExitCode = DeadGround.Benchmarks.NavigationScaleProbe.Run(args.Length == 3 && args[1] == "--json" ? args[2] : null) ? 0 : 1;
+    return;
+}
+
 if (args.Length > 0 && args[0] == "--probe")
 {
     RunProbe();

@@ -235,6 +235,19 @@ The 2000 m x 2000 m scenario map (`navigation-large`) includes:
 - **Winding slalom course**: 8 alternating barrier walls at [1600..1900, 200..700] requiring >64 waypoints. Vehicles navigate seamlessly across multiple consecutive chunks.
 - **Debug route targets**: Press `Alt+1` through `Alt+6` with units selected to issue preset long-range test routes across the obstacle topologies (plain number keys `1..9` remain bound to control groups).
 
+### Headless 5 km navigation probe
+
+The 5x5 km scale probe compares clustered and fixed-seed scattered bursts of 100 and 200
+move orders with the corridor cache on and off. It covers open terrain, a 900-building
+district, a long barrier and a disconnected region. It reports build time, memory,
+per-tick work, initial-route latency and early NoPath rejection cost. It does not launch a playable 5 km map.
+
+```sh
+dotnet run --project tests/Benchmarks --configuration Release -- --navigation-5km
+```
+
+See [navigation scale results and limitations](docs/navigation-5km.md).
+
 ### Recon Raid mission (recon-raid)
 
 To run the playable reconnaissance raid mission with authoritative objectives, enemy AI bot, and complete attempt lifecycle:

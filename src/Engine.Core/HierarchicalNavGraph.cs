@@ -10,7 +10,8 @@ namespace DeadGround.Engine;
 /// </summary>
 public sealed class HierarchicalNavGraph
 {
-    private const int MaxPortals = 8192;
+    private readonly NavigationBuildLimits _buildLimits;
+    private readonly record struct Portal(Vector2 Position, float Clearance, int SectorA, int SectorB);
 
     private static readonly (int dr, int dc)[] s_cardinalNeighbors = [(-1, 0), (1, 0), (0, -1), (0, 1)];
 
@@ -45,11 +46,14 @@ public sealed class HierarchicalNavGraph
     private readonly int[] _portalEdgeCounts;
 
     // Per-sector local component maps for fast sector component query
-    // Stored as flat component array per sector using ushort (up to 65534 components per sector)
+    // Only obstacle-adjacent sectors have stored cells. Offset -1 means implicit open terrain.
     private readonly int[] _sectorCellsOffset;
     private readonly int[] _sectorGridCols;
     private readonly int[] _sectorGridRows;
     private readonly ushort[] _sectorComponentGrid;
+    // Prefix sums index each (sector, local component) into its load-time global connectivity label.
+    private readonly int[] _sectorRegionOffsets;
+    private readonly int[] _globalRegionIds;
 
     // Preallocated Global A* scratch buffers
     private readonly int _virtualStartNode;
@@ -79,13 +83,28 @@ public sealed class HierarchicalNavGraph
     public int TotalSectors => _totalSectors;
     public float SectorSize => _sectorSize;
     public int PortalCount => _portalCount;
+    public int DetailedSectorCount { get; }
+    public int DetailedCellCount => _sectorComponentGrid.Length;
+    public int IntraEdgeCount => _intraEdges.Length;
+    public int GlobalSearchesStarted { get; private set; }
+    // Array payload only, excluding object headers and load-time temporary collections.
+    public long EstimatedMemoryBytes =>
+        (long)_portalPositions.Length * 8 + (long)_portalClearances.Length * 4 +
+        (long)(_portalSectorA.Length + _portalSectorB.Length + _portalCompA.Length + _portalCompB.Length) * 4 +
+        (long)(_sectorPortalOffsets.Length + _sectorPortalCounts.Length + _sectorPortalList.Length) * 4 +
+        (long)_intraEdges.Length * Unsafe.SizeOf<IntraEdge>() +
+        (long)(_portalEdgeOffsets.Length + _portalEdgeCounts.Length) * 4 +
+        (long)(_sectorCellsOffset.Length + _sectorGridCols.Length + _sectorGridRows.Length) * 4 +
+        (long)_sectorComponentGrid.Length * 2 + (long)(_sectorRegionOffsets.Length + _globalRegionIds.Length) * 4 +
+        (long)_totalGraphNodes * 28 + (long)_portalTraceBuffer.Length * 4;
     public bool HasActiveGlobalSearch => _hasActiveGlobalSearch;
 
     public HierarchicalNavGraph(
         NavigationGrid grid,
         float sectorSize = NavigationTuning.DefaultSectorSize,
-        float cellSize = NavigationTuning.DefaultCellSize)
-        : this(grid, MovementClass.Tracked, sectorSize, cellSize)
+        float cellSize = NavigationTuning.DefaultCellSize,
+        NavigationBuildLimits? buildLimits = null)
+        : this(grid, MovementClass.Tracked, sectorSize, cellSize, buildLimits)
     {
     }
 
@@ -93,9 +112,17 @@ public sealed class HierarchicalNavGraph
         NavigationGrid grid,
         MovementClass movementClass,
         float sectorSize = NavigationTuning.DefaultSectorSize,
-        float cellSize = NavigationTuning.DefaultCellSize)
+        float cellSize = NavigationTuning.DefaultCellSize,
+        NavigationBuildLimits? buildLimits = null)
     {
         ArgumentNullException.ThrowIfNull(grid);
+        _buildLimits = buildLimits ?? new NavigationBuildLimits();
+        _buildLimits.Validate();
+        if (!float.IsFinite(sectorSize) || sectorSize < 10f)
+            throw new ArgumentOutOfRangeException(nameof(sectorSize), "Sector size must be finite and at least 10 m.");
+        if (!float.IsFinite(cellSize) || cellSize < 0.1f)
+            throw new ArgumentOutOfRangeException(nameof(cellSize), "Cell size must be finite and at least 0.1 m.");
+        _buildLimits.CheckSectors(grid.MapWidth, grid.MapDepth, sectorSize);
         _grid = grid;
         MovementClass = movementClass;
         ClassRadius = movementClass.GetClearanceRadius();
@@ -106,24 +133,15 @@ public sealed class HierarchicalNavGraph
         _sectorRows = Math.Max(1, (int)MathF.Ceiling(grid.MapDepth / _sectorSize));
         _totalSectors = _sectorCols * _sectorRows;
 
-        _portalPositions = new Vector2[MaxPortals];
-        _portalClearances = new float[MaxPortals];
-        _portalSectorA = new int[MaxPortals];
-        _portalSectorB = new int[MaxPortals];
-        _portalCompA = new int[MaxPortals];
-        _portalCompB = new int[MaxPortals];
-
         _sectorPortalOffsets = new int[_totalSectors];
         _sectorPortalCounts = new int[_totalSectors];
         _sectorPortalList = [];
-
         _intraEdges = [];
-        _portalEdgeOffsets = new int[MaxPortals];
-        _portalEdgeCounts = new int[MaxPortals];
 
         _sectorCellsOffset = new int[_totalSectors];
         _sectorGridCols = new int[_totalSectors];
         _sectorGridRows = new int[_totalSectors];
+        _sectorRegionOffsets = new int[_totalSectors + 1];
 
         // Sizing sector component grids
         int totalSectorCells = 0;
@@ -132,17 +150,49 @@ public sealed class HierarchicalNavGraph
             var bounds = GetSectorBounds(s);
             int cols = Math.Max(1, (int)MathF.Ceiling((bounds.MaxX - bounds.MinX) / _cellSize));
             int rows = Math.Max(1, (int)MathF.Ceiling((bounds.MaxZ - bounds.MinZ) / _cellSize));
-            _sectorCellsOffset[s] = totalSectorCells;
+            bool needsDetail = _grid.HasObstaclesInBox(bounds.MinX - ClassRadius, bounds.MinZ - ClassRadius,
+                bounds.MaxX + ClassRadius, bounds.MaxZ + ClassRadius);
+            _sectorCellsOffset[s] = needsDetail ? totalSectorCells : -1;
             _sectorGridCols[s] = cols;
             _sectorGridRows[s] = rows;
-            totalSectorCells += cols * rows;
+            if (needsDetail)
+            {
+                long required = (long)totalSectorCells + (long)cols * rows;
+                if (required > _buildLimits.MaxDetailedCells)
+                    throw new InvalidOperationException($"Navigation detailed-cell budget exceeded for {MovementClass}: {required}, limit {_buildLimits.MaxDetailedCells}.");
+                totalSectorCells = (int)required;
+                DetailedSectorCount++;
+            }
         }
         _sectorComponentGrid = new ushort[totalSectorCells];
 
+        BuildSectorComponents();
+        List<Portal> portals = DiscoverPortals();
+        _portalCount = portals.Count;
+        _portalPositions = new Vector2[_portalCount];
+        _portalClearances = new float[_portalCount];
+        _portalSectorA = new int[_portalCount];
+        _portalSectorB = new int[_portalCount];
+        _portalCompA = new int[_portalCount];
+        _portalCompB = new int[_portalCount];
+        _portalEdgeOffsets = new int[_portalCount];
+        _portalEdgeCounts = new int[_portalCount];
+        for (int p = 0; p < _portalCount; p++)
+        {
+            Portal portal = portals[p];
+            _portalPositions[p] = portal.Position;
+            _portalClearances[p] = portal.Clearance;
+            _portalSectorA[p] = portal.SectorA;
+            _portalSectorB[p] = portal.SectorB;
+        }
+        AssignPortalComponents();
+        BuildIntraSectorEdges();
+        _globalRegionIds = BuildGlobalConnectivity();
+
         // Global A* scratch buffers
-        _virtualStartNode = MaxPortals;
-        _virtualGoalNode = MaxPortals + 1;
-        _totalGraphNodes = MaxPortals + 2;
+        _virtualStartNode = _portalCount;
+        _virtualGoalNode = _portalCount + 1;
+        _totalGraphNodes = _portalCount + 2;
 
         _heap = new int[_totalGraphNodes];
         _heapPosition = new int[_totalGraphNodes];
@@ -151,10 +201,8 @@ public sealed class HierarchicalNavGraph
         _cameFrom = new int[_totalGraphNodes];
         _searchGen = new uint[_totalGraphNodes];
         _closedGen = new uint[_totalGraphNodes];
-        _portalTraceBuffer = new int[MaxPortals];
+        _portalTraceBuffer = new int[_portalCount];
 
-        // Build sectors, portals, components and intra-edges
-        BuildGraph();
     }
 
     public (float MinX, float MinZ, float MaxX, float MaxZ) GetSectorBounds(int sectorIndex)
@@ -175,33 +223,18 @@ public sealed class HierarchicalNavGraph
         return sy * _sectorCols + sx;
     }
 
-    private void BuildGraph()
-    {
-        // 1. Build local sector component grids
-        BuildSectorComponents();
-
-        // 2. Discover portals along vertical and horizontal sector boundaries
-        DiscoverPortals();
-
-        // 3. Assign portal component memberships in adjacent sectors
-        AssignPortalComponents();
-
-        // 4. Construct intra-sector edges between portals sharing the same component
-        BuildIntraSectorEdges();
-    }
-
     private void BuildSectorComponents()
     {
         // Temporary BFS queue for flood filling components within a sector
         int maxSectorCells = 0;
         for (int s = 0; s < _totalSectors; s++)
         {
-            int cellCount = _sectorGridCols[s] * _sectorGridRows[s];
+            int cellCount = _sectorCellsOffset[s] < 0 ? 0 : _sectorGridCols[s] * _sectorGridRows[s];
             if (cellCount > maxSectorCells) maxSectorCells = cellCount;
         }
 
         int[] bfsQueue = new int[maxSectorCells];
-        int[] sectorObstacles = new int[Math.Min(1024, _grid.GroundedObstacleCount)];
+        int[] sectorObstacles = new int[_grid.GroundedObstacleCount];
 
         for (int s = 0; s < _totalSectors; s++)
         {
@@ -209,17 +242,15 @@ public sealed class HierarchicalNavGraph
             int cols = _sectorGridCols[s];
             int rows = _sectorGridRows[s];
             int baseOffset = _sectorCellsOffset[s];
-            int cellCount = cols * rows;
-
-            // Fast path: if interior sector has no obstacles, the entire sector is one connected component (1)
-            bool isMapBoundarySector = bounds.MinX < ClassRadius || bounds.MaxX > _grid.MapWidth - ClassRadius ||
-                                       bounds.MinZ < ClassRadius || bounds.MaxZ > _grid.MapDepth - ClassRadius;
-
-            if (!isMapBoundarySector && !_grid.HasObstaclesInBox(bounds.MinX - ClassRadius, bounds.MinZ - ClassRadius, bounds.MaxX + ClassRadius, bounds.MaxZ + ClassRadius))
+            if (baseOffset < 0)
             {
-                Array.Fill(_sectorComponentGrid, (ushort)1, baseOffset, cellCount);
+                _sectorRegionOffsets[s + 1] = 1;
                 continue;
             }
+            int cellCount = cols * rows;
+
+            bool isMapBoundarySector = bounds.MinX < ClassRadius || bounds.MaxX > _grid.MapWidth - ClassRadius ||
+                                       bounds.MinZ < ClassRadius || bounds.MaxZ > _grid.MapDepth - ClassRadius;
 
             int localObsCount = _grid.QueryObstacles(
                 bounds.MinX - ClassRadius, bounds.MinZ - ClassRadius,
@@ -326,12 +357,15 @@ public sealed class HierarchicalNavGraph
                     currentComponent++;
                 }
             }
+            _sectorRegionOffsets[s + 1] = currentComponent - 1;
         }
+        for (int s = 1; s <= _totalSectors; s++)
+            _sectorRegionOffsets[s] += _sectorRegionOffsets[s - 1];
     }
 
-    private void DiscoverPortals()
+    private List<Portal> DiscoverPortals()
     {
-        _portalCount = 0;
+        List<Portal> portals = new();
         List<int>[] sectorPortals = new List<int>[_totalSectors];
         for (int s = 0; s < _totalSectors; s++) sectorPortals[s] = new List<int>();
 
@@ -355,7 +389,7 @@ public sealed class HierarchicalNavGraph
                 ExtractPortalsAlongSegment(
                     new Vector2(xBorder, zStart),
                     new Vector2(xBorder, zEnd),
-                    sA, sB, sampleStep, sectorPortals);
+                    sA, sB, sampleStep, sectorPortals, portals);
             }
         }
 
@@ -376,7 +410,7 @@ public sealed class HierarchicalNavGraph
                 ExtractPortalsAlongSegment(
                     new Vector2(xStart, zBorder),
                     new Vector2(xEnd, zBorder),
-                    sA, sB, sampleStep, sectorPortals);
+                    sA, sB, sampleStep, sectorPortals, portals);
             }
         }
 
@@ -398,6 +432,7 @@ public sealed class HierarchicalNavGraph
                 _sectorPortalList[offset + i] = list[i];
             }
         }
+        return portals;
     }
 
     private void ExtractPortalsAlongSegment(
@@ -406,7 +441,7 @@ public sealed class HierarchicalNavGraph
         int sectorA,
         int sectorB,
         float step,
-        List<int>[] sectorPortals)
+        List<int>[] sectorPortals, List<Portal> portals)
     {
         Vector2 dir = end - start;
         float len = dir.Length();
@@ -420,22 +455,7 @@ public sealed class HierarchicalNavGraph
 
         if (!hasObsA && !hasObsB)
         {
-            if (_portalCount >= MaxPortals)
-            {
-                throw new InvalidOperationException($"HierarchicalNavGraph exceeded maximum supported portals ({MaxPortals}).");
-            }
-
-            int pIdx = _portalCount++;
-            Vector2 portalPos = (start + end) * 0.5f;
-            _portalPositions[pIdx] = portalPos;
-            _portalClearances[pIdx] = len * 0.5f;
-            _portalSectorA[pIdx] = sectorA;
-            _portalSectorB[pIdx] = sectorB;
-            _portalCompA[pIdx] = -1;
-            _portalCompB[pIdx] = -1;
-
-            sectorPortals[sectorA].Add(pIdx);
-            sectorPortals[sectorB].Add(pIdx);
+            AddPortal((start + end) * 0.5f, len * 0.5f, sectorA, sectorB, sectorPortals, portals);
             return;
         }
 
@@ -478,27 +498,36 @@ public sealed class HierarchicalNavGraph
                     float width = d - openingStartDist;
                     if (bestClearance >= effectiveThreshold)
                     {
-                        if (_portalCount >= MaxPortals)
-                        {
-                            throw new InvalidOperationException($"HierarchicalNavGraph exceeded maximum supported portals ({MaxPortals}).");
-                        }
-
-                        int pIdx = _portalCount++;
-                        Vector2 portalPos = start + normalDir * bestDist;
-                        _portalPositions[pIdx] = portalPos;
-                        _portalClearances[pIdx] = MathF.Max(bestClearance, width * 0.5f);
-                        _portalSectorA[pIdx] = sectorA;
-                        _portalSectorB[pIdx] = sectorB;
-                        _portalCompA[pIdx] = -1;
-                        _portalCompB[pIdx] = -1;
-
-                        sectorPortals[sectorA].Add(pIdx);
-                        sectorPortals[sectorB].Add(pIdx);
+                        AddPortal(start + normalDir * bestDist, MathF.Max(bestClearance, width * 0.5f),
+                            sectorA, sectorB, sectorPortals, portals);
                     }
                     inOpening = false;
                 }
             }
         }
+    }
+
+    private void AddPortal(Vector2 position, float clearance, int sectorA, int sectorB,
+        List<int>[] sectorPortals, List<Portal> portals)
+    {
+        if (portals.Count >= _buildLimits.MaxPortals)
+            throw new InvalidOperationException($"Navigation portal budget exceeded for {MovementClass}: limit {_buildLimits.MaxPortals}.");
+        int index = portals.Count;
+        portals.Add(new Portal(position, clearance, sectorA, sectorB));
+        sectorPortals[sectorA].Add(index);
+        sectorPortals[sectorB].Add(index);
+    }
+
+    private ushort GetSectorCellComponent(int sector, int col, int row)
+    {
+        int offset = _sectorCellsOffset[sector];
+        if (offset >= 0) return _sectorComponentGrid[offset + row * _sectorGridCols[sector] + col];
+        // Obstacle-free sectors are implicit, including boundary sectors. Preserve map-edge clearance.
+        var bounds = GetSectorBounds(sector);
+        float x = bounds.MinX + (col + 0.5f) * _cellSize;
+        float z = bounds.MinZ + (row + 0.5f) * _cellSize;
+        return x >= ClassRadius && x <= _grid.MapWidth - ClassRadius &&
+               z >= ClassRadius && z <= _grid.MapDepth - ClassRadius ? (ushort)1 : ushort.MaxValue;
     }
 
     private void AssignPortalComponents()
@@ -519,12 +548,11 @@ public sealed class HierarchicalNavGraph
         var bounds = GetSectorBounds(sector);
         int cols = _sectorGridCols[sector];
         int rows = _sectorGridRows[sector];
-        int baseOffset = _sectorCellsOffset[sector];
 
         int c = Math.Clamp((int)((point.X - bounds.MinX) / _cellSize), 0, cols - 1);
         int r = Math.Clamp((int)((point.Y - bounds.MinZ) / _cellSize), 0, rows - 1);
 
-        ushort directComp = _sectorComponentGrid[baseOffset + r * cols + c];
+        ushort directComp = GetSectorCellComponent(sector, c, r);
         if (directComp > 0 && directComp != ushort.MaxValue) return directComp;
 
         // Search small window for closest clear component cell
@@ -540,7 +568,7 @@ public sealed class HierarchicalNavGraph
                 int nc = c + dc;
                 if (nc < 0 || nc >= cols) continue;
 
-                ushort comp = _sectorComponentGrid[baseOffset + nr * cols + nc];
+                ushort comp = GetSectorCellComponent(sector, nc, nr);
                 if (comp > 0 && comp != ushort.MaxValue)
                 {
                     float cx = bounds.MinX + (nc + 0.5f) * _cellSize;
@@ -607,9 +635,56 @@ public sealed class HierarchicalNavGraph
                 float dist = Vector2.Distance(_portalPositions[sourcePortal], _portalPositions[targetPortal]);
                 float bottleneck = MathF.Min(_portalClearances[sourcePortal], _portalClearances[targetPortal]);
 
+                if (edges.Count >= _buildLimits.MaxIntraEdges)
+                    throw new InvalidOperationException($"Navigation edge budget exceeded for {MovementClass}: limit {_buildLimits.MaxIntraEdges}.");
                 edges.Add(new IntraEdge(targetPortal, dist, bottleneck));
             }
         }
+    }
+
+    private int[] BuildGlobalConnectivity()
+    {
+        int[] parents = new int[_sectorRegionOffsets[_totalSectors]];
+        for (int i = 0; i < parents.Length; i++) parents[i] = i;
+        byte[] ranks = new byte[parents.Length];
+        for (int p = 0; p < _portalCount; p++)
+        {
+            if (_portalCompA[p] <= 0 || _portalCompB[p] <= 0) continue;
+            int a = FindRoot(parents, _sectorRegionOffsets[_portalSectorA[p]] + _portalCompA[p] - 1);
+            int b = FindRoot(parents, _sectorRegionOffsets[_portalSectorB[p]] + _portalCompB[p] - 1);
+            if (a == b) continue;
+            if (ranks[a] < ranks[b]) (a, b) = (b, a);
+            parents[b] = a;
+            if (ranks[a] == ranks[b]) ranks[a]++;
+        }
+        // Flatten every label at load. Runtime lookups do not traverse union-find trees.
+        for (int i = 0; i < parents.Length; i++) parents[i] = FindRoot(parents, i);
+        return parents;
+    }
+
+    private static int FindRoot(int[] parents, int node)
+    {
+        while (parents[node] != node)
+        {
+            parents[node] = parents[parents[node]];
+            node = parents[node];
+        }
+        return node;
+    }
+
+    /// <summary>
+    /// Constant-time rejection of disconnected coarse components. Connectivity is optimistic:
+    /// portals are not filtered by exact radius here, so narrow-passage clearance still requires search.
+    /// This must not reject a smaller vehicle that maps to the same coarse movement class.
+    /// </summary>
+    public bool AreComponentsConnected(int startSector, int startComponent, int targetSector, int targetComponent)
+    {
+        if ((uint)startSector >= (uint)_totalSectors || (uint)targetSector >= (uint)_totalSectors ||
+            startComponent <= 0 || targetComponent <= 0 ||
+            startComponent > _sectorRegionOffsets[startSector + 1] - _sectorRegionOffsets[startSector] ||
+            targetComponent > _sectorRegionOffsets[targetSector + 1] - _sectorRegionOffsets[targetSector]) return false;
+        return _globalRegionIds[_sectorRegionOffsets[startSector] + startComponent - 1] ==
+               _globalRegionIds[_sectorRegionOffsets[targetSector] + targetComponent - 1];
     }
 
     public int GetComponentId(Vector2 point, float radius)
@@ -635,11 +710,13 @@ public sealed class HierarchicalNavGraph
         int startComp = FindClosestComponentInSector(startSector, start);
         int targetComp = FindClosestComponentInSector(targetSector, target);
 
-        if (startComp <= 0 || targetComp <= 0)
+        if (!AreComponentsConnected(startSector, startComp, targetSector, targetComp))
         {
             _hasActiveGlobalSearch = false;
             return;
         }
+
+        GlobalSearchesStarted++;
 
         // Initialize virtual goal node
         _searchGen[_virtualGoalNode] = _globalSearchGeneration;
@@ -706,9 +783,9 @@ public sealed class HierarchicalNavGraph
 
             if (current == _virtualGoalNode)
             {
-                portalCount = ReconstructPortalPlan(outPortals);
                 _hasActiveGlobalSearch = false;
-                return PathRequestStatus.PathFound;
+                return TryReconstructPortalPlan(outPortals, out portalCount)
+                    ? PathRequestStatus.PathFound : PathRequestStatus.CapacityExceeded;
             }
 
             Vector2 currentPos = _portalPositions[current];
@@ -793,8 +870,9 @@ public sealed class HierarchicalNavGraph
         return PathRequestStatus.Searching;
     }
 
-    private int ReconstructPortalPlan(Span<Vector2> outPortals)
+    private bool TryReconstructPortalPlan(Span<Vector2> outPortals, out int portalCount)
     {
+        portalCount = 0;
         int trace = _cameFrom[_virtualGoalNode];
         int count = 0;
 
@@ -804,19 +882,23 @@ public sealed class HierarchicalNavGraph
             trace = _cameFrom[trace];
         }
 
+        if (trace != _virtualStartNode) return false;
+
         int written = 0;
         Vector2 lastPos = _activeStart;
-        for (int i = count - 1; i >= 0 && written < outPortals.Length; i--)
+        for (int i = count - 1; i >= 0; i--)
         {
             Vector2 pos = _portalPositions[_portalTraceBuffer[i]];
             if (Vector2.DistanceSquared(pos, lastPos) > 1.0f && Vector2.DistanceSquared(pos, _activeTarget) > 1.0f)
             {
+                if (written == outPortals.Length) return false;
                 outPortals[written++] = pos;
                 lastPos = pos;
             }
         }
 
-        return written;
+        portalCount = written;
+        return true;
     }
 
     public void CancelGlobalSearch()

@@ -56,7 +56,7 @@ public sealed class OpsRules : RuleSet
         DetectionTuning? detTuning,
         DeterministicRandom? combatRandom = null)
     {
-        NavigationSystem nav = new(new NavigationGrid(geometry, navTuning?.CellSize ?? NavigationTuning.DefaultCellSize, enableHierarchical: true), movementCatalog, navTuning);
+        NavigationSystem nav = new(new NavigationGrid(geometry, navTuning?.CellSize ?? NavigationTuning.DefaultCellSize, enableHierarchical: true, sectorSize: navTuning?.SectorSize ?? NavigationTuning.DefaultSectorSize), movementCatalog, navTuning);
         DetectionSystem det = new(geometry, perceptionCatalog, detTuning);
         if (combatCatalog is not null)
         {

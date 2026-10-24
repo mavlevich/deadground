@@ -326,31 +326,38 @@ Test scenes: observing through a forest edge, firing over a ridge, a road under 
 - Movement classes and dedicated coarse graphs:
   - Four explicit movement classes: `Foot` (radius 0.4 m), `Wheeled` (radius 0.8 m), `Medium` (radius 1.0 m), and `Tracked` (radius 1.4 m).
   - Dedicated region-portal graph per movement class: narrow passages (such as a 2 m gap in a wall) correctly split sectors into disconnected components for heavy vehicles (forcing detour routing), while remaining passable in a single component for light vehicles.
-  - Graph build performance: ~0.9 s total build time across all four movement class graphs for a dense 900-house town on a 2x2 km map (well below the 3.0 s budget target).
+  - The headless 5x5 km probe measures open terrain, a 900-building district and a long barrier. See [navigation-5km.md](navigation-5km.md) for scope, memory, request latency and reproducible measurements.
 - Region-portal graph (`HierarchicalNavGraph`):
-  - Partitions static geometry into uniform 50 m sectors across 2x2 km maps (`navigation-large`).
+  - Partitions static geometry into uniform 50 m sectors. The playable `navigation-large` scenario remains 2x2 km; headless scale fixtures cover 5x5 km.
   - Boundary portal extraction: samples sector border clearance at 0.5 m intervals and extracts centered portal nodes with bottleneck clearance. Fast-path midpoint portal emission for obstacle-free boundaries.
-  - Dynamic portal capacity: uses dynamic lists converted to CSR indexing per sector, eliminating arbitrary fixed portal caps.
-  - Intra-sector connected components: flood-fill labeling inside sectors assigns component IDs using `ushort` (supporting up to 65,534 components per sector), preventing false edges across interior dividing walls.
-  - Reconstruct portal trace buffer sized to `MaxPortals = 8192` with `MaxGlobalPlanPortals = 1024`.
+  - Portal arrays and global search scratch are sized to the actual extracted portal count. Per-sector indexing uses CSR. Explicit load budgets reject excessive sectors, detailed cells, portals and intra-sector edges with a diagnostic error.
+  - Obstacle-free sectors store no detailed cells. Their implicit component preserves map-boundary clearance. Obstacle-adjacent sectors use flood-fill `ushort` labels (up to 65,534 components per sector), preventing false edges across interior walls.
+  - At load, union sector components through portals and flatten global connectivity labels. Disconnected pairs return `NoPath` before A* with O(1) label comparison. This is an optimistic coarse precheck; exact-radius portal and swept-clearance checks still apply.
+  - Grid load preflight and class graphs use the same requested sector size, including `NavigationTuning.SectorSize` passed by `OpsRules`.
+  - The reconstruction trace is sized to the loaded portal count. Per-unit output remains limited to 1024 portals. An undersized route buffer reports `CapacityExceeded` instead of a partial successful route.
 - Resumable time-sliced planning stages (`NavigationSystem`):
   - `GlobalPlanning`: A* search over the region-portal graph using min-heap and decrease-key with `MaxGlobalExpansionsPerTick = 500`. Deduplicates consecutive identical portals and skips portals within 1.0 m of start or target.
   - `AreaPreparation`: Row-by-column clearance evaluation over bounded local window (up to `MaxLocalWindowSize = 160 m`, `MaxAreaPrepCellsPerTick = 40000`). Dynamic obstacle buffer scales to total map obstacles.
   - `LocalPlanning`: Fine grid A* in pre-allocated scratch buffers (`MaxLocalExpansionsPerTick = 1000`).
-  - `PathSmoothing`: Raycasting and shortcutting (`MaxSmoothingRaycastsPerTick = 200`). Robust fallback ensures valid raw waypoints are never discarded with false capacity errors.
+  - `PathSmoothing`: Resumable initial splicing and shortcut scans (`MaxSmoothingRaycastsPerTick = 200`) preserve the candidate index across ticks. Robust fallback ensures valid raw waypoints are never discarded with false capacity errors.
+- Static corridor reuse:
+  - A deterministic FIFO cache holds 16 successful global portal plans by start sector/component, target sector/component and exact radius. It can be disabled with `GlobalPlanCacheEntries = 0`.
+  - The probe compares clustered and fixed-seed scattered orders with cache on and off. The 637-tick barrier/200 p99 applies only to clustered group orders; unrelated queries need their own searches.
+  - Neighbors with equivalent connectivity reuse a corridor. Exact destinations, fine path clearance, local smoothing and unit routes remain independent. Reused corridors need not be globally shortest for every start position.
+  - The cache belongs to one immutable navigation instance. Future geometry changes must rebuild or invalidate both graph and cache. This is not a group-order or dynamic-obstacle implementation.
 - Multi-chunk sequential traversal:
   - Long routes (>64 waypoints) stream across multiple chunks without exceeding waypoint buffer limits.
   - Lookahead prefetching: enqueues the next chunk before the current chunk completes (`ChunkLookaheadWaypoints = 2`), guarded against redundant duplicate requests while a chunk is staged.
   - Seamless swapping: when the vehicle reaches the end of its active chunk, staged waypoints swap in immediately, avoiding motion interruption.
   - Final target preservation: preserves initial user destination across intermediate chunks without premature stopping.
 - Memory and allocations:
-  - Bounded memory footprint (~12.7 MB estimated memory for 1000 units on 2x2 km map).
-  - Fine memory depends on explicitly bounded local regions and searches, not flat full-map cell allocation.
+  - `EstimatedMemoryBytes` includes the grid, all four class graphs, search scratch, route storage and corridor cache. It counts array payload, excluding object headers and load-time temporaries. The probe separately reports retained managed heap change and cumulative load allocations.
+  - Open sectors have implicit components. Stored fine detail depends on obstacle-adjacent sectors, subject to a per-class load budget. Fine local searches retain bounded windows.
   - 0 B allocations in steady state during simulation ticks.
 - Performance gate:
-  - Bounded tick time: p99 < 15 ms under 1000 active units (measured at ~1.1 ms).
+  - The 5 km probe checks navigation-only p99 < 15 ms, load < 3 seconds, array payload < 128 MiB at 1024 unit slots, zero measured tick allocations and per-stage work limits. Request latency is reported separately; low tick cost does not imply immediate orders.
 - Prototype limitations for this slice:
-  - Static geometry only. Vehicle-vehicle dynamic avoidance, formation spacing, and moving obstacles are deferred to subsequent slices. Maps up to 2x2 km supported; 50x50 km streaming is not claimed.
+  - Static geometry only. Vehicle-vehicle dynamic avoidance, formation spacing, and moving obstacles are deferred to subsequent slices. Headless static geometry fixtures cover 5x5 km. Forest/water movement rules, bridge support surfaces and a playable 5 km map remain separate work. Neither 10 km support nor 50 km streaming is claimed.
 
 ### 9.3 Following the path
 
