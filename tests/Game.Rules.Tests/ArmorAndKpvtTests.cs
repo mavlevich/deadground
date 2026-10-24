@@ -369,7 +369,8 @@ public sealed class ArmorAndKpvtTests
             sim.Step();
         }
 
-        // Measure steady-state allocation during active combat ticks
+        // Use the same strict no-GC window as other combat allocation tests.
+        using NoGcAllocationWindow window = new();
         long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
         for (int i = 0; i < 50; i++)
         {
@@ -377,7 +378,8 @@ public sealed class ArmorAndKpvtTests
         }
         long allocatedAfter = GC.GetAllocatedBytesForCurrentThread();
 
-        Assert.Equal(0, allocatedAfter - allocatedBefore);
+        long allocated = allocatedAfter - allocatedBefore;
+        Assert.True(allocated == 0, window.Describe(allocated));
     }
 
     [Fact]
