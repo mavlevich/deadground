@@ -37,17 +37,35 @@ public sealed class NavigationGrid
     public int GroundedObstacleCount => _obstacles.Length;
     public ReadOnlySpan<GroundedObstacle> GroundedObstacles => _obstacles;
 
+    // Owned array payload, including all movement graphs, excluding object headers and build scratch.
+    public long EstimatedMemoryBytes
+    {
+        get
+        {
+            long bytes = (long)_obstacles.Length * 16 + (long)_clearance.Length * 4 +
+                (long)(_bucketOffsets.Length + _bucketCounts.Length + _bucketObstacleIndices.Length +
+                       _obstacleQueryStamp.Length + _windowObstacleBuffer.Length) * 4 +
+                (long)_hierarchicalGraphs.Length * IntPtr.Size;
+            for (int i = 0; i < _hierarchicalGraphs.Length; i++) bytes += _hierarchicalGraphs[i].EstimatedMemoryBytes;
+            return bytes;
+        }
+    }
+
     public readonly record struct GroundedObstacle(float MinX, float MinZ, float MaxX, float MaxZ);
 
     public NavigationGrid(
         StaticGeometry geometry,
         float cellSize = NavigationTuning.DefaultCellSize,
-        bool enableHierarchical = false)
+        bool enableHierarchical = false,
+        NavigationBuildLimits? buildLimits = null,
+        float sectorSize = NavigationTuning.DefaultSectorSize)
         : this(
             (geometry ?? throw new ArgumentNullException(nameof(geometry))).HeightMap,
             geometry.Structures is { Count: > 0 } ? GetStructuresArray(geometry) : [],
             cellSize,
-            enableHierarchical)
+            enableHierarchical,
+            buildLimits,
+            sectorSize)
     {
     }
 
@@ -55,11 +73,23 @@ public sealed class NavigationGrid
         HeightMap heightMap,
         ReadOnlySpan<OpaqueStructure> structures,
         float cellSize = NavigationTuning.DefaultCellSize,
-        bool enableHierarchical = false)
+        bool enableHierarchical = false,
+        NavigationBuildLimits? buildLimits = null,
+        float sectorSize = NavigationTuning.DefaultSectorSize)
     {
         ArgumentNullException.ThrowIfNull(heightMap);
         if (!float.IsFinite(cellSize) || cellSize <= 0f)
             throw new ArgumentOutOfRangeException(nameof(cellSize), "Cell size must be positive and finite.");
+
+        if (!float.IsFinite(sectorSize) || sectorSize < 10f)
+            throw new ArgumentOutOfRangeException(nameof(sectorSize), "Sector size must be finite and at least 10 m.");
+        buildLimits ??= new NavigationBuildLimits();
+        buildLimits.Validate();
+        buildLimits.CheckSectors(heightMap.Width, heightMap.Depth, sectorSize);
+        double fineCols = Math.Ceiling((double)heightMap.Width / cellSize);
+        double fineRows = Math.Ceiling((double)heightMap.Depth / cellSize);
+        if (!double.IsFinite(fineCols * fineRows) || fineCols * fineRows > int.MaxValue)
+            throw new InvalidOperationException("Navigation fine-grid dimensions exceed supported cell indexing.");
 
         MapWidth = heightMap.Width;
         MapDepth = heightMap.Depth;
@@ -198,10 +228,10 @@ public sealed class NavigationGrid
         _windowObstacleBuffer = new int[_obstacles.Length];
 
         _hierarchicalGraphs = new HierarchicalNavGraph[4];
-        _hierarchicalGraphs[(int)MovementClass.Foot] = new HierarchicalNavGraph(this, MovementClass.Foot, cellSize: CellSize);
-        _hierarchicalGraphs[(int)MovementClass.Wheeled] = new HierarchicalNavGraph(this, MovementClass.Wheeled, cellSize: CellSize);
-        _hierarchicalGraphs[(int)MovementClass.Medium] = new HierarchicalNavGraph(this, MovementClass.Medium, cellSize: CellSize);
-        _hierarchicalGraphs[(int)MovementClass.Tracked] = new HierarchicalNavGraph(this, MovementClass.Tracked, cellSize: CellSize);
+        _hierarchicalGraphs[(int)MovementClass.Foot] = new HierarchicalNavGraph(this, MovementClass.Foot, sectorSize: sectorSize, cellSize: CellSize, buildLimits: buildLimits);
+        _hierarchicalGraphs[(int)MovementClass.Wheeled] = new HierarchicalNavGraph(this, MovementClass.Wheeled, sectorSize: sectorSize, cellSize: CellSize, buildLimits: buildLimits);
+        _hierarchicalGraphs[(int)MovementClass.Medium] = new HierarchicalNavGraph(this, MovementClass.Medium, sectorSize: sectorSize, cellSize: CellSize, buildLimits: buildLimits);
+        _hierarchicalGraphs[(int)MovementClass.Tracked] = new HierarchicalNavGraph(this, MovementClass.Tracked, sectorSize: sectorSize, cellSize: CellSize, buildLimits: buildLimits);
     }
 
     public bool IsFlatGrid => _clearance.Length > 0;

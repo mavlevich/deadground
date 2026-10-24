@@ -629,7 +629,13 @@ public sealed class NavigationTests
             EntityId unit = world.CreateUnit(1, 1, new Vector2(2f, 2f), 500f);
             sim.TryEnqueue(1, new MoveCommand(1, 0, unit, new Vector2(125f, 2f)));
 
-            for (int i = 0; i < 300; i++) sim.Step();
+            // Long shortcut scans now obey the ray budget instead of finishing with unbounded work.
+            for (int i = 0; i < 6000; i++)
+            {
+                sim.Step();
+                Assert.InRange(nav.SmoothingRaycastsThisTick, 0, nav.Tuning.MaxSmoothingRaycastsPerTick);
+                if (nav.PendingRequests == 0) break;
+            }
 
             UnitState state = world.GetUnitAt(0);
             Assert.Equal(PathRequestStatus.CapacityExceeded, nav.GetUnitStatus(unit));
@@ -647,9 +653,10 @@ public sealed class NavigationTests
             EntityId unit = world.CreateUnit(1, 1, new Vector2(2f, 2f), 500f);
             sim.TryEnqueue(1, new MoveCommand(1, 0, unit, new Vector2(125f, 2f)));
 
-            for (int i = 0; i < 400; i++)
+            for (int i = 0; i < 6000; i++)
             {
                 sim.Step();
+                Assert.InRange(nav.SmoothingRaycastsThisTick, 0, nav.Tuning.MaxSmoothingRaycastsPerTick);
                 if (nav.PendingRequests == 0 && world.TryGetUnit(unit, out var s) && !s.Moving) break;
             }
 

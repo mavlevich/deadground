@@ -147,25 +147,19 @@ Investigation and acceptance:
 
 ## 4. Navigation scaling to 10 x 10 km
 
-Carry forward the confirmed navigation issue separately from visual and demo behavior fixes:
+The first scaling slice now covers 5x5 km headless static geometry. See
+[navigation-5km.md](navigation-5km.md) for the measurements and remaining limits.
 
-- `HierarchicalNavGraph.MaxPortals = 8192`; default sectors are 50 m wide.
-- An empty 3.2 km square uses 8064 portals per graph. At 4 km it needs 12640; at 10 km it needs 79600.
-  Obstacles can create additional portals. These counts are not safe general map-size guarantees.
-- `_sectorComponentGrid` allocates a dense ushort component map at 0.5 m resolution across the entire map.
-  `NavigationGrid` eagerly creates four movement-class graphs. At 10 km this is about 3.2 GB of component
-  arrays alone, excluding all other memory.
-- Increasing portal capacity or sector size alone does not remove dense component storage.
-- TDD statements about fully bounded local detail, approximately 12.7 MB navigation memory and eliminating
-  arbitrary portal caps need correction against actual measured implementation.
+- Replaced the old 8192-element portal arrays with actual-size storage and explicit load budgets.
+- Removed full-map component cell allocation from obstacle-free sectors. Four graphs retain separate
+  detail only around obstacles, with bounded local searches.
+- Corrected the memory estimate to include all graphs and added heap/allocation measurements.
+- Added bounded global corridor reuse to reduce repeated searches in clustered move-order bursts.
+- Kept request queue latency visible; a low per-tick CPU cost is not an instant-response guarantee.
 
-Preferred direction: compact global region/portal connectivity, implicit fully open regions, detailed
-components only where necessary, bounded local route search, explicit loading budgets and capacity checks.
-Keep narrow passages and movement-class connectivity correct.
-
-Acceptance should include 4 km and 10 km maps, open and dense obstacle layouts, disconnected areas,
-mass route requests, load time, peak/steady memory, per-tick work and route latency.
-Do not expand the demo to 10 km until these costs are measured.
+10 km remains unverified and is outside the default sector budget. Before extending the map again,
+measure dense/disconnected geometry, load-time memory, long route capacities and order latency.
+Do not expand the demo to 10 km by raising constants alone.
 
 ## Suggested handoff order
 
@@ -176,4 +170,4 @@ Do not expand the demo to 10 km until these costs are measured.
 
 Items 2 and 3 may share diagnostic recordings, but each confirmed bug needs its own regression.
 No commit, push or agent dispatch has been performed. Later 2026-10-23 requests authorized the
-demo engagement fix and renderer budget fix. Movement smoothness and navigation scaling remain pending.
+demo engagement fix and renderer budget fix. Movement presentation follow-ups and scaling beyond the measured 5 km fixtures remain separate work.

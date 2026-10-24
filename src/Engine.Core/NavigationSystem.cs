@@ -113,6 +113,20 @@ public sealed class NavigationSystem : ISimulationSystem
     private readonly int[] _slotGlobalPortalCounts;
     private readonly int[] _slotGlobalPortalIndices;
 
+    // Static-graph corridor reuse. Fine paths and exact destinations remain per unit.
+    private readonly record struct GlobalPlanKey(int StartSector, int StartComponent, int TargetSector, int TargetComponent, float Radius)
+    {
+        public bool Matches(GlobalPlanKey other) => StartSector == other.StartSector && StartComponent == other.StartComponent &&
+            TargetSector == other.TargetSector && TargetComponent == other.TargetComponent && Radius == other.Radius;
+    }
+    private readonly GlobalPlanKey[] _cachedPlanKeys;
+    private readonly int[] _cachedPlanCounts;
+    private readonly Vector2[] _cachedPlanPortals;
+    private int _nextCachedPlan;
+    private GlobalPlanKey _activePlanKey;
+    public int GlobalPlanCacheHits { get; private set; }
+    public int GlobalPlanCacheMisses { get; private set; }
+
     public NavigationGrid Grid => _grid;
     public NavigationTuning Tuning => _tuning;
     public int PendingRequests => _queueCount + (_hasActiveSearch ? 1 : 0);
@@ -145,15 +159,21 @@ public sealed class NavigationSystem : ISimulationSystem
     {
         get
         {
-            long bytes = 0;
-            bytes += _requestQueue.Length * Unsafe.SizeOf<PathRequest>() * 2;
-            bytes += _maxUnits * 4 * 8;
-            bytes += _routeWaypoints.Length * 8;
-            bytes += _slotNextChunkWaypoints.Length * 8;
-            bytes += _slotGlobalPortals.Length * 8;
-            bytes += _localClearance.Length * 4;
-            bytes += _heap.Length * 4 * 7;
-            bytes += _rawPathBuffer.Length * 8;
+            long bytes = _grid.EstimatedMemoryBytes;
+            bytes += (long)(_requestQueue.Length + _tempQueue.Length) * Unsafe.SizeOf<PathRequest>();
+            bytes += (long)(_activeGlobalPortals.Length + _routeWaypoints.Length + _slotNextChunkWaypoints.Length +
+                            _slotGlobalPortals.Length + _unitFinalTargets.Length + _rawPathBuffer.Length + _smoothedPathBuffer.Length) * 8;
+            bytes += (long)_localClearance.Length * 4;
+            bytes += (long)(_heap.Length + _heapPosition.Length + _heapGen.Length + _gScore.Length + _cameFrom.Length +
+                            _searchGen.Length + _closedGen.Length + _goalAnchorGen.Length) * 4;
+            bytes += (long)(_freeSlots.Length + _idTableKeys.Length + _idTableSlots.Length + _routeCounts.Length +
+                            _routeIndices.Length + _unitOrderGenerations.Length + _unitChunkWaitTicks.Length +
+                            _slotNextChunkCounts.Length + _slotGlobalPortalCounts.Length + _slotGlobalPortalIndices.Length) * 4;
+            bytes += (long)_slotUnitIds.Length * Unsafe.SizeOf<EntityId>();
+            bytes += (long)_unitStatuses.Length * Unsafe.SizeOf<PathRequestStatus>();
+            bytes += _unitHasActiveRoutes.Length + _unitChunkPending.Length;
+            bytes += (long)_cachedPlanKeys.Length * Unsafe.SizeOf<GlobalPlanKey>() +
+                (long)_cachedPlanCounts.Length * 4 + (long)_cachedPlanPortals.Length * 8;
             return bytes;
         }
     }
@@ -180,6 +200,11 @@ public sealed class NavigationSystem : ISimulationSystem
         _catalog = catalog;
         _tuning = tuning ?? new NavigationTuning();
         _maxUnits = Math.Max(1024, maxUnits);
+        if (_tuning.GlobalPlanCacheEntries < 0)
+            throw new ArgumentOutOfRangeException(nameof(tuning), "Global plan cache entries cannot be negative.");
+        _cachedPlanKeys = new GlobalPlanKey[_tuning.GlobalPlanCacheEntries];
+        _cachedPlanCounts = new int[_tuning.GlobalPlanCacheEntries];
+        _cachedPlanPortals = new Vector2[checked(_tuning.GlobalPlanCacheEntries * MaxGlobalPlanPortals)];
 
         _requestQueue = new PathRequest[_tuning.MaxPendingRequests];
         _tempQueue = new PathRequest[_tuning.MaxPendingRequests];
@@ -875,6 +900,20 @@ public sealed class NavigationSystem : ISimulationSystem
         int startComp = graph.GetComponentId(start, radius);
         int targetComp = graph.GetComponentId(target, radius);
 
+        if (!graph.AreComponentsConnected(startSector, startComp, targetSector, targetComp))
+        {
+            _unitStatuses[slot] = PathRequestStatus.NoPath;
+            FailedSearches++;
+            _unitHasActiveRoutes[slot] = false;
+            _unitChunkPending[slot] = false;
+            _routeCounts[slot] = 0;
+            _routeIndices[slot] = 0;
+            _slotGlobalPortalCounts[slot] = 0;
+            world.UpdateUnitNavigation(req.Unit, unit.Position, unit.Position, false);
+            CancelActiveSearch();
+            return false;
+        }
+
         if (startSector == targetSector && startComp == targetComp && startComp > 0)
         {
             _activeGlobalPortalCount = 0;
@@ -883,6 +922,12 @@ public sealed class NavigationSystem : ISimulationSystem
             return true;
         }
 
+        _activePlanKey = new GlobalPlanKey(startSector, startComp, targetSector, targetComp, radius);
+        if (TryLoadGlobalPlan())
+        {
+            InstallGlobalPlan(slot);
+            return true;
+        }
         graph.StartGlobalSearch(start, target, radius);
         _activeStage = NavigationSearchStage.GlobalPlanning;
         return true;
@@ -943,17 +988,8 @@ public sealed class NavigationSystem : ISimulationSystem
 
         if (status == PathRequestStatus.PathFound)
         {
-            int portalOffset = slot * MaxGlobalPlanPortals;
-            for (int i = 0; i < _activeGlobalPortalCount; i++)
-            {
-                _slotGlobalPortals[portalOffset + i] = _activeGlobalPortals[i];
-            }
-            _slotGlobalPortalCounts[slot] = _activeGlobalPortalCount;
-            _slotGlobalPortalIndices[slot] = 0;
-
-            Vector2 chunkTarget = _activeGlobalPortalCount > 0 ? _activeGlobalPortals[0] : _activeRequest.Target;
-            SetupLocalWindow(_activeRequest.Start, chunkTarget);
-            _activeStage = NavigationSearchStage.AreaPreparation;
+            CacheGlobalPlan();
+            InstallGlobalPlan(slot);
             return false;
         }
         else if (status == PathRequestStatus.NoPath)
@@ -980,6 +1016,41 @@ public sealed class NavigationSystem : ISimulationSystem
         }
 
         return true;
+    }
+
+    private bool TryLoadGlobalPlan()
+    {
+        for (int i = 0; i < _cachedPlanCounts.Length; i++)
+        {
+            int count = _cachedPlanCounts[i];
+            if (count == 0 || !_cachedPlanKeys[i].Matches(_activePlanKey)) continue;
+            _cachedPlanPortals.AsSpan(i * MaxGlobalPlanPortals, count).CopyTo(_activeGlobalPortals);
+            _activeGlobalPortalCount = count;
+            GlobalPlanCacheHits++;
+            return true;
+        }
+        GlobalPlanCacheMisses++;
+        return false;
+    }
+
+    private void CacheGlobalPlan()
+    {
+        if (_cachedPlanCounts.Length == 0 || _activeGlobalPortalCount == 0) return;
+        int index = _nextCachedPlan;
+        _nextCachedPlan = (index + 1) % _cachedPlanCounts.Length;
+        _cachedPlanKeys[index] = _activePlanKey;
+        _cachedPlanCounts[index] = _activeGlobalPortalCount;
+        _activeGlobalPortals.AsSpan(0, _activeGlobalPortalCount).CopyTo(_cachedPlanPortals.AsSpan(index * MaxGlobalPlanPortals));
+    }
+
+    private void InstallGlobalPlan(int slot)
+    {
+        _activeGlobalPortals.AsSpan(0, _activeGlobalPortalCount).CopyTo(_slotGlobalPortals.AsSpan(slot * MaxGlobalPlanPortals));
+        _slotGlobalPortalCounts[slot] = _activeGlobalPortalCount;
+        _slotGlobalPortalIndices[slot] = 0;
+        Vector2 chunkTarget = _activeGlobalPortalCount > 0 ? _activeGlobalPortals[0] : _activeRequest.Target;
+        SetupLocalWindow(_activeRequest.Start, chunkTarget);
+        _activeStage = NavigationSearchStage.AreaPreparation;
     }
 
     private void SetupLocalWindow(Vector2 start, Vector2 target)
@@ -1337,31 +1408,9 @@ public sealed class NavigationSystem : ISimulationSystem
 
         _smoothedCount = 0;
 
-        // Splice directly from startPos if it can see any waypoint along raw path
-        Vector2 startPos = _activeRequest.IsChunkContinuation ? _activeRequest.Start : currentPos;
-        int visibleFromCurrent = -1;
-        for (int k = _rawPathCount - 1; k >= 0; k--)
-        {
-            SmoothingRaycastsThisTick++;
-            TotalSmoothingRaycasts++;
-            if (_grid.IsSegmentClear(startPos, _rawPathBuffer[k], _activeRadius))
-            {
-                visibleFromCurrent = k;
-                break;
-            }
-        }
-
-        if (visibleFromCurrent >= 0)
-        {
-            _smoothingCurrentAnchor = _rawPathBuffer[visibleFromCurrent];
-            _smoothedPathBuffer[_smoothedCount++] = _smoothingCurrentAnchor;
-            _smoothingAnchorIdx = visibleFromCurrent;
-        }
-        else
-        {
-            _smoothingCurrentAnchor = startPos;
-            _smoothingAnchorIdx = -1;
-        }
+        // The first splice uses the same resumable ray budget as later shortcut searches.
+        _smoothingCurrentAnchor = _activeRequest.IsChunkContinuation ? _activeRequest.Start : currentPos;
+        _smoothingAnchorIdx = -1;
 
         _smoothingCandidateIdx = _rawPathCount - 1;
     }
@@ -1373,8 +1422,10 @@ public sealed class NavigationSystem : ISimulationSystem
                SmoothingRaycastsThisTick < _tuning.MaxSmoothingRaycastsPerTick)
         {
             int farthest = -1;
-            for (int nextIdx = _smoothingCandidateIdx; nextIdx > _smoothingAnchorIdx; nextIdx--)
+            while (_smoothingCandidateIdx > _smoothingAnchorIdx)
             {
+                if (SmoothingRaycastsThisTick >= _tuning.MaxSmoothingRaycastsPerTick) return true;
+                int nextIdx = _smoothingCandidateIdx--;
                 SmoothingRaycastsThisTick++;
                 TotalSmoothingRaycasts++;
                 if (_grid.IsSegmentClear(_smoothingCurrentAnchor, _rawPathBuffer[nextIdx], _activeRadius))

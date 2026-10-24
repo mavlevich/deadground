@@ -44,7 +44,8 @@ public sealed record NavigationTuning(
     int MaxTotalExpansionsPerRequest = NavigationTuning.DefaultMaxTotalExpansionsPerRequest,
     float SectorSize = NavigationTuning.DefaultSectorSize,
     float MaxLocalWindowSize = NavigationTuning.DefaultMaxLocalWindowSize,
-    int ChunkLookaheadWaypoints = NavigationTuning.DefaultChunkLookaheadWaypoints)
+    int ChunkLookaheadWaypoints = NavigationTuning.DefaultChunkLookaheadWaypoints,
+    int GlobalPlanCacheEntries = NavigationTuning.DefaultGlobalPlanCacheEntries)
 {
     public const int DefaultMaxNodeExpansionsPerTick = 1000;
     public const int DefaultMaxPendingRequests = 256;
@@ -59,5 +60,6 @@ public sealed record NavigationTuning(
     public const float DefaultSectorSize = 50.0f;
     public const float DefaultMaxLocalWindowSize = 160.0f;
     public const int DefaultChunkLookaheadWaypoints = 2;
+    public const int DefaultGlobalPlanCacheEntries = 16;
 }
 

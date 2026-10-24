@@ -1,4 +1,5 @@
 # .NET
+.nuget/
 bin/
 obj/
 *.user
