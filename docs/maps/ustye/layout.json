@@ -1,0 +1,1319 @@
+{
+  "schema_version": 1,
+  "kind": "map_design",
+  "id": "ustye",
+  "name": "Ustye: Backwater Crossing",
+  "status": "schematic_only",
+  "extent_m": [
+    5000,
+    5000
+  ],
+  "axes": {
+    "origin": "northwest",
+    "x": "east",
+    "z": "south",
+    "north": "-Z",
+    "up": "+Y"
+  },
+  "reference": {
+    "region": "Lubin and Wapnica on Wolin, with the Swina estuary",
+    "adaptation": "Fictional layout, not a traced geographic reconstruction.",
+    "sources": [
+      {
+        "title": "Municipality: Lubin hill viewpoint",
+        "url": "https://miedzyzdroje.pl/strona/grodzisko-sredniowieczne"
+      },
+      {
+        "title": "Official Swinoujscie visitor portal",
+        "url": "https://visit.swinoujscie.pl/en/"
+      }
+    ]
+  },
+  "height_model": {
+    "base_m": 4,
+    "peaks": [
+      {
+        "center_m": [
+          1700,
+          1350
+        ],
+        "amplitude_m": 34,
+        "sigma_x_m": 566,
+        "sigma_z_m": 500
+      },
+      {
+        "center_m": [
+          3800,
+          3380
+        ],
+        "amplitude_m": 41,
+        "sigma_x_m": 600,
+        "sigma_z_m": 529
+      },
+      {
+        "center_m": [
+          1500,
+          3700
+        ],
+        "amplitude_m": 14,
+        "sigma_x_m": 894,
+        "sigma_z_m": 632
+      }
+    ],
+    "status": "design_target_not_survey_or_verified_LOS"
+  },
+  "water": {
+    "river": [
+      [
+        2200,
+        0
+      ],
+      [
+        2100,
+        500
+      ],
+      [
+        2400,
+        1000
+      ],
+      [
+        2350,
+        1800
+      ],
+      [
+        2650,
+        2450
+      ],
+      [
+        2550,
+        3000
+      ],
+      [
+        2860,
+        3550
+      ],
+      [
+        3000,
+        4300
+      ],
+      [
+        3450,
+        5000
+      ]
+    ],
+    "river_width_m": 100,
+    "bay": [
+      [
+        5000,
+        3300
+      ],
+      [
+        4650,
+        3460
+      ],
+      [
+        4500,
+        4000
+      ],
+      [
+        4050,
+        4400
+      ],
+      [
+        3500,
+        4650
+      ],
+      [
+        3300,
+        5000
+      ],
+      [
+        5000,
+        5000
+      ]
+    ],
+    "movement": "closed_except_declared_crossings"
+  },
+  "regions": [
+    {
+      "id": "WOOD-D1",
+      "kind": "dense_forest",
+      "polygon": [
+        [
+          180,
+          300
+        ],
+        [
+          1200,
+          180
+        ],
+        [
+          1900,
+          620
+        ],
+        [
+          2150,
+          1250
+        ],
+        [
+          2070,
+          1690
+        ],
+        [
+          1560,
+          2120
+        ],
+        [
+          1000,
+          1700
+        ],
+        [
+          420,
+          1650
+        ],
+        [
+          170,
+          1100
+        ]
+      ],
+      "movement": "foot_offroad_vehicles_on_road",
+      "visibility": "future_density_attenuation_not_opaque_box"
+    },
+    {
+      "id": "WOOD-D2",
+      "kind": "dense_forest",
+      "polygon": [
+        [
+          1150,
+          3350
+        ],
+        [
+          1750,
+          3100
+        ],
+        [
+          2300,
+          3250
+        ],
+        [
+          2720,
+          3390
+        ],
+        [
+          2790,
+          3960
+        ],
+        [
+          2240,
+          4610
+        ],
+        [
+          1350,
+          4800
+        ],
+        [
+          1000,
+          4320
+        ]
+      ],
+      "movement": "foot_offroad_vehicles_on_road",
+      "visibility": "future_density_attenuation_not_opaque_box"
+    },
+    {
+      "id": "WOOD-D3",
+      "kind": "dense_forest",
+      "polygon": [
+        [
+          3400,
+          2850
+        ],
+        [
+          4050,
+          2740
+        ],
+        [
+          4570,
+          3100
+        ],
+        [
+          4380,
+          3640
+        ],
+        [
+          3800,
+          3880
+        ],
+        [
+          3300,
+          3470
+        ]
+      ],
+      "movement": "foot_offroad_vehicles_on_road",
+      "visibility": "future_density_attenuation_not_opaque_box"
+    },
+    {
+      "id": "WOOD-S1",
+      "kind": "sparse_forest",
+      "polygon": [
+        [
+          3300,
+          180
+        ],
+        [
+          3900,
+          180
+        ],
+        [
+          4180,
+          680
+        ],
+        [
+          3850,
+          1210
+        ],
+        [
+          3220,
+          1260
+        ],
+        [
+          2890,
+          750
+        ]
+      ],
+      "movement": "all_ground_future_cost",
+      "visibility": "future_density_attenuation"
+    },
+    {
+      "id": "WOOD-S2",
+      "kind": "sparse_forest",
+      "polygon": [
+        [
+          500,
+          2320
+        ],
+        [
+          950,
+          2000
+        ],
+        [
+          1360,
+          2240
+        ],
+        [
+          1200,
+          2740
+        ],
+        [
+          750,
+          2970
+        ],
+        [
+          350,
+          2810
+        ]
+      ],
+      "movement": "all_ground_future_cost",
+      "visibility": "future_density_attenuation"
+    },
+    {
+      "id": "TOWN-WEST",
+      "kind": "urban",
+      "polygon": [
+        [
+          1910,
+          2030
+        ],
+        [
+          2340,
+          2040
+        ],
+        [
+          2460,
+          2240
+        ],
+        [
+          2500,
+          2600
+        ],
+        [
+          2280,
+          2820
+        ],
+        [
+          1910,
+          2720
+        ]
+      ],
+      "movement": "all_ground_except_building_footprints",
+      "visibility": "future_structure_geometry",
+      "name": "West-bank panel district"
+    },
+    {
+      "id": "TOWN-EAST",
+      "kind": "urban",
+      "polygon": [
+        [
+          2650,
+          2060
+        ],
+        [
+          3120,
+          2020
+        ],
+        [
+          3260,
+          2270
+        ],
+        [
+          3200,
+          2700
+        ],
+        [
+          2770,
+          2780
+        ],
+        [
+          2780,
+          2460
+        ],
+        [
+          2660,
+          2220
+        ]
+      ],
+      "movement": "all_ground_except_building_footprints",
+      "visibility": "future_structure_geometry",
+      "name": "East-bank panel district"
+    },
+    {
+      "id": "DEPOT-AREA",
+      "kind": "industrial",
+      "polygon": [
+        [
+          3300,
+          2570
+        ],
+        [
+          3720,
+          2570
+        ],
+        [
+          3720,
+          2900
+        ],
+        [
+          3300,
+          2900
+        ]
+      ],
+      "movement": "all_ground_except_building_footprints",
+      "visibility": "future_structure_geometry"
+    },
+    {
+      "id": "TIMBER-AREA",
+      "kind": "industrial",
+      "polygon": [
+        [
+          2360,
+          3430
+        ],
+        [
+          2700,
+          3430
+        ],
+        [
+          2740,
+          3890
+        ],
+        [
+          2400,
+          3890
+        ]
+      ],
+      "movement": "all_ground_except_building_footprints",
+      "visibility": "future_structure_geometry"
+    },
+    {
+      "id": "DG-W",
+      "kind": "candidate_dead_ground",
+      "polygon": [
+        [
+          950,
+          2050
+        ],
+        [
+          1410,
+          2070
+        ],
+        [
+          1610,
+          2520
+        ],
+        [
+          1140,
+          2670
+        ]
+      ],
+      "movement": "all_ground_except_building_footprints",
+      "visibility": "unverified_geometry_hypothesis"
+    }
+  ],
+  "roads": [
+    {
+      "id": "central",
+      "name": "Central road",
+      "mode": "vehicle",
+      "width_m": 14,
+      "points": [
+        [
+          500,
+          4400
+        ],
+        [
+          900,
+          3550
+        ],
+        [
+          1500,
+          3000
+        ],
+        [
+          2050,
+          2600
+        ],
+        [
+          2400,
+          2450
+        ],
+        [
+          2900,
+          2450
+        ],
+        [
+          3180,
+          2520
+        ],
+        [
+          3450,
+          2050
+        ],
+        [
+          3900,
+          1350
+        ],
+        [
+          4450,
+          550
+        ]
+      ],
+      "requires_crossing": "CROSS-C",
+      "start_site": "ENTRY-A",
+      "end_site": "ENTRY-B"
+    },
+    {
+      "id": "north",
+      "name": "Northern bypass",
+      "mode": "vehicle",
+      "width_m": 8,
+      "points": [
+        [
+          500,
+          4400
+        ],
+        [
+          500,
+          3000
+        ],
+        [
+          700,
+          2200
+        ],
+        [
+          1100,
+          1500
+        ],
+        [
+          1600,
+          1000
+        ],
+        [
+          2200,
+          1000
+        ],
+        [
+          2650,
+          1000
+        ],
+        [
+          3300,
+          800
+        ],
+        [
+          4450,
+          550
+        ]
+      ],
+      "requires_crossing": "CROSS-N",
+      "start_site": "ENTRY-A",
+      "end_site": "ENTRY-B"
+    },
+    {
+      "id": "south",
+      "name": "Southern bypass",
+      "mode": "vehicle",
+      "width_m": 6,
+      "points": [
+        [
+          500,
+          4400
+        ],
+        [
+          950,
+          4600
+        ],
+        [
+          2200,
+          4600
+        ],
+        [
+          2400,
+          3900
+        ],
+        [
+          2650,
+          3550
+        ],
+        [
+          3080,
+          3550
+        ],
+        [
+          3700,
+          3400
+        ],
+        [
+          4200,
+          2900
+        ],
+        [
+          4500,
+          1800
+        ],
+        [
+          4450,
+          550
+        ]
+      ],
+      "requires_crossing": "CROSS-S",
+      "start_site": "ENTRY-A",
+      "end_site": "ENTRY-B"
+    },
+    {
+      "id": "foot",
+      "name": "Dismounted approach",
+      "mode": "foot",
+      "width_m": 2,
+      "points": [
+        [
+          1650,
+          1000
+        ],
+        [
+          1750,
+          1200
+        ],
+        [
+          1850,
+          1450
+        ]
+      ],
+      "requires_crossing": null,
+      "start_site": "DROP-N",
+      "end_site": "OBS-W"
+    }
+  ],
+  "crossings": [
+    {
+      "id": "CROSS-N",
+      "road_id": "north",
+      "center": [
+        2400,
+        1000
+      ],
+      "deck_endpoints": [
+        [
+          2280,
+          1000
+        ],
+        [
+          2520,
+          1000
+        ]
+      ],
+      "deck_width_m": 8,
+      "allowed": "all_ground",
+      "notes": "Secondary vehicle crossing. Wheeled supply fallback when central bridge closes.",
+      "status": "proposed_link_not_runtime_support_surface"
+    },
+    {
+      "id": "CROSS-C",
+      "road_id": "central",
+      "center": [
+        2650,
+        2450
+      ],
+      "deck_endpoints": [
+        [
+          2520,
+          2450
+        ],
+        [
+          2780,
+          2450
+        ]
+      ],
+      "deck_width_m": 14,
+      "allowed": "all_ground",
+      "notes": "Primary road bridge. Deck endpoints are explicit plan geometry.",
+      "status": "proposed_link_not_runtime_support_surface"
+    },
+    {
+      "id": "CROSS-S",
+      "road_id": "south",
+      "center": [
+        2860,
+        3550
+      ],
+      "deck_endpoints": [
+        [
+          2740,
+          3550
+        ],
+        [
+          2980,
+          3550
+        ]
+      ],
+      "deck_width_m": 6,
+      "allowed": "all_ground",
+      "notes": "Narrow southern service crossing. Traffic behavior and speed cost are future work.",
+      "status": "proposed_link_not_runtime_support_surface"
+    }
+  ],
+  "sites": [
+    {
+      "id": "ENTRY-A",
+      "label": "A",
+      "name": "Southwest entry",
+      "position": [
+        500,
+        4400
+      ],
+      "kind": "spawn"
+    },
+    {
+      "id": "ENTRY-B",
+      "label": "B",
+      "name": "Northeast entry",
+      "position": [
+        4450,
+        550
+      ],
+      "kind": "spawn"
+    },
+    {
+      "id": "MARK-N",
+      "label": "1",
+      "name": "Northern service crossing",
+      "position": [
+        2400,
+        1000
+      ],
+      "kind": "bridge",
+      "crossing_id": "CROSS-N"
+    },
+    {
+      "id": "MARK-C",
+      "label": "2",
+      "name": "Central road bridge",
+      "position": [
+        2650,
+        2450
+      ],
+      "kind": "bridge",
+      "crossing_id": "CROSS-C"
+    },
+    {
+      "id": "MARK-S",
+      "label": "3",
+      "name": "Southern service crossing",
+      "position": [
+        2860,
+        3550
+      ],
+      "kind": "bridge",
+      "crossing_id": "CROSS-S"
+    },
+    {
+      "id": "OBS-W",
+      "label": "4",
+      "name": "Church ridge",
+      "position": [
+        1850,
+        1450
+      ],
+      "kind": "observer",
+      "ground_height_target_m": 35
+    },
+    {
+      "id": "DEPOT",
+      "label": "5",
+      "name": "Ammunition warehouse",
+      "position": [
+        3510,
+        2730
+      ],
+      "kind": "supply",
+      "caption": "Ammo depot",
+      "caption_offset_px": [
+        20,
+        8
+      ]
+    },
+    {
+      "id": "TOWN",
+      "label": "6",
+      "name": "Riverside panel town",
+      "position": [
+        2390,
+        2530
+      ],
+      "kind": "town",
+      "caption": "Riverside town",
+      "caption_offset_px": [
+        -20,
+        -24
+      ]
+    },
+    {
+      "id": "OBS-E",
+      "label": "7",
+      "name": "Radio hill",
+      "position": [
+        3750,
+        3370
+      ],
+      "kind": "observer",
+      "ground_height_target_m": 45
+    },
+    {
+      "id": "LIGHT",
+      "label": "8",
+      "name": "Lighthouse",
+      "position": [
+        4380,
+        3950
+      ],
+      "kind": "landmark"
+    },
+    {
+      "id": "DROP-N",
+      "label": "9",
+      "name": "Northern dismount",
+      "position": [
+        1650,
+        1000
+      ],
+      "kind": "dismount"
+    },
+    {
+      "id": "TIMBER",
+      "label": "10",
+      "name": "Riverside sawmill",
+      "position": [
+        2510,
+        3610
+      ],
+      "kind": "industrial",
+      "note": "Forest-edge clearing near the bank, with a road entrance. Water is setting, not a supply resource.",
+      "caption": "Sawmill",
+      "caption_offset_px": [
+        -20,
+        -16
+      ]
+    },
+    {
+      "id": "OBS-MILL",
+      "label": "11",
+      "name": "Sawmill water tower",
+      "position": [
+        2590,
+        3820
+      ],
+      "kind": "observer",
+      "platform_height_target_m": 18,
+      "note": "Proposed accessible observation deck, not an automatic vision bonus. Occupancy and LOS require implementation.",
+      "caption": "Water tower",
+      "caption_offset_px": [
+        -20,
+        24
+      ]
+    }
+  ],
+  "deployments": [
+    {
+      "id": "DEPLOY-A",
+      "polygon": [
+        [
+          230,
+          3960
+        ],
+        [
+          860,
+          3960
+        ],
+        [
+          860,
+          4700
+        ],
+        [
+          230,
+          4700
+        ]
+      ],
+      "entry_id": "ENTRY-A"
+    },
+    {
+      "id": "DEPLOY-B",
+      "polygon": [
+        [
+          4100,
+          260
+        ],
+        [
+          4750,
+          260
+        ],
+        [
+          4750,
+          1000
+        ],
+        [
+          4100,
+          1000
+        ]
+      ],
+      "entry_id": "ENTRY-B"
+    }
+  ],
+  "timing_assumptions": {
+    "vehicle_kmh": 30,
+    "foot_kmh": 6,
+    "sensor_distance_m": 2000,
+    "omits": [
+      "terrain_cost",
+      "slopes",
+      "acceleration",
+      "steering",
+      "congestion",
+      "combat",
+      "LOS",
+      "identification",
+      "navigation_latency"
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "recon_strike",
+      "status": "proposal",
+      "purpose": "Reconnoiter a command vehicle at the depot and attack through a chosen crossing. No supply economy required."
+    },
+    {
+      "id": "meeting",
+      "status": "proposal",
+      "purpose": "Equal compositions, 20 to 40 units per side. Side-swapped placement probes, not a certified balanced PvP scenario."
+    },
+    {
+      "id": "screen_and_withdraw",
+      "status": "proposal",
+      "purpose": "Screen from forward positions, evacuate finite depot stock and withdraw across the river. Later objective, supply, smoke and bridge-lifecycle work required."
+    },
+    {
+      "id": "stress_100v100",
+      "status": "proposal",
+      "purpose": "Same terrain, separate 100 versus 100 vehicle load probe. No performance or traffic-avoidance claim."
+    }
+  ],
+  "structures": [
+    {
+      "id": "BLOCK-WEST-1-1",
+      "kind": "panel_block",
+      "region_id": "TOWN-WEST",
+      "min": [
+        2040,
+        2160
+      ],
+      "size": [
+        80,
+        18
+      ],
+      "height_m": 15
+    },
+    {
+      "id": "BLOCK-WEST-1-2",
+      "kind": "panel_block",
+      "region_id": "TOWN-WEST",
+      "min": [
+        2250,
+        2160
+      ],
+      "size": [
+        80,
+        18
+      ],
+      "height_m": 15
+    },
+    {
+      "id": "BLOCK-WEST-2-1",
+      "kind": "panel_block",
+      "region_id": "TOWN-WEST",
+      "min": [
+        2040,
+        2340
+      ],
+      "size": [
+        80,
+        18
+      ],
+      "height_m": 15
+    },
+    {
+      "id": "BLOCK-WEST-2-2",
+      "kind": "panel_block",
+      "region_id": "TOWN-WEST",
+      "min": [
+        2250,
+        2340
+      ],
+      "size": [
+        80,
+        18
+      ],
+      "height_m": 15
+    },
+    {
+      "id": "BLOCK-WEST-3-1",
+      "kind": "panel_block",
+      "region_id": "TOWN-WEST",
+      "min": [
+        2040,
+        2650
+      ],
+      "size": [
+        80,
+        18
+      ],
+      "height_m": 15
+    },
+    {
+      "id": "BLOCK-WEST-3-2",
+      "kind": "panel_block",
+      "region_id": "TOWN-WEST",
+      "min": [
+        2250,
+        2650
+      ],
+      "size": [
+        80,
+        18
+      ],
+      "height_m": 15
+    },
+    {
+      "id": "BLOCK-EAST-1-1",
+      "kind": "panel_block",
+      "region_id": "TOWN-EAST",
+      "min": [
+        2820,
+        2160
+      ],
+      "size": [
+        80,
+        18
+      ],
+      "height_m": 15
+    },
+    {
+      "id": "BLOCK-EAST-1-2",
+      "kind": "panel_block",
+      "region_id": "TOWN-EAST",
+      "min": [
+        3030,
+        2160
+      ],
+      "size": [
+        80,
+        18
+      ],
+      "height_m": 15
+    },
+    {
+      "id": "BLOCK-EAST-2-1",
+      "kind": "panel_block",
+      "region_id": "TOWN-EAST",
+      "min": [
+        2820,
+        2340
+      ],
+      "size": [
+        80,
+        18
+      ],
+      "height_m": 15
+    },
+    {
+      "id": "BLOCK-EAST-2-2",
+      "kind": "panel_block",
+      "region_id": "TOWN-EAST",
+      "min": [
+        3030,
+        2340
+      ],
+      "size": [
+        80,
+        18
+      ],
+      "height_m": 15
+    },
+    {
+      "id": "BLOCK-EAST-3-1",
+      "kind": "panel_block",
+      "region_id": "TOWN-EAST",
+      "min": [
+        2820,
+        2580
+      ],
+      "size": [
+        80,
+        18
+      ],
+      "height_m": 15
+    },
+    {
+      "id": "BLOCK-EAST-3-2",
+      "kind": "panel_block",
+      "region_id": "TOWN-EAST",
+      "min": [
+        3030,
+        2580
+      ],
+      "size": [
+        80,
+        18
+      ],
+      "height_m": 15
+    },
+    {
+      "id": "SHED-1",
+      "kind": "warehouse",
+      "min": [
+        3360,
+        2625
+      ],
+      "size": [
+        95,
+        40
+      ],
+      "height_m": 8,
+      "region_id": "DEPOT-AREA"
+    },
+    {
+      "id": "SHED-2",
+      "kind": "warehouse",
+      "min": [
+        3500,
+        2625
+      ],
+      "size": [
+        100,
+        40
+      ],
+      "height_m": 8,
+      "region_id": "DEPOT-AREA"
+    },
+    {
+      "id": "SHED-3",
+      "kind": "warehouse",
+      "min": [
+        3360,
+        2770
+      ],
+      "size": [
+        100,
+        40
+      ],
+      "height_m": 8,
+      "region_id": "DEPOT-AREA"
+    },
+    {
+      "id": "SHED-4",
+      "kind": "warehouse",
+      "min": [
+        3530,
+        2770
+      ],
+      "size": [
+        100,
+        40
+      ],
+      "height_m": 8,
+      "region_id": "DEPOT-AREA"
+    },
+    {
+      "id": "SHED-5",
+      "kind": "warehouse",
+      "min": [
+        2410,
+        3490
+      ],
+      "size": [
+        100,
+        40
+      ],
+      "height_m": 8,
+      "region_id": "TIMBER-AREA"
+    },
+    {
+      "id": "SHED-6",
+      "kind": "warehouse",
+      "min": [
+        2560,
+        3490
+      ],
+      "size": [
+        100,
+        40
+      ],
+      "height_m": 8,
+      "region_id": "TIMBER-AREA"
+    },
+    {
+      "id": "LOGS-1",
+      "kind": "log_stack",
+      "min": [
+        2410,
+        3590
+      ],
+      "size": [
+        90,
+        15
+      ],
+      "height_m": 3,
+      "region_id": "TIMBER-AREA"
+    },
+    {
+      "id": "LOGS-2",
+      "kind": "log_stack",
+      "min": [
+        2410,
+        3650
+      ],
+      "size": [
+        90,
+        15
+      ],
+      "height_m": 3,
+      "region_id": "TIMBER-AREA"
+    },
+    {
+      "id": "LOGS-3",
+      "kind": "log_stack",
+      "min": [
+        2400,
+        3710
+      ],
+      "size": [
+        90,
+        15
+      ],
+      "height_m": 3,
+      "region_id": "TIMBER-AREA"
+    },
+    {
+      "id": "LOGS-4",
+      "kind": "log_stack",
+      "min": [
+        2400,
+        3740
+      ],
+      "size": [
+        90,
+        15
+      ],
+      "height_m": 3,
+      "region_id": "TIMBER-AREA"
+    },
+    {
+      "id": "MILL-TOWER",
+      "kind": "water_tower",
+      "region_id": "TIMBER-AREA",
+      "min": [
+        2580,
+        3810
+      ],
+      "size": [
+        20,
+        20
+      ],
+      "height_m": 22
+    }
+  ],
+  "access_roads": [
+    {
+      "id": "ACCESS-DEPOT",
+      "name": "Depot access",
+      "mode": "vehicle",
+      "width_m": 8,
+      "points": [
+        [
+          3180,
+          2520
+        ],
+        [
+          3290,
+          2730
+        ],
+        [
+          3510,
+          2730
+        ]
+      ],
+      "requires_crossing": null,
+      "start_road": "central",
+      "end_site": "DEPOT"
+    },
+    {
+      "id": "ACCESS-MILL",
+      "name": "Sawmill access",
+      "mode": "vehicle",
+      "width_m": 6,
+      "points": [
+        [
+          2400,
+          3900
+        ],
+        [
+          2500,
+          3800
+        ],
+        [
+          2510,
+          3610
+        ]
+      ],
+      "requires_crossing": null,
+      "start_road": "south",
+      "end_site": "TIMBER"
+    }
+  ]
+}

@@ -70,14 +70,60 @@ public partial class Main : Node3D
         string[] allArgs = OS.GetCmdlineArgs();
         bool isLosSandbox = userArgs.Contains("--los-sandbox") || allArgs.Contains("--los-sandbox");
         bool isVehiclePreview = userArgs.Contains("--vehicle-preview") || allArgs.Contains("--vehicle-preview");
+        string? mapPreviewTarget = null;
+        for (int i = 0; i < userArgs.Length; i++)
+        {
+            if (userArgs[i] == "--map-preview" && i + 1 < userArgs.Length)
+            {
+                mapPreviewTarget = userArgs[i + 1].ToLowerInvariant();
+                break;
+            }
+        }
+        if (mapPreviewTarget is null)
+        {
+            for (int i = 0; i < allArgs.Length; i++)
+            {
+                if (allArgs[i] == "--map-preview" && i + 1 < allArgs.Length)
+                {
+                    mapPreviewTarget = allArgs[i + 1].ToLowerInvariant();
+                    break;
+                }
+            }
+        }
+        bool isMapPreview = mapPreviewTarget is not null;
         bool hasConnect = userArgs.Contains("--connect") || allArgs.Contains("--connect");
 
-        if ((isLosSandbox || isVehiclePreview) && hasConnect)
+        if ((isLosSandbox || isVehiclePreview || isMapPreview) && hasConnect)
         {
-            string flag = isVehiclePreview ? "--vehicle-preview" : "--los-sandbox";
+            string flag = isVehiclePreview ? "--vehicle-preview" : isLosSandbox ? "--los-sandbox" : "--map-preview";
             GD.PushError($"Invalid arguments: {flag} cannot be combined with --connect.");
             SetProcess(false);
             GetTree().Quit(1);
+            return;
+        }
+
+        if (isMapPreview)
+        {
+            SetProcess(false);
+            SetProcessUnhandledInput(false);
+            if (mapPreviewTarget != "ustye")
+            {
+                GD.PushError($"Unknown map preview target: '{mapPreviewTarget}'. Available: ustye");
+                GetTree().Quit(1);
+                return;
+            }
+
+            UstyeMapPreview preview = new();
+            AddChild(preview);
+
+            bool isSmoke = userArgs.Contains("--smoke-test") || allArgs.Contains("--smoke-test");
+            if (isSmoke)
+            {
+                bool ok = UstyeMapPreviewRegressionTests.Run(preview);
+                GetTree().Quit(ok ? 0 : 1);
+                return;
+            }
+
             return;
         }
 
