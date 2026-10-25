@@ -1,0 +1,34 @@
+[
+  {
+    "id": "central",
+    "name": "Central road",
+    "mode": "vehicle",
+    "length_m": 5948,
+    "minutes": 11.9,
+    "crossing": "CROSS-C"
+  },
+  {
+    "id": "north",
+    "name": "Northern bypass",
+    "mode": "vehicle",
+    "length_m": 6645,
+    "minutes": 13.3,
+    "crossing": "CROSS-N"
+  },
+  {
+    "id": "south",
+    "name": "Southern bypass",
+    "mode": "vehicle",
+    "length_m": 7067,
+    "minutes": 14.1,
+    "crossing": "CROSS-S"
+  },
+  {
+    "id": "foot",
+    "name": "Dismounted approach",
+    "mode": "foot",
+    "length_m": 493,
+    "minutes": 4.9,
+    "crossing": null
+  }
+]

@@ -57,6 +57,10 @@ jobs:
         run: dotnet format DeadGround.sln --verify-no-changes --no-restore
       - name: Build with analyzers
         run: dotnet build DeadGround.sln --configuration Release --no-restore
+      - name: Verify Ustye map authoring artifacts
+        run: |
+          python3 tools/map-authoring/ustye_plan.py --check
+          python3 -B -m unittest discover -s tools/map-authoring -p 'test_*.py' -v
 
   export-macos:
     needs: [test, quality]
@@ -85,6 +89,8 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "./build/export/macos/extracted/Dead Ground.app"
           "./build/export/macos/extracted/Dead Ground.app/Contents/MacOS/Dead Ground" --headless -- --smoke-test | tee macos-smoke.log
           grep -Fxq 'M0_CLIENT_SMOKE_OK' macos-smoke.log
+          (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/build/export/macos/extracted/Dead Ground.app/Contents/MacOS/Dead Ground" --headless -- --map-preview ustye --smoke-test) | tee macos-preview-smoke.log
+          grep -Fq 'USTYE_MAP_PREVIEW_SMOKE_OK' macos-preview-smoke.log
       - name: Upload macOS client package
         uses: actions/upload-artifact@v6
         with:
@@ -132,6 +138,18 @@ jobs:
           $smokeOutput | Write-Output
           if ($smokeExitCode -ne 0) { throw "Exported Windows smoke test failed with exit code $smokeExitCode" }
           if ($smokeOutput -notcontains 'M0_CLIENT_SMOKE_OK') { throw 'Exported client did not complete the smoke test.' }
+          Push-Location $env:RUNNER_TEMP
+          try {
+            $previewOutput = & "$env:GITHUB_WORKSPACE/build/export/windows/DeadGround.console.exe" --headless -- --map-preview ustye --smoke-test 2>&1
+            $previewExitCode = $LASTEXITCODE
+            $previewOutput | Write-Output
+            if ($previewExitCode -ne 0) { throw "Exported Windows map preview smoke test failed with exit code $previewExitCode" }
+            if (-not ($previewOutput | Select-String -Pattern 'USTYE_MAP_PREVIEW_SMOKE_OK')) {
+              throw 'Exported client did not complete the map preview smoke test.'
+            }
+          } finally {
+            Pop-Location
+          }
       - name: Package Windows client
         shell: pwsh
         run: |

@@ -297,6 +297,26 @@ Rules:
 
 Test scenes: observing through a forest edge, firing over a ridge, a road under a bridge, a unit on a bridge above another unit, a bridge destroyed with units on it.
 
+### 8.4 Ustye planning artifact
+
+Ustye (`docs/maps/ustye/layout.json`) is the canonical 5000 x 5000 m map design schematic.
+The layout combines a synthetic coastal estuary terrain model (base elevation 4 m, Gaussian moraine peaks),
+a winding 100 m wide river course, a bay, three river crossings, riverside panel town quarters,
+dense and sparse forest zones, and landmark sites (church, radio mast, lighthouse, ammunition depot, sawmill with water tower).
+
+The single editable source is `docs/maps/ustye/layout.json`.
+Authoring checks and derived diagrams are verified by `tools/map-authoring/`.
+A standalone visual preview mode in Godot provides free camera inspection and landmark transitions:
+
+```sh
+./tools/run-client.sh -- --map-preview ustye
+./tools/run-client.sh --headless -- --map-preview ustye --smoke-test
+```
+
+The preview partitions terrain into 10 x 10 chunks of 500 x 500 m. Inland chunks use 25.0 m grid spacing (800 triangles per chunk), while riparian and coastal chunks along the watercourse use fine 6.25 m grid spacing (12,800 triangles per chunk, ~608,000 total terrain triangles) with zero-gap linear boundary stitching for frustum culling and smooth riverbanks.
+Forest foliage is batched into `MultiMeshInstance3D` instances without per-tree scene nodes.
+This inspection mode is visual only; combat units, occupation, destruction, and fake gameplay collisions are not introduced.
+
 ## 9. Navigation and movement
 
 ### 9.1 Planning

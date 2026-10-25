@@ -339,6 +339,23 @@ automatic preview LOD. Tab toggles comparison vehicles and human scale reference
 G toggles the measured grid. Add `--vehicle-preview-capture <directory>` for screenshots.
 See `src/Game.Godot/Assets/Vehicles/T62/README.md` for generation, palette and limits.
 
+### Ustye map preview (5 x 5 km)
+
+A 5000 x 5000 m tactical RTS map preview with undulating coastal moraine relief, river corridor,
+three crossings, panel housing town, dense conifer forest, sparse woodland, sawmill with water tower,
+ammunition depot, church, radio height, and lighthouse. Inspect it independently of combat rules:
+
+```sh
+./tools/run-client.sh -- --map-preview ustye
+./tools/run-client.sh --headless -- --map-preview ustye --smoke-test
+```
+
+Use WASD or arrow keys to pan, mouse wheel to zoom, middle mouse or right mouse drag to orbit,
+and V to toggle perspective/orthogonal projection. Number keys 1 to 9 and 0 transition between named landmarks:
+1 for map overview, 2 for riverside town and central bridge, 3 for church ridge, 4 for sawmill and water tower,
+5 for radio hill, 6 for lighthouse, 7 for northern crossing, 8 for southern crossing, 9 for ammo depot, and 0 for southwest entry.
+See `docs/maps/ustye/README.md` for the single source schematic and verification tools.
+
 ### Meeting engagement (historical units)
 
 A 2 x 2 km battle at 1:1 scale with historical unit types: T-62, BTR-70 and BRDM-2 against M60A1,

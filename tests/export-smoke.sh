@@ -52,6 +52,8 @@ PATH="$fixture/bin:$PATH" GODOT_BIN="$fixture/Godot With Spaces/Godot" \
 presets="$repo_root/src/Game.Godot/export_presets.cfg"
 [[ "$(awk '/^\[preset.0.options\]/{active=1;next} /^\[/{active=0} active && /^binary_format\/architecture=/{print}' "$presets")" == 'binary_format/architecture="universal"' ]]
 [[ "$(awk '/^\[preset.1.options\]/{active=1;next} /^\[/{active=0} active && /^binary_format\/architecture=/{print}' "$presets")" == 'binary_format/architecture="x86_64"' ]]
+[[ "$(awk '/^\[preset.0\]/{active=1;next} /^\[/{active=0} active && /^include_filter=/{print}' "$presets")" == 'include_filter="Assets/Vehicles/visuals.json,Maps/ustye/layout.json"' ]]
+[[ "$(awk '/^\[preset.1\]/{active=1;next} /^\[/{active=0} active && /^include_filter=/{print}' "$presets")" == 'include_filter="Assets/Vehicles/visuals.json,Maps/ustye/layout.json"' ]]
 if grep -q '^architecture/target=' "$presets"; then
   echo 'Export presets must use binary_format/architecture.' >&2
   exit 1

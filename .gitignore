@@ -30,3 +30,8 @@ Thumbs.db
 logs/
 *.replay
 *.cmdlog
+
+# Python
+__pycache__/
+*.pyc
+
