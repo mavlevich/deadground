@@ -83,6 +83,7 @@ StaticGeometry? scenarioGeometry = scenario switch
     "combat" => CombatScenario.CreateStaticGeometry(),
     "recon-raid" => ReconRaidScenario.CreateStaticGeometry(),
     "battle" => BattleScenario.CreateStaticGeometry(),
+    "bridge-crossing" => BridgeCrossingScenario.CreateStaticGeometry(),
     _ => null
 };
 
@@ -97,6 +98,7 @@ MatchSetup setup = scenario switch
     "combat" => CombatScenario.CreateMatchSetup(scenarioGeometry!),
     "recon-raid" => ReconRaidScenario.CreateMatchSetup(scenarioGeometry!),
     "battle" => BattleScenario.CreateMatchSetup(scenarioGeometry!),
+    "bridge-crossing" => BridgeCrossingScenario.CreateMatchSetup(scenarioGeometry!),
     _ => PrototypeScenario.CreateMatchSetup(map)
 };
 
@@ -123,6 +125,7 @@ Simulation CreateSimulation(ulong seed = 0)
         "combat" => CombatScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "recon-raid" => ReconRaidScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "battle" => BattleScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
+        "bridge-crossing" => BridgeCrossingScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         _ => PrototypeScenario.Create(map)
     };
 }
@@ -220,6 +223,54 @@ if (smokeTest)
             throw new InvalidOperationException("Recon-raid smoke test initial mission status mismatch.");
 
         Console.WriteLine($"RECON_RAID_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} mission_status={session.Mission.Status}");
+        return;
+    }
+
+    if (scenario == "bridge-crossing")
+    {
+        for (int i = 0; i < 10; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.Replica.OwnUnits.Length != 3)
+            throw new InvalidOperationException("Bridge-crossing smoke test initial units check failed.");
+
+        EntityId tankId = session.Replica.OwnUnits[0].Id;
+        Vector2 startPos = session.Replica.OwnUnits[0].Position;
+        session.Move(tankId, new Vector2(160f, 100f));
+
+        bool enteredBridge = false;
+        bool crossedToEastBank = false;
+        float minHeightOnBridge = float.MaxValue;
+
+        for (int i = 0; i < 550; i++)
+        {
+            session.Advance(1d / Simulation.TickRate);
+            Vector2 pos = session.Replica.SamplePosition(tankId, session.Replica.LatestTick);
+            uint surface = session.Replica.SampleSupportSurface(tankId);
+            float height = scenarioGeometry!.GetSurfaceHeight(pos, surface);
+
+            if (surface == 1u)
+            {
+                enteredBridge = true;
+                if (height < minHeightOnBridge)
+                {
+                    minHeightOnBridge = height;
+                }
+            }
+
+            if (pos.X >= 150f && surface == 0u)
+            {
+                crossedToEastBank = true;
+                break;
+            }
+        }
+
+        if (!enteredBridge)
+            throw new InvalidOperationException("Bridge-crossing smoke test failed: tank never entered bridge deck.");
+        if (!crossedToEastBank)
+            throw new InvalidOperationException("Bridge-crossing smoke test failed: tank did not cross to east bank.");
+        if (minHeightOnBridge < 3.8f)
+            throw new InvalidOperationException($"Bridge-crossing smoke test failed: tank height dropped to {minHeightOnBridge:F2}m on bridge deck.");
+
+        Console.WriteLine($"BRIDGE_CROSSING_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} start={startPos.X:F0} crossed_to_east_bank=true");
         return;
     }
 

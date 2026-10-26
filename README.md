@@ -248,6 +248,41 @@ dotnet run --project tests/Benchmarks --configuration Release -- --navigation-5k
 
 See [navigation scale results and limitations](docs/navigation-5km.md).
 
+### Bridge crossing scenario (bridge-crossing)
+
+To run the playable bridge crossing scenario with support surface tracking, elevated bridge deck crossing, and traversability layers (dense forest and water):
+
+For self-contained local play:
+
+```sh
+./tools/run-client.sh -- --scenario bridge-crossing
+```
+
+On Windows with PowerShell:
+
+```powershell
+./tools/run-client.ps1 -GodotArgs @("--", "--scenario", "bridge-crossing")
+```
+
+For dedicated server hosting:
+
+```sh
+dotnet run --project src/Game.Server --configuration Release -- --scenario bridge-crossing --port 7777
+```
+
+In headless smoke-test mode:
+
+```sh
+dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario bridge-crossing
+./tools/run-client.sh --headless -- --smoke-test --scenario bridge-crossing
+```
+
+The scenario map (200 m x 200 m) includes:
+- **River water obstacle**: Ground depression with water requiring `TraversabilityCapabilities.Water`.
+- **Elevated bridge structure**: Deck height 4.0 m with longitudinal ramp entry constraints and lateral clearance boundaries.
+- **Dense forest obstacle**: Requires `TraversabilityCapabilities.DenseForest` (foot infantry traverses, vehicles route around).
+- **Elevated direct combat and observation**: Authoritative 3D targeting, elevated contact tracking, and residue projection onto the bridge deck.
+
 ### Recon Raid mission (recon-raid)
 
 To run the playable reconnaissance raid mission with authoritative objectives, enemy AI bot, and complete attempt lifecycle:
@@ -500,8 +535,10 @@ dotnet run --project src/Game.Server --configuration Release --no-build -- --smo
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario navigation
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario navigation-large
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario recon-raid
+dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario bridge-crossing
 ./tools/run-client.sh --headless -- --smoke-test
 ./tools/run-client.sh --headless -- --smoke-test --scenario recon-raid
+./tools/run-client.sh --headless -- --smoke-test --scenario bridge-crossing
 ```
 
 To automatically format C# code according to the repository rules:

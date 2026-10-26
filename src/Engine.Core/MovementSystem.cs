@@ -4,7 +4,7 @@ using Arch.Core;
 namespace DeadGround.Engine;
 
 internal record struct Position(Vector2 Value);
-internal record struct Motion(Vector2 Target, float Speed, bool Active);
+internal record struct Motion(Vector2 Target, float Speed, bool Active, uint SupportSurface = 0);
 
 public sealed class MovementSystem : ISimulationSystem
 {

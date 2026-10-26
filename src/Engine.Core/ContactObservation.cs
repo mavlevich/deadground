@@ -38,7 +38,8 @@ public readonly record struct ContactObservation(
     Vector2 Position,
     int LastSeenTick,
     float TurretYaw = 0f,
-    float HullHeading = 0f)
+    float HullHeading = 0f,
+    uint SupportSurface = 0)
 {
     public bool IsCurrent => State == ContactState.Current;
     public bool IsLastKnown => State == ContactState.LastKnown;

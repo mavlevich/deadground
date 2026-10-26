@@ -21,7 +21,12 @@ public static class ScenarioContent
     public static bool UsesColdWarContent(string scenario) => scenario == "battle";
 
     public static UnitCatalog LoadCatalog(string scenario) =>
-        UsesColdWarContent(scenario) ? ColdWarContent.LoadCatalog() : PrototypeScenario.LoadCatalog();
+        scenario switch
+        {
+            "battle" => ColdWarContent.LoadCatalog(),
+            "bridge-crossing" => BridgeCrossingScenario.LoadCatalog(),
+            _ => PrototypeScenario.LoadCatalog()
+        };
 }
 
 // A 2 x 2 km meeting engagement with historical units at 1:1 scale. A ridge with two saddles runs

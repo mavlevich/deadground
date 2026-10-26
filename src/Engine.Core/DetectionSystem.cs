@@ -35,6 +35,7 @@ public sealed class DetectionSystem : ISimulationSystem
     private readonly Vector3[] _unitTopTargetPoint;
     private readonly float[] _unitTurretYaws;
     private readonly float[] _unitHullHeadings;
+    private readonly uint[] _unitSupportSurfaces;
     private readonly int _maxUnits;
     private readonly int _wordsPerSide;
 
@@ -98,6 +99,7 @@ public sealed class DetectionSystem : ISimulationSystem
         _unitTopTargetPoint = new Vector3[maxUnits];
         _unitTurretYaws = new float[maxUnits];
         _unitHullHeadings = new float[maxUnits];
+        _unitSupportSurfaces = new uint[maxUnits];
     }
 
     public void Update(WorldState world, int tick)
@@ -113,7 +115,8 @@ public sealed class DetectionSystem : ISimulationSystem
         {
             UnitState u = world.GetUnitAt(i);
             _unitPositions[i] = u.Position;
-            float groundY = _geometry.HeightMap.GetHeight(u.Position.X, u.Position.Y);
+            _unitSupportSurfaces[i] = u.SupportSurface;
+            float groundY = _geometry.GetSurfaceHeight(u.Position, u.SupportSurface);
             _unitGroundHeights[i] = groundY;
             _unitOwners[i] = u.Owner;
             _unitTeams[i] = world.GetPlayerTeam(u.Owner);
@@ -262,7 +265,8 @@ public sealed class DetectionSystem : ISimulationSystem
                             targetClass,
                             targetType,
                             _unitTurretYaws[targetUnitIndex],
-                            _unitHullHeadings[targetUnitIndex]);
+                            _unitHullHeadings[targetUnitIndex],
+                            _unitSupportSurfaces[targetUnitIndex]);
                         _observedCounts[sideIndex] = count + 1;
                     }
 

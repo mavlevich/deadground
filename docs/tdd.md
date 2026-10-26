@@ -282,18 +282,22 @@ Layers that change during a match (craters, mines, destroyed structures) live in
 
 ### 8.3 Support surfaces
 
-A heightmap cannot tell "on the bridge" from "under the bridge". Every ground unit has a support surface:
+A heightmap cannot tell "on the bridge" from "under the bridge". Every ground unit and contact has a support surface:
 
-- `Terrain`: height comes from the heightmap.
-- `Structure(id)`: height comes from that structure's deck, for example a bridge.
+- `Terrain` (`0`): height comes from the heightmap.
+- `Structure(id)` (`> 0`): height comes from that structure deck, for example a bridge.
 
-Rules:
+Rules and contracts:
 
-- Path finding treats a bridge as a link in the graph between its two ends. Cells under the bridge stay normal terrain, so a road or river under the bridge works.
-- Movement switches the support surface when a unit enters or leaves the link.
-- Snapshots send the support surface with the position. The client computes height from the heightmap or from the deck profile.
-- When a bridge is destroyed, units on its deck fall to the surface below and take damage, or are destroyed. The rule is set in data.
-- LOS treats bridge decks as obstacles with height.
+- Support surface representation: `uint SupportSurface` on `UnitState`, `OwnUnitObservation`, `ContactObservation`, and `ClientReplica`.
+- `TraversabilityCapabilities`: bitmask flags (`Ground = 1 << 0`, `DenseForest = 1 << 1`, `Water = 1 << 2`, `Bridge = 1 << 3`, presets `DefaultVehicle`, `Foot`, `Amphibious`).
+- Distinction from `MovementClass`: clearance radius and physical footprint remain defined by `MovementClass` (`Foot` 0.4 m, `Wheeled` 0.8 m, `Medium` 1.0 m, `Tracked` 1.4 m). Traversability capabilities govern which terrain features are passable. Two units of identical radius take different routes (for example, foot infantry through dense forest vs a mini-vehicle of identical 0.4 m radius routing around). Global corridor cache keys (`GlobalPlanKey`) include capabilities.
+- Bridge geometry (`BridgeStructure`): elevated deck defined by start/end coordinates, deck width, start/end elevation, thickness, deck height interpolation (`GetHeight`), side clearance (`GetSideClearance`), and longitudinal ramp entry corridors (`IsNearEntry`). Units can only enter or leave the bridge via its ends; lateral edges act as clearance obstacles.
+- Movement switches `SupportSurface` dynamically when a unit crosses the ramp threshold onto or off the deck.
+- Authoritative snapshot protocol: bumped to wire version 16. Contact payload size is 28 bytes, adding 4 bytes for observed `SupportSurface`.
+- Replicated contact state: `ContactObservation` includes observed `SupportSurface`. `SideContactTracker` preserves the observed support surface in `LastKnown` when a contact leaves direct sight, without polling hidden simulation state. No entity IDs leak across the wire.
+- Direct fire and line of sight: `DetectionSystem` and `CombatSystem` evaluate 3D sensor, muzzle origin, and impact positions via `StaticGeometry.GetSurfaceHeight(pos, supportSurface)`. The client preserves authoritative 3D combat impact and tracer coordinates without squashing them back to the heightmap.
+- Demonstration scenario: `bridge-crossing` (200 x 200 m map with river bed, elevated bridge deck at 4.0 m, dense forest obstacle, and opposing forces).
 
 Test scenes: observing through a forest edge, firing over a ridge, a road under a bridge, a unit on a bridge above another unit, a bridge destroyed with units on it.
 

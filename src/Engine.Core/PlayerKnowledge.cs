@@ -58,7 +58,7 @@ public sealed class PlayerKnowledge
                     unit.Id,
                     unit.Definition,
                     unit.Position,
-                    0,
+                    unit.SupportSurface,
                     navStatus,
                     (ushort)Math.Clamp(combat.CurrentHealth, 0, ushort.MaxValue),
                     (ushort)Math.Clamp(combat.Ammunition, 0, ushort.MaxValue),
@@ -71,7 +71,7 @@ public sealed class PlayerKnowledge
             }
             else
             {
-                _ownUnits[count++] = new OwnUnitObservation(unit.Id, unit.Definition, unit.Position, 0, navStatus, Stance: FireStance.FireAtWill, TurretYaw: 0f);
+                _ownUnits[count++] = new OwnUnitObservation(unit.Id, unit.Definition, unit.Position, unit.SupportSurface, navStatus, Stance: FireStance.FireAtWill, TurretYaw: 0f);
             }
         }
         Count = count;

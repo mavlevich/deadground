@@ -121,7 +121,8 @@ public sealed record UnitDefinition(
     float ArmorSide = 0f,
     float ArmorRear = 0f,
     float FrontSectorAngle = 90f,
-    float RearSectorAngle = 90f);
+    float RearSectorAngle = 90f,
+    TraversabilityCapabilities Capabilities = TraversabilityCapabilities.DefaultVehicle);
 
 public sealed record FactionData(string Id, string? Name = null);
 
@@ -258,7 +259,14 @@ public sealed class OpsMovementCatalog : IUnitMovementCatalog
         for (int i = 0; i < catalog.Units.Length; i++)
         {
             UnitDefinition unit = catalog.Units[i];
-            _profiles[i] = new UnitMovementProfile(unit.Speed, unit.Radius);
+            TraversabilityCapabilities caps = unit.Capabilities;
+            if (caps == TraversabilityCapabilities.DefaultVehicle &&
+                (string.Equals(unit.Classification, "infantry", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(unit.Classification, "foot", StringComparison.OrdinalIgnoreCase)))
+            {
+                caps = TraversabilityCapabilities.Foot;
+            }
+            _profiles[i] = new UnitMovementProfile(unit.Speed, unit.Radius, caps);
         }
     }
 
@@ -367,6 +375,7 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
 [JsonSerializable(typeof(AccuracyPoint[]))]
 [JsonSerializable(typeof(FactionData))]
 [JsonSerializable(typeof(FactionData[]))]
+[JsonSerializable(typeof(TraversabilityCapabilities))]
 [JsonSerializable(typeof(float[]))]
 internal partial class ContentJsonContext : JsonSerializerContext;
 

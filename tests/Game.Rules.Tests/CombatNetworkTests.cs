@@ -541,13 +541,13 @@ public sealed class CombatNetworkTests
     }
 
     [Fact]
-    public void WireProtocol_Version15_PreservesHitResultAndEventProperties()
+    public void WireProtocol_Version16_PreservesHitResultAndEventProperties()
     {
-        Assert.Equal(15, WireProtocol.Version);
+        Assert.Equal(16, WireProtocol.Version);
         Assert.Equal(32, WireProtocol.MissionSize);
         Assert.Equal(48, WireProtocol.SnapshotHeaderSize);
         Assert.Equal(35, WireProtocol.UnitSize);
-        Assert.Equal(24, WireProtocol.ContactSize);
+        Assert.Equal(28, WireProtocol.ContactSize);
         Assert.Equal(40, WireProtocol.EventSize);
 
         byte[] bytes = new byte[WireProtocol.MaxMessageSize];
@@ -819,8 +819,8 @@ public sealed class CombatNetworkTests
     [Fact]
     public void WireProtocol_SetFireStance_RoundTrip_AndValidation()
     {
-        Assert.Equal(15, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(15, WireProtocol.Version);
+        Assert.Equal(16, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(16, WireProtocol.Version);
 
         byte[] buffer = new byte[32];
         SetFireStanceCommand cmd = new(42, 10, new EntityId(5), FireStance.ReturnFire);

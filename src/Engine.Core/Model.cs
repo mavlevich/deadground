@@ -53,8 +53,14 @@ public readonly record struct CombatEventObservation(
     EntityId ShooterUnitId = default,
     HitResult Result = HitResult.None);
 
-public readonly record struct UnitState(EntityId Id, int Owner, ushort Definition,
-    Vector2 Position, Vector2 Target, bool Moving);
+public readonly record struct UnitState(
+    EntityId Id,
+    int Owner,
+    ushort Definition,
+    Vector2 Position,
+    Vector2 Target,
+    bool Moving,
+    uint SupportSurface = 0);
 
 // This DTO only represents a player's own unit. Enemy contacts will have separate IDs.
 public readonly record struct OwnUnitObservation(

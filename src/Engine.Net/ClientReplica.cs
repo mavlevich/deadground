@@ -57,6 +57,20 @@ public sealed class ClientReplica
         return true;
     }
 
+    public uint SampleSupportSurface(EntityId id)
+    {
+        if (_count == 0 || !Latest.Indices.TryGetValue(id, out int index))
+            return 0;
+        return Latest.Units[index].SupportSurface;
+    }
+
+    public uint SampleContactSupportSurface(ContactId id)
+    {
+        if (_count == 0 || !Latest.ContactIndices.TryGetValue(id, out int index))
+            return 0;
+        return Latest.Contacts[index].SupportSurface;
+    }
+
     public ClientReplica(int capacity = WireProtocol.MaxUnits)
     {
         if (capacity < 1 || capacity > WireProtocol.MaxUnits) throw new ArgumentOutOfRangeException(nameof(capacity));

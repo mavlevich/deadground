@@ -10,7 +10,7 @@ public sealed record MatchSetup(
     int[]? PlayerTeams = null,
     string[]? PlayerFactions = null)
 {
-    public const byte CurrentProtocolVersion = 15;
+    public const byte CurrentProtocolVersion = 16;
 
     public bool Matches(MatchSetup other)
     {
@@ -80,10 +80,16 @@ public sealed record MatchSetup(
     {
         ArgumentNullException.ThrowIfNull(geometry);
         OpaqueStructure[] array = geometry.Structures.ToArray();
-        return ComputeMapHash(geometry.HeightMap, array.AsSpan());
+        BridgeStructure[] bridges = geometry.Bridges.ToArray();
+        TerrainObstacle[] obstacles = geometry.TerrainObstacles.ToArray();
+        return ComputeMapHash(geometry.HeightMap, array.AsSpan(), bridges.AsSpan(), obstacles.AsSpan());
     }
 
-    public static ulong ComputeMapHash(HeightMap map, ReadOnlySpan<OpaqueStructure> structures)
+    public static ulong ComputeMapHash(
+        HeightMap map,
+        ReadOnlySpan<OpaqueStructure> structures,
+        ReadOnlySpan<BridgeStructure> bridges = default,
+        ReadOnlySpan<TerrainObstacle> obstacles = default)
     {
         ArgumentNullException.ThrowIfNull(map);
         ulong hash = 14695981039346656037UL;
@@ -113,6 +119,49 @@ public sealed record MatchSetup(
                 hash = HashFloat(hash, s.MaxY);
                 hash = HashFloat(hash, s.MaxZ);
                 hash = HashInt(hash, s.IsGrounded ? 1 : 0);
+            }
+        }
+
+        if (bridges.Length > 0)
+        {
+            BridgeStructure[] sortedBridges = bridges.ToArray();
+            Array.Sort(sortedBridges, static (a, b) => a.Id.Value.CompareTo(b.Id.Value));
+
+            hash = HashInt(hash, sortedBridges.Length);
+            for (int i = 0; i < sortedBridges.Length; i++)
+            {
+                BridgeStructure b = sortedBridges[i];
+                hash = HashInt(hash, (int)b.Id.Value);
+                hash = HashFloat(hash, b.Start.X);
+                hash = HashFloat(hash, b.Start.Y);
+                hash = HashFloat(hash, b.End.X);
+                hash = HashFloat(hash, b.End.Y);
+                hash = HashFloat(hash, b.Width);
+                hash = HashFloat(hash, b.StartHeight);
+                hash = HashFloat(hash, b.EndHeight);
+                hash = HashFloat(hash, b.Thickness);
+            }
+        }
+
+        if (obstacles.Length > 0)
+        {
+            TerrainObstacle[] sortedObs = obstacles.ToArray();
+            Array.Sort(sortedObs, static (a, b) =>
+            {
+                int cmp = a.MinX.CompareTo(b.MinX);
+                if (cmp != 0) return cmp;
+                return a.MinZ.CompareTo(b.MinZ);
+            });
+
+            hash = HashInt(hash, sortedObs.Length);
+            for (int i = 0; i < sortedObs.Length; i++)
+            {
+                TerrainObstacle o = sortedObs[i];
+                hash = HashFloat(hash, o.MinX);
+                hash = HashFloat(hash, o.MinZ);
+                hash = HashFloat(hash, o.MaxX);
+                hash = HashFloat(hash, o.MaxZ);
+                hash = HashInt(hash, (int)o.RequiredCapability);
             }
         }
 

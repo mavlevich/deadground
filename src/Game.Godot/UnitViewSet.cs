@@ -6,7 +6,7 @@ using Godot;
 namespace DeadGround.Client;
 
 internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int>? maxHealthProvider = null,
-    Func<ushort, string?>? unitIdProvider = null, Func<string?>? factionProvider = null)
+    Func<ushort, string?>? unitIdProvider = null, Func<string?>? factionProvider = null, StaticGeometry? geometry = null)
 {
     internal const int ControlGroupCount = 9;
 
@@ -25,9 +25,9 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
     private bool _hasHealthBarBasis;
     private static readonly Lazy<UnitCatalog> DefaultCatalog = new(() => PrototypeScenario.LoadCatalog());
 
-    public UnitViewSet(Node3D parent, HeightMap map, UnitCatalog catalog, Func<string?>? factionProvider = null)
+    public UnitViewSet(Node3D parent, HeightMap map, UnitCatalog catalog, Func<string?>? factionProvider = null, StaticGeometry? geometry = null)
         : this(parent, map, def => def < catalog.Units.Length ? catalog.Units[def].MaxHealth : 100,
-            def => def < catalog.Units.Length ? catalog.Units[def].Id : null, factionProvider)
+            def => def < catalog.Units.Length ? catalog.Units[def].Id : null, factionProvider, geometry)
     {
         _catalog = catalog;
     }
@@ -130,7 +130,10 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
                 if (_hasHealthBarBasis) view.FaceHealthBar(_healthBarBasis);
             }
             System.Numerics.Vector2 position = replica.SamplePosition(unit.Id, renderTick);
-            view.UpdatePosition(new Vector3(position.X, map.GetHeight(position.X, position.Y), position.Y));
+            float groundY = geometry is not null
+                ? geometry.GetSurfaceHeight(position, unit.SupportSurface)
+                : map.GetHeight(position.X, position.Y);
+            view.UpdatePosition(new Vector3(position.X, groundY, position.Y));
             replica.SampleYaws(unit.Id, renderTick, out float turretYaw, out float hullHeading);
             view.SetHullHeading(hullHeading);
             view.SetTurretYaw(turretYaw);
