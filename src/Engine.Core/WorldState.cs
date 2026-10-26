@@ -123,7 +123,7 @@ public sealed class WorldState : IDisposable
         ref Identity identity = ref _storage.Get<Identity>(entity);
         ref Motion motion = ref _storage.Get<Motion>(entity);
         return new UnitState(identity.Id, identity.Owner, identity.Definition,
-            _storage.Get<Position>(entity).Value, motion.Target, motion.Active);
+            _storage.Get<Position>(entity).Value, motion.Target, motion.Active, motion.SupportSurface);
     }
 
     public bool TryGetUnit(EntityId id, out UnitState unit)
@@ -152,7 +152,7 @@ public sealed class WorldState : IDisposable
         return true;
     }
 
-    internal bool UpdateUnitNavigation(EntityId id, Vector2 position, Vector2 target, bool active, int tick = -1)
+    internal bool UpdateUnitNavigation(EntityId id, Vector2 position, Vector2 target, bool active, int tick = -1, uint? supportSurface = null)
     {
         if (!_indices.TryGetValue(id, out int index)) return false;
         Entity entity = _entities[index];
@@ -172,6 +172,10 @@ public sealed class WorldState : IDisposable
         pos.Value = position;
         motion.Target = target;
         motion.Active = active;
+        if (supportSurface.HasValue)
+        {
+            motion.SupportSurface = supportSurface.Value;
+        }
         return true;
     }
 

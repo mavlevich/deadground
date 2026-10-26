@@ -129,10 +129,10 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
 
     public bool HasLineOfSightToTarget(UnitState attacker, WeaponDefinition weapon, UnitState targetUnit, out Vector3 hitPoint, out Vector3 muzzlePos)
     {
-        float attackerGroundY = _geometry.HeightMap.GetHeight(attacker.Position.X, attacker.Position.Y);
+        float attackerGroundY = _geometry.GetSurfaceHeight(attacker.Position, attacker.SupportSurface);
         muzzlePos = new Vector3(attacker.Position.X, attackerGroundY + weapon.MuzzleHeight, attacker.Position.Y);
 
-        float targetGroundY = _geometry.HeightMap.GetHeight(targetUnit.Position.X, targetUnit.Position.Y);
+        float targetGroundY = _geometry.GetSurfaceHeight(targetUnit.Position, targetUnit.SupportSurface);
         hitPoint = Vector3.Zero;
 
         if (_perceptionCatalog.TryGetProfile(targetUnit.Definition, out UnitPerceptionProfile targetPerception) &&
@@ -162,7 +162,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
 
     public float ComputeVisibleShare(UnitState attacker, UnitState targetUnit)
     {
-        float attackerGroundY = _geometry.HeightMap.GetHeight(attacker.Position.X, attacker.Position.Y);
+        float attackerGroundY = _geometry.GetSurfaceHeight(attacker.Position, attacker.SupportSurface);
         float muzzleHeight = 1.8f;
         if (_combatCatalog.TryGetProfile(attacker.Definition, out UnitCombatProfile attackerProfile) &&
             attackerProfile.Weapon is not null)
@@ -171,7 +171,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         }
         Vector3 muzzlePos = new(attacker.Position.X, attackerGroundY + muzzleHeight, attacker.Position.Y);
 
-        float targetGroundY = _geometry.HeightMap.GetHeight(targetUnit.Position.X, targetUnit.Position.Y);
+        float targetGroundY = _geometry.GetSurfaceHeight(targetUnit.Position, targetUnit.SupportSurface);
         if (_perceptionCatalog.TryGetProfile(targetUnit.Definition, out UnitPerceptionProfile targetPerception) &&
             targetPerception.TargetPoints is { RelativeHeights.Length: > 0 } points)
         {
@@ -216,7 +216,8 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         Vector2 attackerPos,
         Vector2 targetPos,
         float targetRadius,
-        WeaponDefinition weapon)
+        WeaponDefinition weapon,
+        uint targetSupportSurface = 0)
     {
         Vector2 lineOfFire = targetPos - attackerPos;
         float lineLen = lineOfFire.Length();
@@ -237,7 +238,15 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         float lateralDist = ((float)CombatRandom.NextDouble() * 2f - 1f) * lateralMax;
 
         Vector2 miss2D = targetPos + fireDir * (forwardSign * forwardDist) + lateralDir * lateralDist;
-        float groundY = _geometry.HeightMap.GetHeight(miss2D.X, miss2D.Y);
+        uint surfaceAtMiss = 0;
+        if (targetSupportSurface > 0 && _geometry.TryGetBridge(targetSupportSurface, out BridgeStructure? targetBridge))
+        {
+            if (targetBridge is not null && targetBridge.Contains(miss2D))
+            {
+                surfaceAtMiss = targetSupportSurface;
+            }
+        }
+        float groundY = _geometry.GetSurfaceHeight(miss2D, surfaceAtMiss);
         Vector3 miss3D = new(miss2D.X, groundY, miss2D.Y);
 
         LineOfSightResult los = _geometry.CheckLineOfSight(muzzlePos, miss3D, _losContext);
@@ -1098,7 +1107,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         else
         {
             // Miss: calculate dispersed impact point, hits ground or structure, never the target
-            impactPoint = CalculateMissImpactPoint(muzzlePos, attacker.Position, targetUnit.Position, targetRadius, weapon);
+            impactPoint = CalculateMissImpactPoint(muzzlePos, attacker.Position, targetUnit.Position, targetRadius, weapon, targetUnit.SupportSurface);
             hitResult = HitResult.Miss;
         }
 
@@ -1142,7 +1151,8 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                     targetUnit.Definition,
                     targetUnit.Id,
                     targetUnit.Owner,
-                    targetUnit.Position);
+                    targetUnit.Position,
+                    targetUnit.SupportSurface);
 
                 if (_destroyedCount < _destroyedBuffer.Length)
                 {
@@ -1264,12 +1274,13 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         ushort definition,
         EntityId targetId,
         int targetOwner,
-        Vector2 targetPos)
+        Vector2 targetPos,
+        uint targetSupportSurface = 0)
     {
         uint eventId = _nextEventId++;
         if (_nextEventId == 0) _nextEventId = 1;
 
-        float groundY = _geometry.HeightMap.GetHeight(targetPos.X, targetPos.Y);
+        float groundY = _geometry.GetSurfaceHeight(targetPos, targetSupportSurface);
         Vector3 targetPos3D = new(targetPos.X, groundY, targetPos.Y);
 
         for (int p = 1; p <= _maxSides; p++)

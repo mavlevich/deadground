@@ -4,15 +4,15 @@ using Godot;
 
 namespace DeadGround.Client;
 
-internal sealed class ContactViewSet(Node3D parent, HeightMap map, Func<string?>? hostileFactionProvider = null, Func<ushort, string?>? unitIdProvider = null)
+internal sealed class ContactViewSet(Node3D parent, HeightMap map, Func<string?>? hostileFactionProvider = null, Func<ushort, string?>? unitIdProvider = null, StaticGeometry? geometry = null)
 {
     internal Dictionary<ContactId, ContactView> Views { get; } = new();
     internal HashSet<ContactId> Selected { get; } = new();
     private readonly HashSet<ContactId> _present = new(WireProtocol.MaxContacts);
     private readonly List<ContactId> _removed = new(WireProtocol.MaxContacts);
 
-    public ContactViewSet(Node3D parent, HeightMap map, DeadGround.Rules.Ops.UnitCatalog catalog, Func<string?>? hostileFactionProvider = null)
-        : this(parent, map, hostileFactionProvider, def => def < catalog.Units.Length ? catalog.Units[def].Id : null)
+    public ContactViewSet(Node3D parent, HeightMap map, DeadGround.Rules.Ops.UnitCatalog catalog, Func<string?>? hostileFactionProvider = null, StaticGeometry? geometry = null)
+        : this(parent, map, hostileFactionProvider, def => def < catalog.Units.Length ? catalog.Units[def].Id : null, geometry)
     {
     }
 
@@ -30,7 +30,9 @@ internal sealed class ContactViewSet(Node3D parent, HeightMap map, Func<string?>
             }
             System.Numerics.Vector2 position = replica.SampleContactPosition(contact.Id, renderTick);
             replica.SampleContactYaws(contact.Id, renderTick, out float turretYaw, out float hullHeading);
-            float groundY = map.GetHeight(position.X, position.Y);
+            float groundY = geometry is not null
+                ? geometry.GetSurfaceHeight(position, contact.SupportSurface)
+                : map.GetHeight(position.X, position.Y);
             view.Update(contact, position, groundY, Selected.Contains(contact.Id), turretYaw, hullHeading);
         }
 

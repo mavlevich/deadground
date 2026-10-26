@@ -101,9 +101,9 @@ public partial class TankBattleDemo : Node3D
         _camera.FarClipMargin = 16000f;
         _camera.GroundHeight = (x, z) => TankBattleBackdrop.SampleHeight(_geometry.HeightMap, x, z);
         if (startPerspective) _camera.SetPerspective(true);
-        _sovietViews = new UnitViewSet(this, _geometry.HeightMap, _catalog, () => "soviet");
-        _usViews = new UnitViewSet(this, _geometry.HeightMap, _catalog, () => "us");
-        _effects = new CombatEffects(_geometry.HeightMap);
+        _sovietViews = new UnitViewSet(this, _geometry.HeightMap, _catalog, () => "soviet", _geometry);
+        _usViews = new UnitViewSet(this, _geometry.HeightMap, _catalog, () => "us", _geometry);
+        _effects = new CombatEffects(_geometry.HeightMap, _geometry);
         AddChild(_effects);
         CanvasLayer canvas = new();
         AddChild(canvas);

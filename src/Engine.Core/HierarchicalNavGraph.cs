@@ -23,6 +23,7 @@ public sealed class HierarchicalNavGraph
     private readonly int _totalSectors;
 
     public MovementClass MovementClass { get; }
+    public TraversabilityCapabilities Capabilities { get; }
     public float ClassRadius { get; }
 
     // Portal data
@@ -104,13 +105,24 @@ public sealed class HierarchicalNavGraph
         float sectorSize = NavigationTuning.DefaultSectorSize,
         float cellSize = NavigationTuning.DefaultCellSize,
         NavigationBuildLimits? buildLimits = null)
-        : this(grid, MovementClass.Tracked, sectorSize, cellSize, buildLimits)
+        : this(grid, MovementClass.Tracked, TraversabilityCapabilities.DefaultVehicle, sectorSize, cellSize, buildLimits)
     {
     }
 
     public HierarchicalNavGraph(
         NavigationGrid grid,
         MovementClass movementClass,
+        float sectorSize = NavigationTuning.DefaultSectorSize,
+        float cellSize = NavigationTuning.DefaultCellSize,
+        NavigationBuildLimits? buildLimits = null)
+        : this(grid, movementClass, TraversabilityCapabilities.DefaultVehicle, sectorSize, cellSize, buildLimits)
+    {
+    }
+
+    public HierarchicalNavGraph(
+        NavigationGrid grid,
+        MovementClass movementClass,
+        TraversabilityCapabilities capabilities,
         float sectorSize = NavigationTuning.DefaultSectorSize,
         float cellSize = NavigationTuning.DefaultCellSize,
         NavigationBuildLimits? buildLimits = null)
@@ -125,6 +137,7 @@ public sealed class HierarchicalNavGraph
         _buildLimits.CheckSectors(grid.MapWidth, grid.MapDepth, sectorSize);
         _grid = grid;
         MovementClass = movementClass;
+        Capabilities = capabilities;
         ClassRadius = movementClass.GetClearanceRadius();
         _sectorSize = MathF.Max(10f, sectorSize);
         _cellSize = MathF.Max(0.1f, cellSize);
@@ -151,7 +164,10 @@ public sealed class HierarchicalNavGraph
             int cols = Math.Max(1, (int)MathF.Ceiling((bounds.MaxX - bounds.MinX) / _cellSize));
             int rows = Math.Max(1, (int)MathF.Ceiling((bounds.MaxZ - bounds.MinZ) / _cellSize));
             bool needsDetail = _grid.HasObstaclesInBox(bounds.MinX - ClassRadius, bounds.MinZ - ClassRadius,
-                bounds.MaxX + ClassRadius, bounds.MaxZ + ClassRadius);
+                bounds.MaxX + ClassRadius, bounds.MaxZ + ClassRadius) ||
+                _grid.HasTerrainObstaclesInBox(bounds.MinX - ClassRadius, bounds.MinZ - ClassRadius,
+                bounds.MaxX + ClassRadius, bounds.MaxZ + ClassRadius, Capabilities) ||
+                _grid.HasBridgesInBox(bounds.MinX, bounds.MinZ, bounds.MaxX, bounds.MaxZ);
             _sectorCellsOffset[s] = needsDetail ? totalSectorCells : -1;
             _sectorGridCols[s] = cols;
             _sectorGridRows[s] = rows;
@@ -315,6 +331,57 @@ public sealed class HierarchicalNavGraph
                 }
             }
 
+            for (int t = 0; t < _grid.TerrainObstacles.Count; t++)
+            {
+                TerrainObstacle tobs = _grid.TerrainObstacles[t];
+                if (!tobs.Blocks(Capabilities)) continue;
+
+                int minC = Math.Clamp((int)((tobs.MinX - effectiveRadius - bounds.MinX) / _cellSize), 0, cols - 1);
+                int maxC = Math.Clamp((int)((tobs.MaxX + effectiveRadius - bounds.MinX) / _cellSize), 0, cols - 1);
+                int minR = Math.Clamp((int)((tobs.MinZ - effectiveRadius - bounds.MinZ) / _cellSize), 0, rows - 1);
+                int maxR = Math.Clamp((int)((tobs.MaxZ + effectiveRadius - bounds.MinZ) / _cellSize), 0, rows - 1);
+
+                for (int r = minR; r <= maxR; r++)
+                {
+                    float cz = bounds.MinZ + (r + 0.5f) * _cellSize;
+                    int rowIdx = baseOffset + r * cols;
+                    for (int c = minC; c <= maxC; c++)
+                    {
+                        if (_sectorComponentGrid[rowIdx + c] == ushort.MaxValue) continue;
+                        float cx = bounds.MinX + (c + 0.5f) * _cellSize;
+
+                        bool onBridge = false;
+                        if ((Capabilities & TraversabilityCapabilities.Bridge) != 0)
+                        {
+                            Vector2 pt = new(cx, cz);
+                            for (int b = 0; b < _grid.Bridges.Count; b++)
+                            {
+                                BridgeStructure br = _grid.Bridges[b];
+                                if (br.Contains(pt) && br.GetSideClearance(pt) >= effectiveRadius)
+                                {
+                                    onBridge = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (onBridge) continue;
+
+                        if (cx >= tobs.MinX && cx <= tobs.MaxX && cz >= tobs.MinZ && cz <= tobs.MaxZ)
+                        {
+                            _sectorComponentGrid[rowIdx + c] = ushort.MaxValue;
+                            continue;
+                        }
+
+                        float dx = MathF.Max(0f, MathF.Max(tobs.MinX - cx, cx - tobs.MaxX));
+                        float dz = MathF.Max(0f, MathF.Max(tobs.MinZ - cz, cz - tobs.MaxZ));
+                        if (dx * dx + dz * dz < radiusSq)
+                        {
+                            _sectorComponentGrid[rowIdx + c] = ushort.MaxValue;
+                        }
+                    }
+                }
+            }
+
             // BFS flood fill to label connected components (1, 2, 3...)
             ushort currentComponent = 1;
             for (int r = 0; r < rows; r++)
@@ -450,8 +517,12 @@ public sealed class HierarchicalNavGraph
 
         var boundsA = GetSectorBounds(sectorA);
         var boundsB = GetSectorBounds(sectorB);
-        bool hasObsA = _grid.HasObstaclesInBox(boundsA.MinX - ClassRadius, boundsA.MinZ - ClassRadius, boundsA.MaxX + ClassRadius, boundsA.MaxZ + ClassRadius);
-        bool hasObsB = _grid.HasObstaclesInBox(boundsB.MinX - ClassRadius, boundsB.MinZ - ClassRadius, boundsB.MaxX + ClassRadius, boundsB.MaxZ + ClassRadius);
+        bool hasObsA = _grid.HasObstaclesInBox(boundsA.MinX - ClassRadius, boundsA.MinZ - ClassRadius, boundsA.MaxX + ClassRadius, boundsA.MaxZ + ClassRadius) ||
+                       _grid.HasTerrainObstaclesInBox(boundsA.MinX - ClassRadius, boundsA.MinZ - ClassRadius, boundsA.MaxX + ClassRadius, boundsA.MaxZ + ClassRadius, Capabilities) ||
+                       _grid.HasBridgesInBox(boundsA.MinX, boundsA.MinZ, boundsA.MaxX, boundsA.MaxZ);
+        bool hasObsB = _grid.HasObstaclesInBox(boundsB.MinX - ClassRadius, boundsB.MinZ - ClassRadius, boundsB.MaxX + ClassRadius, boundsB.MaxZ + ClassRadius) ||
+                       _grid.HasTerrainObstaclesInBox(boundsB.MinX - ClassRadius, boundsB.MinZ - ClassRadius, boundsB.MaxX + ClassRadius, boundsB.MaxZ + ClassRadius, Capabilities) ||
+                       _grid.HasBridgesInBox(boundsB.MinX, boundsB.MinZ, boundsB.MaxX, boundsB.MaxZ);
 
         if (!hasObsA && !hasObsB)
         {
@@ -694,7 +765,7 @@ public sealed class HierarchicalNavGraph
     }
 
     private float ComputePointClearance(Vector2 point) =>
-        _grid.ComputePointClearance(point);
+        _grid.ComputePointClearance(point, Capabilities);
 
     public void StartGlobalSearch(Vector2 start, Vector2 target, float radius)
     {

@@ -38,6 +38,7 @@ internal partial class CombatEffects : Node3D
     public const float GunParticlesMaxEventAge = 0.2f;
 
     private readonly HeightMap _map;
+    private readonly StaticGeometry? _geometry;
     private readonly GpuParticles3D[] _blastDust = new GpuParticles3D[MaxBlastDust];
     private readonly GpuParticles3D[] _barrelSmoke = new GpuParticles3D[MaxBarrelSmoke];
     private int _nextBlastDust;
@@ -161,9 +162,10 @@ internal partial class CombatEffects : Node3D
     public int PeakEffectsCount => _peakEffectsCount;
     public int TotalAudioRequests => _totalAudioRequests;
 
-    public CombatEffects(HeightMap map)
+    public CombatEffects(HeightMap map, StaticGeometry? geometry = null)
     {
         _map = map;
+        _geometry = geometry;
         InitTracers();
         InitMuzzleFlashes();
         InitSmokePuffs();
@@ -726,6 +728,23 @@ internal partial class CombatEffects : Node3D
         Basis facing = Basis.LookingAt(flat, Vector3.Up);
 
         float ground = _map.GetHeight(muzzle.X, muzzle.Z);
+        if (_geometry is not null && _geometry.Bridges.Count > 0)
+        {
+            System.Numerics.Vector2 muzzle2D = new(muzzle.X, muzzle.Z);
+            for (int b = 0; b < _geometry.Bridges.Count; b++)
+            {
+                BridgeStructure bridge = _geometry.Bridges[b];
+                if (bridge.Contains(muzzle2D))
+                {
+                    float bridgeH = bridge.GetHeight(muzzle2D);
+                    if (MathF.Abs(muzzle.Y - bridgeH) < BlastDustMaxMuzzleHeight)
+                    {
+                        ground = bridgeH;
+                        break;
+                    }
+                }
+            }
+        }
         float strength = Mathf.Clamp(1f - (muzzle.Y - ground) / BlastDustMaxMuzzleHeight, 0f, 1f);
         if (strength > 0.05f)
         {
@@ -1019,7 +1038,7 @@ internal partial class CombatEffects : Node3D
         tm.FadeAlpha = false;
         tm.InitialScaleVector = Vector3.Zero;
 
-        float groundY = _map.GetHeight(position.X, position.Z) + 0.03f;
+        float groundY = position.Y + 0.03f;
         tm.Mesh.Position = new Vector3(position.X, groundY, position.Z);
         tm.Mesh.Scale = Vector3.One;
         if (remainingLifetime < ResidueFadeStart)

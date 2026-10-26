@@ -27,7 +27,7 @@ public static class WireProtocol
     public const int SnapshotHeaderSize = 16 + MissionSize;
     public const int UnitSize = 35;
     public const int MaxUnits = 1024;
-    public const int ContactSize = 24;
+    public const int ContactSize = 28;
     public const int MaxContacts = 256;
     public const int EventSize = 40;
     public const int MaxEvents = 64;
@@ -274,6 +274,7 @@ public static class WireProtocol
             BinaryPrimitives.WriteInt32LittleEndian(record[16..], contact.LastSeenTick);
             BinaryPrimitives.WriteUInt16LittleEndian(record[20..], QuantizeYaw(contact.TurretYaw));
             BinaryPrimitives.WriteUInt16LittleEndian(record[22..], QuantizeYaw(contact.HullHeading));
+            BinaryPrimitives.WriteUInt32LittleEndian(record[24..], contact.SupportSurface);
         }
 
         int eventsOffset = SnapshotHeaderSize + units.Length * UnitSize + contacts.Length * ContactSize;
@@ -456,6 +457,7 @@ public static class WireProtocol
             int lastSeenTick = BinaryPrimitives.ReadInt32LittleEndian(record[16..]);
             float turretYaw = DequantizeYaw(BinaryPrimitives.ReadUInt16LittleEndian(record[20..]));
             float hullHeading = DequantizeYaw(BinaryPrimitives.ReadUInt16LittleEndian(record[22..]));
+            uint supportSurface = BinaryPrimitives.ReadUInt32LittleEndian(record[24..]);
 
             if (contactId.Value == 0 ||
                 stateByte is not ((byte)ContactState.Current or (byte)ContactState.LastKnown) ||
@@ -475,7 +477,8 @@ public static class WireProtocol
                 position,
                 lastSeenTick,
                 turretYaw,
-                hullHeading);
+                hullHeading,
+                supportSurface);
         }
 
         int eventsOffset = SnapshotHeaderSize + unitCount * UnitSize + contactCount * ContactSize;

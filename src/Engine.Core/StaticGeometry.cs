@@ -39,6 +39,10 @@ public sealed class StaticGeometry
 
     private readonly OpaqueStructure[] _structures;
     private readonly ReadOnlyCollection<OpaqueStructure> _readOnlyStructures;
+    private readonly BridgeStructure[] _bridges;
+    private readonly ReadOnlyCollection<BridgeStructure> _readOnlyBridges;
+    private readonly TerrainObstacle[] _terrainObstacles;
+    private readonly ReadOnlyCollection<TerrainObstacle> _readOnlyTerrainObstacles;
     private readonly int[] _cellOffsets;
     private readonly int[] _structureIndices;
     private readonly int _gridColumns;
@@ -46,9 +50,21 @@ public sealed class StaticGeometry
 
     public HeightMap HeightMap { get; }
     public IReadOnlyList<OpaqueStructure> Structures => _readOnlyStructures;
+    public IReadOnlyList<BridgeStructure> Bridges => _readOnlyBridges;
+    public IReadOnlyList<TerrainObstacle> TerrainObstacles => _readOnlyTerrainObstacles;
     public float StructureCellSize { get; }
 
     public StaticGeometry(HeightMap heightMap, ReadOnlySpan<OpaqueStructure> structures, float structureCellSize = 16.0f)
+        : this(heightMap, structures, ReadOnlySpan<BridgeStructure>.Empty, ReadOnlySpan<TerrainObstacle>.Empty, structureCellSize)
+    {
+    }
+
+    public StaticGeometry(
+        HeightMap heightMap,
+        ReadOnlySpan<OpaqueStructure> structures,
+        ReadOnlySpan<BridgeStructure> bridges,
+        ReadOnlySpan<TerrainObstacle> terrainObstacles = default,
+        float structureCellSize = 16.0f)
     {
         ArgumentNullException.ThrowIfNull(heightMap);
         if (!float.IsFinite(structureCellSize) || structureCellSize <= 0)
@@ -56,6 +72,38 @@ public sealed class StaticGeometry
 
         HeightMap = heightMap;
         StructureCellSize = structureCellSize;
+
+        _bridges = bridges.ToArray();
+        _readOnlyBridges = Array.AsReadOnly(_bridges);
+
+        _terrainObstacles = terrainObstacles.ToArray();
+        _readOnlyTerrainObstacles = Array.AsReadOnly(_terrainObstacles);
+
+        HashSet<StructureId> seenBridgeIds = new();
+        for (int b = 0; b < _bridges.Length; b++)
+        {
+            BridgeStructure bridge = _bridges[b] ?? throw new ArgumentException($"Bridge at index {b} is null.");
+            if (!seenBridgeIds.Add(bridge.Id))
+                throw new ArgumentException($"Duplicate bridge ID detected: {bridge.Id}.");
+
+            if (bridge.MinX < 0 || bridge.MaxX > heightMap.Width ||
+                bridge.MinZ < 0 || bridge.MaxZ > heightMap.Depth)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bridges),
+                    $"Bridge {bridge.Id} ({bridge.MinX:F1},{bridge.MinZ:F1} .. {bridge.MaxX:F1},{bridge.MaxZ:F1}) exceeds map horizontal bounds [0..{heightMap.Width}, 0..{heightMap.Depth}].");
+            }
+        }
+
+        for (int t = 0; t < _terrainObstacles.Length; t++)
+        {
+            TerrainObstacle obs = _terrainObstacles[t] ?? throw new ArgumentException($"Terrain obstacle at index {t} is null.");
+            if (obs.MinX < 0 || obs.MaxX > heightMap.Width ||
+                obs.MinZ < 0 || obs.MaxZ > heightMap.Depth)
+            {
+                throw new ArgumentOutOfRangeException(nameof(terrainObstacles),
+                    $"Terrain obstacle at index {t} ({obs.MinX:F1},{obs.MinZ:F1} .. {obs.MaxX:F1},{obs.MaxZ:F1}) exceeds map horizontal bounds [0..{heightMap.Width}, 0..{heightMap.Depth}].");
+            }
+        }
 
         // Defensive copy to ensure immutability
         _structures = new OpaqueStructure[structures.Length];
@@ -192,6 +240,35 @@ public sealed class StaticGeometry
     {
     }
 
+    public bool TryGetBridge(uint bridgeId, out BridgeStructure bridge)
+    {
+        for (int i = 0; i < _bridges.Length; i++)
+        {
+            if (_bridges[i].Id.Value == bridgeId)
+            {
+                bridge = _bridges[i];
+                return true;
+            }
+        }
+        bridge = null!;
+        return false;
+    }
+
+    public bool TryGetBridge(StructureId id, out BridgeStructure bridge) =>
+        TryGetBridge((uint)id.Value, out bridge);
+
+    public float GetSurfaceHeight(Vector2 position, uint supportSurface = 0)
+    {
+        if (supportSurface > 0 && TryGetBridge(supportSurface, out BridgeStructure bridge))
+        {
+            if (bridge.Contains(position))
+            {
+                return bridge.GetHeight(position);
+            }
+        }
+        return HeightMap.GetHeight(position.X, position.Y);
+    }
+
     private static LineOfSightContext GetThreadContext(int structureCount)
     {
         t_defaultContext ??= new LineOfSightContext(structureCount);
@@ -240,11 +317,20 @@ public sealed class StaticGeometry
         }
 
 
-        if (_structures.Length > 0 && TryGetContainingStructure(start, out _))
+        if (TryGetContainingStructure(start, out _))
             return false;
 
         if (_structures.Length > 0 && TryTraceAnyStructure(start, delta, totalDistance, context))
             return false;
+
+        if (_bridges.Length > 0)
+        {
+            for (int b = 0; b < _bridges.Length; b++)
+            {
+                if (_bridges[b].TryIntersect(start, delta, totalDistance, out _))
+                    return false;
+            }
+        }
 
         if (MathF.Min(start.Y, end.Y) >= HeightMap.MaxHeight - GroundTolerance)
             return true;
@@ -316,6 +402,23 @@ public sealed class StaticGeometry
             }
         }
 
+        if (_bridges.Length > 0)
+        {
+            for (int b = 0; b < _bridges.Length; b++)
+            {
+                testedStructures++;
+                if (_bridges[b].TryIntersect(start, delta, totalDistance, out float bridgeHitT))
+                {
+                    if (bridgeHitT <= closestT + VolumeEpsilon)
+                    {
+                        closestT = bridgeHitT;
+                        closestKind = ObstructionKind.Structure;
+                        closestStructureId = _bridges[b].Id;
+                    }
+                }
+            }
+        }
+
         diagnostics = new LineOfSightDiagnostics(visitedTerrainCells, visitedStructureCells, testedStructures);
 
         if (closestKind == ObstructionKind.None)
@@ -356,6 +459,20 @@ public sealed class StaticGeometry
                 {
                     bestStructT = tNear;
                     bestStructId = s.Id;
+                    foundStructHit = true;
+                }
+            }
+        }
+
+        for (int b = 0; b < _bridges.Length; b++)
+        {
+            BridgeStructure br = _bridges[b];
+            if (br.TryIntersect(start, delta, totalDistance, out float tNear))
+            {
+                if (IsBetterHit(tNear, br.Id, bestStructT, bestStructId, foundStructHit))
+                {
+                    bestStructT = tNear;
+                    bestStructId = br.Id;
                     foundStructHit = true;
                 }
             }
@@ -469,6 +586,18 @@ public sealed class StaticGeometry
                 if (!found || s.Id.Value < bestId.Value)
                 {
                     bestId = s.Id;
+                    found = true;
+                }
+            }
+        }
+
+        for (int b = 0; b < _bridges.Length; b++)
+        {
+            if (_bridges[b].ContainsInterior(point, VolumeEpsilon))
+            {
+                if (!found || _bridges[b].Id.Value < bestId.Value)
+                {
+                    bestId = _bridges[b].Id;
                     found = true;
                 }
             }

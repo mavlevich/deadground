@@ -293,6 +293,12 @@ public partial class Main : Node3D
             _map = scenarioGeometry.HeightMap;
             setup = ReconRaidScenario.CreateMatchSetup(scenarioGeometry);
         }
+        else if (_scenario == "bridge-crossing")
+        {
+            scenarioGeometry = BridgeCrossingScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = BridgeCrossingScenario.CreateMatchSetup(scenarioGeometry);
+        }
         else
         {
             _map = HeightMap.CreatePrototype();
@@ -321,6 +327,7 @@ public partial class Main : Node3D
                 "combat" => CombatScenario.CreateSimulation(scenarioGeometry!),
                 "recon-raid" => ReconRaidScenario.CreateSimulation(scenarioGeometry!),
                 "battle" => BattleScenario.CreateSimulation(scenarioGeometry!),
+                "bridge-crossing" => BridgeCrossingScenario.CreateSimulation(scenarioGeometry!),
                 _ => PrototypeScenario.Create(_map)
             };
             // Test switch: the enemy holds fire, so own units can be tried out without losing them.
@@ -381,6 +388,7 @@ public partial class Main : Node3D
             "navigation-large" => 450,
             "recon-raid" => 160,
             "battle" => 160,
+            "bridge-crossing" => 120,
             _ => 112
         };
         _camera = new Camera3D { Projection = Camera3D.ProjectionType.Orthogonal, Size = initialCameraSize, Far = 3500, Current = true };
@@ -391,6 +399,7 @@ public partial class Main : Node3D
             "navigation-large" => new Vector3(300, 0, 300),
             "recon-raid" => new Vector3(100, 0, 100),
             "battle" => new Vector3(BattleScenario.SovietStart.X, 0, BattleScenario.SovietStart.Y),
+            "bridge-crossing" => new Vector3(100, 4, 100),
             _ => new Vector3(64, 0, 64)
         };
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
@@ -404,12 +413,12 @@ public partial class Main : Node3D
         }
         // Factions are part of the public match setup; the side is known once the session assigns it.
         MatchSetup matchSetup = setup;
-        _unitViews = new UnitViewSet(this, _map, _catalog, () => matchSetup.GetPlayerFaction(_session.AssignedPlayerId));
-        _contactViews = new ContactViewSet(this, _map, _catalog, () => matchSetup.GetHostileFaction(_session.AssignedPlayerId));
-        _combatEffects = new CombatEffects(_map);
+        _unitViews = new UnitViewSet(this, _map, _catalog, () => matchSetup.GetPlayerFaction(_session.AssignedPlayerId), _scenarioGeometry);
+        _contactViews = new ContactViewSet(this, _map, _catalog, () => matchSetup.GetHostileFaction(_session.AssignedPlayerId), _scenarioGeometry);
+        _combatEffects = new CombatEffects(_map, _scenarioGeometry);
         AddChild(_combatEffects);
 
-        if (_session is LocalSession && _scenario != "visibility" && _scenario != "combat" && _scenario != "navigation-large" && _scenario != "recon-raid")
+        if (_session is LocalSession && _scenario != "visibility" && _scenario != "combat" && _scenario != "navigation-large" && _scenario != "recon-raid" && _scenario != "bridge-crossing")
         {
             foreach (OwnUnitObservation unit in _session.Replica.OwnUnits)
             {
@@ -431,6 +440,11 @@ public partial class Main : Node3D
         else if (_scenario == "recon-raid" && _session.Replica.OwnUnits.Length > 0)
         {
             // Auto-select player recon unit for immediate playability
+            _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
+        }
+        else if (_scenario == "bridge-crossing" && _session.Replica.OwnUnits.Length > 0)
+        {
+            // Auto-select player tank for immediate playability
             _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
         }
 
@@ -504,6 +518,44 @@ public partial class Main : Node3D
                 Position = new Vector3(posX, posY, posZ),
                 MaterialOverride = structure.Id.Value == 1 ? buildingMat : wallMat
             });
+        }
+
+        StandardMaterial3D bridgeMat = new() { AlbedoColor = new Color("454c4d"), Roughness = 0.85f };
+        foreach (BridgeStructure bridge in geometry.Bridges)
+        {
+            System.Numerics.Vector2 delta = bridge.End - bridge.Start;
+            float length = delta.Length();
+            System.Numerics.Vector2 mid = (bridge.Start + bridge.End) * 0.5f;
+            float midHeight = (bridge.StartHeight + bridge.EndHeight) * 0.5f - bridge.Thickness * 0.5f;
+            float yaw = MathF.Atan2(delta.X, delta.Y);
+
+            AddChild(new MeshInstance3D
+            {
+                Mesh = new BoxMesh { Size = new Vector3(bridge.Width, bridge.Thickness, length) },
+                Position = new Vector3(mid.X, midHeight, mid.Y),
+                Rotation = new Vector3(0, yaw, 0),
+                MaterialOverride = bridgeMat
+            });
+        }
+
+        StandardMaterial3D forestMat = new() { AlbedoColor = new Color(0.12f, 0.35f, 0.15f, 0.45f), Transparency = BaseMaterial3D.TransparencyEnum.Alpha };
+        foreach (TerrainObstacle obs in geometry.TerrainObstacles)
+        {
+            if ((obs.RequiredCapability & TraversabilityCapabilities.DenseForest) != 0)
+            {
+                float sizeX = obs.MaxX - obs.MinX;
+                float sizeZ = obs.MaxZ - obs.MinZ;
+                float posX = (obs.MinX + obs.MaxX) * 0.5f;
+                float posZ = (obs.MinZ + obs.MaxZ) * 0.5f;
+                float height = 4.0f;
+                float groundY = geometry.HeightMap.GetHeight(posX, posZ);
+                AddChild(new MeshInstance3D
+                {
+                    Mesh = new BoxMesh { Size = new Vector3(sizeX, height, sizeZ) },
+                    Position = new Vector3(posX, groundY + height * 0.5f, posZ),
+                    MaterialOverride = forestMat
+                });
+            }
         }
     }
 
@@ -646,6 +698,7 @@ public partial class Main : Node3D
                     "combat" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 4,
                     "recon-raid" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
                     "battle" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == BattleScenario.UnitsPerSide,
+                    "bridge-crossing" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
                     _ => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
                         _session.Replica.OwnUnits[0].Position.Y > 24
                 };
@@ -655,6 +708,7 @@ public partial class Main : Node3D
                     "navigation-large" => "M1_CLIENT_NAV_LARGE_SMOKE",
                     "recon-raid" => "M1_CLIENT_RECON_RAID_SMOKE",
                     "battle" => "M1_CLIENT_BATTLE_SMOKE",
+                    "bridge-crossing" => "M1_CLIENT_BRIDGE_CROSSING_SMOKE",
                     _ => "M0_CLIENT_SMOKE"
                 };
                 string token = prefix + (ok ? "_OK" : "_FAILED");
@@ -1405,6 +1459,7 @@ public partial class Main : Node3D
             "combat" => "COMBAT SCENARIO",
             "recon-raid" => "RECON RAID MISSION",
             "battle" => "MEETING ENGAGEMENT",
+            "bridge-crossing" => "BRIDGE CROSSING",
             _ => "M0 NETWORK TEST"
         };
         return $"DEAD GROUND   /   SIDE {assignedSide}   /   {name}";

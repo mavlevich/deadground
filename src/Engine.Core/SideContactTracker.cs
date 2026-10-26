@@ -19,7 +19,8 @@ public sealed class SideContactTracker
         ContactClassification Classification = ContactClassification.Unknown,
         ushort Type = 0,
         float TurretYaw = 0f,
-        float HullHeading = 0f);
+        float HullHeading = 0f,
+        uint SupportSurface = 0);
 
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     private static int CompareTargets(in ObservedTarget a, in ObservedTarget b)
@@ -150,6 +151,7 @@ public sealed class SideContactTracker
         public EntityId BoundEntityId; // Internal tracker link for continuous tracking only
         public float TurretYaw;
         public float HullHeading;
+        public uint SupportSurface;
     }
 
     private readonly Entry[] _entries;
@@ -239,6 +241,7 @@ public sealed class SideContactTracker
                 entry.Type = target.Type;
                 entry.TurretYaw = target.TurretYaw;
                 entry.HullHeading = target.HullHeading;
+                entry.SupportSurface = target.SupportSurface;
                 entry.ObservedThisStep = true;
             }
             else
@@ -306,6 +309,7 @@ public sealed class SideContactTracker
                 correlated.LastSeenTick = currentTick;
                 correlated.TurretYaw = target.TurretYaw;
                 correlated.HullHeading = target.HullHeading;
+                correlated.SupportSurface = target.SupportSurface;
                 correlated.ObservedThisStep = true;
                 correlated.HasBoundEntity = true;
                 correlated.BoundEntityId = target.Id;
@@ -418,7 +422,8 @@ public sealed class SideContactTracker
             HasBoundEntity = true,
             BoundEntityId = target.Id,
             TurretYaw = target.TurretYaw,
-            HullHeading = target.HullHeading
+            HullHeading = target.HullHeading,
+            SupportSurface = target.SupportSurface
         };
         _entityToContactIndex[target.Id] = assignedIndex;
         _count++;
@@ -469,7 +474,8 @@ public sealed class SideContactTracker
                 entry.Position,
                 entry.LastSeenTick,
                 entry.TurretYaw,
-                entry.HullHeading);
+                entry.HullHeading,
+                entry.SupportSurface);
         }
 
         // Canonical sort by ContactId to avoid publication order variations
@@ -488,7 +494,7 @@ public sealed class SideContactTracker
             if (_entries[i].Id.Value == id.Value)
             {
                 ref Entry e = ref _entries[i];
-                contact = new ContactObservation(e.Id, e.State, e.Classification, e.Type, e.Position, e.LastSeenTick, e.TurretYaw, e.HullHeading);
+                contact = new ContactObservation(e.Id, e.State, e.Classification, e.Type, e.Position, e.LastSeenTick, e.TurretYaw, e.HullHeading, e.SupportSurface);
                 return true;
             }
         }
@@ -530,7 +536,7 @@ public sealed class SideContactTracker
             contactIndex >= 0 && contactIndex < _count)
         {
             ref Entry e = ref _entries[contactIndex];
-            contact = new ContactObservation(e.Id, e.State, e.Classification, e.Type, e.Position, e.LastSeenTick, e.TurretYaw, e.HullHeading);
+            contact = new ContactObservation(e.Id, e.State, e.Classification, e.Type, e.Position, e.LastSeenTick, e.TurretYaw, e.HullHeading, e.SupportSurface);
             return true;
         }
         contact = default;

@@ -341,8 +341,8 @@ public sealed class ArmorAndKpvtTests
         Assert.Null(contactType.GetProperty("ArmorFront"));
         Assert.Null(contactType.GetProperty("MaxHealth"));
 
-        // Verify wire protocol contact record size is exactly 24 bytes and contains no health/armor
-        Assert.Equal(24, WireProtocol.ContactSize);
+        // Verify wire protocol contact record size is exactly 28 bytes (including SupportSurface) and contains no health/armor
+        Assert.Equal(28, WireProtocol.ContactSize);
     }
 
     [Fact]
