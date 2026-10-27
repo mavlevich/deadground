@@ -11,6 +11,7 @@ public interface IGameSession : IDisposable
     long BytesReceived { get; }
     double PendingSeconds { get; }
     CommandResult? LastCommandResult { get; }
+    uint LastSubmittedCommandSequence { get; }
     long RejectedCommands { get; }
     bool IsConnected { get; }
     int AssignedPlayerId { get; }

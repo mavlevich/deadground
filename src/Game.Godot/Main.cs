@@ -22,7 +22,10 @@ public partial class Main : Node3D
     private Label _stats = null!, _status = null!, _subtitle = null!, _title = null!;
     private UnitViewSet _unitViews = null!;
     private ContactViewSet _contactViews = null!;
-    private MeshInstance3D _destination = null!;
+    private OrderDestinationView _destination = null!;
+    private OrderCursorOverlay _orderCursorOverlay = null!;
+    private OrderPreviewController _previewController = null!;
+    private DestinationEvaluator _destinationEvaluator = null!;
     private double _hudTimer, _smokeTimer;
     private bool _smokeTest;
     private int _smokeQuitFrames = -1;
@@ -50,6 +53,7 @@ public partial class Main : Node3D
 
     internal FogOfWarView? FogOfWar => _fogOfWar;
     internal CameraRig CameraRig => _cameraRig;
+    internal Camera3D Camera => _camera;
     internal SettingsPanel SettingsPanel => _settingsPanel;
     internal SelectionCard SelectionCard => _selectionCard;
     internal OrderNotification OrderNotification => _orderNotification;
@@ -63,6 +67,10 @@ public partial class Main : Node3D
     internal IGameSession Session => _session;
     internal UnitCatalog Catalog => _catalog;
     internal CombatEffects CombatEffects => _combatEffects;
+    internal OrderDestinationView DestinationMarker => _destination;
+    internal OrderCursorOverlay OrderCursorOverlay => _orderCursorOverlay;
+    internal OrderPreviewController PreviewController => _previewController;
+    internal DestinationEvaluator DestinationEvaluator => _destinationEvaluator;
 
     public override void _Ready()
     {
@@ -180,6 +188,7 @@ public partial class Main : Node3D
         string? connectTarget = null;
         string? captureDir = null;
         string? effectsCaptureDir = null;
+        string? orderPreviewCaptureDir = null;
         float? overrideCameraSize = null;
         Vector3? overrideCameraFocus = null;
         int port = 7777;
@@ -243,6 +252,11 @@ public partial class Main : Node3D
                     effectsCaptureDir = args[i + 1];
                     i++;
                 }
+                else if (args[i] == "--order-preview-capture" && i + 1 < args.Length)
+                {
+                    orderPreviewCaptureDir = args[i + 1];
+                    i++;
+                }
                 else if (args[i] == "--combat-feedback-capture" && i + 1 < args.Length)
                 {
                     captureDir = args[i + 1];
@@ -304,7 +318,12 @@ public partial class Main : Node3D
             _map = HeightMap.CreatePrototype();
             setup = PrototypeScenario.CreateMatchSetup(_map);
         }
+        if (scenarioGeometry is null)
+        {
+            scenarioGeometry = new StaticGeometry(_map, ReadOnlySpan<OpaqueStructure>.Empty);
+        }
         _scenarioGeometry = scenarioGeometry;
+        _destinationEvaluator = new DestinationEvaluator(_scenarioGeometry);
 
         if (connectTarget is not null)
         {
@@ -449,19 +468,17 @@ public partial class Main : Node3D
         }
 
 
-        _destination = new MeshInstance3D
-        {
-            Mesh = new TorusMesh { InnerRadius = 1.5f, OuterRadius = 1.8f, Rings = 24, RingSegments = 8 },
-            Scale = new Vector3(1, 0.15f, 1),
-            MaterialOverride = new StandardMaterial3D
-            {
-                AlbedoColor = new Color("edc76b"),
-                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded
-            },
-            Visible = false
-        };
+        _destination = new OrderDestinationView();
         AddChild(_destination);
         BuildHud();
+        _previewController = new OrderPreviewController(
+            _destinationEvaluator,
+            _scenarioGeometry,
+            _map,
+            _catalog,
+            _orderCursorOverlay,
+            _destination,
+            _orderNotification);
         UpdateViews();
 
         if (_smokeTest && !ClientRegressionTests.Run(this))
@@ -492,6 +509,18 @@ public partial class Main : Node3D
                 if (task.IsFaulted)
                 {
                     GD.PushError($"COMBAT_FEEDBACK_CAPTURE_FAULT: {task.Exception}");
+                    GetTree().Quit(1);
+                }
+            }, System.Threading.Tasks.TaskScheduler.Default);
+        }
+
+        if (orderPreviewCaptureDir is not null)
+        {
+            _ = OrderPreviewProbe.RunCapture(this, orderPreviewCaptureDir).ContinueWith(task =>
+            {
+                if (task.IsFaulted)
+                {
+                    GD.PushError($"ORDER_PREVIEW_CAPTURE_FAULT: {task.Exception}");
                     GetTree().Quit(1);
                 }
             }, System.Threading.Tasks.TaskScheduler.Default);
@@ -596,15 +625,27 @@ public partial class Main : Node3D
 
         _orderNotification?.Update(delta);
         UpdateSelectionPresentation();
+        _previewController?.UpdateOrders(_session, delta);
 
-        if (_session.LastCommandResult is { } result && result.Sequence != _lastCommandResult)
+        if (!_settingsPanel.IsOpen)
         {
-            _lastCommandResult = result.Sequence;
-            string msg = result.Queued
-                ? $"Server queued order #{result.Sequence}"
-                : $"Order #{result.Sequence} rejected by server";
-            _orderNotification?.ShowNotification(msg);
-            if (!result.Queued) _destination.Visible = false;
+            Vector2 mousePos = GetViewport().GetMousePosition();
+            Vector2 viewportSize = GetViewport().GetVisibleRect().Size;
+            bool isOccluded = false;
+            for (int i = 0; i < _inputOccludingPanels.Length; i++)
+            {
+                if (_inputOccludingPanels[i].HasPoint(mousePos))
+                {
+                    isOccluded = true;
+                    break;
+                }
+            }
+            bool hasEnemyContact = TryGetTargetContactUnderMouse(mousePos, out _);
+            _previewController?.UpdateHover(_camera, mousePos, viewportSize, isOccluded, hasEnemyContact, _unitViews, _session.Replica);
+        }
+        else
+        {
+            _orderCursorOverlay?.HideTooltip();
         }
 
         _cameraRig.Update(delta, allowInput: !_settingsPanel.IsOpen);
@@ -954,63 +995,33 @@ public partial class Main : Node3D
 
             if (_unitViews.Selected.Count > 0)
             {
-                ContactId? targetContact = null;
-                if (_roleBadgeOverlay.TryHitBadge(mouse.Position, out _, out ContactId? badgeEnemy) && badgeEnemy is not null)
-                {
-                    targetContact = badgeEnemy;
-                }
-                else
-                {
-                    float nearestContactDistance = 28 * 28;
-                    foreach ((ContactId id, ContactView view) in _contactViews.Views)
-                    {
-                        Vector3 center = view.Root.Position + Vector3.Up * 1.5f;
-                        if (_camera.IsPositionBehind(center)) continue;
-                        float distance = _camera.UnprojectPosition(center).DistanceSquaredTo(mouse.Position);
-                        if (distance < nearestContactDistance)
-                        {
-                            nearestContactDistance = distance;
-                            targetContact = id;
-                        }
-                    }
-                }
-
-                if (targetContact is not null)
+                if (TryGetTargetContactUnderMouse(mouse.Position, out ContactId targetContact))
                 {
                     int totalUnits = _unitViews.Selected.Count;
                     int sent = 0;
                     foreach (EntityId id in _unitViews.Selected)
                     {
-                        if (_session.Attack(id, targetContact.Value)) sent++;
+                        if (_session.Attack(id, targetContact)) sent++;
                     }
-                    _destination.Visible = false;
+                    _destination.Clear();
                     string attackMsg = sent == 0
-                        ? $"Failed to submit attack order / 0 of {totalUnits} units -> Contact #{targetContact.Value.Value}"
+                        ? $"Failed to submit attack order / 0 of {totalUnits} units -> Contact #{targetContact.Value}"
                         : sent < totalUnits
-                            ? $"Attack order submitted for {sent} of {totalUnits} units -> Contact #{targetContact.Value.Value}"
-                            : $"Attack order submitted / {sent} units -> Contact #{targetContact.Value.Value}";
+                            ? $"Attack order submitted for {sent} of {totalUnits} units -> Contact #{targetContact.Value}"
+                            : $"Attack order submitted / {sent} units -> Contact #{targetContact.Value}";
                     _orderNotification?.ShowNotification(attackMsg);
                     _status.Text = attackMsg;
                     return;
                 }
 
-                Vector3 origin = _camera.ProjectRayOrigin(mouse.Position);
-                Vector3 direction = _camera.ProjectRayNormal(mouse.Position);
-                if (!_map.TryRaycast(new NumericsVector3(origin.X, origin.Y, origin.Z),
-                    new NumericsVector3(direction.X, direction.Y, direction.Z), _camera.Far, out NumericsVector3 hit)) return;
-                int totalUnitsMove = _unitViews.Selected.Count;
-                int sentMove = 0;
-                foreach (EntityId id in _unitViews.Selected)
-                    if (_session.Move(id, new NumericsVector2(hit.X, hit.Z))) sentMove++;
-                _destination.Position = new Vector3(hit.X, hit.Y + 0.12f, hit.Z);
-                _destination.Visible = sentMove > 0;
-                string moveMsg = sentMove == 0
-                    ? $"Failed to submit move order / 0 of {totalUnitsMove} units / {hit.X:F0}, {hit.Z:F0} m"
-                    : sentMove < totalUnitsMove
-                        ? $"Move order submitted for {sentMove} of {totalUnitsMove} units / {hit.X:F0}, {hit.Z:F0} m"
-                        : $"Move order submitted / {sentMove} units / {hit.X:F0}, {hit.Z:F0} m";
-                _orderNotification?.ShowNotification(moveMsg);
-                _status.Text = moveMsg;
+                if (_previewController.ExecuteMoveClick(_camera, mouse.Position, _unitViews, _session, out string moveMsg))
+                {
+                    _status.Text = moveMsg;
+                }
+                else if (!string.IsNullOrEmpty(moveMsg))
+                {
+                    _status.Text = moveMsg;
+                }
             }
             else if (_contactViews.Selected.Count > 0)
             {
@@ -1018,6 +1029,36 @@ public partial class Main : Node3D
                 _status.Text = "Enemy contacts cannot receive orders";
             }
         }
+    }
+
+    private bool TryGetTargetContactUnderMouse(Vector2 mousePos, out ContactId targetContact)
+    {
+        targetContact = default;
+        if (_roleBadgeOverlay is not null &&
+            _roleBadgeOverlay.TryHitBadge(mousePos, out _, out ContactId? badgeEnemy) &&
+            badgeEnemy is not null)
+        {
+            targetContact = badgeEnemy.Value;
+            return true;
+        }
+
+        if (_contactViews is null) return false;
+
+        float nearestContactDistance = 28 * 28;
+        bool found = false;
+        foreach ((ContactId id, ContactView view) in _contactViews.Views)
+        {
+            Vector3 center = view.Root.Position + Vector3.Up * 1.5f;
+            if (_camera.IsPositionBehind(center)) continue;
+            float distance = _camera.UnprojectPosition(center).DistanceSquaredTo(mousePos);
+            if (distance < nearestContactDistance)
+            {
+                nearestContactDistance = distance;
+                targetContact = id;
+                found = true;
+            }
+        }
+        return found;
     }
 
     private void HandleLeftMouseMotion(Vector2 position)
@@ -1051,6 +1092,7 @@ public partial class Main : Node3D
         {
             _unitViews.UpdateSelectionVisuals();
             UpdateSelectionPresentation();
+            _previewController?.OnUnitSelectionChanged();
         }
     }
 
@@ -1285,6 +1327,9 @@ public partial class Main : Node3D
         {
             CancelActiveDrag();
             _cameraRig?.ClearInput();
+            _orderCursorOverlay?.HideTooltip();
+            _destination?.HideGhost();
+            Input.SetDefaultCursorShape(Input.CursorShape.Arrow);
             Godot.Engine.MaxFps = 30;
         }
         else if (what is (int)NotificationApplicationFocusIn or (int)NotificationWMWindowFocusIn)
@@ -1389,6 +1434,9 @@ public partial class Main : Node3D
         _orderNotification.OffsetRight = 180;
         canvas.AddChild(_orderNotification);
 
+        _orderCursorOverlay = new OrderCursorOverlay();
+        canvas.AddChild(_orderCursorOverlay);
+
         if (_scenario == "recon-raid")
         {
             _missionPanel = new MissionPanel(this, _map);
@@ -1409,7 +1457,8 @@ public partial class Main : Node3D
         _roleBadgeOverlay?.Clear();
         _selectionCard?.UpdateEmpty();
         _orderNotification?.Clear();
-        _destination.Visible = false;
+        _destination.Clear();
+        _previewController?.Reset();
         _combatEffects.Clear();
         _session.Dispose();
 

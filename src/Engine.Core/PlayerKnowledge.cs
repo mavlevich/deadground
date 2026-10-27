@@ -52,6 +52,7 @@ public sealed class PlayerKnowledge
             if (unit.Owner != Player) continue;
             if (count == _ownUnits.Length) throw new InvalidOperationException("Knowledge capacity exceeded.");
             PathRequestStatus navStatus = navigation?.GetUnitStatus(unit.Id) ?? PathRequestStatus.None;
+            uint navOrderSeq = navigation?.GetUnitOrderSequence(unit.Id) ?? 0;
             if (world.TryGetCombatState(unit.Id, out WorldState.CombatState combat))
             {
                 _ownUnits[count++] = new OwnUnitObservation(
@@ -67,11 +68,12 @@ public sealed class PlayerKnowledge
                     combat.TargetContactId,
                     combat.Stance,
                     combat.TurretYaw,
-                    combat.HullHeading);
+                    combat.HullHeading,
+                    navOrderSeq);
             }
             else
             {
-                _ownUnits[count++] = new OwnUnitObservation(unit.Id, unit.Definition, unit.Position, unit.SupportSurface, navStatus, Stance: FireStance.FireAtWill, TurretYaw: 0f);
+                _ownUnits[count++] = new OwnUnitObservation(unit.Id, unit.Definition, unit.Position, unit.SupportSurface, navStatus, Stance: FireStance.FireAtWill, TurretYaw: 0f, NavOrderSequence: navOrderSeq);
             }
         }
         Count = count;

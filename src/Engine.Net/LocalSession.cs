@@ -17,6 +17,7 @@ public sealed class LocalSession : IGameSession
     public long BytesReceived => _client.BytesReceived;
     public double PendingSeconds => _host.PendingSeconds;
     public CommandResult? LastCommandResult => _client.LastCommandResult;
+    public uint LastSubmittedCommandSequence => _client.LastSubmittedCommandSequence;
     public long RejectedCommands => _client.RejectedCommands;
     public bool IsConnected => true;
     public int AssignedPlayerId { get; }

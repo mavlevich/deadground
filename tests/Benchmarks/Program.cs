@@ -13,6 +13,12 @@ if (args.Length > 0 && args[0] == "--navigation-5km")
     return;
 }
 
+if (args.Length > 0 && args[0] == "--order-preview")
+{
+    RunOrderPreviewBenchmark();
+    return;
+}
+
 if (args.Length > 0 && args[0] == "--probe")
 {
     RunProbe();
@@ -651,6 +657,104 @@ static bool RunLargeNavigationProbe()
     Console.WriteLine();
 
     return meetsBudget;
+}
+
+static void RunOrderPreviewBenchmark()
+{
+    const int size = 65;
+    HeightMap map = new(size, size, 2.0f, 0.01f, new ushort[size * size]);
+    OpaqueStructure building = new(new StructureId(1), 40f, 0f, 40f, 60f, 10f, 60f);
+    TerrainObstacle water = new(10f, 10f, 30f, 30f, TraversabilityCapabilities.Water);
+    StaticGeometry geo = new(map, [building], ReadOnlySpan<BridgeStructure>.Empty, [water]);
+    DestinationEvaluator evaluator = new(geo, cellSize: 1.0f);
+
+    Vector2 target = new(35.0f, 50.0f);
+
+    int[] counts = [1, 20, 200];
+    Console.WriteLine("=== ORDER PREVIEW DEDUPLICATION BENCHMARK ===");
+    Console.WriteLine($"Map: {map.Width:F0}x{map.Depth:F0}m, Target: ({target.X:F1}, {target.Y:F1})");
+
+    Span<(float Radius, TraversabilityCapabilities Caps, uint Surface, DestinationEvaluationResult Result)> cache =
+        stackalloc (float, TraversabilityCapabilities, uint, DestinationEvaluationResult)[8];
+
+    foreach (int count in counts)
+    {
+        (float Radius, TraversabilityCapabilities Caps, uint Surface)[] army =
+            new (float, TraversabilityCapabilities, uint)[count];
+
+        for (int i = 0; i < count; i++)
+        {
+            if (i % 3 == 0)
+                army[i] = (1.2f, TraversabilityCapabilities.DefaultVehicle, 0); // Tank
+            else if (i % 3 == 1)
+                army[i] = (0.8f, TraversabilityCapabilities.DefaultVehicle, 0); // Recon
+            else
+                army[i] = (1.0f, TraversabilityCapabilities.DefaultVehicle, 0); // APC
+        }
+
+        // Warmup
+        for (int iter = 0; iter < 1000; iter++)
+        {
+            int cCount = 0;
+            for (int i = 0; i < count; i++)
+            {
+                var unit = army[i];
+                bool found = false;
+                for (int c = 0; c < cCount; c++)
+                {
+                    if (cache[c].Radius == unit.Radius && cache[c].Caps == unit.Caps && cache[c].Surface == unit.Surface)
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                {
+                    DestinationEvaluationResult res = evaluator.Evaluate(target, unit.Radius, unit.Caps, unit.Surface);
+                    if (cCount < cache.Length)
+                        cache[cCount++] = (unit.Radius, unit.Caps, unit.Surface, res);
+                }
+            }
+        }
+
+        int totalQueries = 0;
+        int iterations = 10000;
+        Stopwatch sw = Stopwatch.StartNew();
+        long beforeAllocated = GC.GetAllocatedBytesForCurrentThread();
+
+        for (int iter = 0; iter < iterations; iter++)
+        {
+            int cCount = 0;
+            for (int i = 0; i < count; i++)
+            {
+                var unit = army[i];
+                bool found = false;
+                for (int c = 0; c < cCount; c++)
+                {
+                    if (cache[c].Radius == unit.Radius && cache[c].Caps == unit.Caps && cache[c].Surface == unit.Surface)
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                {
+                    totalQueries++;
+                    DestinationEvaluationResult res = evaluator.Evaluate(target, unit.Radius, unit.Caps, unit.Surface);
+                    if (cCount < cache.Length)
+                        cache[cCount++] = (unit.Radius, unit.Caps, unit.Surface, res);
+                }
+            }
+        }
+
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - beforeAllocated;
+        sw.Stop();
+        double totalMs = sw.Elapsed.TotalMilliseconds;
+        double avgUsPerFrame = (totalMs * 1000.0) / iterations;
+        int queriesPerFrame = totalQueries / iterations;
+
+        Console.WriteLine($"Selected Units: {count,3} | Actual Queries: {queriesPerFrame} | Avg Time: {avgUsPerFrame:F3} us/frame | Allocated: {allocated} B");
+    }
 }
 
 [MemoryDiagnoser]

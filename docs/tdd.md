@@ -619,7 +619,7 @@ A unit may fire at any `Current` contact known to its side, including targets sp
 
 ### 12.2 Move orders
 
-Status: planned, together with or after section 9.5.
+Status: planned, together with or after section 9.5. Move order preview, destination snapping, and sequence correlation landed.
 
 - Final facing: a move order may carry a facing angle. The unit turns to it on arrival. The server
   validates that the value is finite.
@@ -634,6 +634,37 @@ Status: planned, together with or after section 9.5.
   queued order starts.
 - Group moves keep the existing per-unit commands. Formation spreading of group destinations is later
   work (M3).
+- Destination pre-evaluation (`DestinationEvaluator`):
+  - Shared allocation-free evaluation engine shared by client pre-click validation and server snapping.
+  - Distinguishes destination validity from route reachability: pre-evaluation checks local point traversability and obstacle clearance, but does not guarantee the existence of an unobstructed transit corridor (for example, land across an unbridged river).
+  - Diagnostic rejection reasons:
+    - `Water`: "Water blocks this unit." (reported when non-amphibious units target water on ground surface).
+    - `DenseForest`: "Dense forest blocks this unit."
+    - `Building`: "Building blocks this position."
+    - `InsufficientClearance`: "Not enough clearance."
+    - `OutsideMapBounds`: "Outside map bounds."
+  - Target snapping: when hovering within `MaxSnapDistance` (3.0 m) of an obstacle perimeter or boundary, the candidate destination snaps to the nearest clear point (`DestinationValidity.Adjusted`). The client renders a ghost preview ring at the snapped spot.
+  - Bridge deck vs ground under span:
+    - Vertical raycast determines target `SupportSurface`.
+    - If hitting a bridge slab, target `SupportSurface = bridge.Id`, elevation is deck height, checking deck clearance and no water blockage.
+    - If passing under a bridge or targeting terrain under the span, target `SupportSurface = 0`, checking ground elevation, water obstacle, and overhead deck clearance.
+  - Group profile deduplication:
+    - When evaluating moves for groups (up to 200 units), units are clustered by `(Radius, TraversabilityCapabilities, SupportSurface)`. Evaluating 1, 20, or 200 units requires at most 1 to 3 queries, completing in under 1 microsecond per frame with zero steady-state heap allocations.
+  - Mixed selection handling:
+    - If destination is valid for all selected units: standard reticle.
+    - If valid for a subset: mixed reticle with tooltip "Destination suitable for X of Y units."
+    - Right-click move sends orders only to valid units; invalid units remain untouched and a client notification is displayed: "Skipped N units unable to reach destination."
+    - If invalid for all selected units: move command is not sent and existing orders remain untouched.
+  - Order outcome correlation:
+    - Protocol version bumped to 17 (`MatchSetup.CurrentProtocolVersion = 17`).
+    - Added `uint NavOrderSequence` to `OwnUnitObservation` (wire packet `UnitSize` 39 bytes).
+    - `NavigationSystem` tracks unit order sequence upon queue admission and immediate rejection (`GetUnitOrderSequence`).
+    - Client correlates `OwnUnitObservation.NavOrderSequence` with tracked command sequence (`LastSubmittedCommandSequence`) to discard stale server responses and advance the destination marker through lifecycle states:
+      - `Sent`: amber marker, order dispatched to server.
+      - `Processing`: cyan marker, server received order and pathfinding is active.
+      - `PathFound`: pulsing green marker, path computed and movement started.
+      - `Failed`: red marker, no path, rejected, or capacity exceeded.
+      - `Partial`: orange marker, mixed selection where some units found paths and others failed.
 
 ### 12.3 Direct fire accuracy and armor
 
@@ -1170,6 +1201,22 @@ consumers. The real-renderer regression loads all vehicle LODs and three deferre
 The separate `tests/vehicle-rendering-smoke.sh` opens an actual rendering window.
 The demo does not implement dynamic
 avoidance, a network spectator protocol, unlimited ammunition, artillery or aircraft.
+
+### 18.11 Move order preview, cursor overlay, and destination marker
+
+- Move order cursor overlay (`OrderCursorOverlay`):
+  - CanvasItem overlay rendering responsive 2D vector reticles aligned with mouse position during terrain hover:
+    - Valid: green reticle with center pip.
+    - Blocked: red reticle with diagonal slash and dark HUD tooltip detailing rejection reason ("Water blocks this unit.", "Dense forest blocks this unit.", "Building blocks this position.", "Not enough clearance.", "Outside map bounds.").
+    - Adjusted: amber reticle with target dot indicating snapped destination.
+    - Mixed: split green and red reticle with dark tooltip ("Destination suitable for X of Y units.").
+  - Input occlusion: cursor preview and tooltip suppress completely when mouse coordinates intersect interactive UI panels (`InputOccludingPanels`: `TopHud`, `SelectionCard`, `SettingsPanel`, `MissionPanel`, `BottomHud`).
+  - Zero heap allocations: reticle geometry, tooltip layout, and cached text buffers avoid managed allocations during hover.
+- 3D destination marker (`OrderDestinationView`):
+  - Spatial ground marker rendered at the target location with concentric animated indicator rings:
+    - Concentric pulses indicate lifecycle status: `Sent` (amber), `Processing` (cyan), `PathFound` (green pulse), `Failed` (red, with quick decay), and `Partial` (orange).
+    - Ghost preview ring: renders an amber preview circle at the snapped position when destination adjustment is suggested.
+    - Auto-dismiss: smoothly fades out upon path resolution or timeout.
 
 ## 19. Rule sets and modularity
 
