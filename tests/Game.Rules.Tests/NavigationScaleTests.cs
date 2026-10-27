@@ -169,6 +169,7 @@ public sealed class NavigationScaleTests
         using Simulation sim = new(world, new RuleSet(nav));
         Vector2[] targets = [new(355, 55), new(360, 60)];
         EntityId[] ids = [world.CreateUnit(1, 1, new(55, 55), 100), world.CreateUnit(1, 1, new(60, 60), 100)];
+        using NoGcAllocationWindow window = new();
         long secondUnitAllocated = 0;
         for (int unit = 0; unit < ids.Length; unit++)
         {
@@ -188,7 +189,7 @@ public sealed class NavigationScaleTests
         }
         Assert.Equal(cacheEntries == 0 ? 0 : 1, nav.GlobalPlanCacheHits);
         Assert.Equal(cacheEntries == 0 ? 2 : 1, nav.GlobalPlanCacheMisses);
-        Assert.Equal(0, secondUnitAllocated);
+        Assert.True(secondUnitAllocated == 0, window.Describe(secondUnitAllocated));
     }
 
     [Fact]
@@ -231,11 +232,15 @@ public sealed class NavigationScaleTests
         sim.Step();
         for (int i = 0; i < ids.Length; i++)
             Assert.True(sim.TryEnqueue(1, new MoveCommand((uint)(i + 1), sim.Tick, ids[i], new(4500, 1000 + i / 10 * 5))));
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        sim.Step();
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        // Keep background collections out of the strict allocation measurement.
+        using (NoGcAllocationWindow window = new())
+        {
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            sim.Step();
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.True(allocated == 0, window.Describe(allocated));
+        }
         foreach (EntityId id in ids) Assert.Equal(PathRequestStatus.NoPath, nav.GetUnitStatus(id));
-        Assert.Equal(0, allocated);
         Assert.Equal(0, nav.PendingRequests);
         Assert.Equal(0, nav.TotalGlobalExpansions);
         Assert.Equal(0, nav.TotalLocalExpansions);
