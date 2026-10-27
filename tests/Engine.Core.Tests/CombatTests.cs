@@ -38,9 +38,9 @@ public sealed class CombatTests
     {
         private readonly Dictionary<ushort, UnitMovementProfile> _profiles = new();
 
-        public TestMovementCatalog Register(ushort definition, float speed, float radius)
+        public TestMovementCatalog Register(ushort definition, float speed, float radius, float turnRate = 360f, TraversabilityCapabilities capabilities = TraversabilityCapabilities.DefaultVehicle)
         {
-            _profiles[definition] = new UnitMovementProfile(speed, radius);
+            _profiles[definition] = new UnitMovementProfile(speed, radius, capabilities, turnRate);
             return this;
         }
 

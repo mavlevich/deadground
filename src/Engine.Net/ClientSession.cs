@@ -169,10 +169,10 @@ public sealed class ClientSession : IGameSession
         }
     }
 
-    public bool Move(EntityId unit, Vector2 target)
+    public bool Move(EntityId unit, Vector2 target, float? finalFacing = null)
     {
         if (State != SessionConnectionState.Connected) return false;
-        MoveCommand command = new(_nextCommand, Replica.LatestTick, unit, target);
+        MoveCommand command = new(_nextCommand, Replica.LatestTick, unit, target, finalFacing);
         WireProtocol.WriteMove(_command, command);
         if (!_transport.TrySend(_command.AsSpan(0, WireProtocol.MoveSize))) return false;
         _nextCommand = checked(_nextCommand + 1);

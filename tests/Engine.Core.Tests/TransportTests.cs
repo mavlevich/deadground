@@ -43,6 +43,48 @@ public sealed class TransportTests
     }
 
     [Fact]
+    public void MoveCodec_RoundTripsOptionalFinalFacing_AndRejectsNonFiniteFacing()
+    {
+        Span<byte> bytes = stackalloc byte[WireProtocol.MoveSize];
+
+        // 1. Null final facing (standard move)
+        MoveCommand withoutFacing = new(10, 5, new EntityId(2), new Vector2(12f, 34f), FinalFacing: null);
+        WireProtocol.WriteMove(bytes, withoutFacing);
+        Assert.True(WireProtocol.TryReadMove(bytes, out MoveCommand readWithoutFacing));
+        Assert.Equal(withoutFacing, readWithoutFacing);
+        Assert.Null(readWithoutFacing.FinalFacing);
+
+        // 2. Zero final facing (North)
+        MoveCommand zeroFacing = new(11, 5, new EntityId(2), new Vector2(12f, 34f), FinalFacing: 0.0f);
+        WireProtocol.WriteMove(bytes, zeroFacing);
+        Assert.True(WireProtocol.TryReadMove(bytes, out MoveCommand readZeroFacing));
+        Assert.Equal(zeroFacing, readZeroFacing);
+        Assert.NotNull(readZeroFacing.FinalFacing);
+        Assert.Equal(0.0f, readZeroFacing.FinalFacing.Value);
+
+        // 3. Positive and negative finite facings
+        MoveCommand positiveFacing = new(12, 5, new EntityId(2), new Vector2(12f, 34f), FinalFacing: 1.57079f);
+        WireProtocol.WriteMove(bytes, positiveFacing);
+        Assert.True(WireProtocol.TryReadMove(bytes, out MoveCommand readPositiveFacing));
+        Assert.Equal(positiveFacing, readPositiveFacing);
+
+        MoveCommand negativeFacing = new(13, 5, new EntityId(2), new Vector2(12f, 34f), FinalFacing: -2.35619f);
+        WireProtocol.WriteMove(bytes, negativeFacing);
+        Assert.True(WireProtocol.TryReadMove(bytes, out MoveCommand readNegativeFacing));
+        Assert.Equal(negativeFacing, readNegativeFacing);
+
+        // 4. Non-finite final facing rejected
+        WireProtocol.WriteMove(bytes, withoutFacing with { FinalFacing = float.NaN });
+        Assert.False(WireProtocol.TryReadMove(bytes, out _));
+
+        WireProtocol.WriteMove(bytes, withoutFacing with { FinalFacing = float.PositiveInfinity });
+        Assert.False(WireProtocol.TryReadMove(bytes, out _));
+
+        WireProtocol.WriteMove(bytes, withoutFacing with { FinalFacing = float.NegativeInfinity });
+        Assert.False(WireProtocol.TryReadMove(bytes, out _));
+    }
+
+    [Fact]
     public void ReplicaRejectsIncompleteAndOldSnapshotsWithoutChangingState()
     {
         ClientReplica replica = new(4);

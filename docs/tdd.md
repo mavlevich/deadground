@@ -402,11 +402,12 @@ Path following is a separate problem from path planning and needs as much attent
 
 ### 9.5 Vehicle heading and steering
 
-Status: stage 0 landed, stage 1 is the next movement change. Stage 0: every unit has a hull heading
-in the simulation, set to the direction of its last step along the route and turning at once (no turn
-rate). It is replicated as described below, and the client draws hulls from it. A unit still moves in
-a straight line toward its next waypoint. Facing at the end of a move, reversing and armor by side
-need the steering of stage 1.
+Status: stage 1 forward movement and final facing are implemented. The server limits hull
+rotation to the catalog turn rate and replicates the resulting heading. Vehicles stop and pivot
+when the next route segment differs from the hull heading by more than 0.05 rad (about 2.8 degrees).
+This includes wheeled vehicles as a temporary simplification. Collision uses the current circle model.
+The client provides an RMB drag gesture with an arrow preview and Escape cancellation.
+Smooth turns while moving, explicit reverse orders, and separate wheeled steering remain planned.
 
 State and convention:
 
@@ -421,8 +422,8 @@ Turret yaw and traverse:
 - Armed units have a turret yaw as simulation state, stored as an angle in radians wrapped to (-pi, pi].
   Heading 0 faces -Z (map north); positive angles turn counterclockwise seen from above. The forward
   vector on the (X, Z) plane is `(-sin yaw, -cos yaw)`.
-- Today the simulation has no hull heading, so turret yaw is stored as a world angle. Once hull heading
-  lands (section 9.5), turret yaw will become hull-relative: world turret yaw will be `HullHeading + TurretYaw`.
+- Turret yaw is stored and replicated as a world angle. The client derives the model-local turret
+  angle as `TurretYaw - HullHeading`.
 - Turret turning follows the shorter arc across the -pi / +pi wrap.
 - Armed units specify a powered turret traverse rate in degrees per second from period sources:
   - T-62: 18.0 deg/s (full 360 degree powered traverse in 20.0 s, US Army TRADOC Bulletin 10 / DTIC ADA392790).
@@ -437,8 +438,8 @@ Unit data (section 17):
 Stages:
 
 - Stage 1 (first heading change): every vehicle turns in place at its `turn_rate`, wheeled ones
-  included. This is a known simplification for wheeled vehicles, accepted so that final facing,
-  reverse and armor by side work for all units. Collision stays the current circle model.
+  included. This is a known simplification for wheeled vehicles, accepted for the current final
+  facing controls and armor by side. Reverse orders remain planned. Collision stays the current circle model.
 - Stage 2 (later): wheeled kinematics. A vehicle without pivot steering gets `pivot_steer = false`
   and a minimum `turning_radius` R, and turns only while moving, with `|omega| <= |v| / R`. Slowing
   down never tightens the radius below R. Final facing then needs a planned maneuver ending on the
@@ -449,16 +450,16 @@ Stages:
 
 Steering, each tick (stage 1):
 
-- The desired direction points to the next waypoint, or away from it when reversing.
-- If the heading error is above a threshold from data (start value 60 degrees), a pivot steer vehicle
-  stops and turns in place at `turn_rate`. Below it, it drives and turns at the same time, with speed
-  scaled down by the heading error. Turning never exceeds `turn_rate * TickSeconds` per tick.
+- The desired direction points to the next waypoint. Planned reverse orders will face the hull
+  away from the travel direction.
+- If the heading error is above an alignment threshold (0.05 rad / ~2.8 degrees), a vehicle
+  stops linear displacement and pivots in place at `turn_rate`. Below it, it drives and turns at the same time. Turning never exceeds `turn_rate * TickSeconds` per tick.
 - On arrival, if the order has a final facing, the vehicle turns in place to it before the order
   completes. In stage 2 a vehicle without pivot steering reaches it by a planned maneuver instead.
-- Reversing keeps the hull facing away from the travel direction and caps speed at `reverse_speed`.
-  Path planning is the same; only the steering target flips.
-- Following the path, stopping and local avoidance (section 9.3) work on the steered motion, not on
-  instant direction changes.
+- Planned reverse movement will keep the hull facing away from the travel direction and cap speed
+  at `reverse_speed`. The current move command does not carry a reverse mode.
+- Each traversed route segment uses the remaining angular budget for the tick. Future local
+  avoidance (section 9.3) must respect the same steering constraints.
 
 Replication (sections 7.1, 14.1):
 
@@ -473,7 +474,7 @@ Replication (sections 7.1, 14.1):
 Client:
 
 - Uses the replicated heading, interpolated along the shorter arc, instead of inferring it from
-  movement. The turret yaw stays relative to the hull.
+  movement. Both replicated angles are world angles; the view converts turret yaw to hull-local rotation.
 - Track motion (section 18.7) uses the real heading change for the turn differential, so a pivot
   turn runs the tracks in opposite directions.
 
@@ -481,11 +482,12 @@ Determinism: heading is server-authoritative state like position. It is saved, r
 on reconnect with the rest of the unit state.
 
 Required tests: turn rate is never exceeded; a large heading error stops and pivots before moving;
-reversing keeps the hull opposite to travel and respects `reverse_speed`; final facing is reached
+final facing is reached
 before the order completes; angles wrap correctly across pi; snapshot round trip and quantization
 error; contacts expose heading only while `Current` and freeze it as `LastKnown`; contact heading
 comes from the tracker even when the world heading changes after the last observation; replay of the
-same commands gives the same headings. Stage 2 adds the wheeled tests listed above.
+same commands gives the same headings. The reverse slice adds checks that the hull faces opposite
+to travel and respects `reverse_speed`. Stage 2 adds the wheeled tests listed above.
 
 ## 10. Detection and fog of war
 
@@ -601,7 +603,7 @@ Every unit has a fire stance: `FireAtWill` (default), `ReturnFire`, or `HoldFire
 - With an active target (attack order or auto-fire), the turret turns toward the target at most at its traverse rate per tick, along the shorter arc.
 - A shot is fired only when the turret points at the target within `TurretAlignmentTolerance` (0.05 radians, about 2.86 degrees).
 - Reload continues while turning. If the weapon is loaded and line of sight is clear, firing occurs on the tick the turret enters alignment tolerance.
-- The hull heading (section 9.5, stage 0) is the direction of the unit's last step along its route, turning at once (no turn rate yet). Spawned units start with hull and gun along the scenario facing (toward the enemy side by default in battle and combat scenarios).
+- The hull heading (section 9.5) is steered by simulation at `turn_rate`. Spawned units start with hull and gun along the scenario facing (toward the enemy side by default in battle and combat scenarios).
 - The turret rides on the hull. With no target, a hull turn carries the gun along, so a tank driving without a target keeps its gun over the front. With a target, the gunner keeps the gun on it through hull turns (a real hull turns over seconds and the gunner tracks through it).
 - Without a target the gunner lays the gun back over the front at the traverse rate.
 - A move order drops an ordered attack target, not a target picked by auto-fire. A unit driving off keeps its gun on that target while it stays valid (in sight and range), for example watching the enemy over the rear deck when pulling back. Moving units still do not fire; mobile fire is a later rule.
@@ -619,12 +621,13 @@ A unit may fire at any `Current` contact known to its side, including targets sp
 
 ### 12.2 Move orders
 
-Status: planned, together with or after section 9.5. Move order preview, destination snapping, and sequence correlation landed.
+Status: move order preview, destination snapping, sequence correlation, and final facing move orders
+(stage 1) are implemented. Reverse orders and user waypoint queues below remain planned.
 
 - Final facing: a move order may carry a facing angle. The unit turns to it on arrival. The server
   validates that the value is finite.
-- Reverse: a move order may ask the unit to drive in reverse (section 9.5).
-- Waypoint queue: a move order may append to the unit's order queue instead of replacing it. A plain
+- Planned reverse: a move order will be able to ask the unit to drive in reverse (section 9.5).
+- Planned waypoint queue: a move order may append to the unit's order queue instead of replacing it. A plain
   order clears the queue. The queue length is capped in data (start value 16); longer queues are
   rejected without cancelling the current orders.
 - The order queue and the navigation route are different things. Each queued move order is one user

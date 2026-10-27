@@ -23,6 +23,9 @@ internal sealed partial class OrderDestinationView : Node3D
     private readonly MeshInstance3D _ring;
     private readonly MeshInstance3D _centerDot;
     private readonly MeshInstance3D _ghostRing;
+    private readonly Node3D _facingArrowRoot;
+    private readonly MeshInstance3D _facingArrowShaft;
+    private readonly MeshInstance3D _facingArrowHead;
 
     private readonly StandardMaterial3D _matSent;
     private readonly StandardMaterial3D _matProcessing;
@@ -42,6 +45,10 @@ internal sealed partial class OrderDestinationView : Node3D
     internal bool IsSubmittedMarkerVisible => _markerRoot.Visible;
     internal bool IsSubmittedMarkerVisibleInTree => _markerRoot.IsVisibleInTree();
     internal Vector3 GhostPosition => _ghostRing.Position;
+    internal bool IsFacingArrowVisible => _facingArrowRoot.Visible;
+    internal bool IsFacingArrowVisibleInTree => _facingArrowRoot.IsVisibleInTree();
+    internal float FacingArrowYaw => _facingArrowRoot.Rotation.Y;
+    internal Vector3 FacingArrowPosition => _facingArrowRoot.Position;
 
     public OrderDestinationView()
     {
@@ -108,6 +115,36 @@ internal sealed partial class OrderDestinationView : Node3D
             Visible = false
         };
         AddChild(_ghostRing);
+
+        _facingArrowRoot = new Node3D { Name = "FacingArrowRoot", Visible = false };
+        AddChild(_facingArrowRoot);
+
+        BoxMesh shaftMesh = new()
+        {
+            Size = new Vector3(0.24f, 0.08f, 2.0f)
+        };
+        _facingArrowShaft = new MeshInstance3D
+        {
+            Mesh = shaftMesh,
+            Position = new Vector3(0f, 0.05f, -1.0f),
+            MaterialOverride = _matSent
+        };
+        _facingArrowRoot.AddChild(_facingArrowShaft);
+
+        CylinderMesh headMesh = new()
+        {
+            TopRadius = 0.0f,
+            BottomRadius = 0.45f,
+            Height = 0.8f
+        };
+        _facingArrowHead = new MeshInstance3D
+        {
+            Mesh = headMesh,
+            Rotation = new Vector3(-Mathf.Pi / 2f, 0f, 0f),
+            Position = new Vector3(0f, 0.05f, -2.4f),
+            MaterialOverride = _matSent
+        };
+        _facingArrowRoot.AddChild(_facingArrowHead);
 
         Visible = true;
     }
@@ -240,16 +277,30 @@ internal sealed partial class OrderDestinationView : Node3D
         }
     }
 
+    public void ShowFacingArrow(Vector3 origin, float yaw)
+    {
+        _facingArrowRoot.Position = origin;
+        _facingArrowRoot.Rotation = new Vector3(0f, yaw, 0f);
+        _facingArrowRoot.Visible = true;
+    }
+
+    public void HideFacingArrow()
+    {
+        _facingArrowRoot.Visible = false;
+    }
+
     public void ClearSubmittedMarker()
     {
         _markerRoot.Visible = false;
         _state = OrderMarkerVisualState.Hidden;
         _timeInState = 0;
+        HideFacingArrow();
     }
 
     public void Clear()
     {
         ClearSubmittedMarker();
         HideGhost();
+        HideFacingArrow();
     }
 }

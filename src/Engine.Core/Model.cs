@@ -4,7 +4,7 @@ namespace DeadGround.Engine;
 
 public readonly record struct EntityId(uint Value);
 
-public readonly record struct MoveCommand(uint Sequence, int ClientTick, EntityId Unit, Vector2 Target);
+public readonly record struct MoveCommand(uint Sequence, int ClientTick, EntityId Unit, Vector2 Target, float? FinalFacing = null);
 
 public readonly record struct AttackCommand(uint Sequence, int ClientTick, EntityId Unit, ContactId Target);
 

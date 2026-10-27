@@ -87,6 +87,8 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
             !_world.Map.Contains(command.Target) || !_world.TryGetUnit(command.Unit, out UnitState unit) ||
             unit.Owner != player) return false;
 
+        if (command.FinalFacing.HasValue && !float.IsFinite(command.FinalFacing.Value)) return false;
+
         _commands[_commandCount++] = QueuedCommand.CreateMove(player, command);
         _lastAccepted[player - 1] = command.Sequence;
         return true;

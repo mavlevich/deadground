@@ -418,11 +418,9 @@ public sealed class TurretTraverseTests
             previous = unit.Position;
             if (step.Length() < 0.05f) continue;
             float travel = MathF.Atan2(-step.X, -step.Y);
-            Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(travel, cs.HullHeading)) < 0.001f,
-                $"Tick {tick}: hull {cs.HullHeading}, last step went {travel}");
             Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(cs.HullHeading, cs.TurretYaw)) < 0.0001f,
                 $"Tick {tick}: gun {cs.TurretYaw} off the hull {cs.HullHeading}");
-            if (MathF.Abs(CombatSystem.ShorterArcDelta(travel, -MathF.PI / 2f)) > 0.2f) offAxisTicks++;
+            if (MathF.Abs(CombatSystem.ShorterArcDelta(cs.HullHeading, -MathF.PI / 2f)) > 0.2f) offAxisTicks++;
         }
         Assert.True(offAxisTicks > 10, $"The route must bend around the wall, {offAxisTicks} off-axis ticks.");
     }
@@ -435,15 +433,15 @@ public sealed class TurretTraverseTests
         using Simulation _ = sim;
         EntityId jeep = Spawn(world, catalog, 1, "m151a2", new Vector2(100f, 100f), 0f);
         Assert.True(sim.TryEnqueue(1, new MoveCommand(1, sim.Tick, jeep, new Vector2(400f, 100f))));
-        for (int tick = 0; tick < 20; tick++) sim.Step();
+        for (int tick = 0; tick < 35; tick++) sim.Step();
         world.TryGetCombatState(jeep, out WorldState.CombatState jeepState);
         Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(jeepState.HullHeading, -MathF.PI / 2f)) < 0.001f,
             $"An unarmed unit must face its travel, hull {jeepState.HullHeading}");
 
         using WorldState plainWorld = new(HeightMap.CreatePrototype());
         using Simulation plain = new(plainWorld, new OpsRules());
-        EntityId box = plainWorld.CreateUnit(1, 0, new Vector2(10f, 10f), 6f);
-        plainWorld.SetTurretYaw(box, 0.4f); // the gun off the front by 0.4 rad
+        EntityId box = plainWorld.CreateUnit(1, 0, new Vector2(10f, 10f), 6f, initialTurretYaw: MathF.PI);
+        plainWorld.SetTurretYaw(box, MathF.PI + 0.4f); // the gun off the front by 0.4 rad
         Assert.True(plain.TryEnqueue(1, new MoveCommand(1, plain.Tick, box, new Vector2(10f, 40f))));
         for (int tick = 0; tick < 10; tick++) plain.Step();
         plainWorld.TryGetCombatState(box, out WorldState.CombatState boxState);
@@ -471,7 +469,7 @@ public sealed class TurretTraverseTests
         Assert.True(MathF.Abs(enemy.Contacts[0].HullHeading) < 0.001f, $"Parked contact hull {enemy.Contacts[0].HullHeading}");
         world.SetTurretYaw(tank, 1.0f);
         Assert.True(sim.TryEnqueue(2, new MoveCommand(1, sim.Tick, tank, new Vector2(350f, 140f))));
-        for (int tick = 0; tick < 20; tick++) sim.Step();
+        for (int tick = 0; tick < 70; tick++) sim.Step();
 
         PlayerKnowledge own = new(2);
         sim.UpdateKnowledge(own);
@@ -522,18 +520,23 @@ public sealed class TurretTraverseTests
 
         Assert.True(sim.TryEnqueue(1, new MoveCommand(1, sim.Tick, tank, new Vector2(300f, 60f))));
         int ammo = -1;
-        for (int tick = 1; tick <= 40; tick++)
+        bool reachedBackFacing = false;
+        for (int tick = 1; tick <= 140; tick++)
         {
             sim.Step();
             world.TryGetCombatState(tank, out WorldState.CombatState cs);
             if (!world.TryGetUnit(tank, out UnitState unit) || !unit.Moving) continue;
             if (ammo < 0) ammo = cs.Ammunition;
             Assert.Equal(ammo, cs.Ammunition);
-            Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(cs.HullHeading, 0f)) < 0.001f, "The hull faces the way back.");
+            if (MathF.Abs(CombatSystem.ShorterArcDelta(cs.HullHeading, 0f)) < 0.001f)
+            {
+                reachedBackFacing = true;
+            }
             Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(cs.TurretYaw, MathF.PI)) <= CombatSystem.TurretAlignmentTolerance,
                 $"Tick {tick}: the gun must stay on the enemy behind, yaw {cs.TurretYaw}");
         }
         Assert.True(ammo >= 0, "The tank never drove off.");
+        Assert.True(reachedBackFacing, "The hull must turn to face the way back.");
     }
 
     [Fact]

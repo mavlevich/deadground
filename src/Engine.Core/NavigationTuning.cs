@@ -45,7 +45,9 @@ public sealed record NavigationTuning(
     float SectorSize = NavigationTuning.DefaultSectorSize,
     float MaxLocalWindowSize = NavigationTuning.DefaultMaxLocalWindowSize,
     int ChunkLookaheadWaypoints = NavigationTuning.DefaultChunkLookaheadWaypoints,
-    int GlobalPlanCacheEntries = NavigationTuning.DefaultGlobalPlanCacheEntries)
+    int GlobalPlanCacheEntries = NavigationTuning.DefaultGlobalPlanCacheEntries,
+    float PivotSteerAngleThreshold = NavigationTuning.DefaultPivotSteerAngleThreshold,
+    float FinalFacingTolerance = NavigationTuning.DefaultFinalFacingTolerance)
 {
     public const int DefaultMaxNodeExpansionsPerTick = 1000;
     public const int DefaultMaxPendingRequests = 256;
@@ -61,5 +63,7 @@ public sealed record NavigationTuning(
     public const float DefaultMaxLocalWindowSize = 160.0f;
     public const int DefaultChunkLookaheadWaypoints = 2;
     public const int DefaultGlobalPlanCacheEntries = 16;
+    public const float DefaultPivotSteerAngleThreshold = 0.05f; // ~2.8 degrees in radians
+    public const float DefaultFinalFacingTolerance = 0.02f; // ~1.15 degrees in radians
 }
 

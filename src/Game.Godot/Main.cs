@@ -763,23 +763,41 @@ public partial class Main : Node3D
 
     public override void _Input(InputEvent @event)
     {
-        if (!_selectionController.IsPointerDown)
-            return;
+        if (_selectionController.IsPointerDown)
+        {
+            if (_settingsPanel.IsOpen)
+            {
+                CancelActiveDrag();
+                return;
+            }
 
-        if (_settingsPanel.IsOpen)
-        {
-            CancelActiveDrag();
-            return;
+            if (@event is InputEventMouseMotion motion)
+            {
+                HandleLeftMouseMotion(motion.Position);
+            }
+            else if (@event is InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: false } release)
+            {
+                HandleLeftMouseRelease(release.Position, release.ShiftPressed);
+                GetViewport().SetInputAsHandled();
+            }
         }
+        else if (_previewController?.IsFacingGestureActive == true)
+        {
+            if (_settingsPanel.IsOpen)
+            {
+                CancelActiveDrag();
+                return;
+            }
 
-        if (@event is InputEventMouseMotion motion)
-        {
-            HandleLeftMouseMotion(motion.Position);
-        }
-        else if (@event is InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: false } release)
-        {
-            HandleLeftMouseRelease(release.Position, release.ShiftPressed);
-            GetViewport().SetInputAsHandled();
+            if (@event is InputEventMouseMotion motion)
+            {
+                _previewController.UpdateFacingGesture(_camera, motion.Position, _unitViews);
+            }
+            else if (@event is InputEventMouseButton { ButtonIndex: MouseButton.Right, Pressed: false } release)
+            {
+                HandleRightMouseRelease(release.Position);
+                GetViewport().SetInputAsHandled();
+            }
         }
     }
 
@@ -854,6 +872,14 @@ public partial class Main : Node3D
 
             if (key.Keycode == Key.Escape)
             {
+                if (_previewController?.IsFacingGestureActive == true)
+                {
+                    _previewController.CancelFacingGesture();
+                    _status.Text = "Move order cancelled";
+                    GetViewport().SetInputAsHandled();
+                    return;
+                }
+
                 CancelActiveDrag();
                 _unitViews.Selected.Clear();
                 _contactViews.Selected.Clear();
@@ -892,6 +918,7 @@ public partial class Main : Node3D
                     case GroupKeyAction.Add:
                         _selectionController.AddToControlGroup(_unitViews, groupNumber);
                         UpdateSelectionPresentation();
+                        _previewController?.OnUnitSelectionChanged();
                         break;
                     case GroupKeyAction.Recall:
                         double nowSeconds = Time.GetTicksUsec() / 1_000_000.0;
@@ -899,6 +926,7 @@ public partial class Main : Node3D
                         {
                             _unitViews.UpdateSelectionVisuals();
                             UpdateSelectionPresentation();
+                            _previewController?.OnUnitSelectionChanged();
                         }
                         break;
                 }
@@ -975,6 +1003,16 @@ public partial class Main : Node3D
             return;
         }
 
+        if (mouse.ButtonIndex == MouseButton.Right && !mouse.Pressed)
+        {
+            if (_previewController?.IsFacingGestureActive == true)
+            {
+                HandleRightMouseRelease(mouse.Position);
+                GetViewport().SetInputAsHandled();
+            }
+            return;
+        }
+
         if (!mouse.Pressed) return;
 
         if (mouse.ButtonIndex == MouseButton.Left)
@@ -989,6 +1027,7 @@ public partial class Main : Node3D
 
         if (mouse.ButtonIndex == MouseButton.Right)
         {
+            if (mouse.AltPressed) return;
             RefreshOccludingPanels();
             if (SelectionController.IsPointOccluded(mouse.Position, _inputOccludingPanels))
                 return;
@@ -1014,13 +1053,13 @@ public partial class Main : Node3D
                     return;
                 }
 
-                if (_previewController.ExecuteMoveClick(_camera, mouse.Position, _unitViews, _session, out string moveMsg))
+                if (_previewController.BeginFacingGesture(_camera, mouse.Position, _unitViews, _session, out string failMsg))
                 {
-                    _status.Text = moveMsg;
+                    GetViewport().SetInputAsHandled();
                 }
-                else if (!string.IsNullOrEmpty(moveMsg))
+                else if (!string.IsNullOrEmpty(failMsg))
                 {
-                    _status.Text = moveMsg;
+                    _status.Text = failMsg;
                 }
             }
             else if (_contactViews.Selected.Count > 0)
@@ -1096,10 +1135,23 @@ public partial class Main : Node3D
         }
     }
 
+    private void HandleRightMouseRelease(Vector2 position)
+    {
+        if (_previewController.EndFacingGesture(_camera, position, _unitViews, _session, out string moveMsg))
+        {
+            _status.Text = moveMsg;
+        }
+        else if (!string.IsNullOrEmpty(moveMsg))
+        {
+            _status.Text = moveMsg;
+        }
+    }
+
     internal void CancelActiveDrag()
     {
         _selectionController.CancelDrag();
         _selectionBoxOverlay?.HideBox();
+        _previewController?.CancelFacingGesture();
     }
 
     internal void RefreshOccludingPanels()

@@ -26,6 +26,14 @@ internal static class OrderPreviewRegressionTests
         CheckSelectionOver256UnitsDispatchesAll(main);
         CheckSingleUnitSnappedTargetPosition(main);
         CheckOneRejectionOneSuccessYieldsPartial(main);
+        CheckFacingGesture_ShortClickVsDrag_IssuesCorrectOrder(main);
+        CheckFacingGesture_DragAndReturn_IssuesStandardMove(main);
+        CheckFacingGesture_EscapeCancelsGesture_LeavesSelectionIntact(main);
+        CheckFacingGesture_CameraRotationInvariance(main);
+        CheckFacingGesture_ZeroAllocationsDuringDrag(main);
+        CheckFacingGesture_CameraPanPreservesWorldDestination(main);
+        CheckFacingGesture_ControlGroupRecallCancelsGesture(main);
+        CheckFacingGesture_UnitDeletionCancelsWithoutMouseMotion(main);
     }
 
     private static void CheckMixedSelectionPreviewAndClick(Main main)
@@ -823,6 +831,487 @@ internal static class OrderPreviewRegressionTests
         }
     }
 
+    private static void CheckFacingGesture_ShortClickVsDrag_IssuesCorrectOrder(Main main)
+    {
+        Node3D parent = new();
+        main.AddChild(parent);
+        UnitViewSet? unitViews = null;
+        try
+        {
+            HeightMap map = HeightMap.CreatePrototype();
+            UnitCatalog catalog = PrototypeScenario.LoadCatalog();
+            StaticGeometry geo = new(map, []);
+
+            unitViews = new UnitViewSet(parent, map, catalog);
+            Camera3D camera = CreateTestCamera(parent, new Vector3(30, 0, 30), 80f);
+
+            OrderCursorOverlay overlay = new();
+            parent.AddChild(overlay);
+            OrderDestinationView destinationView = new();
+            parent.AddChild(destinationView);
+
+            OrderPreviewController controller = new(geo, map, catalog, overlay, destinationView);
+
+            ClientReplica replica = new();
+            byte[] bytes = new byte[WireProtocol.MaxMessageSize];
+            OwnUnitObservation u1 = new(new EntityId(101), 0, new NumericsVector2(20, 20), 0);
+            ApplyWithContacts(replica, bytes, 1, 1, [u1], []);
+            unitViews.Sync(replica, 1.0);
+            unitViews.Selected.Clear();
+            unitViews.Selected.Add(u1.Id);
+
+            TestGameSession session = new() { Replica = replica };
+            Vector2 screenPos = camera.UnprojectPosition(new Vector3(30, 0, 30));
+
+            // 1. Short click: press and immediately release without dragging
+            Require(controller.BeginFacingGesture(camera, screenPos, unitViews, session, out _), "BeginFacingGesture failed");
+            Require(controller.IsFacingGestureActive, "Facing gesture must be active");
+            Require(destinationView.IsSubmittedMarkerVisible, "Marker must show on press");
+            Require(!destinationView.IsFacingArrowVisible, "Facing arrow must not show on press");
+
+            Require(controller.EndFacingGesture(camera, screenPos, unitViews, session, out _), "EndFacingGesture failed");
+            Require(session.SubmittedMoves.Count == 1, "One move must be submitted");
+            Require(session.SubmittedMoves[0].FinalFacing == null, "Short click must submit null final facing");
+            Require(!destinationView.IsFacingArrowVisible, "Facing arrow must be hidden after dispatch");
+
+            // 2. Drag: press at (30, 30) and drag to point East (+X in 3D, heading -pi/2)
+            Require(controller.BeginFacingGesture(camera, screenPos, unitViews, session, out _), "BeginFacingGesture failed for drag");
+            Vector2 screenDragEast = camera.UnprojectPosition(new Vector3(45, 0, 30));
+            controller.UpdateFacingGesture(camera, screenDragEast);
+
+            Require(controller.IsFacingDetermined, "Facing must be determined after drag past threshold");
+            Require(destinationView.IsFacingArrowVisible, "Facing arrow must be visible during drag");
+            Require(MathF.Abs(CombatSystem.ShorterArcDelta(destinationView.FacingArrowYaw, -MathF.PI / 2f)) < 0.05f,
+                $"Arrow yaw must face East (-pi/2), got: {destinationView.FacingArrowYaw}");
+
+            Require(controller.EndFacingGesture(camera, screenDragEast, unitViews, session, out _), "EndFacingGesture failed for drag");
+            Require(session.SubmittedMoves.Count == 2, "Second move must be submitted");
+            Require(session.SubmittedMoves[1].FinalFacing != null, "Drag gesture must submit non-null final facing");
+            Require(MathF.Abs(CombatSystem.ShorterArcDelta(session.SubmittedMoves[1].FinalFacing!.Value, -MathF.PI / 2f)) < 0.05f,
+                $"Final facing must match East (-pi/2), got: {session.SubmittedMoves[1].FinalFacing}");
+            Require(!destinationView.IsFacingArrowVisible, "Facing arrow must be hidden after release");
+        }
+        finally
+        {
+            unitViews?.Clear();
+            parent.QueueFree();
+        }
+    }
+
+    private static void CheckFacingGesture_DragAndReturn_IssuesStandardMove(Main main)
+    {
+        Node3D parent = new();
+        main.AddChild(parent);
+        UnitViewSet? unitViews = null;
+        try
+        {
+            HeightMap map = HeightMap.CreatePrototype();
+            UnitCatalog catalog = PrototypeScenario.LoadCatalog();
+            StaticGeometry geo = new(map, []);
+
+            unitViews = new UnitViewSet(parent, map, catalog);
+            Camera3D camera = CreateTestCamera(parent, new Vector3(30, 0, 30), 80f);
+
+            OrderCursorOverlay overlay = new();
+            parent.AddChild(overlay);
+            OrderDestinationView destinationView = new();
+            parent.AddChild(destinationView);
+
+            OrderPreviewController controller = new(geo, map, catalog, overlay, destinationView);
+
+            ClientReplica replica = new();
+            byte[] bytes = new byte[WireProtocol.MaxMessageSize];
+            OwnUnitObservation u1 = new(new EntityId(101), 0, new NumericsVector2(20, 20), 0);
+            ApplyWithContacts(replica, bytes, 1, 1, [u1], []);
+            unitViews.Sync(replica, 1.0);
+            unitViews.Selected.Clear();
+            unitViews.Selected.Add(u1.Id);
+
+            TestGameSession session = new() { Replica = replica };
+            Vector2 screenPos = camera.UnprojectPosition(new Vector3(30, 0, 30));
+
+            // Press and drag 50 pixels away
+            Require(controller.BeginFacingGesture(camera, screenPos, unitViews, session, out _), "BeginFacingGesture failed");
+            Vector2 screenDrag = screenPos + new Vector2(50, 0);
+            controller.UpdateFacingGesture(camera, screenDrag);
+            Require(controller.IsFacingDetermined, "Facing should be determined");
+            Require(destinationView.IsFacingArrowVisible, "Arrow should be visible");
+
+            // Drag back to start (within 3 pixels)
+            Vector2 screenReturn = screenPos + new Vector2(2, 0);
+            controller.UpdateFacingGesture(camera, screenReturn);
+            Require(!controller.IsFacingDetermined, "Facing must reset to undetermined when returned to start");
+            Require(!destinationView.IsFacingArrowVisible, "Arrow must hide when returned to start");
+
+            // Release
+            Require(controller.EndFacingGesture(camera, screenReturn, unitViews, session, out _), "EndFacingGesture failed");
+            Require(session.SubmittedMoves.Count == 1, "Expected 1 submitted move");
+            Require(session.SubmittedMoves[0].FinalFacing == null, "Move must have null final facing when returned to start");
+        }
+        finally
+        {
+            unitViews?.Clear();
+            parent.QueueFree();
+        }
+    }
+
+    private static void CheckFacingGesture_EscapeCancelsGesture_LeavesSelectionIntact(Main main)
+    {
+        if (main.Session.Replica.OwnUnits.Length == 0) return;
+        EntityId unitId = main.Session.Replica.OwnUnits[0].Id;
+        main.UnitViews.Selected.Clear();
+        main.UnitViews.Selected.Add(unitId);
+        main.UnitViews.UpdateSelectionVisuals();
+
+        Vector2 screenPos = main.Camera.UnprojectPosition(new Vector3(30, 0, 30));
+
+        // Press and drag via main PreviewController
+        Require(main.PreviewController.BeginFacingGesture(main.Camera, screenPos, main.UnitViews, main.Session, out _), "BeginFacingGesture failed");
+        main.PreviewController.UpdateFacingGesture(main.Camera, screenPos + new Vector2(40, 20), main.UnitViews);
+        Require(main.PreviewController.IsFacingGestureActive, "Expected facing gesture to be active");
+        Require(main.DestinationMarker.IsFacingArrowVisible, "Expected facing arrow to be visible");
+
+        // Cancel via real Escape key input dispatched through Main._UnhandledInput
+        using InputEventKey escapeKey1 = new() { Keycode = Key.Escape, Pressed = true, Echo = false };
+        main._UnhandledInput(escapeKey1);
+
+        Require(!main.PreviewController.IsFacingGestureActive, "Gesture must be inactive after real Escape key");
+        Require(!main.PreviewController.IsFacingDetermined, "Facing must be undetermined after real Escape key");
+        Require(!main.DestinationMarker.IsFacingArrowVisible, "Arrow must hide after real Escape key");
+        Require(!main.DestinationMarker.IsSubmittedMarkerVisible, "Marker must hide after real Escape key");
+
+        // Verify selection is still intact after first Escape
+        Require(main.UnitViews.Selected.Count == 1, "Unit selection must remain intact after first Escape");
+        Require(main.UnitViews.Selected.Contains(unitId), "Selected unit must match");
+
+        // Second Escape clears selection
+        using InputEventKey escapeKey2 = new() { Keycode = Key.Escape, Pressed = true, Echo = false };
+        main._UnhandledInput(escapeKey2);
+        Require(main.UnitViews.Selected.Count == 0, "Second Escape must clear unit selection");
+    }
+
+    private static void CheckFacingGesture_CameraPanPreservesWorldDestination(Main main)
+    {
+        Node3D parent = new();
+        main.AddChild(parent);
+        UnitViewSet? unitViews = null;
+        try
+        {
+            HeightMap map = HeightMap.CreatePrototype();
+            UnitCatalog catalog = PrototypeScenario.LoadCatalog();
+            StaticGeometry geo = new(map, []);
+
+            unitViews = new UnitViewSet(parent, map, catalog);
+            Camera3D camera = CreateTestCamera(parent, new Vector3(30, 0, 30), 80f);
+
+            OrderCursorOverlay overlay = new();
+            parent.AddChild(overlay);
+            OrderDestinationView destinationView = new();
+            parent.AddChild(destinationView);
+
+            OrderPreviewController controller = new(geo, map, catalog, overlay, destinationView);
+
+            ClientReplica replica = new();
+            byte[] bytes = new byte[WireProtocol.MaxMessageSize];
+            OwnUnitObservation u1 = new(new EntityId(101), 0, new NumericsVector2(20, 20), 0);
+            ApplyWithContacts(replica, bytes, 1, 1, [u1], []);
+            unitViews.Sync(replica, 1.0);
+            unitViews.Selected.Clear();
+            unitViews.Selected.Add(u1.Id);
+
+            TestGameSession session = new() { Replica = replica };
+            Vector3 worldTarget = new(40f, 0f, 50f);
+            Vector2 screenPos = camera.UnprojectPosition(worldTarget);
+
+            // Press at worldTarget
+            Require(controller.BeginFacingGesture(camera, screenPos, unitViews, session, out _), "BeginFacingGesture failed");
+
+            // Pan camera by 10 meters along X
+            camera.Position += new Vector3(10f, 0f, 0f);
+
+            // Drag mouse
+            controller.UpdateFacingGesture(camera, screenPos + new Vector2(30, 20), unitViews);
+
+            // Release
+            Require(controller.EndFacingGesture(camera, screenPos + new Vector2(30, 20), unitViews, session, out _), "EndFacingGesture failed");
+
+            Require(session.SubmittedMoves.Count == 1, "Expected 1 submitted move");
+            NumericsVector2 sentTarget = session.SubmittedMoves[0].Target;
+            float distFromOriginal = NumericsVector2.Distance(sentTarget, new NumericsVector2(40f, 50f));
+            Require(distFromOriginal <= 0.05f, $"Target must preserve original world coordinates despite camera pan: got {sentTarget}");
+        }
+        finally
+        {
+            unitViews?.Clear();
+            parent.QueueFree();
+        }
+    }
+
+    private static void CheckFacingGesture_ControlGroupRecallCancelsGesture(Main main)
+    {
+        if (main.Session.Replica.OwnUnits.Length < 2) return;
+        EntityId unit1 = main.Session.Replica.OwnUnits[0].Id;
+        EntityId unit2 = main.Session.Replica.OwnUnits[1].Id;
+
+        // Group 1: unit 1
+        main.UnitViews.Selected.Clear();
+        main.UnitViews.Selected.Add(unit1);
+        main.SelectionController.StoreControlGroup(main.UnitViews, 1);
+
+        // Group 2: unit 2
+        main.UnitViews.Selected.Clear();
+        main.UnitViews.Selected.Add(unit2);
+        main.SelectionController.StoreControlGroup(main.UnitViews, 2);
+
+        // Select Group 1
+        main.UnitViews.Selected.Clear();
+        main.UnitViews.Selected.Add(unit1);
+        main.UnitViews.UpdateSelectionVisuals();
+
+        Vector2 screenPos = main.Camera.UnprojectPosition(new Vector3(30, 0, 30));
+
+        // Start facing gesture for Group 1
+        Require(main.PreviewController.BeginFacingGesture(main.Camera, screenPos, main.UnitViews, main.Session, out _), "BeginFacingGesture failed");
+        main.PreviewController.UpdateFacingGesture(main.Camera, screenPos + new Vector2(40, 20), main.UnitViews);
+        Require(main.PreviewController.IsFacingGestureActive, "Expected facing gesture to be active");
+
+        // Recall Group 2 via keyboard input (Key2)
+        using InputEventKey key2 = new() { Keycode = Key.Key2, Pressed = true, Echo = false };
+        main._UnhandledInput(key2);
+
+        // Gesture must be cancelled immediately
+        Require(!main.PreviewController.IsFacingGestureActive, "Facing gesture must cancel when control group is switched");
+        Require(!main.DestinationMarker.IsFacingArrowVisible, "Facing arrow must hide when control group is switched");
+        Require(main.UnitViews.Selected.Count == 1 && main.UnitViews.Selected.Contains(unit2), "Group 2 should now be selected");
+    }
+
+    private static void CheckFacingGesture_UnitDeletionCancelsWithoutMouseMotion(Main main)
+    {
+        if (main.Session.Replica.OwnUnits.Length == 0) return;
+        EntityId unit1 = main.Session.Replica.OwnUnits[0].Id;
+
+        main.UnitViews.Selected.Clear();
+        main.UnitViews.Selected.Add(unit1);
+        main.UnitViews.UpdateSelectionVisuals();
+
+        Vector2 screenPos = main.Camera.UnprojectPosition(new Vector3(30, 0, 30));
+        Vector2 viewport = main.GetViewport().GetVisibleRect().Size;
+
+        // Start facing gesture and drag to reveal facing arrow
+        Require(main.PreviewController.BeginFacingGesture(main.Camera, screenPos, main.UnitViews, main.Session, out _), "BeginFacingGesture failed");
+        Vector2 dragPos = screenPos + new Vector2(40, 20);
+        main.PreviewController.UpdateFacingGesture(main.Camera, dragPos, main.UnitViews);
+        Require(main.PreviewController.IsFacingGestureActive, "Expected facing gesture to be active");
+        Require(main.DestinationMarker.IsFacingArrowVisible, "Expected facing arrow to be visible during drag");
+
+        // Simulate unit deletion or selection clear without any mouse motion event
+        main.UnitViews.Selected.Clear();
+
+        // The per-frame UpdateHover (invoked every frame in _Process) runs with the stationary mouse position
+        main.PreviewController.UpdateHover(
+            main.Camera,
+            dragPos,
+            viewport,
+            isPointerOccluded: false,
+            hasEnemyContactUnderMouse: false,
+            main.UnitViews,
+            main.Session.Replica);
+
+        // Gesture must be cancelled immediately without requiring mouse movement
+        Require(!main.PreviewController.IsFacingGestureActive, "Facing gesture must cancel when units are removed or deselected even without mouse motion");
+        Require(!main.DestinationMarker.IsFacingArrowVisible, "Facing arrow must hide when gesture is cancelled without mouse motion");
+
+        // Also verify multi-unit group: deleting one unit cancels gesture without mouse motion
+        if (main.Session.Replica.OwnUnits.Length >= 2)
+        {
+            EntityId unit2 = main.Session.Replica.OwnUnits[1].Id;
+            main.UnitViews.Selected.Clear();
+            main.UnitViews.Selected.Add(unit1);
+            main.UnitViews.Selected.Add(unit2);
+            main.UnitViews.UpdateSelectionVisuals();
+
+            Require(main.PreviewController.BeginFacingGesture(main.Camera, screenPos, main.UnitViews, main.Session, out _), "Multi-unit BeginFacingGesture failed");
+            main.PreviewController.UpdateFacingGesture(main.Camera, dragPos, main.UnitViews);
+            Require(main.PreviewController.IsFacingGestureActive, "Expected multi-unit facing gesture to be active");
+            Require(main.DestinationMarker.IsFacingArrowVisible, "Expected facing arrow to be visible");
+
+            // Unit 2 dies / is removed from selection
+            main.UnitViews.Selected.Remove(unit2);
+
+            main.PreviewController.UpdateHover(
+                main.Camera,
+                dragPos,
+                viewport,
+                isPointerOccluded: false,
+                hasEnemyContactUnderMouse: false,
+                main.UnitViews,
+                main.Session.Replica);
+
+            Require(!main.PreviewController.IsFacingGestureActive, "Facing gesture must cancel when a unit is removed from multi-selection without mouse motion");
+            Require(!main.DestinationMarker.IsFacingArrowVisible, "Facing arrow must hide after multi-unit deselection without mouse motion");
+        }
+
+        main.UnitViews.Selected.Clear();
+        main.UnitViews.UpdateSelectionVisuals();
+    }
+
+    private static void CheckFacingGesture_CameraRotationInvariance(Main main)
+    {
+        Node3D parent = new();
+        main.AddChild(parent);
+        UnitViewSet? unitViews = null;
+        try
+        {
+            HeightMap map = HeightMap.CreatePrototype();
+            UnitCatalog catalog = PrototypeScenario.LoadCatalog();
+            StaticGeometry geo = new(map, []);
+
+            unitViews = new UnitViewSet(parent, map, catalog);
+
+            OrderCursorOverlay overlay = new();
+            parent.AddChild(overlay);
+            OrderDestinationView destinationView = new();
+            parent.AddChild(destinationView);
+
+            OrderPreviewController controller = new(geo, map, catalog, overlay, destinationView);
+
+            ClientReplica replica = new();
+            byte[] bytes = new byte[WireProtocol.MaxMessageSize];
+            OwnUnitObservation u1 = new(new EntityId(101), 0, new NumericsVector2(20, 20), 0);
+            ApplyWithContacts(replica, bytes, 1, 1, [u1], []);
+            unitViews.Sync(replica, 1.0);
+            unitViews.Selected.Clear();
+            unitViews.Selected.Add(u1.Id);
+
+            TestGameSession session = new() { Replica = replica };
+
+            Vector3 worldTarget = new(30, 0, 30);
+            // World direction pointing East-South: delta = (15, 0, 15), angle = Atan2(-15, -15) = -2.35619 rad (-135 deg)
+            Vector3 worldDragPoint = new(45, 0, 45);
+            float expectedHeading = MathF.Atan2(-15f, -15f);
+
+            // Test 1: Overhead orthogonal camera facing North
+            Camera3D cam1 = CreateTestCamera(parent, worldTarget, 80f);
+            Vector2 screenStart1 = cam1.UnprojectPosition(worldTarget);
+            Vector2 screenEnd1 = cam1.UnprojectPosition(worldDragPoint);
+
+            Require(controller.BeginFacingGesture(cam1, screenStart1, unitViews, session, out _), "Cam1 begin failed");
+            controller.UpdateFacingGesture(cam1, screenEnd1);
+            Require(controller.IsFacingDetermined, "Cam1 facing determined failed");
+            Require(MathF.Abs(CombatSystem.ShorterArcDelta(controller.GestureFacing, expectedHeading)) < 0.02f,
+                $"Cam1 heading mismatch: expected {expectedHeading}, got {controller.GestureFacing}");
+            controller.CancelFacingGesture();
+            cam1.QueueFree();
+
+            // Test 2: Camera rotated by 45 degrees yaw around target
+            Camera3D cam2 = new()
+            {
+                Projection = Camera3D.ProjectionType.Orthogonal,
+                Size = 80f,
+                Position = new Vector3(worldTarget.X + 60f, worldTarget.Y + 115f, worldTarget.Z + 60f)
+            };
+            parent.AddChild(cam2);
+            cam2.LookAt(worldTarget, Vector3.Up);
+
+            Vector2 screenStart2 = cam2.UnprojectPosition(worldTarget);
+            Vector2 screenEnd2 = cam2.UnprojectPosition(worldDragPoint);
+
+            Require(controller.BeginFacingGesture(cam2, screenStart2, unitViews, session, out _), "Cam2 begin failed");
+            controller.UpdateFacingGesture(cam2, screenEnd2);
+            Require(controller.IsFacingDetermined, "Cam2 facing determined failed");
+            Require(MathF.Abs(CombatSystem.ShorterArcDelta(controller.GestureFacing, expectedHeading)) < 0.02f,
+                $"Cam2 heading mismatch with rotated camera: expected {expectedHeading}, got {controller.GestureFacing}");
+            controller.CancelFacingGesture();
+            cam2.QueueFree();
+
+            // Test 3: Perspective camera looking down at 45 degrees
+            Camera3D cam3 = new()
+            {
+                Projection = Camera3D.ProjectionType.Perspective,
+                Fov = 60f,
+                Position = new Vector3(worldTarget.X, worldTarget.Y + 40f, worldTarget.Z + 40f)
+            };
+            parent.AddChild(cam3);
+            cam3.LookAt(worldTarget, Vector3.Up);
+
+            Vector2 screenStart3 = cam3.UnprojectPosition(worldTarget);
+            Vector2 screenEnd3 = cam3.UnprojectPosition(worldDragPoint);
+
+            Require(controller.BeginFacingGesture(cam3, screenStart3, unitViews, session, out _), "Cam3 begin failed");
+            controller.UpdateFacingGesture(cam3, screenEnd3);
+            Require(controller.IsFacingDetermined, "Cam3 facing determined failed");
+            Require(MathF.Abs(CombatSystem.ShorterArcDelta(controller.GestureFacing, expectedHeading)) < 0.02f,
+                $"Cam3 heading mismatch with perspective camera: expected {expectedHeading}, got {controller.GestureFacing}");
+            controller.CancelFacingGesture();
+            cam3.QueueFree();
+        }
+        finally
+        {
+            unitViews?.Clear();
+            parent.QueueFree();
+        }
+    }
+
+    private static void CheckFacingGesture_ZeroAllocationsDuringDrag(Main main)
+    {
+        Node3D parent = new();
+        main.AddChild(parent);
+        UnitViewSet? unitViews = null;
+        try
+        {
+            HeightMap map = HeightMap.CreatePrototype();
+            UnitCatalog catalog = PrototypeScenario.LoadCatalog();
+            StaticGeometry geo = new(map, []);
+
+            unitViews = new UnitViewSet(parent, map, catalog);
+            Camera3D camera = CreateTestCamera(parent, new Vector3(30, 0, 30), 80f);
+
+            OrderCursorOverlay overlay = new();
+            parent.AddChild(overlay);
+            OrderDestinationView destinationView = new();
+            parent.AddChild(destinationView);
+
+            OrderPreviewController controller = new(geo, map, catalog, overlay, destinationView);
+
+            ClientReplica replica = new();
+            byte[] bytes = new byte[WireProtocol.MaxMessageSize];
+            OwnUnitObservation u1 = new(new EntityId(101), 0, new NumericsVector2(20, 20), 0);
+            ApplyWithContacts(replica, bytes, 1, 1, [u1], []);
+            unitViews.Sync(replica, 1.0);
+            unitViews.Selected.Clear();
+            unitViews.Selected.Add(u1.Id);
+
+            TestGameSession session = new() { Replica = replica };
+            Vector2 screenPos = camera.UnprojectPosition(new Vector3(30, 0, 30));
+
+            Require(controller.BeginFacingGesture(camera, screenPos, unitViews, session, out _), "BeginFacingGesture failed");
+
+            // Warmup
+            Vector2 drag1 = screenPos + new Vector2(30, 10);
+            Vector2 drag2 = screenPos + new Vector2(40, 20);
+            for (int i = 0; i < 10; i++)
+            {
+                controller.UpdateFacingGesture(camera, (i % 2 == 0) ? drag1 : drag2);
+            }
+
+            long beforeAlloc = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 100; i++)
+            {
+                controller.UpdateFacingGesture(camera, (i % 2 == 0) ? drag1 : drag2);
+            }
+            long afterAlloc = GC.GetAllocatedBytesForCurrentThread();
+            long delta = afterAlloc - beforeAlloc;
+
+            Require(delta == 0, $"UpdateFacingGesture must allocate zero bytes per frame, allocated: {delta} bytes.");
+            controller.CancelFacingGesture();
+        }
+        finally
+        {
+            unitViews?.Clear();
+            parent.QueueFree();
+        }
+    }
+
     private static Camera3D CreateTestCamera(Node3D parent, Vector3 focus, float size)
     {
         Camera3D camera = new()
@@ -871,12 +1360,14 @@ internal static class OrderPreviewRegressionTests
         public int AssignedPlayerId => 1;
         public string StatusDescription => "TestSession";
 
-        public List<(EntityId Unit, NumericsVector2 Target, uint Sequence)> SubmittedMoves { get; } = new();
+        public List<(EntityId Unit, NumericsVector2 Target, uint Sequence, float? FinalFacing)> SubmittedMoves { get; } = new();
 
-        public bool Move(EntityId unit, NumericsVector2 target)
+        public bool Move(EntityId unit, NumericsVector2 target) => Move(unit, target, null);
+
+        public bool Move(EntityId unit, NumericsVector2 target, float? finalFacing = null)
         {
             LastSubmittedCommandSequence++;
-            SubmittedMoves.Add((unit, target, LastSubmittedCommandSequence));
+            SubmittedMoves.Add((unit, target, LastSubmittedCommandSequence, finalFacing));
             return true;
         }
 
