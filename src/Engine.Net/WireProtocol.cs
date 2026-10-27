@@ -25,7 +25,7 @@ public static class WireProtocol
     public const int CommandResultSize = 11;
     public const int MissionSize = 32;
     public const int SnapshotHeaderSize = 16 + MissionSize;
-    public const int UnitSize = 35;
+    public const int UnitSize = 39;
     public const int MaxUnits = 1024;
     public const int ContactSize = 28;
     public const int MaxContacts = 256;
@@ -258,6 +258,7 @@ public static class WireProtocol
             record[30] = (byte)unit.Stance;
             BinaryPrimitives.WriteUInt16LittleEndian(record[31..], QuantizeYaw(unit.TurretYaw));
             BinaryPrimitives.WriteUInt16LittleEndian(record[33..], QuantizeYaw(unit.HullHeading));
+            BinaryPrimitives.WriteUInt32LittleEndian(record[35..], unit.NavOrderSequence);
         }
 
         int contactsOffset = SnapshotHeaderSize + units.Length * UnitSize;
@@ -420,6 +421,7 @@ public static class WireProtocol
             byte stanceByte = record[30];
             float turretYaw = DequantizeYaw(BinaryPrimitives.ReadUInt16LittleEndian(record[31..]));
             float hullHeading = DequantizeYaw(BinaryPrimitives.ReadUInt16LittleEndian(record[33..]));
+            uint navOrderSequence = BinaryPrimitives.ReadUInt32LittleEndian(record[35..]);
 
             if (id.Value == 0 || !float.IsFinite(position.X) || !float.IsFinite(position.Y) ||
                 navStatusByte > (byte)PathRequestStatus.CapacityExceeded ||
@@ -440,7 +442,8 @@ public static class WireProtocol
                 new ContactId(targetContactVal),
                 (FireStance)stanceByte,
                 turretYaw,
-                hullHeading);
+                hullHeading,
+                navOrderSequence);
         }
 
         int contactsOffset = SnapshotHeaderSize + unitCount * UnitSize;

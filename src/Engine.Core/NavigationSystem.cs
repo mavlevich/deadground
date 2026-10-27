@@ -103,6 +103,7 @@ public sealed class NavigationSystem : ISimulationSystem
     private readonly Vector2[] _unitFinalTargets;
     private readonly PathRequestStatus[] _unitStatuses;
     private readonly uint[] _unitOrderGenerations;
+    private readonly uint[] _unitOrderSequences;
     private readonly bool[] _unitHasActiveRoutes;
     private readonly bool[] _unitChunkPending;
     private readonly int[] _unitChunkWaitTicks;
@@ -270,6 +271,7 @@ public sealed class NavigationSystem : ISimulationSystem
         _unitFinalTargets = new Vector2[_maxUnits];
         _unitStatuses = new PathRequestStatus[_maxUnits];
         _unitOrderGenerations = new uint[_maxUnits];
+        _unitOrderSequences = new uint[_maxUnits];
         _unitHasActiveRoutes = new bool[_maxUnits];
         _unitChunkPending = new bool[_maxUnits];
         _unitChunkWaitTicks = new int[_maxUnits];
@@ -356,6 +358,7 @@ public sealed class NavigationSystem : ISimulationSystem
                 _routeCounts[slot] = 0;
                 _routeIndices[slot] = 0;
                 _unitOrderGenerations[slot] = 0;
+                _unitOrderSequences[slot] = 0;
                 _unitFinalTargets[slot] = Vector2.Zero;
                 _unitChunkPending[slot] = false;
                 _unitChunkWaitTicks[slot] = 0;
@@ -418,6 +421,7 @@ public sealed class NavigationSystem : ISimulationSystem
         _routeCounts[slot] = 0;
         _routeIndices[slot] = 0;
         _unitOrderGenerations[slot] = 0;
+        _unitOrderSequences[slot] = 0;
         _unitFinalTargets[slot] = Vector2.Zero;
         _unitChunkPending[slot] = false;
         _unitChunkWaitTicks[slot] = 0;
@@ -484,6 +488,13 @@ public sealed class NavigationSystem : ISimulationSystem
         return PathRequestStatus.None;
     }
 
+    public uint GetUnitOrderSequence(EntityId unit)
+    {
+        if (TryGetSlot(unit, out int slot))
+            return _unitOrderSequences[slot];
+        return 0;
+    }
+
     public bool EnqueueCommand(int player, MoveCommand command, WorldState? world = null)
     {
         if (!GetOrCreateSlot(command.Unit, out int slot))
@@ -491,6 +502,8 @@ public sealed class NavigationSystem : ISimulationSystem
             CapacityExceeded++;
             return false;
         }
+
+        _unitOrderSequences[slot] = command.Sequence;
 
         if (_queueCount == _requestQueue.Length)
         {
@@ -512,7 +525,7 @@ public sealed class NavigationSystem : ISimulationSystem
 
             if (!_grid.IsPointClear(command.Target, radius, capabilities, unit.SupportSurface))
             {
-                if (!TrySnapDestination(unit.Position, command.Target, radius, capabilities, out _))
+                if (!TrySnapDestination(unit.Position, command.Target, radius, capabilities, unit.SupportSurface, out _))
                 {
                     _unitOrderGenerations[slot] = checked(++_nextOrderGeneration);
                     _unitStatuses[slot] = PathRequestStatus.InvalidDestination;
@@ -1715,54 +1728,13 @@ public sealed class NavigationSystem : ISimulationSystem
     }
 
     private bool TrySnapDestination(Vector2 start, Vector2 target, float radius, out Vector2 snapped) =>
-        TrySnapDestination(start, target, radius, TraversabilityCapabilities.DefaultVehicle, out snapped);
+        TrySnapDestination(start, target, radius, TraversabilityCapabilities.DefaultVehicle, 0, out snapped);
 
-    private bool TrySnapDestination(Vector2 start, Vector2 target, float radius, TraversabilityCapabilities capabilities, out Vector2 snapped)
-    {
-        float maxSnapDistance = _tuning.MaxSnapDistance;
-        float maxSnapDistanceSq = maxSnapDistance * maxSnapDistance;
+    private bool TrySnapDestination(Vector2 start, Vector2 target, float radius, TraversabilityCapabilities capabilities, out Vector2 snapped) =>
+        TrySnapDestination(start, target, radius, capabilities, 0, out snapped);
 
-        (int centerCol, int centerRow) = _grid.WorldToCell(target);
-        int cellWindow = (int)MathF.Ceiling(maxSnapDistance / _grid.CellSize);
-
-        float bestScore = float.MaxValue;
-        Vector2 bestPoint = target;
-        bool found = false;
-
-        for (int dr = -cellWindow; dr <= cellWindow; dr++)
-        {
-            int r = centerRow + dr;
-            if (r < 0 || r >= _grid.Rows) continue;
-
-            for (int dc = -cellWindow; dc <= cellWindow; dc++)
-            {
-                int c = centerCol + dc;
-                if (c < 0 || c >= _grid.Columns) continue;
-
-                if (!_grid.IsCellPassable(c, r, radius, capabilities)) continue;
-
-                Vector2 candidate = _grid.CellCenter(c, r);
-                float distSq = Vector2.DistanceSquared(target, candidate);
-                if (distSq > maxSnapDistanceSq) continue;
-
-                if (!_grid.IsPointClear(candidate, radius, capabilities)) continue;
-
-                float score = distSq;
-                if (!_grid.IsSegmentClear(start, candidate, radius, capabilities)) score += 4.0f;
-                score += 0.001f * Vector2.DistanceSquared(start, candidate);
-
-                if (score < bestScore - 1e-4f)
-                {
-                    bestScore = score;
-                    bestPoint = candidate;
-                    found = true;
-                }
-            }
-        }
-
-        snapped = bestPoint;
-        return found;
-    }
+    private bool TrySnapDestination(Vector2 start, Vector2 target, float radius, TraversabilityCapabilities capabilities, uint targetSurface, out Vector2 snapped) =>
+        _grid.TrySnapDestination(start, target, radius, capabilities, targetSurface, _tuning.MaxSnapDistance, out snapped);
 
     private void ProcessMovement(WorldState world)
     {

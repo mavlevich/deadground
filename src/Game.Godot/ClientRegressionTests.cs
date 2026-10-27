@@ -38,7 +38,8 @@ internal static class ClientRegressionTests
             FogOfWarRegressionTests.Run(scene);
             TurretTraverseRegressionTests.Run(scene);
             InfantryAssetRegressionTests.Run(scene);
-            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability combat_feedback vehicle_preview faction_vehicles rts_selection vehicle_effects cannon_sound historical_units seen_means_known fog_of_war relief contact_turrets infantry_assets");
+            OrderPreviewRegressionTests.Run(scene);
+            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability combat_feedback vehicle_preview faction_vehicles rts_selection vehicle_effects cannon_sound historical_units seen_means_known fog_of_war relief contact_turrets infantry_assets order_preview");
             return true;
         }
         catch (Exception exception)

@@ -29,6 +29,7 @@ public sealed class NavigationGrid
     private readonly int[] _obstacleQueryStamp;
     private int _currentQueryStamp;
     private readonly int[] _windowObstacleBuffer;
+    private readonly DestinationEvaluator _evaluator;
 
     public const int MaxSupportedCells = 262_144;
 
@@ -42,6 +43,7 @@ public sealed class NavigationGrid
     public ReadOnlySpan<GroundedObstacle> GroundedObstacles => _obstacles;
     public IReadOnlyList<BridgeStructure> Bridges => _bridges;
     public IReadOnlyList<TerrainObstacle> TerrainObstacles => _terrainObstacles;
+    public DestinationEvaluator Evaluator => _evaluator;
 
     // Owned array payload, including all movement graphs, excluding object headers and build scratch.
     public long EstimatedMemoryBytes
@@ -267,6 +269,7 @@ public sealed class NavigationGrid
         _obstacleQueryStamp = new int[_obstacles.Length];
         _currentQueryStamp = 0;
         _windowObstacleBuffer = new int[_obstacles.Length];
+        _evaluator = new DestinationEvaluator(MapWidth, MapDepth, _obstacles, _bridges, _terrainObstacles, CellSize, heightMap);
 
         _vehicleGraphs = new HierarchicalNavGraph[4];
         _vehicleGraphs[(int)MovementClass.Foot] = new HierarchicalNavGraph(this, MovementClass.Foot, TraversabilityCapabilities.DefaultVehicle, sectorSize: sectorSize, cellSize: CellSize, buildLimits: buildLimits);
@@ -676,6 +679,16 @@ public sealed class NavigationGrid
 
     public bool IsPointClear(Vector2 point, float radius) =>
         IsPointClear(point, radius, TraversabilityCapabilities.DefaultVehicle, 0);
+
+    public bool TrySnapDestination(
+        Vector2 start,
+        Vector2 target,
+        float radius,
+        TraversabilityCapabilities capabilities,
+        uint targetSurface,
+        float maxSnapDistance,
+        out Vector2 snapped) =>
+        _evaluator.TrySnapDestination(start, target, radius, capabilities, targetSurface, maxSnapDistance, out snapped);
 
     /// <summary>
     /// Continuous geometric swept-capsule safety check between start and end with unit radius.

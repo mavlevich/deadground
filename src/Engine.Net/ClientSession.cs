@@ -44,6 +44,7 @@ public sealed class ClientSession : IGameSession
     public double PendingSeconds => 0;
     public long BytesReceived { get; private set; }
     public CommandResult? LastCommandResult { get; private set; }
+    public uint LastSubmittedCommandSequence => _nextCommand > 1 ? _nextCommand - 1 : 0;
     public long RejectedCommands { get; private set; }
     public int AssignedPlayerId { get; private set; }
     public SessionConnectionState State { get; private set; }

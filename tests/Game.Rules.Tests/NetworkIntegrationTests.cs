@@ -211,7 +211,8 @@ public sealed class NetworkIntegrationTests
         ClientSession client1 = ClientSession.Connect("127.0.0.1", port, setup);
         using ClientSession client2 = ClientSession.Connect("127.0.0.1", port, setup);
 
-        WaitFor(() => client1.IsConnected && client2.IsConnected, host, client1, client2);
+        WaitFor(() => client1.IsConnected && client2.IsConnected &&
+            client1.Replica.OwnUnits.Length == 12 && client2.Replica.OwnUnits.Length == 4, host, client1, client2);
 
         EntityId p1Unit = client1.Replica.OwnUnits[0].Id;
         Assert.True(client1.Move(p1Unit, new Vector2(30, 30)));
@@ -278,7 +279,7 @@ public sealed class NetworkIntegrationTests
         using SimulationHost host = new(PrototypeScenario.Create(map), serverTransport, setup);
 
         using ClientSession client = ClientSession.Connect("127.0.0.1", port, setup);
-        WaitForSingle(() => client.IsConnected, host, client);
+        WaitForSingle(() => client.IsConnected && client.Replica.OwnUnits.Length == 12, host, client);
 
         RawNetListener rawListener = new();
         NetManager rawNet = new(rawListener) { AutoRecycle = true, IPv6Enabled = false };
@@ -488,7 +489,7 @@ public sealed class NetworkIntegrationTests
         SimulationHost host = new(PrototypeScenario.Create(map), serverTransport, setup);
 
         using ClientSession client = ClientSession.Connect("127.0.0.1", port, setup);
-        WaitForSingle(() => client.IsConnected, host, client);
+        WaitForSingle(() => client.IsConnected && client.Replica.OwnUnits.Length == 12, host, client);
 
         host.Dispose();
 

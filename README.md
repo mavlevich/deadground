@@ -90,12 +90,19 @@ Alternatively, build `src/Game.Godot/Game.Godot.csproj`, then import
 
 Units move automatically in local demo mode. Left-click selects a unit, dragging with the left button
 box-selects own units, double-clicking an own unit selects all on-screen units of the same type,
-Shift + left-click/drag adds to the selection, and right-click orders a move. `Ctrl+1..9` or `Cmd+1..9` (on every platform)
-stores a control group, `Shift+1..9` adds to it, `1..9` selects it, and pressing the same group number twice
-within 0.35 s centers the camera on the group. WASD or arrow keys smoothly pan the
-camera with normalized diagonal speed scaled by zoom. The mouse wheel smoothly zooms, Space restores
-the overview, and Escape closes open dialogs or clears unit selection. F10, O, or the HUD SETTINGS button
-opens display settings (VSync toggle and FPS cap). F9 or V toggles fog of war on the map. Keys Z (Fire at will), X (Return fire), and C (Hold fire) set the fire stance of selected units. The HUD shows connection state, tick time, allocations and traffic.
+Shift + left-click/drag adds to the selection, and right-click orders a move. When friendly units
+are selected, hovering over terrain displays a contextual order preview reticle: green for valid
+terrain, amber with a ghost preview ring for snapped destinations near obstacle edges, red with a
+diagnostic tooltip for impassable obstacles (water, dense forest, buildings, insufficient clearance),
+and split green/red for mixed selections ("Destination suitable for X of Y units."). Right-clicking
+places an animated 3D destination marker that tracks order lifecycle (Sent -> Processing -> PathFound / Failed / Partial).
+`Ctrl+1..9` or `Cmd+1..9` (on every platform) stores a control group, `Shift+1..9` adds to it, `1..9` selects it,
+and pressing the same group number twice within 0.35 s centers the camera on the group. WASD or arrow keys
+smoothly pan the camera with normalized diagonal speed scaled by zoom. The mouse wheel smoothly zooms,
+Space restores the overview, and Escape closes open dialogs or clears unit selection. F10, O, or the
+HUD SETTINGS button opens display settings (VSync toggle and FPS cap). F9 or V toggles fog of war on the map.
+Keys Z (Fire at will), X (Return fire), and C (Hold fire) set the fire stance of selected units. The HUD shows
+connection state, tick time, allocations and traffic.
 The host reports whether a valid command was queued or rejected. Rejections give
 no hidden-world details. Queue admission does not guarantee arrival at the target.
 
@@ -590,6 +597,12 @@ To run the automated performance regression probe suite (measuring 1000-unit ste
 dotnet run --project tests/Benchmarks --configuration Release -- --probe
 ```
 
+To run the move order preview deduplication and allocation benchmark (1, 20, 200 units):
+
+```sh
+dotnet run --project tests/Benchmarks --configuration Release -- --order-preview
+```
+
 ## Export the client
 
 Godot .NET export templates matching the pinned client SDK are required. macOS exports use the
@@ -654,9 +667,13 @@ Follow this checklist to verify an exported client interactively:
    - Shift + left-click or Shift + box-drag to add units to the selection.
    - Press `Ctrl+1..9` (`Cmd+1..9` on macOS) to store a control group, `Shift+1..9` to add to it, `1..9` to recall it (showing the group number on unit badges, the selection card, and the status bar), and double-tap `1..9` to center the camera on the group.
    - Left-click empty terrain or press Escape to clear active selections.
-5. Movement orders:
+5. Movement orders and cursor preview:
    - Select one or more units.
-   - Right-click terrain. Confirm that a yellow target ring appears at the click position.
+   - Hover over terrain: confirm responsive cursor reticle (green for valid terrain, amber for snapped positions, red with slash and refusal tooltip for obstacles, split green/red for mixed selections).
+   - Hover over obstacles: verify diagnostic rejection tooltips ("Water blocks this unit.", "Dense forest blocks this unit.", "Building blocks this position.", "Not enough clearance.").
+   - Hover near an obstacle edge (within 3 m): verify destination snaps to the nearest clear point and displays an amber ghost preview ring.
+   - Right-click terrain: confirm destination marker appears at the target location.
+   - Observe marker lifecycle: `Sent` (amber) -> `Processing` (cyan) -> `PathFound` (pulsing green) / `Failed` (red) / `Partial` (orange).
    - Confirm status updates to "Move order sent / N units / X, Z m".
    - Verify that selected units turn and travel toward the target point.
 6. Camera:
