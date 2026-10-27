@@ -74,12 +74,14 @@ internal sealed partial class OrderCursorOverlay : Control
     private DestinationBlockReason _lastReason;
     private int _lastValidCount;
     private int _lastTotalCount;
+    private bool _lastIsReverse;
 
     internal bool IsPanelVisible => _panel.Visible;
     internal DestinationValidity CurrentValidity => _lastValidity;
     internal DestinationBlockReason CurrentReason => _lastReason;
     internal string CurrentText => _label.Text;
     internal bool CurrentIsMixed => _icon.IsMixed;
+    internal bool CurrentIsReverse => _lastIsReverse;
 
     public OrderCursorOverlay()
     {
@@ -140,14 +142,16 @@ internal sealed partial class OrderCursorOverlay : Control
         DestinationValidity validity,
         DestinationBlockReason reason,
         int validCount,
-        int totalCount)
+        int totalCount,
+        bool isReverse = false)
     {
         if (_hasState &&
             _lastVisible == visible &&
             _lastValidity == validity &&
             _lastReason == reason &&
             _lastValidCount == validCount &&
-            _lastTotalCount == totalCount)
+            _lastTotalCount == totalCount &&
+            _lastIsReverse == isReverse)
         {
             return;
         }
@@ -158,6 +162,7 @@ internal sealed partial class OrderCursorOverlay : Control
         _lastReason = reason;
         _lastValidCount = validCount;
         _lastTotalCount = totalCount;
+        _lastIsReverse = isReverse;
 
         if (!visible)
         {
@@ -176,7 +181,11 @@ internal sealed partial class OrderCursorOverlay : Control
         if (validity == DestinationValidity.Blocked)
         {
             Input.SetDefaultCursorShape(Input.CursorShape.Forbidden);
-            if (totalCount > 1 && validCount == 0)
+            if (reason == DestinationBlockReason.NoReverseGear)
+            {
+                _label.Text = DestinationBlockReasons.NoReverseGear;
+            }
+            else if (totalCount > 1 && validCount == 0)
             {
                 string reasonText = DestinationBlockReasons.GetReasonText(reason);
                 _label.Text = string.IsNullOrEmpty(reasonText)
@@ -192,17 +201,19 @@ internal sealed partial class OrderCursorOverlay : Control
         {
             Input.SetDefaultCursorShape(Input.CursorShape.Cross);
 
+            string actionText = isReverse ? "[REVERSE] " : string.Empty;
+
             if (isMixed)
             {
-                _label.Text = $"Destination suitable for {validCount} of {totalCount} units.";
+                _label.Text = $"{actionText}Destination suitable for {validCount} of {totalCount} units.";
             }
             else if (validity == DestinationValidity.Adjusted)
             {
-                _label.Text = "Move (adjusted to clear position)";
+                _label.Text = $"{actionText}Move (adjusted to clear position)";
             }
             else
             {
-                _label.Text = "Move";
+                _label.Text = $"{actionText}Move";
             }
         }
     }

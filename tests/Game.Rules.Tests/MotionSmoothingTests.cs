@@ -557,7 +557,7 @@ public sealed class MotionSmoothingTests
             client1.Advance(0);
 
             // Warm up until tanks reach steady cruising speed (past initial bot order ticks)
-            for (int i = 0; i < 60; i++)
+            for (int i = 0; i < 240; i++)
             {
                 host1.Advance(1.0 / 60.0);
                 client1.Advance(1.0 / 60.0);
@@ -593,7 +593,7 @@ public sealed class MotionSmoothingTests
             client2.Advance(0);
 
             // Warm up identically to cruise speed
-            for (int i = 0; i < 60; i++)
+            for (int i = 0; i < 240; i++)
             {
                 host2.Advance(1.0 / 60.0);
                 client2.Advance(1.0 / 60.0);

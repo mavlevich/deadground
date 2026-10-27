@@ -4,7 +4,19 @@ namespace DeadGround.Engine;
 
 public readonly record struct EntityId(uint Value);
 
-public readonly record struct MoveCommand(uint Sequence, int ClientTick, EntityId Unit, Vector2 Target, float? FinalFacing = null);
+public enum MoveMode : byte
+{
+    Forward = 0,
+    Reverse = 1
+}
+
+public readonly record struct MoveCommand(
+    uint Sequence,
+    int ClientTick,
+    EntityId Unit,
+    Vector2 Target,
+    float? FinalFacing = null,
+    MoveMode Mode = MoveMode.Forward);
 
 public readonly record struct AttackCommand(uint Sequence, int ClientTick, EntityId Unit, ContactId Target);
 

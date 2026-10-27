@@ -489,9 +489,11 @@ internal sealed class UnitView
             movement.Y = 0;
             if (movement.LengthSquared() > 0.000001f)
             {
-                AdvanceTracks(movement.Length(), 0f);
-                if (movement.Length() <= MaxDustStep)
-                    _distanceSinceEffects += movement.Length();
+                float stepDist = movement.Length();
+                float forwardDist = movement.X * (-MathF.Sin(_heading)) + movement.Z * (-MathF.Cos(_heading));
+                AdvanceTracks(forwardDist, 0f);
+                if (stepDist <= MaxDustStep)
+                    _distanceSinceEffects += stepDist;
             }
         }
         _previousPosition = position;

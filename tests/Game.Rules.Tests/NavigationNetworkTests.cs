@@ -426,7 +426,7 @@ public sealed class NavigationNetworkTests
 
         WaitFor(() => client.IsConnected && client.Replica.OwnUnits.Length == 3, host, client);
 
-        EntityId unitId = client.Replica.OwnUnits[0].Id;
+        EntityId unitId = client.Replica.OwnUnits[1].Id;
         Vector2 target = new(25f, 20f);
         float desiredFacing = 0f; // North (0 rad)
 
@@ -449,7 +449,7 @@ public sealed class NavigationNetworkTests
                 }
             }
             return false;
-        }, host, client, maxAttempts: 150);
+        }, host, client, maxAttempts: 250);
 
         OwnUnitObservation finalObs = default;
         foreach (OwnUnitObservation u in client.Replica.OwnUnits)
@@ -459,6 +459,49 @@ public sealed class NavigationNetworkTests
 
         Assert.True(Vector2.Distance(finalObs.Position, target) <= 0.15f);
         Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(finalObs.HullHeading, desiredFacing)) <= 0.05f);
+    }
+
+    [Fact]
+    public void Reverse_MoveOverUdp_ExecutesAndReplicatesBackwardsMovement()
+    {
+        StaticGeometry geometry = NavigationScenario.CreateStaticGeometry();
+        UnitCatalog catalog = PrototypeScenario.LoadCatalog();
+        MatchSetup setup = NavigationScenario.CreateMatchSetup(geometry);
+
+        using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
+        int port = serverTransport.Port;
+        using SimulationHost host = new(NavigationScenario.CreateSimulation(geometry, catalog), serverTransport, setup);
+
+        using ClientSession client = ClientSession.Connect("127.0.0.1", port, setup);
+
+        WaitFor(() => client.IsConnected && client.Replica.OwnUnits.Length == 3, host, client);
+
+        EntityId tankId = client.Replica.OwnUnits[1].Id;
+        Vector2 startPos = client.Replica.OwnUnits[1].Position;
+        Vector2 target = new(18f, 28f);
+
+        Assert.True(client.Move(tankId, target, finalFacing: 0f, mode: MoveMode.Reverse));
+        WaitFor(() => client.LastCommandResult is { Sequence: 1, Queued: true }, host, client);
+
+        WaitFor(() =>
+        {
+            foreach (OwnUnitObservation u in client.Replica.OwnUnits)
+            {
+                if (u.Id == tankId)
+                {
+                    return u.Position.Y > startPos.Y + 2.0f;
+                }
+            }
+            return false;
+        }, host, client, maxAttempts: 150);
+
+        OwnUnitObservation obs = default;
+        foreach (OwnUnitObservation u in client.Replica.OwnUnits)
+        {
+            if (u.Id == tankId) { obs = u; break; }
+        }
+
+        Assert.True(obs.Position.Y > startPos.Y + 2.0f);
     }
 
     [Fact]

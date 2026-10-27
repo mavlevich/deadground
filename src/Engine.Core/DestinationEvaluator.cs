@@ -9,7 +9,8 @@ public enum DestinationBlockReason : byte
     Building = 2,
     Water = 3,
     DenseForest = 4,
-    InsufficientClearance = 5
+    InsufficientClearance = 5,
+    NoReverseGear = 6
 }
 
 public enum DestinationValidity : byte
@@ -26,6 +27,7 @@ public static class DestinationBlockReasons
     public const string Building = "Building blocks this position.";
     public const string InsufficientClearance = "Not enough clearance.";
     public const string OutsideMapBounds = "Outside map bounds.";
+    public const string NoReverseGear = "Unit cannot move in reverse.";
 
     public static string GetReasonText(DestinationBlockReason reason) => reason switch
     {
@@ -34,6 +36,7 @@ public static class DestinationBlockReasons
         DestinationBlockReason.Building => Building,
         DestinationBlockReason.InsufficientClearance => InsufficientClearance,
         DestinationBlockReason.OutsideMapBounds => OutsideMapBounds,
+        DestinationBlockReason.NoReverseGear => NoReverseGear,
         _ => string.Empty
     };
 }

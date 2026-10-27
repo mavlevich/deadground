@@ -16,7 +16,7 @@ public interface IGameSession : IDisposable
     bool IsConnected { get; }
     int AssignedPlayerId { get; }
     string StatusDescription { get; }
-    bool Move(EntityId unit, System.Numerics.Vector2 target, float? finalFacing = null);
+    bool Move(EntityId unit, System.Numerics.Vector2 target, float? finalFacing = null, MoveMode mode = MoveMode.Forward);
     bool Attack(EntityId unit, ContactId target);
     bool SetFireStance(EntityId unit, FireStance stance);
     void Advance(double elapsedSeconds);

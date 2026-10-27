@@ -178,7 +178,7 @@ public sealed class BridgeCrossingTests
     [Fact]
     public void Clarification2_WireProtocol_Version16_RoundTripContact_PreservesSupportSurface_NoEntityIdLeak()
     {
-        Assert.Equal(18, WireProtocol.Version);
+        Assert.Equal(19, WireProtocol.Version);
         Assert.Equal(28, WireProtocol.ContactSize);
 
         byte[] snapshotBuffer = new byte[WireProtocol.MaxMessageSize];
@@ -392,16 +392,11 @@ public sealed class BridgeCrossingTests
 
         bool enteredThroughRamp = false;
 
-        Vector2 lastPos = new(70f, 130f);
-        PathRequestStatus lastStatus = PathRequestStatus.None;
-        NavigationSystem nav = (sim.Rules as RuleSet)!.FindSystem<NavigationSystem>()!;
         for (int tick = 0; tick < 600; tick++)
         {
             sim.Step();
             if (world.TryGetUnit(tankId, out UnitState u))
             {
-                lastPos = u.Position;
-                lastStatus = nav.GetUnitStatus(tankId);
                 // When unit enters the bridge deck (SupportSurface == 1), verify its position entered near the ramp (X ~ 75, Z ~ 100)
                 if (u.SupportSurface == 1u)
                 {
@@ -700,7 +695,7 @@ public sealed class BridgeCrossingTests
         // 3. Issue new order to return back to bridge center [100, 100]
         Assert.True(sim.TryEnqueue(1, new MoveCommand(3, sim.Tick, unitId, bridgeCenter)));
         reachedBridgeCenter = false;
-        for (int tick = 0; tick < 300; tick++)
+        for (int tick = 0; tick < 450; tick++)
         {
             sim.Step();
             if (world.TryGetUnit(unitId, out UnitState u))
@@ -719,7 +714,7 @@ public sealed class BridgeCrossingTests
         // 4. Issue new order from middle of bridge to west bank [40, 100]
         Assert.True(sim.TryEnqueue(1, new MoveCommand(4, sim.Tick, unitId, westBank)));
         bool reachedWestBank = false;
-        for (int tick = 0; tick < 300; tick++)
+        for (int tick = 0; tick < 450; tick++)
         {
             sim.Step();
             if (world.TryGetUnit(unitId, out UnitState u))

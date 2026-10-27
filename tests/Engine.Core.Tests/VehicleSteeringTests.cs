@@ -9,9 +9,27 @@ public sealed class VehicleSteeringTests
     {
         private readonly Dictionary<ushort, UnitMovementProfile> _profiles = new();
 
-        public TestMovementCatalog Register(ushort definition, float speed, float radius, float turnRate = 45.0f)
+        public TestMovementCatalog Register(
+            ushort definition,
+            float speed,
+            float radius,
+            float turnRate = 45.0f,
+            float reverseSpeed = 2.5f,
+            float acceleration = 0.0f,
+            float deceleration = 0.0f,
+            bool canPivot = true,
+            float minTurnRadius = 0.0f)
         {
-            _profiles[definition] = new UnitMovementProfile(speed, radius, TraversabilityCapabilities.DefaultVehicle, turnRate);
+            _profiles[definition] = new UnitMovementProfile(
+                speed,
+                radius,
+                TraversabilityCapabilities.DefaultVehicle,
+                turnRate,
+                reverseSpeed,
+                acceleration,
+                deceleration,
+                canPivot,
+                minTurnRadius);
             return this;
         }
 
@@ -381,7 +399,7 @@ public sealed class VehicleSteeringTests
             }
 
             prevPos = state.Position;
-            if (Vector2.Distance(state.Position, target) <= 0.05f) break;
+            if (Vector2.Distance(state.Position, target) <= 0.05f && !state.Moving) break;
         }
 
         UnitState finalState = world.GetUnitAt(0);
@@ -493,5 +511,824 @@ public sealed class VehicleSteeringTests
         UnitState finalState = world.GetUnitAt(0);
         Assert.True(Vector2.Distance(finalState.Position, target) <= 0.5f,
             $"Unit should reach destination around obstacle: ended at {finalState.Position}");
+    }
+
+    [Fact]
+    public void AccelerationAndDeceleration_LinearRamp_SmoothlyScalesSpeed()
+    {
+        const int size = 65;
+        HeightMap map = new(size, size, 2f, 0.01f, new ushort[size * size]);
+        StaticGeometry geo = new(map, []);
+        NavigationGrid grid = new(geo, cellSize: 0.5f);
+
+        TestMovementCatalog catalog = new();
+        // Speed 8 m/s, accel 2 m/s^2, decel 4 m/s^2
+        catalog.Register(1, speed: 8f, radius: 1.0f, turnRate: 45f, acceleration: 2f, deceleration: 4f);
+
+        NavigationSystem nav = new(grid, catalog);
+        WorldState world = new(map);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        EntityId unit = world.CreateUnit(1, 1, new Vector2(20f, 20f), 8f, initialTurretYaw: -MathF.PI / 2f);
+        Vector2 target = new(60f, 20f);
+        sim.TryEnqueue(1, new MoveCommand(1, 0, unit, target));
+
+        Vector2 prevPos = new(20f, 20f);
+        float maxSpeedObserved = 0f;
+
+        for (int i = 0; i < 200; i++)
+        {
+            sim.Step();
+            UnitState state = world.GetUnitAt(0);
+            float stepDist = Vector2.Distance(state.Position, prevPos);
+            float speed = stepDist / Simulation.TickSeconds;
+            if (speed > maxSpeedObserved) maxSpeedObserved = speed;
+
+            // Speed must not exceed max speed of 8 m/s
+            Assert.True(speed <= 8.01f, $"Tick {i}: Speed {speed:F2} m/s exceeded max speed 8 m/s");
+
+            prevPos = state.Position;
+            if (Vector2.Distance(state.Position, target) <= 0.05f && !state.Moving) break;
+        }
+
+        // Vehicle must accelerate up to high cruise speed
+        Assert.True(maxSpeedObserved >= 7.0f, $"Vehicle should accelerate to near max speed: observed {maxSpeedObserved:F2} m/s");
+
+        UnitState finalState = world.GetUnitAt(0);
+        Assert.True(Vector2.Distance(finalState.Position, target) <= 0.15f, "Vehicle should reach target.");
+        Assert.False(finalState.Moving, "Vehicle should come to halt at target.");
+    }
+
+    [Fact]
+    public void WheeledVehicle_StationaryTurn_IsZero()
+    {
+        const int size = 65;
+        HeightMap map = new(size, size, 2f, 0.01f, new ushort[size * size]);
+        StaticGeometry geo = new(map, []);
+        NavigationGrid grid = new(geo, cellSize: 0.5f);
+
+        TestMovementCatalog catalog = new();
+        // Wheeled vehicle: canPivot = false, minTurnRadius = 5.0m, accel = 2 m/s^2, turnRate = 45 deg/s
+        catalog.Register(1, speed: 6f, radius: 1.0f, turnRate: 45f, acceleration: 2f, deceleration: 4f, canPivot: false, minTurnRadius: 5f);
+
+        NavigationSystem nav = new(grid, catalog);
+        WorldState world = new(map);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        // Unit starts at (20, 20) facing North (0.0 rad)
+        EntityId unit = world.CreateUnit(1, 1, new Vector2(20f, 20f), 6f, initialTurretYaw: 0f);
+
+        // Commanded to move East (40, 20)
+        sim.TryEnqueue(1, new MoveCommand(1, 0, unit, new Vector2(40f, 20f)));
+
+        // On first tick, unit speed starts from 0; turn rate at v=0 must be 0 (cannot pivot on spot)
+        float prevHeading = 0f;
+        Vector2 prevPos = new(20f, 20f);
+
+        for (int i = 0; i < 60; i++)
+        {
+            sim.Step();
+            UnitState state = world.GetUnitAt(0);
+            world.TryGetCombatState(unit, out WorldState.CombatState cs);
+
+            float stepDist = Vector2.Distance(state.Position, prevPos);
+            float speed = stepDist / Simulation.TickSeconds;
+            float angularDelta = MathF.Abs(CombatSystem.ShorterArcDelta(prevHeading, cs.HullHeading));
+            float omega = angularDelta / Simulation.TickSeconds;
+
+            if (speed <= 0.01f)
+            {
+                // When stationary, angular velocity must be 0
+                Assert.True(omega <= 0.001f, $"Tick {i}: Wheeled vehicle turned {omega:F3} rad/s while stationary!");
+            }
+            else
+            {
+                // When moving, angular velocity must respect omega <= v / R_min
+                float maxOmegaAllowed = (speed / 5.0f) + 0.1f;
+                Assert.True(omega <= maxOmegaAllowed,
+                    $"Tick {i}: Omega {omega:F3} exceeded kinematic limit {maxOmegaAllowed:F3} for speed {speed:F2}");
+            }
+
+            prevHeading = cs.HullHeading;
+            prevPos = state.Position;
+        }
+    }
+
+    [Fact]
+    public void ReverseMove_ExplicitCommand_MaintainsForwardHullFacing()
+    {
+        const int size = 65;
+        HeightMap map = new(size, size, 2f, 0.01f, new ushort[size * size]);
+        StaticGeometry geo = new(map, []);
+        NavigationGrid grid = new(geo, cellSize: 0.5f);
+
+        TestMovementCatalog catalog = new();
+        // Forward speed 8 m/s, reverse speed 3 m/s, accel 3 m/s^2, decel 6 m/s^2
+        catalog.Register(1, speed: 8f, radius: 1.0f, turnRate: 45f, reverseSpeed: 3f, acceleration: 3f, deceleration: 6f);
+
+        NavigationSystem nav = new(grid, catalog);
+        WorldState world = new(map);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        // Unit starts at (20, 20) facing North (0.0 rad, vector (0, -1))
+        EntityId unit = world.CreateUnit(1, 1, new Vector2(20f, 20f), 8f, initialTurretYaw: 0f);
+
+        // Commanded to move South (20, 35) in REVERSE gear
+        // Heading is North (0 rad), so moving South is moving backwards
+        Vector2 target = new(20f, 35f);
+        sim.TryEnqueue(1, new MoveCommand(1, 0, unit, target, Mode: MoveMode.Reverse));
+
+        Vector2 prevPos = new(20f, 20f);
+        for (int i = 0; i < 150; i++)
+        {
+            sim.Step();
+            UnitState state = world.GetUnitAt(0);
+            world.TryGetCombatState(unit, out WorldState.CombatState cs);
+
+            Vector2 step = state.Position - prevPos;
+            if (state.Moving && step.Length() > 0.01f)
+            {
+                float speed = step.Length() / Simulation.TickSeconds;
+                Assert.True(speed <= 3.05f, $"Tick {i}: Reverse speed {speed:F2} exceeded reverse limit 3 m/s");
+
+                // Displacement should be in South (+Z) direction, while hull remains facing North (0 rad)
+                Assert.True(step.Y > 0f, $"Tick {i}: Reverse displacement should move in +Z direction");
+                float headingError = MathF.Abs(CombatSystem.ShorterArcDelta(cs.HullHeading, 0f));
+                Assert.True(headingError <= 0.05f, $"Tick {i}: Hull heading should remain facing North, error={headingError:F3}");
+            }
+
+            prevPos = state.Position;
+            if (Vector2.Distance(state.Position, target) <= 0.05f && !state.Moving) break;
+        }
+
+        UnitState finalState = world.GetUnitAt(0);
+        Assert.True(Vector2.Distance(finalState.Position, target) <= 0.15f, "Unit reached reverse target");
+        world.TryGetCombatState(unit, out WorldState.CombatState finalCs);
+        Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(finalCs.HullHeading, 0f)) <= 0.05f, "Hull kept forward facing");
+    }
+
+    [Fact]
+    public void DirectionTransition_ForwardToReverse_BrakesThroughZeroSpeed()
+    {
+        const int size = 65;
+        HeightMap map = new(size, size, 2f, 0.01f, new ushort[size * size]);
+        StaticGeometry geo = new(map, []);
+        NavigationGrid grid = new(geo, cellSize: 0.5f);
+
+        TestMovementCatalog catalog = new();
+        catalog.Register(1, speed: 8f, radius: 1.0f, turnRate: 45f, reverseSpeed: 3f, acceleration: 4f, deceleration: 4f);
+
+        NavigationSystem nav = new(grid, catalog);
+        WorldState world = new(map);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        // Unit starts at (20, 20) facing East (-pi/2)
+        EntityId unit = world.CreateUnit(1, 1, new Vector2(20f, 20f), 8f, initialTurretYaw: -MathF.PI / 2f);
+
+        // Drive forward East to (50, 20)
+        sim.TryEnqueue(1, new MoveCommand(1, 0, unit, new Vector2(50f, 20f), Mode: MoveMode.Forward));
+
+        // Advance until cruising at high speed (> 6 m/s)
+        float maxForwardSpeed = 0f;
+        Vector2 prevPos = new(20f, 20f);
+        for (int i = 0; i < 30; i++)
+        {
+            sim.Step();
+            UnitState state = world.GetUnitAt(0);
+            float stepDist = Vector2.Distance(state.Position, prevPos);
+            float spd = stepDist / Simulation.TickSeconds;
+            if (spd > maxForwardSpeed) maxForwardSpeed = spd;
+            prevPos = state.Position;
+        }
+        Assert.True(maxForwardSpeed >= 5f, $"Unit should reach cruise speed: {maxForwardSpeed:F2}");
+
+        // Now issue reverse order to go West (10, 20) in reverse gear
+        sim.TryEnqueue(1, new MoveCommand(2, sim.Tick, unit, new Vector2(10f, 20f), Mode: MoveMode.Reverse));
+
+        // Unit must brake down smoothly through zero speed before moving West
+        bool reachedNearZero = false;
+        bool beganReverseMove = false;
+
+        for (int i = 0; i < 100; i++)
+        {
+            sim.Step();
+            UnitState state = world.GetUnitAt(0);
+            Vector2 step = state.Position - prevPos;
+            float spd = step.Length() / Simulation.TickSeconds;
+
+            if (spd <= 0.15f)
+            {
+                reachedNearZero = true;
+            }
+
+            if (reachedNearZero && step.X < -0.01f)
+            {
+                beganReverseMove = true;
+                break;
+            }
+
+            prevPos = state.Position;
+        }
+
+        Assert.True(reachedNearZero, "Vehicle must decelerate to near zero speed during direction change.");
+        Assert.True(beganReverseMove, "Vehicle must begin reverse travel after braking to halt.");
+    }
+
+    [Fact]
+    public void OnTheFlyOrderRedirection_PreservesSpeedAndMomemtum()
+    {
+        const int size = 65;
+        HeightMap map = new(size, size, 2f, 0.01f, new ushort[size * size]);
+        StaticGeometry geo = new(map, []);
+        NavigationGrid grid = new(geo, cellSize: 0.5f);
+
+        TestMovementCatalog catalog = new();
+        catalog.Register(1, speed: 8f, radius: 1.0f, turnRate: 45f, acceleration: 3f, deceleration: 4f);
+
+        NavigationSystem nav = new(grid, catalog);
+        WorldState world = new(map);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        // Unit starts at (20, 20) facing East (-pi/2)
+        EntityId unit = world.CreateUnit(1, 1, new Vector2(20f, 20f), 8f, initialTurretYaw: -MathF.PI / 2f);
+
+        // Move to (50, 20)
+        sim.TryEnqueue(1, new MoveCommand(1, 0, unit, new Vector2(50f, 20f)));
+
+        // Run until cruising at speed > 5 m/s
+        Vector2 prevPos = new(20f, 20f);
+        for (int i = 0; i < 25; i++)
+        {
+            sim.Step();
+            prevPos = world.GetUnitAt(0).Position;
+        }
+
+        // On the fly redirect to (55, 25) - gentle 15 deg redirection ahead
+        sim.TryEnqueue(1, new MoveCommand(2, sim.Tick, unit, new Vector2(55f, 25f)));
+
+        // Verify that speed does NOT drop to zero on redirect
+        float minSpeedAfterRedirect = 999f;
+        for (int i = 0; i < 15; i++)
+        {
+            sim.Step();
+            UnitState state = world.GetUnitAt(0);
+            float stepDist = Vector2.Distance(state.Position, prevPos);
+            float spd = stepDist / Simulation.TickSeconds;
+            if (spd < minSpeedAfterRedirect) minSpeedAfterRedirect = spd;
+            prevPos = state.Position;
+        }
+
+        Assert.True(minSpeedAfterRedirect >= 3.0f,
+            $"Speed dropped too low on redirection: {minSpeedAfterRedirect:F2} m/s; momentum should be preserved.");
+    }
+
+    [Fact]
+    public void WheeledVehicle_UnachievableFinalFacing_HonestlyRejectsOrder()
+    {
+        // Wall directly behind the target at (30, 10..30)
+        OpaqueStructure wall = new(
+            new StructureId(1),
+            minX: 28f, minY: 0f, minZ: 10f,
+            maxX: 32f, maxY: 4f, maxZ: 30f,
+            isGrounded: true);
+
+        const int size = 65;
+        HeightMap map = new(size, size, 2f, 0.01f, new ushort[size * size]);
+        StaticGeometry geo = new(map, [wall]);
+        NavigationGrid grid = new(geo, cellSize: 0.5f);
+
+        TestMovementCatalog catalog = new();
+        // Wheeled vehicle cannot pivot: canPivot = false, minTurnRadius = 5.0m
+        catalog.Register(1, speed: 6f, radius: 1.0f, turnRate: 45f, canPivot: false, minTurnRadius: 5f);
+
+        NavigationSystem nav = new(grid, catalog);
+        WorldState world = new(map);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        // Unit starts at (15, 20) facing East (-pi/2)
+        EntityId unit = world.CreateUnit(1, 1, new Vector2(15f, 20f), 6f, initialTurretYaw: -MathF.PI / 2f);
+
+        // Target is at (25, 20) right in front of the wall at X=28..32.
+        // Desired final facing is West (+pi/2). To face West on arrival, approach corridor would have
+        // to come from the East (X=35, through the wall!). Because the wall blocks the approach corridor,
+        // kinematic approach corridor is impossible and order must be honestly rejected.
+        Vector2 target = new(25f, 20f);
+        float desiredFacing = MathF.PI / 2f; // West
+        sim.TryEnqueue(1, new MoveCommand(1, 0, unit, target, FinalFacing: desiredFacing));
+
+        sim.Step();
+
+        // The order must be honestly rejected as InvalidDestination, unit does not move
+        Assert.Equal(PathRequestStatus.InvalidDestination, nav.GetUnitStatus(unit));
+        UnitState state = world.GetUnitAt(0);
+        Assert.False(state.Moving, "Unit should not move when order is rejected.");
+        Assert.Equal(new Vector2(15f, 20f), state.Position);
+    }
+
+    [Fact]
+    public void WheeledVehicle_InPlaceTurn_RejectedAsInvalidDestination_PreservesSequence()
+    {
+        const int size = 65;
+        HeightMap map = new(size, size, 2f, 0.01f, new ushort[size * size]);
+        StaticGeometry geo = new(map, []);
+        NavigationGrid grid = new(geo, cellSize: 0.5f);
+
+        TestMovementCatalog catalog = new();
+        catalog.Register(1, speed: 6f, radius: 1.0f, turnRate: 45f, canPivot: false, minTurnRadius: 5f);
+
+        NavigationSystem nav = new(grid, catalog);
+        WorldState world = new(map);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        EntityId unit = world.CreateUnit(1, 1, new Vector2(15f, 20f), 6f, initialTurretYaw: 0f);
+
+        // Turn in place by 5.73 degrees (0.10 rad)
+        sim.TryEnqueue(1, new MoveCommand(42, 0, unit, new Vector2(15f, 20f), FinalFacing: 0.10f));
+        sim.Step();
+
+        Assert.Equal(PathRequestStatus.InvalidDestination, nav.GetUnitStatus(unit));
+        Assert.Equal(42u, nav.GetUnitOrderSequence(unit));
+
+        world.TryGetCombatState(unit, out WorldState.CombatState cs);
+        Assert.Equal(0f, cs.HullHeading);
+        UnitState state = world.GetUnitAt(0);
+        Assert.False(state.Moving);
+        Assert.Equal(new Vector2(15f, 20f), state.Position);
+
+        // Turn in place by 90 degrees
+        sim.TryEnqueue(1, new MoveCommand(43, sim.Tick, unit, new Vector2(15f, 20f), FinalFacing: MathF.PI / 2f));
+        sim.Step();
+
+        Assert.Equal(PathRequestStatus.InvalidDestination, nav.GetUnitStatus(unit));
+        Assert.Equal(43u, nav.GetUnitOrderSequence(unit));
+
+        world.TryGetCombatState(unit, out cs);
+        Assert.Equal(0f, cs.HullHeading);
+        state = world.GetUnitAt(0);
+        Assert.False(state.Moving);
+    }
+
+    [Fact]
+    public void WheeledVehicle_DetourSearch_RetainsTrueUserDestination()
+    {
+        const int size = 65;
+        HeightMap map = new(size, size, 2f, 0.01f, new ushort[size * size]);
+        OpaqueStructure wall = new(new StructureId(1), 30f, 0f, 15f, 34f, 4f, 25f, isGrounded: true);
+        StaticGeometry geo = new(map, [wall]);
+        NavigationGrid grid = new(geo, cellSize: 0.5f);
+
+        TestMovementCatalog catalog = new();
+        catalog.Register(1, speed: 6f, radius: 1.0f, turnRate: 45f, canPivot: false, minTurnRadius: 5f);
+
+        NavigationSystem nav = new(grid, catalog);
+        WorldState world = new(map);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        EntityId unit = world.CreateUnit(1, 1, new Vector2(20f, 20f), 6f, initialTurretYaw: -MathF.PI / 2f);
+        Vector2 userTarget = new(45f, 20f);
+        float userFacing = -MathF.PI / 2f; // East
+
+        sim.TryEnqueue(1, new MoveCommand(1, 0, unit, userTarget, FinalFacing: userFacing));
+
+        for (int i = 0; i < 20; i++)
+        {
+            sim.Step();
+            if (nav.GetUnitStatus(unit) == PathRequestStatus.PathFound) break;
+        }
+
+        Assert.Equal(userTarget, nav.GetUnitFinalTarget(unit));
+    }
+
+    [Fact]
+    public void VehicleDeceleration_RespectsDecelLimit_OnEveryTickIncludingArrival()
+    {
+        const int size = 65;
+        HeightMap map = new(size, size, 2f, 0.01f, new ushort[size * size]);
+        StaticGeometry geo = new(map, []);
+        NavigationGrid grid = new(geo, cellSize: 0.5f);
+
+        TestMovementCatalog catalog = new();
+        float decel = 4.0f;
+        float dt = Simulation.TickSeconds;
+        float maxAllowedDecel = decel * dt + 1e-3f;
+        catalog.Register(1, speed: 7f, radius: 1.0f, turnRate: 45f, acceleration: 3f, deceleration: decel);
+
+        NavigationSystem nav = new(grid, catalog);
+        WorldState world = new(map);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        EntityId unit = world.CreateUnit(1, 1, new Vector2(15f, 20f), 7f, initialTurretYaw: -MathF.PI / 2f);
+        Vector2 target = new(45f, 20f);
+        sim.TryEnqueue(1, new MoveCommand(1, 0, unit, target));
+
+        Vector2 prevPos = new(15f, 20f);
+        float prevInternalSpeed = 0f;
+        float prevActualSpeed = 0f;
+        bool checkedArrival = false;
+
+        for (int t = 0; t < 150; t++)
+        {
+            sim.Step();
+            UnitState state = world.GetUnitAt(0);
+            float currentInternalSpeed = nav.GetUnitSpeed(unit);
+            float currentActualSpeed = Vector2.Distance(prevPos, state.Position) / dt;
+
+            // Actual physical displacement speed must match internal speed closely
+            float mismatch = MathF.Abs(currentActualSpeed - currentInternalSpeed);
+            Assert.True(mismatch <= 0.05f,
+                $"Speed mismatch {mismatch:F4} at tick {t}: actual={currentActualSpeed:F4}, internal={currentInternalSpeed:F4}");
+
+            if (currentActualSpeed < prevActualSpeed)
+            {
+                float decelStep = prevActualSpeed - currentActualSpeed;
+                Assert.True(decelStep <= maxAllowedDecel,
+                    $"Actual deceleration step {decelStep:F3} m/s at tick {t} exceeded max allowed {maxAllowedDecel:F3} m/s (prev={prevActualSpeed:F3}, curr={currentActualSpeed:F3})");
+            }
+
+            if (prevActualSpeed > 0f && currentActualSpeed <= 1e-4f)
+            {
+                checkedArrival = true;
+            }
+
+            prevPos = state.Position;
+            prevInternalSpeed = currentInternalSpeed;
+            prevActualSpeed = currentActualSpeed;
+            if (!state.Moving && currentInternalSpeed <= 1e-4f) break;
+        }
+
+        Assert.True(checkedArrival, "Must observe and verify the arrival tick deceleration.");
+
+        // Part 2: Re-assigning close target while cruising at high speed must not drop speed to 0 in one tick
+        EntityId fastUnit = world.CreateUnit(1, 1, new Vector2(10f, 10f), 7f, initialTurretYaw: -MathF.PI / 2f);
+        sim.TryEnqueue(1, new MoveCommand(2, sim.Tick, fastUnit, new Vector2(50f, 10f)));
+
+        for (int t = 0; t < 50; t++)
+        {
+            sim.Step();
+            if (nav.GetUnitSpeed(fastUnit) >= 5.0f) break;
+        }
+
+        float cruiseSpeed = nav.GetUnitSpeed(fastUnit);
+        Assert.True(cruiseSpeed >= 5.0f, $"Unit must reach high speed (actual={cruiseSpeed}).");
+
+        world.TryGetUnit(fastUnit, out UnitState fastState);
+        Vector2 posBeforeReassign = fastState.Position;
+        Vector2 closeTarget = fastState.Position + new Vector2(0.10f, 0f);
+
+        sim.TryEnqueue(1, new MoveCommand(3, sim.Tick, fastUnit, closeTarget));
+        sim.Step();
+
+        world.TryGetUnit(fastUnit, out UnitState fastStateAfter);
+        float actualSpeedAfter = Vector2.Distance(posBeforeReassign, fastStateAfter.Position) / dt;
+        float internalSpeedAfter = nav.GetUnitSpeed(fastUnit);
+
+        float actualDrop = cruiseSpeed - actualSpeedAfter;
+        Assert.True(actualDrop <= maxAllowedDecel,
+            $"Actual coordinate speed drop {actualDrop:F3} m/s after close re-assignment exceeded max deceleration {maxAllowedDecel:F3} m/s (cruise={cruiseSpeed:F3}, actualAfter={actualSpeedAfter:F3})");
+
+        float internalDrop = cruiseSpeed - internalSpeedAfter;
+        Assert.True(internalDrop <= maxAllowedDecel,
+            $"Internal speed drop {internalDrop:F3} m/s after close re-assignment exceeded max deceleration {maxAllowedDecel:F3} m/s (cruise={cruiseSpeed:F3}, internalAfter={internalSpeedAfter:F3})");
+    }
+
+    [Fact]
+    public void WheeledVehicle_AchievableFinalFacing_ArrivesAndAlignsSuccessfully()
+    {
+        const int size = 65;
+        HeightMap map = new(size, size, 2f, 0.01f, new ushort[size * size]);
+        StaticGeometry geo = new(map, []);
+        NavigationGrid grid = new(geo, cellSize: 0.5f);
+
+        TestMovementCatalog catalog = new();
+        catalog.Register(1, speed: 6f, radius: 1.0f, turnRate: 45f, reverseSpeed: 3f, acceleration: 2f, deceleration: 4f, canPivot: false, minTurnRadius: 5f);
+
+        NavigationSystem nav = new(grid, catalog);
+        WorldState world = new(map);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        // Unit starts at (50, 70) facing North (0)
+        EntityId unit = world.CreateUnit(1, 1, new Vector2(50f, 70f), 6f, initialTurretYaw: 0f);
+        Vector2 goal = new(50f, 50f);
+        float desiredFacing = 0f; // North
+
+        sim.TryEnqueue(1, new MoveCommand(1, 0, unit, goal, FinalFacing: desiredFacing));
+
+        for (int t = 0; t < 500; t++)
+        {
+            sim.Step();
+            UnitState state = world.GetUnitAt(0);
+            if (t > 0 && !state.Moving) break;
+        }
+
+        UnitState finalState = world.GetUnitAt(0);
+        world.TryGetCombatState(unit, out WorldState.CombatState cs);
+
+        Assert.False(finalState.Moving, "Unit should come to a complete stop upon arrival.");
+        Assert.Equal(PathRequestStatus.PathFound, nav.GetUnitStatus(unit));
+        Assert.True(Vector2.Distance(finalState.Position, goal) <= 0.15f,
+            $"Final position {finalState.Position} should be within 0.15m of goal {goal}.");
+        float headingDiff = MathF.Abs(MathF.IEEERemainder(cs.HullHeading - desiredFacing, MathF.PI * 2f));
+        Assert.True(headingDiff <= 0.05f,
+            $"Final heading {cs.HullHeading} should align with desired facing {desiredFacing} within 0.05 rad (diff={headingDiff}).");
+    }
+
+    [Fact]
+    public void WheeledVehicle_UnachievableFinalFacing_AbortsWithInvalidDestinationWithinTimeout()
+    {
+        const int size = 129;
+        HeightMap map = new(size, size, 2f, 0.01f, new ushort[size * size]);
+        StaticGeometry geo = new(map, []);
+        NavigationGrid grid = new(geo, cellSize: 0.5f);
+
+        TestMovementCatalog catalog = new();
+        catalog.Register(1, speed: 6f, radius: 1.0f, turnRate: 45f, reverseSpeed: 3f, acceleration: 2f, deceleration: 4f, canPivot: false, minTurnRadius: 5f);
+
+        NavigationSystem nav = new(grid, catalog);
+        WorldState world = new(map);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        // Unit starts at (50, 50) facing North (0), target (80, 50) with facing North (0)
+        // With minTurnRadius = 5m, arriving at (80, 50) while facing North cannot be achieved directly on straight path
+        EntityId unit = world.CreateUnit(1, 1, new Vector2(50f, 50f), 6f, initialTurretYaw: 0f);
+        Vector2 goal = new(80f, 50f);
+        sim.TryEnqueue(1, new MoveCommand(1, 0, unit, goal, FinalFacing: 0f));
+
+        for (int t = 0; t < 500; t++)
+        {
+            sim.Step();
+            UnitState state = world.GetUnitAt(0);
+            if (t > 0 && !state.Moving) break;
+        }
+
+        UnitState finalState = world.GetUnitAt(0);
+        Assert.False(finalState.Moving, "Unit should stop rather than circling infinitely.");
+        Assert.Equal(PathRequestStatus.InvalidDestination, nav.GetUnitStatus(unit));
+        Assert.True(sim.Tick < 400, $"Simulation should terminate within 400 ticks (actual: {sim.Tick}).");
+    }
+
+    [Fact]
+    public void NewOrderRejection_PreservedWhenOldRouteFinishesConcurrently()
+    {
+        const int size = 129;
+        HeightMap map = new(size, size, 2f, 0.01f, new ushort[size * size]);
+        StaticGeometry geo = new(map, []);
+        NavigationGrid grid = new(geo, cellSize: 0.5f);
+
+        TestMovementCatalog catalog = new();
+        float decel = 4f;
+        float dt = Simulation.TickSeconds;
+        catalog.Register(1, speed: 6f, radius: 1.0f, turnRate: 45f, reverseSpeed: 3f, acceleration: 2f, deceleration: decel, canPivot: false, minTurnRadius: 5f);
+
+        NavigationSystem nav = new(grid, catalog);
+        WorldState world = new(map);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        EntityId unit = world.CreateUnit(1, 1, new Vector2(50f, 80f), 6f, initialTurretYaw: 0f);
+        Vector2 goal = new(50f, 50f);
+        sim.TryEnqueue(1, new MoveCommand(1, 0, unit, goal));
+
+        bool approachedArrival = false;
+        for (int t = 0; t < 1000; t++)
+        {
+            UnitState u = world.GetUnitAt(0);
+            if (nav.HasActiveRoute(unit) &&
+                Vector2.Distance(u.Position, goal) <= 0.15f &&
+                nav.GetUnitSpeed(unit) <= decel * dt + 1e-4f)
+            {
+                approachedArrival = true;
+                break;
+            }
+            sim.Step();
+        }
+
+        Assert.True(approachedArrival, "Unit must approach arrival point.");
+
+        // Enqueue invalid in-place turn command with Sequence=2
+        bool queued = sim.TryEnqueue(1, new MoveCommand(2, sim.Tick, unit, goal, FinalFacing: MathF.PI / 2f));
+        Assert.True(queued);
+
+        sim.Step();
+
+        world.TryGetCombatState(unit, out WorldState.CombatState cs);
+        Assert.Equal(2u, nav.GetUnitOrderSequence(unit));
+        Assert.Equal(PathRequestStatus.InvalidDestination, nav.GetUnitStatus(unit));
+        Assert.False(nav.HasActiveRoute(unit));
+        Assert.True(MathF.Abs(cs.HullHeading - 0f) < 0.1f, "Hull heading must not snap to invalid requested heading.");
+    }
+
+    [Fact]
+    public void ReverseOrder_ProfileWithoutReverseSpeed_RejectedByServer()
+    {
+        const int size = 65;
+        HeightMap map = new(size, size, 2f, 0.01f, new ushort[size * size]);
+        StaticGeometry geo = new(map, []);
+        NavigationGrid grid = new(geo, cellSize: 0.5f);
+
+        TestMovementCatalog catalog = new();
+        // reverseSpeed is 0
+        catalog.Register(1, speed: 6f, radius: 1.0f, turnRate: 45f, reverseSpeed: 0f);
+
+        NavigationSystem nav = new(grid, catalog);
+        WorldState world = new(map);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        EntityId unit = world.CreateUnit(1, 1, new Vector2(20f, 20f), 6f);
+
+        sim.TryEnqueue(1, new MoveCommand(55, 0, unit, new Vector2(20f, 35f), Mode: MoveMode.Reverse));
+        sim.Step();
+
+        Assert.Equal(PathRequestStatus.InvalidDestination, nav.GetUnitStatus(unit));
+        Assert.Equal(55u, nav.GetUnitOrderSequence(unit));
+
+        UnitState state = world.GetUnitAt(0);
+        Assert.False(state.Moving);
+        Assert.Equal(new Vector2(20f, 20f), state.Position);
+    }
+
+    [Fact]
+    public void TightCorridor_TrackedVehicle_CompliesWithTurnRateLimit()
+    {
+        // Test both standard tracked tank (turnRate=45) and T-62 parameters (turnRate=30, radius=1.65)
+        var profiles = new[]
+        {
+            (Speed: 7f, Radius: 1.0f, TurnRate: 45f, Accel: 3f, Decel: 4f),
+            (Speed: 8.3f, Radius: 1.65f, TurnRate: 30f, Accel: 2f, Decel: 4f)
+        };
+
+        foreach (var p in profiles)
+        {
+            const int size = 129;
+            HeightMap map = new(size, size, 2f, 0.01f, new ushort[size * size]);
+            OpaqueStructure[] walls =
+            [
+                new(new StructureId(1), 0f, 0f, 22f, 38f, 6f, 48f, true),
+                new(new StructureId(2), 42f, 0f, 0f, 50f, 6f, 48f, true)
+            ];
+            StaticGeometry geo = new(map, walls);
+            NavigationGrid grid = new(geo, cellSize: 0.5f);
+
+            TestMovementCatalog catalog = new();
+            catalog.Register(1, speed: p.Speed, radius: p.Radius, turnRate: p.TurnRate,
+                acceleration: p.Accel, deceleration: p.Decel, canPivot: true);
+
+            NavigationSystem nav = new(grid, catalog);
+            WorldState world = new(map);
+            RuleSet rules = new(nav);
+            using Simulation sim = new(world, rules);
+
+            EntityId unit = world.CreateUnit(1, 1, new Vector2(15f, 20f), p.Speed, initialTurretYaw: -MathF.PI / 2f);
+            Vector2 goal = new(40f, 60f);
+            sim.TryEnqueue(1, new MoveCommand(1, 0, unit, goal));
+
+            float prevYaw = -MathF.PI / 2f;
+            float maxAllowedDeg = p.TurnRate * Simulation.TickSeconds + 1e-3f;
+            float dt = Simulation.TickSeconds;
+            float maxAllowedAccelStep = p.Accel * dt + 1e-3f;
+            float maxAllowedDecelStep = p.Decel * dt + 1e-3f;
+
+            Vector2 prevPos = new(15f, 20f);
+            float prevActualSpeed = 0f;
+
+            for (int t = 0; t < 1500; t++)
+            {
+                sim.Step();
+                world.TryGetCombatState(unit, out WorldState.CombatState cs);
+                float deltaDeg = MathF.Abs(CombatSystem.ShorterArcDelta(prevYaw, cs.HullHeading)) * 180f / MathF.PI;
+
+                Assert.True(deltaDeg <= maxAllowedDeg,
+                    $"Turn delta {deltaDeg:F4} deg at tick {t} exceeded limit {maxAllowedDeg:F4} deg for radius={p.Radius}");
+
+                prevYaw = cs.HullHeading;
+                UnitState state = world.GetUnitAt(0);
+
+                Vector2 displacement = state.Position - prevPos;
+                float actualSpeed = displacement.Length() / dt;
+
+                if (actualSpeed > prevActualSpeed)
+                {
+                    float accelStep = actualSpeed - prevActualSpeed;
+                    Assert.True(accelStep <= maxAllowedAccelStep,
+                        $"Actual acceleration step {accelStep:F4} at tick {t} exceeded limit {maxAllowedAccelStep:F4} for radius={p.Radius}");
+                }
+
+                if (actualSpeed < prevActualSpeed)
+                {
+                    float decelStep = prevActualSpeed - actualSpeed;
+                    Assert.True(decelStep <= maxAllowedDecelStep,
+                        $"Actual deceleration step {decelStep:F4} at tick {t} exceeded limit {maxAllowedDecelStep:F4} for radius={p.Radius}");
+                }
+
+                float mismatch = MathF.Abs(actualSpeed - nav.GetUnitSpeed(unit));
+                Assert.True(mismatch <= 0.05f,
+                    $"Speed mismatch {mismatch:F4} at tick {t} exceeded tolerance 0.05 (actual={actualSpeed:F4}, internal={nav.GetUnitSpeed(unit):F4}) for radius={p.Radius}");
+
+                if (actualSpeed > 0.05f)
+                {
+                    float motionHeading = MathF.Atan2(-displacement.X, -displacement.Y);
+                    float slipDeg = MathF.Abs(CombatSystem.ShorterArcDelta(cs.HullHeading, motionHeading)) * 180f / MathF.PI;
+                    Assert.True(slipDeg <= 5.0f,
+                        $"Slip angle {slipDeg:F4} deg at tick {t} exceeded limit 5.0 deg for radius={p.Radius}");
+                }
+
+                prevPos = state.Position;
+                prevActualSpeed = actualSpeed;
+
+                if (t > 0 && !state.Moving) break;
+            }
+
+            Assert.Equal(PathRequestStatus.PathFound, nav.GetUnitStatus(unit));
+            UnitState finalState = world.GetUnitAt(0);
+            Assert.False(finalState.Moving);
+            Assert.True(Vector2.Distance(finalState.Position, goal) <= 0.15f,
+                $"Final position {finalState.Position} should be within 0.15m of goal {goal} for radius={p.Radius}.");
+        }
+    }
+
+    [Fact]
+    public void ZeroAccelerationProfile_CompliesWithReverseModeAndSpeedCap()
+    {
+        const int size = 65;
+        HeightMap map = new(size, size, 2f, 0.01f, new ushort[size * size]);
+        StaticGeometry geo = new(map, []);
+        NavigationGrid grid = new(geo, cellSize: 0.5f);
+
+        TestMovementCatalog catalog = new();
+        catalog.Register(1, speed: 8f, radius: 1.0f, turnRate: 45f, reverseSpeed: 3f,
+            acceleration: 0f, deceleration: 0f, canPivot: true);
+
+        NavigationSystem nav = new(grid, catalog);
+        WorldState world = new(map);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        EntityId unit = world.CreateUnit(1, 1, new Vector2(50f, 50f), 8f, initialTurretYaw: 0f);
+        sim.TryEnqueue(1, new MoveCommand(1, 0, unit, new Vector2(50f, 70f), Mode: MoveMode.Reverse));
+
+        float peakSpeed = 0f;
+        for (int t = 0; t < 400; t++)
+        {
+            Vector2 before = world.GetUnitAt(0).Position;
+            sim.Step();
+            UnitState state = world.GetUnitAt(0);
+            float speed = Vector2.Distance(before, state.Position) / Simulation.TickSeconds;
+            peakSpeed = MathF.Max(peakSpeed, speed);
+            if (t > 0 && !state.Moving) break;
+        }
+
+        world.TryGetCombatState(unit, out WorldState.CombatState cs);
+        Assert.True(MathF.Abs(cs.HullHeading - 0f) < 0.05f,
+            $"Hull heading {cs.HullHeading:F4} should remain North (0), not flip 180 deg.");
+        Assert.True(peakSpeed <= 3.01f,
+            $"Peak speed {peakSpeed:F4} exceeded reverse cap 3.0 m/s.");
+        Assert.Equal(MoveMode.Reverse, nav.GetUnitMoveMode(unit));
+        Assert.Equal(PathRequestStatus.PathFound, nav.GetUnitStatus(unit));
+    }
+
+    [Fact]
+    public void WheeledVehicle_SlowSpeedLongApproach_ReachesGoalWithoutPrematureTimeout()
+    {
+        const int size = 129;
+        HeightMap map = new(size, size, 2f, 0.01f, new ushort[size * size]);
+        StaticGeometry geo = new(map, []);
+        NavigationGrid grid = new(geo, cellSize: 0.5f);
+
+        TestMovementCatalog catalog = new();
+        catalog.Register(1, speed: 1f, radius: 1.0f, turnRate: 45f, reverseSpeed: 0.5f,
+            acceleration: 0.5f, deceleration: 1f, canPivot: false, minTurnRadius: 5f);
+
+        NavigationSystem nav = new(grid, catalog);
+        WorldState world = new(map);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        EntityId unit = world.CreateUnit(1, 1, new Vector2(50f, 70f), 1f, initialTurretYaw: 0f);
+        Vector2 goal = new(50f, 50f);
+        sim.TryEnqueue(1, new MoveCommand(1, 0, unit, goal, FinalFacing: 0f));
+
+        for (int t = 0; t < 1500; t++)
+        {
+            sim.Step();
+            UnitState state = world.GetUnitAt(0);
+            if (t > 0 && !state.Moving) break;
+        }
+
+        UnitState finalState = world.GetUnitAt(0);
+        Assert.Equal(PathRequestStatus.PathFound, nav.GetUnitStatus(unit));
+        Assert.False(finalState.Moving);
+        Assert.True(Vector2.Distance(finalState.Position, goal) <= 0.15f,
+            $"Final position {finalState.Position} should be within 0.15m of goal {goal}.");
     }
 }

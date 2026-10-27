@@ -232,7 +232,7 @@ public sealed class HierarchicalNavigationTests
         sim.TryEnqueue(1, new MoveCommand(1, 0, unit, target));
 
         int ticks = 0;
-        while (ticks < 800)
+        while (ticks < 1200)
         {
             sim.Step();
             ticks++;

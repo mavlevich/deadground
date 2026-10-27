@@ -392,6 +392,23 @@ Path following is a separate problem from path planning and needs as much attent
 - stopping behind friendly units
 - local avoidance
 
+Known limitation after the vehicle-motion slice (manual playtest, 2026-10-27):
+vehicles do not yet block one another. Allied vehicles ordered to the same destination can
+occupy the same position, and vehicles can drive through hostile vehicles. Static obstacle
+clearance and kinematic steering do not provide unit-to-unit collision handling.
+
+Next dynamic movement slice, planned:
+
+- Enforce server-authoritative non-penetration for allied and hostile vehicles on physically
+  intersecting support levels. Keep acceleration, braking and steering constraints intact.
+- Assign separate valid destination slots for a group order. Destination spacing alone does
+  not prevent overlaps while travelling; local following and yielding are also required.
+- Use side knowledge for proactive planning and true geometry for actual collisions, as in
+  section 9.1. Never send hidden enemy positions to the client to implement avoidance.
+- Cover a shared destination, a parked ally, a parked enemy, intersecting routes and opposing
+  bridge traffic. Verify bounded work, deterministic results and zero steady-state allocations.
+  Full formations, vehicle pushing and wreck physics remain separate work.
+
 ### 9.4 Required test scenarios
 
 1. Two columns meet on a narrow road.
@@ -402,12 +419,13 @@ Path following is a separate problem from path planning and needs as much attent
 
 ### 9.5 Vehicle heading and steering
 
-Status: stage 1 forward movement and final facing are implemented. The server limits hull
-rotation to the catalog turn rate and replicates the resulting heading. Vehicles stop and pivot
-when the next route segment differs from the hull heading by more than 0.05 rad (about 2.8 degrees).
-This includes wheeled vehicles as a temporary simplification. Collision uses the current circle model.
-The client provides an RMB drag gesture with an arrow preview and Escape cancellation.
-Smooth turns while moving, explicit reverse orders, and separate wheeled steering remain planned.
+Status: kinematic vehicle motion, acceleration and deceleration, smooth path steering, reverse gear,
+and final facing are implemented. The server limits hull rotation to the catalog turn rate and kinematic
+curvature, and replicates the resulting heading. Displacement is strictly collinear with hull heading and
+gear mode. Tracked vehicles can pivot on the spot; wheeled vehicles obey minimum turning radius limits
+(|omega| <= v / R_min) and cannot rotate while stationary. Collision uses the current circle model.
+The client provides an RMB drag gesture with an arrow preview, R + RMB for reverse movement, [REVERSE]
+cursor badges, reverse wheel and track roll, and Escape cancellation.
 
 State and convention:
 
@@ -430,34 +448,44 @@ Turret yaw and traverse:
   - M60A1: 22.5 deg/s (full 360 degree powered traverse in 16.0 s, TM 9-2350-215-10).
   - Prototype tank: 24.0 deg/s (full 360 degree turn in 15.0 s, plausible estimate for 128 m prototype test map).
 
-Unit data (section 17):
+Unit mobility data (section 17):
 
-- `turn_rate`: degrees per second for a turn in place.
-- `reverse_speed`: meters per second, lower than `speed`.
+- `speed`: forward cruising speed in meters per second.
+- `reverse_speed`: reverse speed in meters per second.
+- `acceleration`: linear acceleration in m/s^2.
+- `deceleration`: braking deceleration in m/s^2.
+- `turn_rate`: maximum angular velocity in degrees per second.
+- `can_pivot`: boolean indicating whether the vehicle can pivot in place (true for tracked tanks and APCs, false for wheeled vehicles).
+- `min_turn_radius`: minimum turning radius R in meters for wheeled vehicles.
 
-Stages:
+Kinematic steering and path following:
 
-- Stage 1 (first heading change): every vehicle turns in place at its `turn_rate`, wheeled ones
-  included. This is a known simplification for wheeled vehicles, accepted for the current final
-  facing controls and armor by side. Reverse orders remain planned. Collision stays the current circle model.
-- Stage 2 (later): wheeled kinematics. A vehicle without pivot steering gets `pivot_steer = false`
-  and a minimum `turning_radius` R, and turns only while moving, with `|omega| <= |v| / R`. Slowing
-  down never tightens the radius below R. Final facing then needs a planned maneuver ending on the
-  required heading, not a turn in place. The current planner builds polyline routes, so this stage
-  needs its own path following tests: a corner next to a wall, a destination directly behind the
-  vehicle, and reversing through a turn. Rectangular hull collision and track physics are separate
-  later steps.
-
-Steering, each tick (stage 1):
-
-- The desired direction points to the next waypoint. Planned reverse orders will face the hull
-  away from the travel direction.
-- If the heading error is above an alignment threshold (0.05 rad / ~2.8 degrees), a vehicle
-  stops linear displacement and pivots in place at `turn_rate`. Below it, it drives and turns at the same time. Turning never exceeds `turn_rate * TickSeconds` per tick.
-- On arrival, if the order has a final facing, the vehicle turns in place to it before the order
-  completes. In stage 2 a vehicle without pivot steering reaches it by a planned maneuver instead.
-- Planned reverse movement will keep the hull facing away from the travel direction and cap speed
-  at `reverse_speed`. The current move command does not carry a reverse mode.
+- Polyline lookahead: vehicles steer toward a lookahead point projected along the route polyline
+  at distance `lookahead = clamp(v * LookaheadTime, MinLookaheadDistance, MaxLookaheadDistance)`.
+  This allows smooth navigation around gentle curves without stopping at intermediate waypoints.
+- Collinear displacement: displacement per tick is strictly along `moveDir * stepDist`, where
+  `moveDir` is `(-sin h, -cos h)` in forward gear and `(sin h, cos h)` in reverse gear. Lateral
+  skidding and crab-walking are eliminated.
+- Speed ramp and deceleration: vehicles accelerate at `acceleration` toward cruising speed and
+  brake at `deceleration` governed by stopping distance: `v_stop = sqrt(2 * decel * s_rem)`.
+  Vehicles come to a smooth halt precisely at the destination.
+- Wheeled kinematic limits: wheeled vehicles (`can_pivot = false`) cannot rotate while stationary
+  (turn rate is 0 at v = 0). When moving, turning velocity is bounded by `|omega| <= min(turn_rate, v / R_min)`.
+- Final facing:
+  - Tracked vehicles (`can_pivot = true`): upon arrival at the destination point, the vehicle stops
+    and pivots in place to the commanded final facing at its catalog turn rate.
+  - Wheeled vehicles (`can_pivot = false`): when kinematic approach is clear, the vehicle plans an
+    approach corridor point `target + approachDir * approachDist` and drives into the target with the
+    corridor aligned to the commanded facing. If approach geometry is blocked or unachievable, the
+    order completes with natural arrival heading without angle teleportation or infinite orbits.
+- Reverse gear:
+  - Commanded via `R + RMB` click or drag gesture.
+  - Hull maintains its forward-facing orientation; displacement moves toward the rear.
+  - Maximum speed is capped at `reverse_speed`.
+  - Direction transitions between forward and reverse brake smoothly through zero speed before
+    reversing travel direction.
+- On-the-fly order redirection: new orders preserve the current vehicle velocity and momentum,
+  splicing the new path directly from the vehicle's live state without unnecessary stops.
 - Each traversed route segment uses the remaining angular budget for the tick. Future local
   avoidance (section 9.3) must respect the same steering constraints.
 
@@ -621,12 +649,16 @@ A unit may fire at any `Current` contact known to its side, including targets sp
 
 ### 12.2 Move orders
 
-Status: move order preview, destination snapping, sequence correlation, and final facing move orders
-(stage 1) are implemented. Reverse orders and user waypoint queues below remain planned.
+Status: move order preview, destination snapping, sequence correlation, final facing, reverse gear,
+and on-the-fly redirection are implemented. User waypoint queues below remain planned.
 
-- Final facing: a move order may carry a facing angle. The unit turns to it on arrival. The server
-  validates that the value is finite.
-- Planned reverse: a move order will be able to ask the unit to drive in reverse (section 9.5).
+- Final facing: a move order may carry a facing angle. Tracked units turn to it on arrival at the catalog
+  turn rate; wheeled units use an approach corridor when kinematic space is clear.
+- Reverse gear: a move order may specify `MoveMode.Reverse` via `R + RMB` hold or click. The hull maintains
+  forward facing while displacement moves toward the rear, with maximum speed capped at `reverse_speed`.
+  Transitions between forward and reverse brake through zero speed before reversing direction.
+- On-the-fly redirection: issuing a new move order to a moving unit splices the new path from the unit's
+  current kinematic state, preserving cruising speed and momentum without stopping.
 - Planned waypoint queue: a move order may append to the unit's order queue instead of replacing it. A plain
   order clears the queue. The queue length is capped in data (start value 16); longer queues are
   rejected without cancelling the current orders.
@@ -646,6 +678,7 @@ Status: move order preview, destination snapping, sequence correlation, and fina
     - `Building`: "Building blocks this position."
     - `InsufficientClearance`: "Not enough clearance."
     - `OutsideMapBounds`: "Outside map bounds."
+    - `NoReverseGear`: "Unit cannot move in reverse."
   - Target snapping: when hovering within `MaxSnapDistance` (3.0 m) of an obstacle perimeter or boundary, the candidate destination snaps to the nearest clear point (`DestinationValidity.Adjusted`). The client renders a ghost preview ring at the snapped spot.
   - Bridge deck vs ground under span:
     - Vertical raycast determines target `SupportSurface`.

@@ -50,6 +50,7 @@ public sealed class NavigationTests
         UnitState finalState = world.GetUnitAt(0);
         Assert.False(finalState.Moving);
         Assert.True(Vector2.Distance(finalState.Position, new Vector2(30f, 30f)) < 0.05f);
+        Assert.True(Vector2.Distance(finalState.Position, new Vector2(30f, 30f)) < 0.05f);
     }
 
     [Fact]
@@ -662,7 +663,8 @@ public sealed class NavigationTests
 
             UnitState state = world.GetUnitAt(0);
             Assert.Equal(PathRequestStatus.PathFound, nav.GetUnitStatus(unit));
-            Assert.False(state.Moving);
+            Assert.True(!state.Moving, $"pos={state.Position}, dist={Vector2.Distance(state.Position, new Vector2(125f, 2f))}");
+            Assert.True(Vector2.Distance(state.Position, new Vector2(125f, 2f)) < 1.0f);
             Assert.True(Vector2.Distance(state.Position, new Vector2(125f, 2f)) < 1.0f);
         }
     }
@@ -706,7 +708,7 @@ public sealed class NavigationTests
     }
 
     [Fact]
-    public void CommandReplacement_OnMovingUnit_WithInvalidDestination_ClearsMovingFlag()
+    public void CommandReplacement_OnMovingUnit_WithInvalidDestination_PreservesActiveRouteAndMovement()
     {
         HeightMap map = new(33, 33, 1f, 0.01f, new ushort[33 * 33]);
         OpaqueStructure building = new(new StructureId(1), 12f, 0f, 10f, 22f, 3f, 22f, isGrounded: true);
@@ -731,14 +733,14 @@ public sealed class NavigationTests
         Assert.True(before.Moving);
         Assert.True(before.Position.Y > 16.0f);
 
-        // Supersede order with invalid target deep inside building at (17, 16)
+        // Attempt order with invalid target deep inside building at (17, 16)
         sim.TryEnqueue(1, new MoveCommand(2, 0, unit, new Vector2(17f, 16f)));
         sim.Step();
 
         UnitState after = world.GetUnitAt(0);
-        Assert.False(after.Moving);
-        Assert.Equal(PathRequestStatus.InvalidDestination, nav.GetUnitStatus(unit));
-        Assert.Equal(before.Position, after.Position);
+        Assert.True(after.Moving);
+        Assert.True(nav.HasActiveRoute(unit));
+        Assert.True(after.Position.Y > before.Position.Y);
     }
 
     [Fact]

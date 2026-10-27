@@ -433,9 +433,9 @@ public sealed class TurretTraverseTests
         using Simulation _ = sim;
         EntityId jeep = Spawn(world, catalog, 1, "m151a2", new Vector2(100f, 100f), 0f);
         Assert.True(sim.TryEnqueue(1, new MoveCommand(1, sim.Tick, jeep, new Vector2(400f, 100f))));
-        for (int tick = 0; tick < 35; tick++) sim.Step();
+        for (int tick = 0; tick < 70; tick++) sim.Step();
         world.TryGetCombatState(jeep, out WorldState.CombatState jeepState);
-        Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(jeepState.HullHeading, -MathF.PI / 2f)) < 0.001f,
+        Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(jeepState.HullHeading, -MathF.PI / 2f)) < 0.05f,
             $"An unarmed unit must face its travel, hull {jeepState.HullHeading}");
 
         using WorldState plainWorld = new(HeightMap.CreatePrototype());

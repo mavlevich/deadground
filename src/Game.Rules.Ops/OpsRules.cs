@@ -123,7 +123,11 @@ public sealed record UnitDefinition(
     float FrontSectorAngle = 90f,
     float RearSectorAngle = 90f,
     TraversabilityCapabilities Capabilities = TraversabilityCapabilities.DefaultVehicle,
-    float TurnRate = 0f);
+    float TurnRate = 0f,
+    bool CanPivot = true,
+    float MinTurnRadius = 0f,
+    float Acceleration = 0f,
+    float Deceleration = 0f);
 
 public sealed record FactionData(string Id, string? Name = null);
 
@@ -268,7 +272,12 @@ public sealed class OpsMovementCatalog : IUnitMovementCatalog
                 caps = TraversabilityCapabilities.Foot;
             }
             float turnRate = unit.TurnRate > 0f ? unit.TurnRate : 45.0f;
-            _profiles[i] = new UnitMovementProfile(unit.Speed, unit.Radius, caps, turnRate);
+            float revSpeed = unit.ReverseSpeed > 0f ? unit.ReverseSpeed : MathF.Max(1.0f, unit.Speed * 0.5f);
+            float accel = unit.Acceleration > 0f ? unit.Acceleration : 3.0f;
+            float decel = unit.Deceleration > 0f ? unit.Deceleration : 5.0f;
+            bool canPivot = unit.CanPivot;
+            float minTurnRadius = unit.MinTurnRadius;
+            _profiles[i] = new UnitMovementProfile(unit.Speed, unit.Radius, caps, turnRate, revSpeed, accel, decel, canPivot, minTurnRadius);
         }
     }
 
@@ -540,6 +549,16 @@ public static class PrototypeScenario
                 throw new InvalidOperationException($"Unit '{unit.Id}' reverses as fast as it drives forward.");
             if (!float.IsFinite(unit.TurretTraverseRate) || unit.TurretTraverseRate < 0)
                 throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid turret traverse rate.");
+            if (!float.IsFinite(unit.TurnRate) || unit.TurnRate < 0)
+                throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid turn rate.");
+            if (!float.IsFinite(unit.Acceleration) || unit.Acceleration < 0)
+                throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid acceleration.");
+            if (!float.IsFinite(unit.Deceleration) || unit.Deceleration < 0)
+                throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid deceleration.");
+            if (!float.IsFinite(unit.MinTurnRadius) || unit.MinTurnRadius < 0)
+                throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid minimum turn radius.");
+            if (!unit.CanPivot && unit.MinTurnRadius <= 0)
+                throw new InvalidOperationException($"Unit '{unit.Id}' cannot pivot in place but specifies no positive minimum turn radius.");
             if (!float.IsFinite(unit.ArmorFront) || unit.ArmorFront < 0 ||
                 !float.IsFinite(unit.ArmorSide) || unit.ArmorSide < 0 ||
                 !float.IsFinite(unit.ArmorRear) || unit.ArmorRear < 0)
