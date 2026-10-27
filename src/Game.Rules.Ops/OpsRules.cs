@@ -122,7 +122,8 @@ public sealed record UnitDefinition(
     float ArmorRear = 0f,
     float FrontSectorAngle = 90f,
     float RearSectorAngle = 90f,
-    TraversabilityCapabilities Capabilities = TraversabilityCapabilities.DefaultVehicle);
+    TraversabilityCapabilities Capabilities = TraversabilityCapabilities.DefaultVehicle,
+    float TurnRate = 0f);
 
 public sealed record FactionData(string Id, string? Name = null);
 
@@ -266,7 +267,8 @@ public sealed class OpsMovementCatalog : IUnitMovementCatalog
             {
                 caps = TraversabilityCapabilities.Foot;
             }
-            _profiles[i] = new UnitMovementProfile(unit.Speed, unit.Radius, caps);
+            float turnRate = unit.TurnRate > 0f ? unit.TurnRate : 45.0f;
+            _profiles[i] = new UnitMovementProfile(unit.Speed, unit.Radius, caps, turnRate);
         }
     }
 

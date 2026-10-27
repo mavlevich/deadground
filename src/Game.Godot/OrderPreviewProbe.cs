@@ -112,6 +112,22 @@ internal static class OrderPreviewProbe
         await WaitFrames(main, 3);
         CombatFeedbackProbe.SaveViewport(main, System.IO.Path.Combine(outputDir, "order_marker_partial.png"));
 
+        // 8. Facing arrow preview and gesture progression
+        main.DestinationMarker.Show(groundPos, OrderMarkerVisualState.Processing);
+        main.DestinationMarker.ShowFacingArrow(groundPos, 0.7853982f);
+        await WaitFrames(main, 3);
+        CombatFeedbackProbe.SaveViewport(main, System.IO.Path.Combine(outputDir, "order_facing_arrow.png"));
+
+        // Capture multi-angle sequence for animation
+        float[] angles = [0f, 0.5235988f, 1.0471976f, 1.5707963f, 2.0943951f, 2.6179939f, 3.1415927f];
+        for (int i = 0; i < angles.Length; i++)
+        {
+            main.DestinationMarker.ShowFacingArrow(groundPos, angles[i]);
+            await WaitFrames(main, 2);
+            CombatFeedbackProbe.SaveViewport(main, System.IO.Path.Combine(outputDir, $"facing_seq_{i:D2}.png"));
+        }
+        main.DestinationMarker.HideFacingArrow();
+
         GD.Print($"ORDER_PREVIEW_CAPTURE_OK: {outputDir}");
         main.GetTree().Quit(0);
     }

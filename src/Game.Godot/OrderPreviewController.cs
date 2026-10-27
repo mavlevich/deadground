@@ -75,6 +75,23 @@ internal sealed class OrderPreviewController
     private uint _lastHandledCommandResultSeq;
     private Vector3 _lastOrderedTarget3D;
 
+    public const float DragThresholdPixels = 14.0f;
+    public const float DragThresholdWorldDistance = 0.5f;
+
+    private bool _isFacingGestureActive;
+    private bool _isFacingDetermined;
+    private float _gestureFacing;
+    private Vector2 _facingGestureStartScreenPos;
+    private Vector3 _facingGestureTarget3D;
+    private System.Numerics.Vector2 _facingGestureTarget2D;
+    private uint _facingGestureHitSurface;
+    private readonly HashSet<EntityId> _facingGestureUnits = new();
+
+    public bool IsFacingGestureActive => _isFacingGestureActive;
+    public bool IsFacingDetermined => _isFacingDetermined;
+    public float GestureFacing => _gestureFacing;
+    public Vector3 GestureTarget3D => _facingGestureTarget3D;
+
     public OrderPreviewController(
         StaticGeometry geometry,
         HeightMap map,
@@ -174,6 +191,14 @@ internal sealed class OrderPreviewController
         UnitViewSet unitViews,
         ClientReplica replica)
     {
+        if (_isFacingGestureActive)
+        {
+            UpdateFacingGesture(camera, mousePos, unitViews);
+            _overlay.HideTooltip();
+            _destinationView.HideGhost();
+            return;
+        }
+
         if (isPointerOccluded || hasEnemyContactUnderMouse || unitViews.Selected.Count == 0)
         {
             _overlay.HideTooltip();
@@ -306,12 +331,208 @@ internal sealed class OrderPreviewController
         }
     }
 
+    public bool BeginFacingGesture(
+        Camera3D camera,
+        Vector2 mousePos,
+        UnitViewSet unitViews,
+        IGameSession session,
+        out string failMessage)
+    {
+        failMessage = string.Empty;
+
+        if (unitViews.Selected.Count == 0)
+        {
+            return false;
+        }
+
+        if (!TryRaycast(camera, mousePos, out Vector3 hitPoint3D, out uint hitSurface, out _))
+        {
+            return false;
+        }
+
+        System.Numerics.Vector2 target2D = new(hitPoint3D.X, hitPoint3D.Z);
+        ClientReplica replica = session.Replica;
+
+        int validCount = 0;
+        DestinationBlockReason primaryBlockedReason = DestinationBlockReason.None;
+        System.Numerics.Vector2 primaryAdjusted = target2D;
+
+        foreach (EntityId unitId in unitViews.Selected)
+        {
+            if (!replica.TryGetOwnUnit(unitId, out OwnUnitObservation own))
+            {
+                continue;
+            }
+
+            float radius = 1.0f;
+            TraversabilityCapabilities capabilities = TraversabilityCapabilities.DefaultVehicle;
+            if (_movementCatalog.TryGetProfile(own.Definition, out UnitMovementProfile profile))
+            {
+                radius = profile.Radius;
+                capabilities = profile.Capabilities;
+            }
+
+            DestinationEvaluationResult res = _evaluator.Evaluate(target2D, radius, capabilities, hitSurface, own.Position);
+            if (res.IsUsable)
+            {
+                if (validCount == 0)
+                {
+                    primaryAdjusted = res.AdjustedTarget;
+                }
+                validCount++;
+            }
+            else if (primaryBlockedReason == DestinationBlockReason.None)
+            {
+                primaryBlockedReason = res.Reason;
+            }
+        }
+
+        if (validCount == 0)
+        {
+            string reason = DestinationBlockReasons.GetReasonText(primaryBlockedReason);
+            failMessage = string.IsNullOrEmpty(reason)
+                ? "Cannot move: Destination blocked."
+                : $"Cannot move: {reason}";
+            _notification?.ShowNotification(failMessage);
+            return false;
+        }
+
+        _isFacingGestureActive = true;
+        _isFacingDetermined = false;
+        _gestureFacing = 0f;
+        _facingGestureStartScreenPos = mousePos;
+        _facingGestureHitSurface = hitSurface;
+        _facingGestureTarget2D = target2D;
+        _facingGestureUnits.Clear();
+        foreach (EntityId id in unitViews.Selected)
+        {
+            _facingGestureUnits.Add(id);
+        }
+
+        float markerHeight = _evaluator.GetSurfaceHeight(primaryAdjusted, hitSurface);
+        _facingGestureTarget3D = new Vector3(primaryAdjusted.X, markerHeight + 0.12f, primaryAdjusted.Y);
+
+        _destinationView.Show(_facingGestureTarget3D, OrderMarkerVisualState.Sent);
+        _destinationView.HideGhost();
+        _overlay.HideTooltip();
+        return true;
+    }
+
+    public void UpdateFacingGesture(Camera3D camera, Vector2 mousePos, UnitViewSet? unitViews = null)
+    {
+        if (!_isFacingGestureActive) return;
+
+        if (unitViews is not null)
+        {
+            if (unitViews.Selected.Count != _facingGestureUnits.Count || !_facingGestureUnits.SetEquals(unitViews.Selected))
+            {
+                CancelFacingGesture();
+                return;
+            }
+        }
+
+        float screenDist = mousePos.DistanceTo(_facingGestureStartScreenPos);
+        if (screenDist < DragThresholdPixels)
+        {
+            _isFacingDetermined = false;
+            _destinationView.HideFacingArrow();
+            return;
+        }
+
+        Vector3 rayOrigin = camera.ProjectRayOrigin(mousePos);
+        Vector3 rayDir = camera.ProjectRayNormal(mousePos);
+
+        if (MathF.Abs(rayDir.Y) < 1e-5f)
+        {
+            return;
+        }
+
+        float t = (_facingGestureTarget3D.Y - rayOrigin.Y) / rayDir.Y;
+        if (t <= 0f)
+        {
+            return;
+        }
+
+        Vector3 hitPoint = rayOrigin + rayDir * t;
+        float dx = hitPoint.X - _facingGestureTarget3D.X;
+        float dz = hitPoint.Z - _facingGestureTarget3D.Z;
+        float worldDistSq = dx * dx + dz * dz;
+
+        if (worldDistSq < DragThresholdWorldDistance * DragThresholdWorldDistance)
+        {
+            _isFacingDetermined = false;
+            _destinationView.HideFacingArrow();
+            return;
+        }
+
+        float yaw = MathF.Atan2(-dx, -dz);
+        _gestureFacing = yaw;
+        _isFacingDetermined = true;
+        _destinationView.ShowFacingArrow(_facingGestureTarget3D, yaw);
+    }
+
+    public bool EndFacingGesture(
+        Camera3D camera,
+        Vector2 mousePos,
+        UnitViewSet unitViews,
+        IGameSession session,
+        out string notificationMessage)
+    {
+        if (!_isFacingGestureActive)
+        {
+            notificationMessage = string.Empty;
+            return false;
+        }
+
+        if (unitViews.Selected.Count != _facingGestureUnits.Count || !_facingGestureUnits.SetEquals(unitViews.Selected))
+        {
+            CancelFacingGesture();
+            notificationMessage = string.Empty;
+            return false;
+        }
+
+        _destinationView.HideFacingArrow();
+        bool hadFacing = _isFacingDetermined;
+        float facing = _gestureFacing;
+        System.Numerics.Vector2 savedTarget2D = _facingGestureTarget2D;
+        uint savedHitSurface = _facingGestureHitSurface;
+
+        _isFacingGestureActive = false;
+        _isFacingDetermined = false;
+        _facingGestureUnits.Clear();
+
+        return ExecuteMoveToWorldTarget(savedTarget2D, savedHitSurface, unitViews, session, out notificationMessage, hadFacing ? facing : null);
+    }
+
+    public void CancelFacingGesture()
+    {
+        if (!_isFacingGestureActive) return;
+
+        _isFacingGestureActive = false;
+        _isFacingDetermined = false;
+        _facingGestureUnits.Clear();
+        _destinationView.HideFacingArrow();
+        _destinationView.ClearSubmittedMarker();
+        _destinationView.HideGhost();
+    }
+
     public bool ExecuteMoveClick(
         Camera3D camera,
         Vector2 mousePos,
         UnitViewSet unitViews,
         IGameSession session,
         out string notificationMessage)
+    {
+        return ExecuteMoveClick(camera, mousePos, unitViews, session, out notificationMessage, null);
+    }
+
+    public bool ExecuteMoveClick(
+        Camera3D camera,
+        Vector2 mousePos,
+        UnitViewSet unitViews,
+        IGameSession session,
+        out string notificationMessage,
+        float? finalFacing)
     {
         notificationMessage = string.Empty;
 
@@ -320,12 +541,30 @@ internal sealed class OrderPreviewController
             return false;
         }
 
-        if (!TryRaycast(camera, mousePos, out Vector3 hitPoint3D, out uint hitSurface, out float surfaceHeight))
+        if (!TryRaycast(camera, mousePos, out Vector3 hitPoint3D, out uint hitSurface, out _))
         {
             return false;
         }
 
         System.Numerics.Vector2 target2D = new(hitPoint3D.X, hitPoint3D.Z);
+        return ExecuteMoveToWorldTarget(target2D, hitSurface, unitViews, session, out notificationMessage, finalFacing);
+    }
+
+    public bool ExecuteMoveToWorldTarget(
+        System.Numerics.Vector2 target2D,
+        uint hitSurface,
+        UnitViewSet unitViews,
+        IGameSession session,
+        out string notificationMessage,
+        float? finalFacing)
+    {
+        notificationMessage = string.Empty;
+
+        if (unitViews.Selected.Count == 0)
+        {
+            return false;
+        }
+
         ClientReplica replica = session.Replica;
 
         int validCount = 0;
@@ -397,7 +636,7 @@ internal sealed class OrderPreviewController
         for (int i = 0; i < validCount; i++)
         {
             ValidUnitOrder order = _validUnitsBuffer[i];
-            if (session.Move(order.UnitId, order.Target))
+            if (session.Move(order.UnitId, order.Target, finalFacing))
             {
                 sentMove++;
                 uint seq = session.LastSubmittedCommandSequence;
@@ -456,15 +695,21 @@ internal sealed class OrderPreviewController
         {
             if (sentMove == 1)
             {
-                notificationMessage = $"Move order submitted / 1 unit / {primaryTarget.X:F0}, {primaryTarget.Y:F0} m";
+                notificationMessage = finalFacing.HasValue
+                    ? $"Move order submitted / 1 unit / {primaryTarget.X:F0}, {primaryTarget.Y:F0} m / facing {MathF.Round(finalFacing.Value * 180f / MathF.PI):F0}°"
+                    : $"Move order submitted / 1 unit / {primaryTarget.X:F0}, {primaryTarget.Y:F0} m";
             }
             else if (allSameTarget)
             {
-                notificationMessage = $"Move order submitted / {sentMove} units / {primaryTarget.X:F0}, {primaryTarget.Y:F0} m";
+                notificationMessage = finalFacing.HasValue
+                    ? $"Move order submitted / {sentMove} units / {primaryTarget.X:F0}, {primaryTarget.Y:F0} m / facing {MathF.Round(finalFacing.Value * 180f / MathF.PI):F0}°"
+                    : $"Move order submitted / {sentMove} units / {primaryTarget.X:F0}, {primaryTarget.Y:F0} m";
             }
             else
             {
-                notificationMessage = $"Move order submitted / {sentMove} units / individual destinations";
+                notificationMessage = finalFacing.HasValue
+                    ? $"Move order submitted / {sentMove} units / individual destinations / facing {MathF.Round(finalFacing.Value * 180f / MathF.PI):F0}°"
+                    : $"Move order submitted / {sentMove} units / individual destinations";
             }
         }
 
@@ -597,12 +842,15 @@ internal sealed class OrderPreviewController
 
     public void OnUnitSelectionChanged()
     {
+        CancelFacingGesture();
         _overlay.HideTooltip();
         _destinationView.HideGhost();
     }
 
     public void Reset()
     {
+        _isFacingGestureActive = false;
+        _isFacingDetermined = false;
         _trackedOrderCount = 0;
         _lastHandledCommandResultSeq = 0;
         _orderOutcomeHandled = false;

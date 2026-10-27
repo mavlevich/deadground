@@ -28,6 +28,15 @@ public sealed class NavigationNetworkTests
         Assert.True(condition());
     }
 
+    private static void WaitFor(Func<bool> condition, SimulationHost host, ClientSession c1, int maxAttempts = 150)
+    {
+        for (int i = 0; i < maxAttempts && !condition(); i++)
+        {
+            Pump(host, c1, c1, iterations: 1, delayMs: 5);
+        }
+        Assert.True(condition());
+    }
+
     [Fact]
     public void TwoClientsConnectOverLoopback_NavigationScenario_ServerAuthoritativeMovementAroundObstacle()
     {
@@ -323,8 +332,8 @@ public sealed class NavigationNetworkTests
         }
         Assert.True(replacementClient1.LastCommandResult is { Queued: true });
 
-        // Advance simulation for 100 ticks
-        for (int i = 0; i < 100; i++)
+        // Advance simulation for 140 ticks
+        for (int i = 0; i < 140; i++)
         {
             host.Advance(1d / Simulation.TickRate);
             client2.Advance(1d / Simulation.TickRate);
@@ -400,6 +409,134 @@ public sealed class NavigationNetworkTests
             }
             return false;
         }, host, client1, client2);
+    }
+
+    [Fact]
+    public void FinalFacing_MoveOverUdp_ExecutesTurnsAndReplicatesToReplica()
+    {
+        StaticGeometry geometry = NavigationScenario.CreateStaticGeometry();
+        UnitCatalog catalog = PrototypeScenario.LoadCatalog();
+        MatchSetup setup = NavigationScenario.CreateMatchSetup(geometry);
+
+        using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
+        int port = serverTransport.Port;
+        using SimulationHost host = new(NavigationScenario.CreateSimulation(geometry, catalog), serverTransport, setup);
+
+        using ClientSession client = ClientSession.Connect("127.0.0.1", port, setup);
+
+        WaitFor(() => client.IsConnected && client.Replica.OwnUnits.Length == 3, host, client);
+
+        EntityId unitId = client.Replica.OwnUnits[0].Id;
+        Vector2 target = new(25f, 20f);
+        float desiredFacing = 0f; // North (0 rad)
+
+        Assert.True(client.Move(unitId, target, desiredFacing));
+        WaitFor(() => client.LastCommandResult is { Sequence: 1, Queued: true }, host, client);
+
+        // Advance until unit arrives and rotates to final facing
+        WaitFor(() =>
+        {
+            foreach (OwnUnitObservation u in client.Replica.OwnUnits)
+            {
+                if (u.Id == unitId)
+                {
+                    bool nearDest = Vector2.Distance(u.Position, target) <= 0.15f;
+                    bool facingMatched = MathF.Abs(CombatSystem.ShorterArcDelta(u.HullHeading, desiredFacing)) <= 0.05f;
+                    if (nearDest && facingMatched)
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }, host, client, maxAttempts: 150);
+
+        OwnUnitObservation finalObs = default;
+        foreach (OwnUnitObservation u in client.Replica.OwnUnits)
+        {
+            if (u.Id == unitId) { finalObs = u; break; }
+        }
+
+        Assert.True(Vector2.Distance(finalObs.Position, target) <= 0.15f);
+        Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(finalObs.HullHeading, desiredFacing)) <= 0.05f);
+    }
+
+    [Fact]
+    public void FinalFacing_SimulationDeterminism_IdenticalRunsMatchExactly()
+    {
+        StaticGeometry geometry = NavigationScenario.CreateStaticGeometry();
+        UnitCatalog catalog = PrototypeScenario.LoadCatalog();
+
+        using Simulation sim1 = NavigationScenario.CreateSimulation(geometry, catalog);
+        using Simulation sim2 = NavigationScenario.CreateSimulation(geometry, catalog);
+
+        EntityId unit1 = sim1.World.GetUnitAt(0).Id;
+        EntityId unit2 = sim2.World.GetUnitAt(0).Id;
+
+        MoveCommand cmd1 = new(1, 0, unit1, new Vector2(40f, 25f), FinalFacing: -1.25f);
+        MoveCommand cmd2 = new(1, 0, unit2, new Vector2(40f, 25f), FinalFacing: -1.25f);
+
+        sim1.TryEnqueue(1, cmd1);
+        sim2.TryEnqueue(1, cmd2);
+
+        for (int tick = 0; tick < 100; tick++)
+        {
+            sim1.Step();
+            sim2.Step();
+
+            UnitState u1 = sim1.World.GetUnitAt(0);
+            UnitState u2 = sim2.World.GetUnitAt(0);
+            sim1.World.TryGetCombatState(unit1, out WorldState.CombatState cs1);
+            sim2.World.TryGetCombatState(unit2, out WorldState.CombatState cs2);
+
+            Assert.Equal(u1.Position, u2.Position);
+            Assert.Equal(cs1.HullHeading, cs2.HullHeading);
+            Assert.Equal(u1.Moving, u2.Moving);
+        }
+    }
+
+    [Fact]
+    public void FinalFacing_FogOfWar_FreezesLastKnownHullHeading()
+    {
+        StaticGeometry geometry = VisibilityScenario.CreateStaticGeometry();
+        UnitCatalog catalog = PrototypeScenario.LoadCatalog();
+
+        DetectionTuning lifecycleTuning = new(
+            memoryDurationTicks: 30,
+            correlationWindowTicks: 50,
+            correlationDistanceGate: 30.0f,
+            evaluationIntervalTicks: 2);
+        OpsRules rules = new(geometry, new OpsPerceptionCatalog(catalog), lifecycleTuning);
+        WorldState world = new(geometry.HeightMap);
+        world.CreateUnit(1, 1, new Vector2(20f, 25f), catalog.Units[1].Speed); // Observer 1 (Recon)
+        EntityId enemy = world.CreateUnit(2, 2, new Vector2(60f, 25f), 10.0f); // Enemy tank in open view at (60, 25)
+
+        using Simulation sim = new(world, rules);
+
+        // Step so watcher spots enemy
+        for (int i = 0; i < 10; i++) sim.Step();
+
+        PlayerKnowledge p1Knowledge = new(1);
+        sim.UpdateKnowledge(p1Knowledge);
+
+        Assert.Equal(1, p1Knowledge.Contacts.Length);
+        ContactObservation seen = p1Knowledge.Contacts[0];
+        Assert.Equal(ContactState.Current, seen.State);
+
+        // Move enemy behind the 6m building to (60, 45) and specify final facing
+        sim.TryEnqueue(2, new MoveCommand(1, sim.Tick, enemy, new Vector2(60f, 45f), FinalFacing: 2.5f));
+
+        // Advance simulation until enemy is behind building and turns
+        for (int i = 0; i < 60; i++) sim.Step();
+
+        sim.UpdateKnowledge(p1Knowledge);
+        Assert.Equal(1, p1Knowledge.Contacts.Length);
+        ContactObservation lost = p1Knowledge.Contacts[0];
+
+        Assert.Equal(ContactState.LastKnown, lost.State);
+        // Contact heading must remain frozen from last seen observation, not leaking the unobserved turn
+        Assert.False(MathF.Abs(lost.HullHeading - 2.5f) < 0.1f,
+            "Server must not leak unobserved heading changes in fog of war.");
     }
 
     private sealed class SlowMovementCatalog : IUnitMovementCatalog

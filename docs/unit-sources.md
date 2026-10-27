@@ -11,14 +11,14 @@ Gameplay tuning differences are marked "balance, revisit after play".
 
 ## Mobility and protection
 
-| Type | Crew + troops | Weight | Road speed | Off-road speed | Reverse | Water | Sourced Armor front / side / rear (mm RHA) | Game Armor front / side / rear (mm RHA) |
-|---|---|---|---|---|---|---|---|---|
-| T-62 (1972 model) | 4 | 37 t [1] | 50 km/h, 13.9 m/s [1] | 30 km/h, 8.3 m/s, estimate [2] | 8 km/h, 2.2 m/s, estimate [3] | no (snorkel only) | 200 / 80 / 45 mm [1] [2] [15] | 200 / 80 / 45 mm |
-| M60A1 | 4 | 47.7 t [4] | 48 km/h, 13.3 m/s [5] | 25 km/h, 6.9 m/s, estimate [6] | 16 km/h, 4.5 m/s [5] | no | 250 / 76 / 41 mm [4] [6] | 220 / 76 / 41 mm |
-| BTR-70 | 2 + 8 [7] | 11.5 t [7] | 80 km/h, 22.2 m/s [7] [8] | 40 km/h, 11.1 m/s, estimate | 15 km/h, 4.2 m/s, estimate | 9 km/h [7] | 10 / 7 / 7 mm [7] [8] | 16 / 9 / 7 mm |
-| M113A1 | 2 + 11 [9] | 12.3 t [10] | 64 km/h, 17.8 m/s [9] | 35 km/h, 9.7 m/s, estimate | 15 km/h, 4.2 m/s, estimate | 5.8 km/h [10] | 22 / 15 / 15 mm RHA equiv, estimate [10] | 20 / 12 / 12 mm RHA equiv |
-| BRDM-2 | 4 [11] | 7.0 t [11] | 95 km/h, 26.4 m/s [11] | 40 km/h, 11.1 m/s, estimate | 15 km/h, 4.2 m/s, estimate | 10 km/h [11] | 14 / 7 / 5 mm [11] | 16 / 8 / 5 mm |
-| M151A2 | 1 + 3 | 1.1 t [14] | 106 km/h, 29.4 m/s, estimate | 50 km/h, 13.9 m/s, estimate | 15 km/h, 4.2 m/s, estimate | no | none (0 / 0 / 0 mm) [14] | none (0 / 0 / 0 mm) |
+| Type | Crew + troops | Weight | Road speed | Off-road speed | Reverse | Water | Turn rate | Sourced Armor front / side / rear (mm RHA) | Game Armor front / side / rear (mm RHA) |
+|---|---|---|---|---|---|---|---|---|---|
+| T-62 (1972 model) | 4 | 37 t [1] | 50 km/h, 13.9 m/s [1] | 30 km/h, 8.3 m/s, estimate [2] | 8 km/h, 2.2 m/s, estimate [3] | no (snorkel only) | 30.0 deg/s, estimate | 200 / 80 / 45 mm [1] [2] [15] | 200 / 80 / 45 mm |
+| M60A1 | 4 | 47.7 t [4] | 48 km/h, 13.3 m/s [5] | 25 km/h, 6.9 m/s, estimate [6] | 16 km/h, 4.5 m/s [5] | no | 36.0 deg/s, estimate | 250 / 76 / 41 mm [4] [6] | 220 / 76 / 41 mm |
+| BTR-70 | 2 + 8 [7] | 11.5 t [7] | 80 km/h, 22.2 m/s [7] [8] | 40 km/h, 11.1 m/s, estimate | 15 km/h, 4.2 m/s, estimate | 9 km/h [7] | 40.0 deg/s, estimate | 10 / 7 / 7 mm [7] [8] | 16 / 9 / 7 mm |
+| M113A1 | 2 + 11 [9] | 12.3 t [10] | 64 km/h, 17.8 m/s [9] | 35 km/h, 9.7 m/s, estimate | 15 km/h, 4.2 m/s, estimate | 5.8 km/h [10] | 36.0 deg/s, estimate | 22 / 15 / 15 mm RHA equiv, estimate [10] | 20 / 12 / 12 mm RHA equiv |
+| BRDM-2 | 4 [11] | 7.0 t [11] | 95 km/h, 26.4 m/s [11] | 40 km/h, 11.1 m/s, estimate | 15 km/h, 4.2 m/s, estimate | 10 km/h [11] | 45.0 deg/s, estimate | 14 / 7 / 5 mm [11] | 16 / 8 / 5 mm |
+| M151A2 | 1 + 3 | 1.1 t [14] | 106 km/h, 29.4 m/s, estimate | 50 km/h, 13.9 m/s, estimate | 15 km/h, 4.2 m/s, estimate | no | 60.0 deg/s, estimate | none (0 / 0 / 0 mm) [14] | none (0 / 0 / 0 mm) |
 
 ## Weapons
 
@@ -139,7 +139,14 @@ Balance, revisit after play.
      and penetrate flank armor at all combat ranges.
   3. Recon contest: M151A2 is armed with 7.62 mm M60 on an M4 pedestal mount (9 mm near, 4 mm far). It penetrates
      BRDM-2 flank armor (8 mm) at close ambush range (< 160 m), while remaining unable to penetrate front armor.
-- Turn rates for pivot turns come with the hull heading PR (section 9.5) and are added here then.
+- Turn rates for pivot turns (TDD section 9.5 stage 1):
+  T-62: 30.0 deg/s (estimate: ~12 s for full 360 pivot turn).
+  M60A1: 36.0 deg/s (estimate: ~10 s for full 360 pivot turn with cross-drive transmission).
+  BTR-70: 40.0 deg/s (estimate: stage 1 pivot in place simplification for 8x8 wheeled APC).
+  M113A1: 36.0 deg/s (estimate: ~10 s for full pivot turn).
+  BRDM-2: 45.0 deg/s (estimate: stage 1 pivot in place simplification for 4x4 scout vehicle).
+  M151A2: 60.0 deg/s (estimate: stage 1 pivot in place simplification for light utility 4x4).
+  Prototype units: prototype_vehicle 45.0 deg/s, recon_vehicle 50.0 deg/s, prototype_tank 30.0 deg/s, apc 40.0 deg/s.
 
 ## Sources
 

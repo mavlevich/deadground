@@ -96,6 +96,10 @@ terrain, amber with a ghost preview ring for snapped destinations near obstacle 
 diagnostic tooltip for impassable obstacles (water, dense forest, buildings, insufficient clearance),
 and split green/red for mixed selections ("Destination suitable for X of Y units."). Right-clicking
 places an animated 3D destination marker that tracks order lifecycle (Sent -> Processing -> PathFound / Failed / Partial).
+Holding RMB and dragging sets a final hull facing direction with a 3D arrow preview before dispatch, with Escape canceling unfinished gestures without issuing an order.
+Vehicles use data-defined turn rates and currently stop to pivot at route bends before continuing.
+They rotate to their commanded facing upon arrival. This temporary steering model also applies to
+wheeled vehicles. Smooth moving turns and explicit reverse orders are planned.
 `Ctrl+1..9` or `Cmd+1..9` (on every platform) stores a control group, `Shift+1..9` adds to it, `1..9` selects it,
 and pressing the same group number twice within 0.35 s centers the camera on the group. WASD or arrow keys
 smoothly pan the camera with normalized diagonal speed scaled by zoom. The mouse wheel smoothly zooms,

@@ -9,9 +9,9 @@ public sealed class NavigationTests
     {
         private readonly Dictionary<ushort, UnitMovementProfile> _profiles = new();
 
-        public TestMovementCatalog Register(ushort definition, float speed, float radius)
+        public TestMovementCatalog Register(ushort definition, float speed, float radius, float turnRate = 360f, TraversabilityCapabilities capabilities = TraversabilityCapabilities.DefaultVehicle)
         {
-            _profiles[definition] = new UnitMovementProfile(speed, radius);
+            _profiles[definition] = new UnitMovementProfile(speed, radius, capabilities, turnRate);
             return _profiles.Count > 0 ? this : this;
         }
 
@@ -721,7 +721,7 @@ public sealed class NavigationTests
         RuleSet rules = new(nav);
         using Simulation sim = new(world, rules);
 
-        EntityId unit = world.CreateUnit(1, 1, new Vector2(5f, 16f), 8f);
+        EntityId unit = world.CreateUnit(1, 1, new Vector2(5f, 16f), 8f, initialTurretYaw: MathF.PI);
 
         // Start moving toward (5, 26)
         sim.TryEnqueue(1, new MoveCommand(1, 0, unit, new Vector2(5f, 26f)));
@@ -1498,7 +1498,7 @@ public sealed class NavigationTests
         RuleSet rules = new(nav);
         using Simulation sim = new(world, rules);
 
-        EntityId unit = world.CreateUnit(1, 1, new Vector2(10f, 20f), 6f);
+        EntityId unit = world.CreateUnit(1, 1, new Vector2(10f, 20f), 6f, initialTurretYaw: -MathF.PI / 2f);
 
         // 1. Initial direct move toward (25, 20)
         sim.TryEnqueue(1, new MoveCommand(1, 0, unit, new Vector2(25f, 20f)));
@@ -1670,7 +1670,7 @@ public sealed class NavigationTests
         using Simulation sim = new(world, rules);
 
         // Unit starts on West side of wall
-        EntityId unit = world.CreateUnit(1, 1, new Vector2(10f, 20f), 6f);
+        EntityId unit = world.CreateUnit(1, 1, new Vector2(10f, 20f), 6f, initialTurretYaw: -MathF.PI / 2f);
 
         // Player clicks directly on the wall at (31, 20)
         Vector2 clickOnWall = new(31f, 20f);

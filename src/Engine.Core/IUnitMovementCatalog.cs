@@ -8,7 +8,8 @@ namespace DeadGround.Engine;
 public readonly record struct UnitMovementProfile(
     float Speed,
     float Radius,
-    TraversabilityCapabilities Capabilities = TraversabilityCapabilities.DefaultVehicle)
+    TraversabilityCapabilities Capabilities = TraversabilityCapabilities.DefaultVehicle,
+    float TurnRate = 45.0f)
 {
     public MovementClass MovementClass => MovementClassExtensions.FromRadius(Radius);
 }

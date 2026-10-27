@@ -152,23 +152,37 @@ public sealed class WorldState : IDisposable
         return true;
     }
 
-    internal bool UpdateUnitNavigation(EntityId id, Vector2 position, Vector2 target, bool active, int tick = -1, uint? supportSurface = null)
+    internal bool UpdateUnitNavigation(EntityId id, Vector2 position, Vector2 target, bool active, int tick = -1, uint? supportSurface = null, float? hullHeading = null)
     {
         if (!_indices.TryGetValue(id, out int index)) return false;
         Entity entity = _entities[index];
         ref Position pos = ref _storage.Get<Position>(entity);
         ref Motion motion = ref _storage.Get<Motion>(entity);
         ref CombatState combat = ref _storage.Get<CombatState>(entity);
-        Vector2 step = position - pos.Value;
-        if (step.LengthSquared() > 0.0001f)
+
+        if (hullHeading.HasValue)
         {
-            TurnHullAlong(ref combat, step);
-            if (tick >= 0)
+            TurnHullTo(ref combat, hullHeading.Value, tick);
+            if (position != pos.Value && tick >= 0)
             {
                 combat.LastMovedTick = tick;
+                combat.ConsecutiveShotsOnTarget = 0;
             }
-            combat.ConsecutiveShotsOnTarget = 0;
         }
+        else
+        {
+            Vector2 step = position - pos.Value;
+            if (step.LengthSquared() > 0.0001f)
+            {
+                TurnHullAlong(ref combat, step);
+                if (tick >= 0)
+                {
+                    combat.LastMovedTick = tick;
+                }
+                combat.ConsecutiveShotsOnTarget = 0;
+            }
+        }
+
         pos.Value = position;
         motion.Target = target;
         motion.Active = active;
@@ -232,6 +246,27 @@ public sealed class WorldState : IDisposable
         ref CombatState combat = ref _storage.Get<CombatState>(_entities[index]);
         combat.Stance = stance;
         return true;
+    }
+
+    /// <summary>
+    /// Steers the hull to a specified world heading.
+    /// With no target the turret rides on the hull, so a hull turn carries the gun along. With a target
+    /// the gunner keeps the gun on it while the hull turns, so the gun's world bearing stays.
+    /// </summary>
+    internal static void TurnHullTo(ref CombatState combat, float newHullHeading, int tick = -1)
+    {
+        float delta = CombatSystem.ShorterArcDelta(combat.HullHeading, newHullHeading);
+        if (MathF.Abs(delta) > 0.0001f)
+        {
+            if (combat.TargetContactId.Value == 0)
+                combat.TurretYaw = CombatSystem.NormalizeYaw(combat.TurretYaw + delta);
+            combat.HullHeading = CombatSystem.NormalizeYaw(newHullHeading);
+            if (tick >= 0)
+            {
+                combat.LastMovedTick = tick;
+            }
+            combat.ConsecutiveShotsOnTarget = 0;
+        }
     }
 
     /// <summary>

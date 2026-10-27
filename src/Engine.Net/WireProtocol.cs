@@ -19,7 +19,7 @@ public enum HandshakeReason : byte
 public static class WireProtocol
 {
     public const byte Version = MatchSetup.CurrentProtocolVersion;
-    public const int MoveSize = 22;
+    public const int MoveSize = 27;
     public const int AttackSize = 18;
     public const int SetFireStanceSize = 15;
     public const int CommandResultSize = 11;
@@ -91,6 +91,16 @@ public static class WireProtocol
         BinaryPrimitives.WriteUInt32LittleEndian(bytes[10..], command.Unit.Value);
         BinaryPrimitives.WriteSingleLittleEndian(bytes[14..], command.Target.X);
         BinaryPrimitives.WriteSingleLittleEndian(bytes[18..], command.Target.Y);
+        if (command.FinalFacing.HasValue)
+        {
+            bytes[22] = 1;
+            BinaryPrimitives.WriteSingleLittleEndian(bytes[23..], command.FinalFacing.Value);
+        }
+        else
+        {
+            bytes[22] = 0;
+            BinaryPrimitives.WriteSingleLittleEndian(bytes[23..], 0f);
+        }
     }
 
     public static bool TryReadMove(ReadOnlySpan<byte> bytes, out MoveCommand command)
@@ -102,8 +112,17 @@ public static class WireProtocol
         uint id = BinaryPrimitives.ReadUInt32LittleEndian(bytes[10..]);
         Vector2 target = new(BinaryPrimitives.ReadSingleLittleEndian(bytes[14..]),
             BinaryPrimitives.ReadSingleLittleEndian(bytes[18..]));
+        byte hasFacing = bytes[22];
+        if (hasFacing > 1) return false;
+        float? finalFacing = null;
+        if (hasFacing == 1)
+        {
+            float facing = BinaryPrimitives.ReadSingleLittleEndian(bytes[23..]);
+            if (!float.IsFinite(facing)) return false;
+            finalFacing = facing;
+        }
         if (sequence == 0 || id == 0 || tick < 0 || !float.IsFinite(target.X) || !float.IsFinite(target.Y)) return false;
-        command = new MoveCommand(sequence, tick, new EntityId(id), target);
+        command = new MoveCommand(sequence, tick, new EntityId(id), target, finalFacing);
         return true;
     }
 

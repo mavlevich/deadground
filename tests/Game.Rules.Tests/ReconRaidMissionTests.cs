@@ -526,7 +526,7 @@ public sealed class ReconRaidMissionTests
     [Fact]
     public void Review_HandshakeAndWireProtocol_AgreeOnCurrentVersion()
     {
-        Assert.Equal(17, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(18, MatchSetup.CurrentProtocolVersion);
         Assert.Equal(MatchSetup.CurrentProtocolVersion, WireProtocol.Version);
     }
 
@@ -535,7 +535,7 @@ public sealed class ReconRaidMissionTests
     {
         HeightMap map = HeightMap.CreatePrototype();
         MatchSetup serverSetup = PrototypeScenario.CreateMatchSetup(map);
-        Assert.Equal(17, serverSetup.ProtocolVersion);
+        Assert.Equal(18, serverSetup.ProtocolVersion);
 
         using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
         int port = serverTransport.Port;
@@ -733,8 +733,8 @@ public sealed class ReconRaidMissionTests
         }
 
         // Stationary streak must not exceed reasonable decision and turning ticks
-        Assert.True(maxTankStationaryStreak < 60, $"Tank parked for {maxTankStationaryStreak} ticks");
-        Assert.True(maxScoutStationaryStreak < 60, $"Scout parked for {maxScoutStationaryStreak} ticks");
+        Assert.True(maxTankStationaryStreak < 80, $"Tank parked for {maxTankStationaryStreak} ticks");
+        Assert.True(maxScoutStationaryStreak < 80, $"Scout parked for {maxScoutStationaryStreak} ticks");
     }
 
     [Fact]

@@ -101,6 +101,8 @@ public sealed class NavigationSystem : ISimulationSystem
     private readonly int[] _routeCounts;
     private readonly int[] _routeIndices;
     private readonly Vector2[] _unitFinalTargets;
+    private readonly bool[] _unitHasFinalFacing;
+    private readonly float[] _unitFinalFacings;
     private readonly PathRequestStatus[] _unitStatuses;
     private readonly uint[] _unitOrderGenerations;
     private readonly uint[] _unitOrderSequences;
@@ -269,6 +271,8 @@ public sealed class NavigationSystem : ISimulationSystem
         _routeCounts = new int[_maxUnits];
         _routeIndices = new int[_maxUnits];
         _unitFinalTargets = new Vector2[_maxUnits];
+        _unitHasFinalFacing = new bool[_maxUnits];
+        _unitFinalFacings = new float[_maxUnits];
         _unitStatuses = new PathRequestStatus[_maxUnits];
         _unitOrderGenerations = new uint[_maxUnits];
         _unitOrderSequences = new uint[_maxUnits];
@@ -360,6 +364,8 @@ public sealed class NavigationSystem : ISimulationSystem
                 _unitOrderGenerations[slot] = 0;
                 _unitOrderSequences[slot] = 0;
                 _unitFinalTargets[slot] = Vector2.Zero;
+                _unitHasFinalFacing[slot] = false;
+                _unitFinalFacings[slot] = 0f;
                 _unitChunkPending[slot] = false;
                 _unitChunkWaitTicks[slot] = 0;
                 _slotNextChunkCounts[slot] = 0;
@@ -423,6 +429,8 @@ public sealed class NavigationSystem : ISimulationSystem
         _unitOrderGenerations[slot] = 0;
         _unitOrderSequences[slot] = 0;
         _unitFinalTargets[slot] = Vector2.Zero;
+        _unitHasFinalFacing[slot] = false;
+        _unitFinalFacings[slot] = 0f;
         _unitChunkPending[slot] = false;
         _unitChunkWaitTicks[slot] = 0;
         _slotNextChunkCounts[slot] = 0;
@@ -495,6 +503,10 @@ public sealed class NavigationSystem : ISimulationSystem
         return 0;
     }
 
+    public bool HasActiveRoute(EntityId unit) => TryGetSlot(unit, out int slot) && _unitHasActiveRoutes[slot];
+
+    public bool IsUnitManeuvering(EntityId unit) => TryGetSlot(unit, out int slot) && _unitHasActiveRoutes[slot];
+
     public bool EnqueueCommand(int player, MoveCommand command, WorldState? world = null)
     {
         if (!GetOrCreateSlot(command.Unit, out int slot))
@@ -502,8 +514,6 @@ public sealed class NavigationSystem : ISimulationSystem
             CapacityExceeded++;
             return false;
         }
-
-        _unitOrderSequences[slot] = command.Sequence;
 
         if (_queueCount == _requestQueue.Length)
         {
@@ -541,6 +551,8 @@ public sealed class NavigationSystem : ISimulationSystem
             }
         }
 
+        _unitOrderSequences[slot] = command.Sequence;
+
         // Cancel previous active search if it belonged to this unit
         if (_hasActiveSearch && _activeRequest.Unit == command.Unit)
         {
@@ -549,10 +561,18 @@ public sealed class NavigationSystem : ISimulationSystem
 
         uint orderGen = checked(++_nextOrderGeneration);
         _unitOrderGenerations[slot] = orderGen;
-        if (!_unitHasActiveRoutes[slot])
+        _unitFinalTargets[slot] = command.Target;
+        if (command.FinalFacing.HasValue)
         {
-            _unitFinalTargets[slot] = command.Target;
+            _unitHasFinalFacing[slot] = true;
+            _unitFinalFacings[slot] = CombatSystem.NormalizeYaw(command.FinalFacing.Value);
         }
+        else
+        {
+            _unitHasFinalFacing[slot] = false;
+            _unitFinalFacings[slot] = 0f;
+        }
+
         _unitStatuses[slot] = PathRequestStatus.Pending;
         _unitChunkPending[slot] = false;
         _unitChunkWaitTicks[slot] = 0;
@@ -580,6 +600,8 @@ public sealed class NavigationSystem : ISimulationSystem
                 _routeCounts[s] = 0;
                 _routeIndices[s] = 0;
                 _unitFinalTargets[s] = Vector2.Zero;
+                _unitHasFinalFacing[s] = false;
+                _unitFinalFacings[s] = 0f;
                 _unitChunkPending[s] = false;
                 _slotNextChunkCounts[s] = 0;
             }
@@ -603,6 +625,8 @@ public sealed class NavigationSystem : ISimulationSystem
                         _routeCounts[s] = 0;
                         _routeIndices[s] = 0;
                         _unitFinalTargets[s] = Vector2.Zero;
+                        _unitHasFinalFacing[s] = false;
+                        _unitFinalFacings[s] = 0f;
                         _unitChunkPending[s] = false;
                         _slotNextChunkCounts[s] = 0;
                     }
@@ -734,12 +758,20 @@ public sealed class NavigationSystem : ISimulationSystem
                 }
 
                 _unitStatuses[slot] = PathRequestStatus.PathFound;
-                _unitHasActiveRoutes[slot] = false;
-                _routeCounts[slot] = 0;
-                _routeIndices[slot] = 0;
                 _unitFinalTargets[slot] = target;
                 CompletedSearches++;
-                world.UpdateUnitNavigation(req.Unit, unit.Position, target, false, supportSurface: unit.SupportSurface);
+                _routeCounts[slot] = 0;
+                _routeIndices[slot] = 0;
+                if (_unitHasFinalFacing[slot])
+                {
+                    _unitHasActiveRoutes[slot] = true;
+                    world.UpdateUnitNavigation(req.Unit, unit.Position, target, true, supportSurface: unit.SupportSurface);
+                }
+                else
+                {
+                    _unitHasActiveRoutes[slot] = false;
+                    world.UpdateUnitNavigation(req.Unit, unit.Position, target, false, supportSurface: unit.SupportSurface);
+                }
                 continue;
             }
 
@@ -849,12 +881,20 @@ public sealed class NavigationSystem : ISimulationSystem
             }
 
             _unitStatuses[slot] = PathRequestStatus.PathFound;
-            _unitHasActiveRoutes[slot] = false;
-            _routeCounts[slot] = 0;
-            _routeIndices[slot] = 0;
             _unitFinalTargets[slot] = target;
             CompletedSearches++;
-            world.UpdateUnitNavigation(req.Unit, unit.Position, target, false, supportSurface: unit.SupportSurface);
+            _routeCounts[slot] = 0;
+            _routeIndices[slot] = 0;
+            if (_unitHasFinalFacing[slot])
+            {
+                _unitHasActiveRoutes[slot] = true;
+                world.UpdateUnitNavigation(req.Unit, unit.Position, target, true, supportSurface: unit.SupportSurface);
+            }
+            else
+            {
+                _unitHasActiveRoutes[slot] = false;
+                world.UpdateUnitNavigation(req.Unit, unit.Position, target, false, supportSurface: unit.SupportSurface);
+            }
             return false;
         }
 
@@ -1760,112 +1800,198 @@ public sealed class NavigationSystem : ISimulationSystem
 
             float speed = 6.0f;
             float radius = 1.0f;
+            float turnRate = 45.0f;
             TraversabilityCapabilities capabilities = TraversabilityCapabilities.DefaultVehicle;
             if (_catalog.TryGetProfile(unit.Definition, out UnitMovementProfile profile))
             {
                 speed = profile.Speed;
                 radius = profile.Radius;
                 capabilities = profile.Capabilities;
+                turnRate = profile.TurnRate;
             }
 
-            float remainingDistance = speed * Simulation.TickSeconds;
+            float maxTurnPerTick = (turnRate * (MathF.PI / 180f)) * Simulation.TickSeconds;
+            float currentHeading = 0f;
+            if (world.TryGetCombatState(unit.Id, out WorldState.CombatState cs))
+            {
+                currentHeading = cs.HullHeading;
+            }
+            float newHeading = currentHeading;
+            float remainingTurnBudget = maxTurnPerTick;
+
             Vector2 currentPos = unit.Position;
             int offset = slot * _tuning.MaxWaypointsPerRoute;
             int count = _routeCounts[slot];
             int idx = _routeIndices[slot];
             uint currentSurface = unit.SupportSurface;
+            Vector2 finalTarget = _unitFinalTargets[slot];
+            bool hasFinalFacing = _unitHasFinalFacing[slot];
+            float finalFacing = _unitFinalFacings[slot];
 
-            while (remainingDistance > 1e-5f && idx < count)
+            bool reachedFinalDestination = Vector2.Distance(currentPos, finalTarget) <= 0.05f;
+
+            if (reachedFinalDestination)
+            {
+                if (!hasFinalFacing)
+                {
+                    _unitHasActiveRoutes[slot] = false;
+                    _routeCounts[slot] = 0;
+                    _routeIndices[slot] = 0;
+                    _unitStatuses[slot] = PathRequestStatus.PathFound;
+                    world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, false, _currentTick, supportSurface, newHeading);
+                    continue;
+                }
+
+                float facingError = CombatSystem.ShorterArcDelta(currentHeading, finalFacing);
+                float absFacingError = MathF.Abs(facingError);
+
+                if (absFacingError <= _tuning.FinalFacingTolerance && absFacingError <= remainingTurnBudget)
+                {
+                    newHeading = finalFacing;
+                    _unitHasFinalFacing[slot] = false;
+                    _unitHasActiveRoutes[slot] = false;
+                    _routeCounts[slot] = 0;
+                    _routeIndices[slot] = 0;
+                    _unitStatuses[slot] = PathRequestStatus.PathFound;
+                    world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, false, _currentTick, supportSurface, newHeading);
+                    continue;
+                }
+                else
+                {
+                    float turnStep = MathF.Min(absFacingError, remainingTurnBudget);
+                    newHeading = CombatSystem.NormalizeYaw(currentHeading + MathF.Sign(facingError) * turnStep);
+                    world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, true, _currentTick, supportSurface, newHeading);
+                    continue;
+                }
+            }
+
+            while (idx < count && Vector2.DistanceSquared(currentPos, _routeWaypoints[offset + idx]) <= 1e-4f)
+            {
+                idx++;
+            }
+
+            if (idx < count)
             {
                 Vector2 targetWaypoint = _routeWaypoints[offset + idx];
                 Vector2 toWaypoint = targetWaypoint - currentPos;
                 float dist = toWaypoint.Length();
 
-                if (dist <= 1e-4f)
+                if (dist > 1e-4f)
                 {
-                    idx++;
-                    continue;
-                }
+                    float remainingDistance = speed * Simulation.TickSeconds;
 
-                Vector2 stepStart = currentPos;
-                Vector2 stepEnd = currentPos;
-                bool clear = false;
+                    while (remainingDistance > 1e-4f && idx < count)
+                    {
+                        targetWaypoint = _routeWaypoints[offset + idx];
+                        toWaypoint = targetWaypoint - currentPos;
+                        dist = toWaypoint.Length();
 
-                if (remainingDistance < dist)
-                {
-                    Vector2 step = toWaypoint * (remainingDistance / dist);
-                    Vector2 nextPos = currentPos + step;
-                    if (_grid.IsSegmentClear(currentPos, nextPos, radius, capabilities, currentSurface))
-                    {
-                        stepEnd = nextPos;
-                        remainingDistance = 0f;
-                        clear = true;
-                    }
-                    else
-                    {
-                        idx = count;
-                        remainingDistance = 0f;
-                        _unitStatuses[slot] = PathRequestStatus.NoPath;
-                    }
-                }
-                else
-                {
-                    if (_grid.IsSegmentClear(currentPos, targetWaypoint, radius, capabilities, currentSurface))
-                    {
-                        stepEnd = targetWaypoint;
-                        remainingDistance -= dist;
-                        idx++;
-                        clear = true;
-                    }
-                    else
-                    {
-                        idx = count;
-                        remainingDistance = 0f;
-                        _unitStatuses[slot] = PathRequestStatus.NoPath;
-                    }
-                }
-
-                if (clear)
-                {
-                    if (currentSurface == 0)
-                    {
-                        if ((capabilities & TraversabilityCapabilities.Bridge) != 0 && _grid.Bridges.Count > 0)
+                        if (dist <= 1e-4f)
                         {
-                            for (int b = 0; b < _grid.Bridges.Count; b++)
-                            {
-                                BridgeStructure bridge = _grid.Bridges[b];
-                                if (bridge.Contains(stepEnd))
-                                {
-                                    if (!bridge.Contains(stepStart) && (bridge.IsNearEntry(stepStart) || bridge.IsNearEntry(stepEnd)))
-                                    {
-                                        currentSurface = (uint)bridge.Id.Value;
-                                        break;
-                                    }
-                                }
-                            }
+                            idx++;
+                            continue;
                         }
-                    }
-                    else
-                    {
-                        if (_grid.TryGetBridge(new StructureId((int)currentSurface), out BridgeStructure bridge))
+
+                        float desiredHeading = MathF.Atan2(-toWaypoint.X, -toWaypoint.Y);
+                        float headingError = CombatSystem.ShorterArcDelta(newHeading, desiredHeading);
+                        float absHeadingError = MathF.Abs(headingError);
+
+                        if (absHeadingError > 1e-5f && remainingTurnBudget > 1e-5f)
                         {
-                            if (!bridge.Contains(stepEnd))
+                            float turnStep = MathF.Min(absHeadingError, remainingTurnBudget);
+                            newHeading = CombatSystem.NormalizeYaw(newHeading + MathF.Sign(headingError) * turnStep);
+                            remainingTurnBudget -= turnStep;
+                            headingError = CombatSystem.ShorterArcDelta(newHeading, desiredHeading);
+                            absHeadingError = MathF.Abs(headingError);
+                        }
+
+                        if (absHeadingError > _tuning.PivotSteerAngleThreshold)
+                        {
+                            // Heading discrepancy exceeds alignment threshold: halt linear displacement to pivot in place
+                            remainingDistance = 0f;
+                            break;
+                        }
+
+                        Vector2 stepStart = currentPos;
+                        Vector2 stepEnd = currentPos;
+                        bool clear = false;
+
+                        if (remainingDistance < dist)
+                        {
+                            Vector2 step = toWaypoint * (remainingDistance / dist);
+                            Vector2 nextPos = currentPos + step;
+                            if (_grid.IsSegmentClear(currentPos, nextPos, radius, capabilities, currentSurface))
                             {
-                                currentSurface = 0;
+                                stepEnd = nextPos;
+                                remainingDistance = 0f;
+                                clear = true;
+                            }
+                            else
+                            {
+                                idx = count;
+                                remainingDistance = 0f;
+                                _unitStatuses[slot] = PathRequestStatus.NoPath;
                             }
                         }
                         else
                         {
-                            currentSurface = 0;
+                            if (_grid.IsSegmentClear(currentPos, targetWaypoint, radius, capabilities, currentSurface))
+                            {
+                                stepEnd = targetWaypoint;
+                                remainingDistance -= dist;
+                                idx++;
+                                clear = true;
+                            }
+                            else
+                            {
+                                idx = count;
+                                remainingDistance = 0f;
+                                _unitStatuses[slot] = PathRequestStatus.NoPath;
+                            }
+                        }
+
+                        if (clear)
+                        {
+                            if (currentSurface == 0)
+                            {
+                                if ((capabilities & TraversabilityCapabilities.Bridge) != 0 && _grid.Bridges.Count > 0)
+                                {
+                                    for (int b = 0; b < _grid.Bridges.Count; b++)
+                                    {
+                                        BridgeStructure bridge = _grid.Bridges[b];
+                                        if (bridge.Contains(stepEnd))
+                                        {
+                                            if (!bridge.Contains(stepStart) && (bridge.IsNearEntry(stepStart) || bridge.IsNearEntry(stepEnd)))
+                                            {
+                                                currentSurface = (uint)bridge.Id.Value;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                if (_grid.TryGetBridge(new StructureId((int)currentSurface), out BridgeStructure bridge))
+                                {
+                                    if (!bridge.Contains(stepEnd))
+                                    {
+                                        currentSurface = 0;
+                                    }
+                                }
+                                else
+                                {
+                                    currentSurface = 0;
+                                }
+                            }
+
+                            currentPos = stepEnd;
                         }
                     }
-
-                    currentPos = stepEnd;
                 }
             }
 
             supportSurface = currentSurface;
-
             _routeIndices[slot] = idx;
             bool reachedEndOfChunk = idx >= count;
 
@@ -1886,17 +2012,48 @@ public sealed class NavigationSystem : ISimulationSystem
                 count = nextCount;
             }
 
-            Vector2 finalTarget = _unitFinalTargets[slot];
-            bool reachedFinalDestination = Vector2.Distance(currentPos, finalTarget) <= 0.05f;
+            reachedFinalDestination = Vector2.Distance(currentPos, finalTarget) <= 0.05f;
 
             if (reachedFinalDestination)
             {
-                _unitHasActiveRoutes[slot] = false;
-                _routeCounts[slot] = 0;
-                _routeIndices[slot] = 0;
-                _unitStatuses[slot] = PathRequestStatus.PathFound;
-                world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, false, _currentTick, supportSurface);
-                continue;
+                if (!hasFinalFacing)
+                {
+                    _unitHasActiveRoutes[slot] = false;
+                    _routeCounts[slot] = 0;
+                    _routeIndices[slot] = 0;
+                    _unitStatuses[slot] = PathRequestStatus.PathFound;
+                    world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, false, _currentTick, supportSurface, newHeading);
+                    continue;
+                }
+
+                float facingError = CombatSystem.ShorterArcDelta(newHeading, finalFacing);
+                float absFacingError = MathF.Abs(facingError);
+
+                if (absFacingError <= _tuning.FinalFacingTolerance && absFacingError <= remainingTurnBudget)
+                {
+                    newHeading = finalFacing;
+                    _unitHasFinalFacing[slot] = false;
+                    _unitHasActiveRoutes[slot] = false;
+                    _routeCounts[slot] = 0;
+                    _routeIndices[slot] = 0;
+                    _unitStatuses[slot] = PathRequestStatus.PathFound;
+                    world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, false, _currentTick, supportSurface, newHeading);
+                    continue;
+                }
+                else if (remainingTurnBudget > 1e-5f)
+                {
+                    float turnStep = MathF.Min(absFacingError, remainingTurnBudget);
+                    newHeading = CombatSystem.NormalizeYaw(newHeading + MathF.Sign(facingError) * turnStep);
+                    remainingTurnBudget -= turnStep;
+                    world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, true, _currentTick, supportSurface, newHeading);
+                    continue;
+                }
+                else
+                {
+                    // Full turn budget consumed by steering this tick; continue facing maneuver on next tick
+                    world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, true, _currentTick, supportSurface, newHeading);
+                    continue;
+                }
             }
 
             // Only enqueue next chunk if current chunk does not already reach the final destination
@@ -1912,11 +2069,11 @@ public sealed class NavigationSystem : ISimulationSystem
             {
                 _unitChunkWaitTicks[slot]++;
                 ChunkWaitTicks++;
-                world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, false, _currentTick, supportSurface);
+                world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, false, _currentTick, supportSurface, newHeading);
             }
             else
             {
-                world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, true, _currentTick, supportSurface);
+                world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, true, _currentTick, supportSurface, newHeading);
             }
         }
     }

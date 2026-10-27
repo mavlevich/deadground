@@ -12,9 +12,9 @@ public sealed class HierarchicalNavigationTests
     {
         private readonly Dictionary<ushort, UnitMovementProfile> _profiles = new();
 
-        public TestMovementCatalog Register(ushort definition, float speed, float radius)
+        public TestMovementCatalog Register(ushort definition, float speed, float radius, float turnRate = 360f, TraversabilityCapabilities capabilities = TraversabilityCapabilities.DefaultVehicle)
         {
-            _profiles[definition] = new UnitMovementProfile(speed, radius);
+            _profiles[definition] = new UnitMovementProfile(speed, radius, capabilities, turnRate);
             return this;
         }
 
@@ -101,7 +101,7 @@ public sealed class HierarchicalNavigationTests
 
         sim.TryEnqueue(1, new MoveCommand(1, 0, unit, target));
 
-        for (int i = 0; i < 300; i++)
+        for (int i = 0; i < 350; i++)
         {
             sim.Step();
             UnitState state = world.GetUnitAt(0);
@@ -313,7 +313,7 @@ public sealed class HierarchicalNavigationTests
         // Order 2: replacement order during active planning to open area (250, 200)
         sim.TryEnqueue(1, new MoveCommand(2, 0, unit, new Vector2(250f, 200f)));
 
-        for (int i = 0; i < 100; i++)
+        for (int i = 0; i < 150; i++)
         {
             sim.Step();
             UnitState state = world.GetUnitAt(0);
