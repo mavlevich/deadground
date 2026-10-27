@@ -97,9 +97,10 @@ diagnostic tooltip for impassable obstacles (water, dense forest, buildings, ins
 and split green/red for mixed selections ("Destination suitable for X of Y units."). Right-clicking
 places an animated 3D destination marker that tracks order lifecycle (Sent -> Processing -> PathFound / Failed / Partial).
 Holding RMB and dragging sets a final hull facing direction with a 3D arrow preview before dispatch, with Escape canceling unfinished gestures without issuing an order.
-Vehicles use data-defined turn rates and currently stop to pivot at route bends before continuing.
-They rotate to their commanded facing upon arrival. This temporary steering model also applies to
-wheeled vehicles. Smooth moving turns and explicit reverse orders are planned.
+Holding R while clicking or dragging RMB issues a reverse move order with [REVERSE] cursor badge and reverse track/wheel rotation.
+Vehicles use kinematic movement profiles with data-defined speed, reverse speed, acceleration, deceleration, turn rate, pivot capability, and minimum turn radius.
+Tracked vehicles pivot in place when needed, while wheeled vehicles steer with curvature limited by minimum turning radius and cannot rotate while stationary.
+Smooth lookahead path following steers along polyline waypoints without stopping on gentle curves, and on-the-fly order redirection preserves vehicle speed and momentum.
 `Ctrl+1..9` or `Cmd+1..9` (on every platform) stores a control group, `Shift+1..9` adds to it, `1..9` selects it,
 and pressing the same group number twice within 0.35 s centers the camera on the group. WASD or arrow keys
 smoothly pan the camera with normalized diagonal speed scaled by zoom. The mouse wheel smoothly zooms,

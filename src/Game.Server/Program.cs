@@ -56,6 +56,12 @@ for (int i = 0; i < args.Length; i++)
     {
         excludeRecon = true;
     }
+    else if (args[i] == "--generate-steering-telemetry" && i + 1 < args.Length)
+    {
+        string outDir = args[i + 1];
+        DeadGround.Server.VehicleSteeringTelemetry.GenerateScenarios(outDir);
+        return;
+    }
 }
 
 if (battleReport)

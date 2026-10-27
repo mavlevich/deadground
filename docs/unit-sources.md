@@ -139,14 +139,14 @@ Balance, revisit after play.
      and penetrate flank armor at all combat ranges.
   3. Recon contest: M151A2 is armed with 7.62 mm M60 on an M4 pedestal mount (9 mm near, 4 mm far). It penetrates
      BRDM-2 flank armor (8 mm) at close ambush range (< 160 m), while remaining unable to penetrate front armor.
-- Turn rates for pivot turns (TDD section 9.5 stage 1):
-  T-62: 30.0 deg/s (estimate: ~12 s for full 360 pivot turn).
-  M60A1: 36.0 deg/s (estimate: ~10 s for full 360 pivot turn with cross-drive transmission).
-  BTR-70: 40.0 deg/s (estimate: stage 1 pivot in place simplification for 8x8 wheeled APC).
-  M113A1: 36.0 deg/s (estimate: ~10 s for full pivot turn).
-  BRDM-2: 45.0 deg/s (estimate: stage 1 pivot in place simplification for 4x4 scout vehicle).
-  M151A2: 60.0 deg/s (estimate: stage 1 pivot in place simplification for light utility 4x4).
-  Prototype units: prototype_vehicle 45.0 deg/s, recon_vehicle 50.0 deg/s, prototype_tank 30.0 deg/s, apc 40.0 deg/s.
+- Turn rates, pivot capability, minimum turning radius, and acceleration (TDD section 9.5):
+  T-62: 30.0 deg/s, pivot yes, min radius 0.0 m, accel 2.0 m/s^2 (estimate), decel 4.0 m/s^2 (estimate).
+  M60A1: 36.0 deg/s, pivot yes, min radius 0.0 m, accel 2.2 m/s^2 (estimate), decel 4.5 m/s^2 (estimate).
+  BTR-70: 40.0 deg/s, pivot no, min radius 9.5 m (estimate, turning circle ~19 m [7]), accel 3.0 m/s^2 (estimate), decel 5.0 m/s^2 (estimate).
+  M113A1: 36.0 deg/s, pivot yes, min radius 0.0 m, accel 2.5 m/s^2 (estimate), decel 4.5 m/s^2 (estimate).
+  BRDM-2: 45.0 deg/s, pivot no, min radius 7.5 m (estimate, turning circle ~15 m [11]), accel 3.5 m/s^2 (estimate), decel 5.5 m/s^2 (estimate).
+  M151A2: 60.0 deg/s, pivot no, min radius 5.5 m (estimate, turning radius ~5.5 m [14]), accel 4.0 m/s^2 (estimate), decel 6.0 m/s^2 (estimate).
+  Prototype units: prototype_vehicle (pivot yes, min radius 0.0 m, reverse 3.0 m/s, accel 3.0, decel 5.0), recon_vehicle (pivot no, min radius 5.0 m, reverse 3.5 m/s, accel 4.0, decel 6.0), prototype_tank (pivot yes, min radius 0.0 m, reverse 2.5 m/s, accel 2.0, decel 4.0), apc (pivot yes, min radius 0.0 m, reverse 3.2 m/s, accel 2.5, decel 4.5). All values without direct historical sources are gameplay estimates.
 
 ## Sources
 

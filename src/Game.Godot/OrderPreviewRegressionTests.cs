@@ -34,6 +34,8 @@ internal static class OrderPreviewRegressionTests
         CheckFacingGesture_CameraPanPreservesWorldDestination(main);
         CheckFacingGesture_ControlGroupRecallCancelsGesture(main);
         CheckFacingGesture_UnitDeletionCancelsWithoutMouseMotion(main);
+        CheckReverseMove_PreviewAndDispatch(main);
+        CheckReverseMove_ThroughMainUnhandledInput(main);
     }
 
     private static void CheckMixedSelectionPreviewAndClick(Main main)
@@ -1312,6 +1314,117 @@ internal static class OrderPreviewRegressionTests
         }
     }
 
+    private static void CheckReverseMove_PreviewAndDispatch(Main main)
+    {
+        Node3D parent = new();
+        main.AddChild(parent);
+        UnitViewSet? unitViews = null;
+        try
+        {
+            HeightMap map = HeightMap.CreatePrototype();
+            UnitCatalog catalog = PrototypeScenario.LoadCatalog();
+            StaticGeometry geo = new(map, []);
+
+            unitViews = new UnitViewSet(parent, map, catalog);
+            Camera3D camera = CreateTestCamera(parent, new Vector3(30, 0, 30), 80f);
+
+            OrderCursorOverlay overlay = new();
+            parent.AddChild(overlay);
+            OrderDestinationView destinationView = new();
+            parent.AddChild(destinationView);
+
+            OrderPreviewController controller = new(geo, map, catalog, overlay, destinationView);
+
+            ClientReplica replica = new();
+            byte[] bytes = new byte[WireProtocol.MaxMessageSize];
+            OwnUnitObservation u1 = new(new EntityId(101), 0, new NumericsVector2(20, 20), 0);
+            ApplyWithContacts(replica, bytes, 1, 1, [u1], []);
+            unitViews.Sync(replica, 1.0);
+            unitViews.Selected.Clear();
+            unitViews.Selected.Add(u1.Id);
+
+            TestGameSession session = new() { Replica = replica };
+            Vector2 screenPos = camera.UnprojectPosition(new Vector3(20, 0, 35));
+
+            Require(controller.BeginFacingGesture(camera, screenPos, unitViews, session, out _, MoveMode.Reverse), "Reverse BeginFacingGesture should succeed for unit");
+            Require(controller.GestureMode == MoveMode.Reverse, "Gesture mode should be Reverse");
+
+            Require(controller.EndFacingGesture(camera, screenPos, unitViews, session, out _), "EndFacingGesture should dispatch reverse move");
+            Require(session.SubmittedMoves.Count == 1, "One move should be submitted");
+            Require(session.SubmittedMoves[0].Mode == MoveMode.Reverse, "Submitted move must have Mode == MoveMode.Reverse");
+            Require(session.SubmittedMoves[0].Unit == new EntityId(101), "Submitted move unit id mismatch");
+        }
+        finally
+        {
+            unitViews?.Clear();
+            parent.QueueFree();
+        }
+    }
+
+    private static void CheckReverseMove_ThroughMainUnhandledInput(Main main)
+    {
+        if (main.Session.Replica.OwnUnits.Length == 0) return;
+
+        OpsMovementCatalog movementCatalog = new(main.Catalog);
+        OwnUnitObservation? targetUnit = null;
+        foreach (OwnUnitObservation u in main.Session.Replica.OwnUnits)
+        {
+            if (movementCatalog.TryGetProfile(u.Definition, out UnitMovementProfile p) && p.ReverseSpeed > 0f)
+            {
+                targetUnit = u;
+                break;
+            }
+        }
+        if (targetUnit is null) return;
+
+        EntityId unitId = targetUnit.Value.Id;
+        main.UnitViews.Selected.Clear();
+        main.UnitViews.Selected.Add(unitId);
+        main.UnitViews.UpdateSelectionVisuals();
+
+        Vector3 unitPos3D = main.UnitViews.Views.TryGetValue(unitId, out UnitView? view)
+            ? view.Root.Position
+            : new Vector3(targetUnit.Value.Position.X, 0f, targetUnit.Value.Position.Y);
+        Vector2 screenPos = main.Camera.UnprojectPosition(unitPos3D + new Vector3(2f, 0f, 2f));
+
+        // 1. Press Key.R into input singleton
+        using InputEventKey rDown = new() { Keycode = Key.R, Pressed = true, Echo = false };
+        Input.ParseInputEvent(rDown);
+        Input.FlushBufferedEvents();
+
+        try
+        {
+            // 2. Dispatch RMB press through Main._UnhandledInput
+            using InputEventMouseButton rmbDown = new()
+            {
+                ButtonIndex = MouseButton.Right,
+                Pressed = true,
+                Position = screenPos
+            };
+            main._UnhandledInput(rmbDown);
+
+            Require(main.PreviewController.IsFacingGestureActive, "Facing gesture must be active after R + RMB");
+            Require(main.PreviewController.GestureMode == MoveMode.Reverse, "GestureMode must be Reverse when R is pressed");
+
+            // 3. Dispatch RMB release through Main._UnhandledInput
+            using InputEventMouseButton rmbUp = new()
+            {
+                ButtonIndex = MouseButton.Right,
+                Pressed = false,
+                Position = screenPos
+            };
+            main._UnhandledInput(rmbUp);
+
+            Require(!main.PreviewController.IsFacingGestureActive, "Facing gesture must end after RMB release");
+        }
+        finally
+        {
+            using InputEventKey rUp = new() { Keycode = Key.R, Pressed = false, Echo = false };
+            Input.ParseInputEvent(rUp);
+            Input.FlushBufferedEvents();
+        }
+    }
+
     private static Camera3D CreateTestCamera(Node3D parent, Vector3 focus, float size)
     {
         Camera3D camera = new()
@@ -1360,14 +1473,16 @@ internal static class OrderPreviewRegressionTests
         public int AssignedPlayerId => 1;
         public string StatusDescription => "TestSession";
 
-        public List<(EntityId Unit, NumericsVector2 Target, uint Sequence, float? FinalFacing)> SubmittedMoves { get; } = new();
+        public List<(EntityId Unit, NumericsVector2 Target, uint Sequence, float? FinalFacing, MoveMode Mode)> SubmittedMoves { get; } = new();
 
-        public bool Move(EntityId unit, NumericsVector2 target) => Move(unit, target, null);
+        public bool Move(EntityId unit, NumericsVector2 target) => Move(unit, target, null, MoveMode.Forward);
 
-        public bool Move(EntityId unit, NumericsVector2 target, float? finalFacing = null)
+        public bool Move(EntityId unit, NumericsVector2 target, float? finalFacing = null) => Move(unit, target, finalFacing, MoveMode.Forward);
+
+        public bool Move(EntityId unit, NumericsVector2 target, float? finalFacing = null, MoveMode mode = MoveMode.Forward)
         {
             LastSubmittedCommandSequence++;
-            SubmittedMoves.Add((unit, target, LastSubmittedCommandSequence, finalFacing));
+            SubmittedMoves.Add((unit, target, LastSubmittedCommandSequence, finalFacing, mode));
             return true;
         }
 

@@ -1053,7 +1053,9 @@ public partial class Main : Node3D
                     return;
                 }
 
-                if (_previewController.BeginFacingGesture(_camera, mouse.Position, _unitViews, _session, out string failMsg))
+                bool isReverse = Input.IsKeyPressed(Key.R);
+                MoveMode moveMode = isReverse ? MoveMode.Reverse : MoveMode.Forward;
+                if (_previewController.BeginFacingGesture(_camera, mouse.Position, _unitViews, _session, out string failMsg, moveMode))
                 {
                     GetViewport().SetInputAsHandled();
                 }

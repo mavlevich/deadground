@@ -9,7 +9,12 @@ public readonly record struct UnitMovementProfile(
     float Speed,
     float Radius,
     TraversabilityCapabilities Capabilities = TraversabilityCapabilities.DefaultVehicle,
-    float TurnRate = 45.0f)
+    float TurnRate = 45.0f,
+    float ReverseSpeed = 2.5f,
+    float Acceleration = 0.0f,
+    float Deceleration = 0.0f,
+    bool CanPivot = true,
+    float MinTurnRadius = 0.0f)
 {
     public MovementClass MovementClass => MovementClassExtensions.FromRadius(Radius);
 }

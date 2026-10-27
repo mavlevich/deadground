@@ -85,6 +85,32 @@ public sealed class TransportTests
     }
 
     [Fact]
+    public void MoveCodec_RoundTripsMoveMode_AndRejectsInvalidMode()
+    {
+        Span<byte> bytes = stackalloc byte[WireProtocol.MoveSize];
+
+        // 1. MoveMode.Forward
+        MoveCommand forwardCmd = new(14, 5, new EntityId(2), new Vector2(10f, 20f), FinalFacing: 1.0f, Mode: MoveMode.Forward);
+        WireProtocol.WriteMove(bytes, forwardCmd);
+        Assert.True(WireProtocol.TryReadMove(bytes, out MoveCommand readForward));
+        Assert.Equal(forwardCmd, readForward);
+        Assert.Equal(MoveMode.Forward, readForward.Mode);
+
+        // 2. MoveMode.Reverse
+        MoveCommand reverseCmd = new(15, 5, new EntityId(2), new Vector2(10f, 20f), FinalFacing: 1.0f, Mode: MoveMode.Reverse);
+        WireProtocol.WriteMove(bytes, reverseCmd);
+        Assert.True(WireProtocol.TryReadMove(bytes, out MoveCommand readReverse));
+        Assert.Equal(reverseCmd, readReverse);
+        Assert.Equal(MoveMode.Reverse, readReverse.Mode);
+
+        // 3. Invalid Mode byte value (e.g. 2 or 255)
+        bytes[27] = 2;
+        Assert.False(WireProtocol.TryReadMove(bytes, out _));
+        bytes[27] = 255;
+        Assert.False(WireProtocol.TryReadMove(bytes, out _));
+    }
+
+    [Fact]
     public void ReplicaRejectsIncompleteAndOldSnapshotsWithoutChangingState()
     {
         ClientReplica replica = new(4);

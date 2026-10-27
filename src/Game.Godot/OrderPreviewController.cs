@@ -85,12 +85,14 @@ internal sealed class OrderPreviewController
     private Vector3 _facingGestureTarget3D;
     private System.Numerics.Vector2 _facingGestureTarget2D;
     private uint _facingGestureHitSurface;
+    private MoveMode _facingGestureMode = MoveMode.Forward;
     private readonly HashSet<EntityId> _facingGestureUnits = new();
 
     public bool IsFacingGestureActive => _isFacingGestureActive;
     public bool IsFacingDetermined => _isFacingDetermined;
     public float GestureFacing => _gestureFacing;
     public Vector3 GestureTarget3D => _facingGestureTarget3D;
+    public MoveMode GestureMode => _facingGestureMode;
 
     public OrderPreviewController(
         StaticGeometry geometry,
@@ -216,6 +218,10 @@ internal sealed class OrderPreviewController
         System.Numerics.Vector2 target2D = new(hitPoint3D.X, hitPoint3D.Z);
         _profileCacheCount = 0;
 
+        bool isReverse = _isFacingGestureActive
+            ? _facingGestureMode == MoveMode.Reverse
+            : Input.IsKeyPressed(Key.R);
+
         int totalCount = 0;
         int validCount = 0;
         DestinationBlockReason primaryReason = DestinationBlockReason.None;
@@ -232,10 +238,21 @@ internal sealed class OrderPreviewController
             totalCount++;
             float radius = 1.0f;
             TraversabilityCapabilities capabilities = TraversabilityCapabilities.DefaultVehicle;
+            float reverseSpeed = 2.5f;
             if (_movementCatalog.TryGetProfile(own.Definition, out UnitMovementProfile profile))
             {
                 radius = profile.Radius;
                 capabilities = profile.Capabilities;
+                reverseSpeed = profile.ReverseSpeed;
+            }
+
+            if (isReverse && reverseSpeed <= 0f)
+            {
+                if (primaryReason == DestinationBlockReason.None)
+                {
+                    primaryReason = DestinationBlockReason.NoReverseGear;
+                }
+                continue;
             }
 
             ProfileKey key = new(radius, capabilities, own.SupportSurface);
@@ -316,7 +333,8 @@ internal sealed class OrderPreviewController
             validity: combinedValidity,
             reason: primaryReason,
             validCount: validCount,
-            totalCount: totalCount);
+            totalCount: totalCount,
+            isReverse: isReverse);
 
         _overlay.UpdatePosition(mousePos, viewportSize);
 
@@ -336,13 +354,35 @@ internal sealed class OrderPreviewController
         Vector2 mousePos,
         UnitViewSet unitViews,
         IGameSession session,
-        out string failMessage)
+        out string failMessage,
+        MoveMode mode = MoveMode.Forward)
     {
         failMessage = string.Empty;
 
         if (unitViews.Selected.Count == 0)
         {
             return false;
+        }
+
+        if (mode == MoveMode.Reverse)
+        {
+            int revCapable = 0;
+            foreach (EntityId unitId in unitViews.Selected)
+            {
+                if (session.Replica.TryGetOwnUnit(unitId, out OwnUnitObservation own) &&
+                    _movementCatalog.TryGetProfile(own.Definition, out UnitMovementProfile profile) &&
+                    profile.ReverseSpeed > 0f)
+                {
+                    revCapable++;
+                }
+            }
+
+            if (revCapable == 0)
+            {
+                failMessage = "Cannot move: Unit cannot move in reverse.";
+                _notification?.ShowNotification(failMessage);
+                return false;
+            }
         }
 
         if (!TryRaycast(camera, mousePos, out Vector3 hitPoint3D, out uint hitSurface, out _))
@@ -366,10 +406,21 @@ internal sealed class OrderPreviewController
 
             float radius = 1.0f;
             TraversabilityCapabilities capabilities = TraversabilityCapabilities.DefaultVehicle;
+            float reverseSpeed = 2.5f;
             if (_movementCatalog.TryGetProfile(own.Definition, out UnitMovementProfile profile))
             {
                 radius = profile.Radius;
                 capabilities = profile.Capabilities;
+                reverseSpeed = profile.ReverseSpeed;
+            }
+
+            if (mode == MoveMode.Reverse && reverseSpeed <= 0f)
+            {
+                if (primaryBlockedReason == DestinationBlockReason.None)
+                {
+                    primaryBlockedReason = DestinationBlockReason.NoReverseGear;
+                }
+                continue;
             }
 
             DestinationEvaluationResult res = _evaluator.Evaluate(target2D, radius, capabilities, hitSurface, own.Position);
@@ -400,6 +451,7 @@ internal sealed class OrderPreviewController
         _isFacingGestureActive = true;
         _isFacingDetermined = false;
         _gestureFacing = 0f;
+        _facingGestureMode = mode;
         _facingGestureStartScreenPos = mousePos;
         _facingGestureHitSurface = hitSurface;
         _facingGestureTarget2D = target2D;
@@ -494,14 +546,16 @@ internal sealed class OrderPreviewController
         _destinationView.HideFacingArrow();
         bool hadFacing = _isFacingDetermined;
         float facing = _gestureFacing;
+        MoveMode mode = _facingGestureMode;
         System.Numerics.Vector2 savedTarget2D = _facingGestureTarget2D;
         uint savedHitSurface = _facingGestureHitSurface;
 
         _isFacingGestureActive = false;
         _isFacingDetermined = false;
         _facingGestureUnits.Clear();
+        _facingGestureMode = MoveMode.Forward;
 
-        return ExecuteMoveToWorldTarget(savedTarget2D, savedHitSurface, unitViews, session, out notificationMessage, hadFacing ? facing : null);
+        return ExecuteMoveToWorldTarget(savedTarget2D, savedHitSurface, unitViews, session, out notificationMessage, hadFacing ? facing : null, mode);
     }
 
     public void CancelFacingGesture()
@@ -511,6 +565,7 @@ internal sealed class OrderPreviewController
         _isFacingGestureActive = false;
         _isFacingDetermined = false;
         _facingGestureUnits.Clear();
+        _facingGestureMode = MoveMode.Forward;
         _destinationView.HideFacingArrow();
         _destinationView.ClearSubmittedMarker();
         _destinationView.HideGhost();
@@ -523,7 +578,7 @@ internal sealed class OrderPreviewController
         IGameSession session,
         out string notificationMessage)
     {
-        return ExecuteMoveClick(camera, mousePos, unitViews, session, out notificationMessage, null);
+        return ExecuteMoveClick(camera, mousePos, unitViews, session, out notificationMessage, null, MoveMode.Forward);
     }
 
     public bool ExecuteMoveClick(
@@ -532,7 +587,8 @@ internal sealed class OrderPreviewController
         UnitViewSet unitViews,
         IGameSession session,
         out string notificationMessage,
-        float? finalFacing)
+        float? finalFacing,
+        MoveMode mode = MoveMode.Forward)
     {
         notificationMessage = string.Empty;
 
@@ -547,7 +603,7 @@ internal sealed class OrderPreviewController
         }
 
         System.Numerics.Vector2 target2D = new(hitPoint3D.X, hitPoint3D.Z);
-        return ExecuteMoveToWorldTarget(target2D, hitSurface, unitViews, session, out notificationMessage, finalFacing);
+        return ExecuteMoveToWorldTarget(target2D, hitSurface, unitViews, session, out notificationMessage, finalFacing, mode);
     }
 
     public bool ExecuteMoveToWorldTarget(
@@ -556,7 +612,8 @@ internal sealed class OrderPreviewController
         UnitViewSet unitViews,
         IGameSession session,
         out string notificationMessage,
-        float? finalFacing)
+        float? finalFacing,
+        MoveMode mode = MoveMode.Forward)
     {
         notificationMessage = string.Empty;
 
@@ -581,10 +638,25 @@ internal sealed class OrderPreviewController
 
             float radius = 1.0f;
             TraversabilityCapabilities capabilities = TraversabilityCapabilities.DefaultVehicle;
+            float reverseSpeed = 2.5f;
             if (_movementCatalog.TryGetProfile(own.Definition, out UnitMovementProfile profile))
             {
                 radius = profile.Radius;
                 capabilities = profile.Capabilities;
+                reverseSpeed = profile.ReverseSpeed;
+            }
+
+            if (mode == MoveMode.Reverse && reverseSpeed <= 0f)
+            {
+                if (skippedCount < _skippedUnitsBuffer.Length)
+                {
+                    _skippedUnitsBuffer[skippedCount++] = unitId;
+                }
+                if (primaryBlockedReason == DestinationBlockReason.None)
+                {
+                    primaryBlockedReason = DestinationBlockReason.NoReverseGear;
+                }
+                continue;
             }
 
             DestinationEvaluationResult res = _evaluator.Evaluate(target2D, radius, capabilities, hitSurface, own.Position);
@@ -636,7 +708,7 @@ internal sealed class OrderPreviewController
         for (int i = 0; i < validCount; i++)
         {
             ValidUnitOrder order = _validUnitsBuffer[i];
-            if (session.Move(order.UnitId, order.Target, finalFacing))
+            if (session.Move(order.UnitId, order.Target, finalFacing, mode))
             {
                 sentMove++;
                 uint seq = session.LastSubmittedCommandSequence;

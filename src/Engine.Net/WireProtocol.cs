@@ -19,7 +19,7 @@ public enum HandshakeReason : byte
 public static class WireProtocol
 {
     public const byte Version = MatchSetup.CurrentProtocolVersion;
-    public const int MoveSize = 27;
+    public const int MoveSize = 28;
     public const int AttackSize = 18;
     public const int SetFireStanceSize = 15;
     public const int CommandResultSize = 11;
@@ -101,6 +101,7 @@ public static class WireProtocol
             bytes[22] = 0;
             BinaryPrimitives.WriteSingleLittleEndian(bytes[23..], 0f);
         }
+        bytes[27] = (byte)command.Mode;
     }
 
     public static bool TryReadMove(ReadOnlySpan<byte> bytes, out MoveCommand command)
@@ -121,8 +122,11 @@ public static class WireProtocol
             if (!float.IsFinite(facing)) return false;
             finalFacing = facing;
         }
+        byte modeByte = bytes[27];
+        if (modeByte > 1) return false;
+        MoveMode mode = (MoveMode)modeByte;
         if (sequence == 0 || id == 0 || tick < 0 || !float.IsFinite(target.X) || !float.IsFinite(target.Y)) return false;
-        command = new MoveCommand(sequence, tick, new EntityId(id), target, finalFacing);
+        command = new MoveCommand(sequence, tick, new EntityId(id), target, finalFacing, mode);
         return true;
     }
 

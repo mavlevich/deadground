@@ -804,9 +804,27 @@ public sealed class NavigationGrid
                         {
                             return false;
                         }
-                        if (endOnBridge && bridgeOnDeck.GetSideClearance(end) < effectiveRadius)
+                        if (bridgeOnDeck.GetSideClearance(bridgePoint) < effectiveRadius)
                         {
                             return false;
+                        }
+                        float uStart = Vector2.Dot(start - bridgeOnDeck.Start, bridgeOnDeck.Direction);
+                        float uEnd = Vector2.Dot(end - bridgeOnDeck.Start, bridgeOnDeck.Direction);
+                        if ((uStart < 0f && uEnd >= 0f) || (uStart >= 0f && uEnd < 0f))
+                        {
+                            float denom = MathF.Abs(uEnd - uStart);
+                            float t = denom > 1e-4f ? MathF.Abs(uStart) / denom : 0f;
+                            Vector2 crossPoint = start + t * (end - start);
+                            if (bridgeOnDeck.GetSideClearance(crossPoint) < effectiveRadius)
+                                return false;
+                        }
+                        else if ((uStart > bridgeOnDeck.Length && uEnd <= bridgeOnDeck.Length) || (uStart <= bridgeOnDeck.Length && uEnd > bridgeOnDeck.Length))
+                        {
+                            float denom = MathF.Abs(uEnd - uStart);
+                            float t = denom > 1e-4f ? MathF.Abs(bridgeOnDeck.Length - uStart) / denom : 0f;
+                            Vector2 crossPoint = start + t * (end - start);
+                            if (bridgeOnDeck.GetSideClearance(crossPoint) < effectiveRadius)
+                                return false;
                         }
                         bridgeCovered = true;
                     }
@@ -829,9 +847,27 @@ public sealed class NavigationGrid
                         // Only if transitioning through designated ramp entries is this a bridge ramp traversal
                         if (bridge.IsNearEntry(bridgePoint, threshold) && bridge.IsNearEntry(landPoint, threshold))
                         {
-                            if (endOnBridge && bridge.GetSideClearance(end) < effectiveRadius)
+                            if (bridge.GetSideClearance(bridgePoint) < effectiveRadius)
                             {
                                 return false;
+                            }
+                            float uStart = Vector2.Dot(start - bridge.Start, bridge.Direction);
+                            float uEnd = Vector2.Dot(end - bridge.Start, bridge.Direction);
+                            if ((uStart < 0f && uEnd >= 0f) || (uStart >= 0f && uEnd < 0f))
+                            {
+                                float denom = MathF.Abs(uEnd - uStart);
+                                float t = denom > 1e-4f ? MathF.Abs(uStart) / denom : 0f;
+                                Vector2 crossPoint = start + t * (end - start);
+                                if (bridge.GetSideClearance(crossPoint) < effectiveRadius)
+                                    return false;
+                            }
+                            else if ((uStart > bridge.Length && uEnd <= bridge.Length) || (uStart <= bridge.Length && uEnd > bridge.Length))
+                            {
+                                float denom = MathF.Abs(uEnd - uStart);
+                                float t = denom > 1e-4f ? MathF.Abs(bridge.Length - uStart) / denom : 0f;
+                                Vector2 crossPoint = start + t * (end - start);
+                                if (bridge.GetSideClearance(crossPoint) < effectiveRadius)
+                                    return false;
                             }
                             bridgeCovered = true;
                             break;
