@@ -31,13 +31,12 @@ public sealed class BridgeCrossingTests
         ushort footIdx = catalog.RequireDefinitionIndex("infantry_foot");
         ushort miniIdx = catalog.RequireDefinitionIndex("mini_vehicle");
 
-        EntityId footId = world.CreateUnit(1, footIdx, new Vector2(130f, 70f), footDef.Speed, footDef.MaxHealth);
-        EntityId miniId = world.CreateUnit(1, miniIdx, new Vector2(130f, 70f), miniDef.Speed, miniDef.MaxHealth);
+        EntityId footId = world.CreateUnit(1, footIdx, new Vector2(130f, 68f), footDef.Speed, footDef.MaxHealth);
+        EntityId miniId = world.CreateUnit(1, miniIdx, new Vector2(130f, 72f), miniDef.Speed, miniDef.MaxHealth);
 
-        // Command both units to move across the forest to (180, 70)
-        Vector2 goal = new(180f, 70f);
-        Assert.True(sim.TryEnqueue(1, new MoveCommand(1, sim.Tick, footId, goal)));
-        Assert.True(sim.TryEnqueue(1, new MoveCommand(2, sim.Tick, miniId, goal)));
+        // Command both units to move across the forest to (180, 68) and (180, 72)
+        Assert.True(sim.TryEnqueue(1, new MoveCommand(1, sim.Tick, footId, new Vector2(180f, 68f))));
+        Assert.True(sim.TryEnqueue(1, new MoveCommand(2, sim.Tick, miniId, new Vector2(180f, 72f))));
 
         bool footTraversedForestInterior = false;
         bool miniDetouredAroundForest = false;
@@ -178,7 +177,7 @@ public sealed class BridgeCrossingTests
     [Fact]
     public void Clarification2_WireProtocol_Version16_RoundTripContact_PreservesSupportSurface_NoEntityIdLeak()
     {
-        Assert.Equal(19, WireProtocol.Version);
+        Assert.Equal(MatchSetup.CurrentProtocolVersion, WireProtocol.Version);
         Assert.Equal(28, WireProtocol.ContactSize);
 
         byte[] snapshotBuffer = new byte[WireProtocol.MaxMessageSize];

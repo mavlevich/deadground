@@ -11,7 +11,8 @@ public enum PathRequestStatus : byte
     PathFound = 3,
     NoPath = 4,
     InvalidDestination = 5,
-    CapacityExceeded = 6
+    CapacityExceeded = 6,
+    WaitingForClearance = 7
 }
 
 /// <summary>

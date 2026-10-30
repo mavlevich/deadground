@@ -93,6 +93,7 @@ internal sealed partial class SelectionCard : PanelContainer
     private AttackExecutionStatus _cachedSingleAttackStatus;
     private ContactId _cachedSingleTargetContact;
     private FireStance _cachedSingleStance;
+    private PathRequestStatus _cachedSingleNavStatus;
     private int _cachedSingleControlGroup = -1;
 
     // Multiple units cached state
@@ -132,6 +133,7 @@ internal sealed partial class SelectionCard : PanelContainer
             _cachedSingleAttackStatus == ownUnit.AttackStatus &&
             _cachedSingleTargetContact == ownUnit.TargetContactId &&
             _cachedSingleStance == ownUnit.Stance &&
+            _cachedSingleNavStatus == ownUnit.NavStatus &&
             _cachedSingleControlGroup == controlGroup)
         {
             return;
@@ -146,6 +148,7 @@ internal sealed partial class SelectionCard : PanelContainer
         _cachedSingleAttackStatus = ownUnit.AttackStatus;
         _cachedSingleTargetContact = ownUnit.TargetContactId;
         _cachedSingleStance = ownUnit.Stance;
+        _cachedSingleNavStatus = ownUnit.NavStatus;
         _cachedSingleControlGroup = controlGroup;
 
         UnitDefinition? def = ownUnit.Definition < _catalog.Units.Length ? _catalog.Units[ownUnit.Definition] : null;
@@ -195,7 +198,8 @@ internal sealed partial class SelectionCard : PanelContainer
             _ => ownUnit.AttackStatus.ToString()
         };
 
-        _line3Label.Text = $"Stance: {FormatStance(ownUnit.Stance)} | Attack Order: {attackStr}";
+        string navStr = ownUnit.NavStatus == PathRequestStatus.WaitingForClearance ? " [Waiting for clearance]" : "";
+        _line3Label.Text = $"Stance: {FormatStance(ownUnit.Stance)} | Attack Order: {attackStr}{navStr}";
         _line3Label.Modulate = ownUnit.AttackStatus switch
         {
             AttackExecutionStatus.Aiming => new Color("edc76b"),

@@ -213,6 +213,7 @@ internal sealed class UnitView
     private Vector3 _lastDrapedPosition;
     private bool _ringsDraped;
     private bool _isSelected;
+    private readonly Vector3[] _ringVertices = new Vector3[144];
     internal const float MinRedrapeDistance = 3.0f;
     private const float MinRedrapeDistanceSquared = MinRedrapeDistance * MinRedrapeDistance;
     internal int RingsRebuildCount { get; private set; }
@@ -305,12 +306,13 @@ internal sealed class UnitView
         mesh.ClearSurfaces();
         if (radius <= 0f) return;
 
-        mesh.SurfaceBegin(Mesh.PrimitiveType.Lines, material);
         const int segments = 72;
         const float step = Mathf.Tau / segments;
         float cx = Root.Position.X;
         float cy = Root.Position.Y;
         float cz = Root.Position.Z;
+
+        int vertexCount = 0;
 
         for (int i = 0; i < segments; i++)
         {
@@ -330,14 +332,22 @@ internal sealed class UnitView
 
                 float wy0 = _map.GetHeight(cwx0, cwz0) + 0.12f;
                 float wy1 = _map.GetHeight(cwx1, cwz1) + 0.12f;
-                mesh.SurfaceAddVertex(new Vector3(cwx0 - cx, wy0 - cy, cwz0 - cz));
-                mesh.SurfaceAddVertex(new Vector3(cwx1 - cx, wy1 - cy, cwz1 - cz));
+                _ringVertices[vertexCount++] = new Vector3(cwx0 - cx, wy0 - cy, cwz0 - cz);
+                _ringVertices[vertexCount++] = new Vector3(cwx1 - cx, wy1 - cy, cwz1 - cz);
             }
             else
             {
-                mesh.SurfaceAddVertex(new Vector3(wx0 - cx, 0.12f, wz0 - cz));
-                mesh.SurfaceAddVertex(new Vector3(wx1 - cx, 0.12f, wz1 - cz));
+                _ringVertices[vertexCount++] = new Vector3(wx0 - cx, 0.12f, wz0 - cz);
+                _ringVertices[vertexCount++] = new Vector3(wx1 - cx, 0.12f, wz1 - cz);
             }
+        }
+
+        if (vertexCount == 0) return;
+
+        mesh.SurfaceBegin(Mesh.PrimitiveType.Lines, material);
+        for (int i = 0; i < vertexCount; i++)
+        {
+            mesh.SurfaceAddVertex(_ringVertices[i]);
         }
         mesh.SurfaceEnd();
     }

@@ -90,6 +90,7 @@ StaticGeometry? scenarioGeometry = scenario switch
     "recon-raid" => ReconRaidScenario.CreateStaticGeometry(),
     "battle" => BattleScenario.CreateStaticGeometry(),
     "bridge-crossing" => BridgeCrossingScenario.CreateStaticGeometry(),
+    "vehicle-traffic" => VehicleTrafficScenario.CreateStaticGeometry(),
     _ => null
 };
 
@@ -105,6 +106,7 @@ MatchSetup setup = scenario switch
     "recon-raid" => ReconRaidScenario.CreateMatchSetup(scenarioGeometry!),
     "battle" => BattleScenario.CreateMatchSetup(scenarioGeometry!),
     "bridge-crossing" => BridgeCrossingScenario.CreateMatchSetup(scenarioGeometry!),
+    "vehicle-traffic" => VehicleTrafficScenario.CreateMatchSetup(scenarioGeometry!),
     _ => PrototypeScenario.CreateMatchSetup(map)
 };
 
@@ -132,6 +134,7 @@ Simulation CreateSimulation(ulong seed = 0)
         "recon-raid" => ReconRaidScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "battle" => BattleScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "bridge-crossing" => BridgeCrossingScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
+        "vehicle-traffic" => VehicleTrafficScenario.CreateSimulation(scenarioGeometry!),
         _ => PrototypeScenario.Create(map)
     };
 }

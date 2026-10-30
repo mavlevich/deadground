@@ -127,7 +127,9 @@ public sealed record UnitDefinition(
     bool CanPivot = true,
     float MinTurnRadius = 0f,
     float Acceleration = 0f,
-    float Deceleration = 0f);
+    float Deceleration = 0f,
+    float CollisionRadius = 0f,
+    float Height = 0f);
 
 public sealed record FactionData(string Id, string? Name = null);
 
@@ -277,7 +279,9 @@ public sealed class OpsMovementCatalog : IUnitMovementCatalog
             float decel = unit.Deceleration > 0f ? unit.Deceleration : 5.0f;
             bool canPivot = unit.CanPivot;
             float minTurnRadius = unit.MinTurnRadius;
-            _profiles[i] = new UnitMovementProfile(unit.Speed, unit.Radius, caps, turnRate, revSpeed, accel, decel, canPivot, minTurnRadius);
+            float colRadius = unit.CollisionRadius > 0f ? unit.CollisionRadius : unit.Radius;
+            float height = unit.Height > 0f ? unit.Height : 2.5f;
+            _profiles[i] = new UnitMovementProfile(unit.Speed, unit.Radius, caps, turnRate, revSpeed, accel, decel, canPivot, minTurnRadius, colRadius, height);
         }
     }
 
@@ -557,6 +561,10 @@ public static class PrototypeScenario
                 throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid deceleration.");
             if (!float.IsFinite(unit.MinTurnRadius) || unit.MinTurnRadius < 0)
                 throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid minimum turn radius.");
+            if (!float.IsFinite(unit.CollisionRadius) || unit.CollisionRadius < 0)
+                throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid collision radius.");
+            if (!float.IsFinite(unit.Height) || unit.Height < 0)
+                throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid height.");
             if (!unit.CanPivot && unit.MinTurnRadius <= 0)
                 throw new InvalidOperationException($"Unit '{unit.Id}' cannot pivot in place but specifies no positive minimum turn radius.");
             if (!float.IsFinite(unit.ArmorFront) || unit.ArmorFront < 0 ||
@@ -872,9 +880,9 @@ public static class NavigationScenario
         ushort vehicleIdx = catalog.RequireDefinitionIndex("prototype_vehicle");
 
         // Side 1: friendly units in open area
-        world.CreateUnit(1, reconIdx, new Vector2(15f, 20f), reconDef.Speed);
+        world.CreateUnit(1, reconIdx, new Vector2(15f, 10f), reconDef.Speed);
         world.CreateUnit(1, tankIdx, new Vector2(18f, 20f), tankDef.Speed);
-        world.CreateUnit(1, vehicleIdx, new Vector2(21f, 20f), vehicleDef.Speed);
+        world.CreateUnit(1, vehicleIdx, new Vector2(18f, 28f), vehicleDef.Speed);
 
         // Side 2: other units
         world.CreateUnit(2, tankIdx, new Vector2(65f, 30f), tankDef.Speed);

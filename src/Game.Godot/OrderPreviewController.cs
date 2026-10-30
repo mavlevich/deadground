@@ -849,6 +849,7 @@ internal sealed class OrderPreviewController
                 switch (obs.NavStatus)
                 {
                     case PathRequestStatus.PathFound:
+                    case PathRequestStatus.WaitingForClearance:
                         pathFoundCount++;
                         break;
                     case PathRequestStatus.NoPath:

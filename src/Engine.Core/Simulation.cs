@@ -13,7 +13,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
     private readonly IMissionSystem? _mission;
     private readonly DeterministicRandom[] _domainStreams = new DeterministicRandom[4];
 
-    private readonly QueuedCommand[] _commands = new QueuedCommand[256];
+    private readonly QueuedCommand[] _commands;
     private readonly uint[] _lastAccepted = new uint[MaxPlayers];
     private int _commandCount;
 
@@ -63,11 +63,13 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         return _domainStreams[index] ??= DeterministicRandom.CreateDomainStream(MatchSeed, domain);
     }
 
-    public Simulation(WorldState world, ISimulationRules rules, ulong matchSeed = 2024UL)
+    public Simulation(WorldState world, ISimulationRules rules, ulong matchSeed = 2024UL, int? commandCapacity = null)
     {
         _world = world ?? throw new ArgumentNullException(nameof(world));
         _rules = rules ?? throw new ArgumentNullException(nameof(rules));
         MatchSeed = matchSeed;
+        int cmdCap = commandCapacity ?? Math.Max(_world.Capacity, 1024);
+        _commands = new QueuedCommand[cmdCap];
         if (_rules is IRandomStreamsAware awareRules)
         {
             awareRules.InitializeRandomStreams(this);
@@ -238,6 +240,10 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
     {
         if (player >= 1 && player <= _admittedPlayers.Length)
         {
+            if (!_admittedPlayers[player - 1] && admitted)
+            {
+                _lastAccepted[player - 1] = 0;
+            }
             _admittedPlayers[player - 1] = admitted;
         }
         _combat?.SetPlayerAdmitted(player, admitted);

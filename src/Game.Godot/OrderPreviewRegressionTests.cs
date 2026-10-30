@@ -14,28 +14,42 @@ internal static class OrderPreviewRegressionTests
         Require(scene is Main, "OrderPreviewRegressionTests requires Main scene.");
         Main main = (Main)scene;
 
-        CheckMixedSelectionPreviewAndClick(main);
-        CheckDelayedResultSequenceCorrelation(main);
-        CheckUnitRemovalAndRestartClearsMarker(main);
-        CheckInputEventHandling_PanelsBlock_NotificationPasses(main);
-        CheckFogOfWar_NoHiddenEnemyLeak(main);
-        CheckSteadyStateZeroAllocations(main);
-        CheckPerUnitIndividualSnappedTargets(main);
-        CheckGhostMarkerVisibleInTreeBeforeFirstOrder(main);
-        CheckOrderExpirationAndCancellation(main);
-        CheckSelectionOver256UnitsDispatchesAll(main);
-        CheckSingleUnitSnappedTargetPosition(main);
-        CheckOneRejectionOneSuccessYieldsPartial(main);
-        CheckFacingGesture_ShortClickVsDrag_IssuesCorrectOrder(main);
-        CheckFacingGesture_DragAndReturn_IssuesStandardMove(main);
-        CheckFacingGesture_EscapeCancelsGesture_LeavesSelectionIntact(main);
-        CheckFacingGesture_CameraRotationInvariance(main);
-        CheckFacingGesture_ZeroAllocationsDuringDrag(main);
-        CheckFacingGesture_CameraPanPreservesWorldDestination(main);
-        CheckFacingGesture_ControlGroupRecallCancelsGesture(main);
-        CheckFacingGesture_UnitDeletionCancelsWithoutMouseMotion(main);
-        CheckReverseMove_PreviewAndDispatch(main);
-        CheckReverseMove_ThroughMainUnhandledInput(main);
+        HashSet<EntityId> savedSelection = [.. main.UnitViews.Selected];
+        try
+        {
+            CheckMixedSelectionPreviewAndClick(main);
+            CheckDelayedResultSequenceCorrelation(main);
+            CheckUnitRemovalAndRestartClearsMarker(main);
+            CheckInputEventHandling_PanelsBlock_NotificationPasses(main);
+            CheckFogOfWar_NoHiddenEnemyLeak(main);
+            CheckSteadyStateZeroAllocations(main);
+            CheckPerUnitIndividualSnappedTargets(main);
+            CheckGhostMarkerVisibleInTreeBeforeFirstOrder(main);
+            CheckOrderExpirationAndCancellation(main);
+            CheckSelectionOver256UnitsDispatchesAll(main);
+            CheckSingleUnitSnappedTargetPosition(main);
+            CheckOneRejectionOneSuccessYieldsPartial(main);
+            CheckFacingGesture_ShortClickVsDrag_IssuesCorrectOrder(main);
+            CheckFacingGesture_DragAndReturn_IssuesStandardMove(main);
+            CheckFacingGesture_EscapeCancelsGesture_LeavesSelectionIntact(main);
+            CheckFacingGesture_CameraRotationInvariance(main);
+            CheckFacingGesture_ZeroAllocationsDuringDrag(main);
+            CheckFacingGesture_CameraPanPreservesWorldDestination(main);
+            CheckFacingGesture_ControlGroupRecallCancelsGesture(main);
+            CheckFacingGesture_UnitDeletionCancelsWithoutMouseMotion(main);
+            CheckReverseMove_PreviewAndDispatch(main);
+            CheckReverseMove_ThroughMainUnhandledInput(main);
+        }
+        finally
+        {
+            main.UnitViews.Selected.Clear();
+            foreach (EntityId id in savedSelection)
+            {
+                main.UnitViews.Selected.Add(id);
+            }
+            main.UnitViews.UpdateSelectionVisuals();
+            main.CancelActiveDrag();
+        }
     }
 
     private static void CheckMixedSelectionPreviewAndClick(Main main)
@@ -1387,6 +1401,10 @@ internal static class OrderPreviewRegressionTests
             : new Vector3(targetUnit.Value.Position.X, 0f, targetUnit.Value.Position.Y);
         Vector2 screenPos = main.Camera.UnprojectPosition(unitPos3D + new Vector3(2f, 0f, 2f));
 
+        IGameSession originalSession = main.Session;
+        TestGameSession testSession = new() { Replica = originalSession.Replica };
+        main.Session = testSession;
+
         // 1. Press Key.R into input singleton
         using InputEventKey rDown = new() { Keycode = Key.R, Pressed = true, Echo = false };
         Input.ParseInputEvent(rDown);
@@ -1416,9 +1434,12 @@ internal static class OrderPreviewRegressionTests
             main._UnhandledInput(rmbUp);
 
             Require(!main.PreviewController.IsFacingGestureActive, "Facing gesture must end after RMB release");
+            Require(testSession.SubmittedMoves.Count > 0, "Move command must be submitted through session");
+            Require(testSession.SubmittedMoves[0].Mode == MoveMode.Reverse, "Move command must have MoveMode.Reverse");
         }
         finally
         {
+            main.Session = originalSession;
             using InputEventKey rUp = new() { Keycode = Key.R, Pressed = false, Echo = false };
             Input.ParseInputEvent(rUp);
             Input.FlushBufferedEvents();

@@ -19,6 +19,12 @@ if (args.Length > 0 && args[0] == "--order-preview")
     return;
 }
 
+if (args.Length > 0 && (args[0] == "--vehicle-separation" || args[0] == "--vehicle-traffic"))
+{
+    RunVehicleSeparationBenchmark();
+    return;
+}
+
 if (args.Length > 0 && args[0] == "--probe")
 {
     RunProbe();
@@ -757,6 +763,223 @@ static void RunOrderPreviewBenchmark()
     }
 }
 
+static void RunVehicleSeparationBenchmark()
+{
+    Console.WriteLine("=== Dynamic Vehicle Separation and Distance Keeping Benchmark ===");
+    Console.WriteLine("Budget target: p99 < 15.000 ms for 1000 vehicles on open map\n");
+
+    int[] counts = [1, 20, 200, 1000];
+    const int resolution = 501; // 501x501 at 2.0m spacing = 1000m x 1000m
+
+    Console.WriteLine("Scenario A: Multi-Stream Intersecting Traffic (4 Converging Streams)");
+    foreach (int count in counts)
+    {
+        HeightMap map = new(resolution, resolution, 2.0f, 0.01f, new ushort[resolution * resolution]);
+        NavigationGrid grid = new(map, [], enableHierarchical: true);
+
+        TestSeparationMovementCatalog catalog = new();
+        NavigationSystem nav = new(grid, catalog, new NavigationTuning(MaxPendingRequests: 2048), maxUnits: Math.Max(2048, count + 128));
+        WorldState world = new(map, capacity: Math.Max(2048, count + 128));
+        using Simulation sim = new(world, new RuleSet(nav));
+
+        EntityId[] unitIds = new EntityId[count];
+        Vector2[] targets = new Vector2[count];
+        Vector2[] startPositions = new Vector2[count];
+
+        const int streamLanes = 10;
+        for (int i = 0; i < count; i++)
+        {
+            int stream = i % 4;
+            int streamIdx = i / 4;
+            int lane = streamIdx % streamLanes;
+            int row = streamIdx / streamLanes;
+
+            Vector2 start;
+            Vector2 target;
+            float yaw;
+
+            switch (stream)
+            {
+                case 0: // North to South (+Y), crossing Stream 3 and Stream 2
+                    start = new Vector2(350f + lane * 14f, 300f - row * 10f);
+                    target = new Vector2(start.X, start.Y + 650f);
+                    yaw = MathF.PI;
+                    break;
+                case 1: // South to North (-Y), crossing Stream 2 and Stream 3
+                    start = new Vector2(524f + lane * 14f, 700f + row * 10f);
+                    target = new Vector2(start.X, start.Y - 650f);
+                    yaw = 0f;
+                    break;
+                case 2: // West to East (+X), crossing Stream 0 and Stream 1
+                    start = new Vector2(300f - row * 10f, 524f + lane * 14f);
+                    target = new Vector2(start.X + 650f, start.Y);
+                    yaw = -MathF.PI * 0.5f;
+                    break;
+                default: // East to West (-X), crossing Stream 1 and Stream 0
+                    start = new Vector2(700f + row * 10f, 350f + lane * 14f);
+                    target = new Vector2(start.X - 650f, start.Y);
+                    yaw = MathF.PI * 0.5f;
+                    break;
+            }
+
+            startPositions[i] = start;
+            EntityId id = world.CreateUnit(1, 1, start, 8.0f, initialTurretYaw: yaw);
+            unitIds[i] = id;
+            targets[i] = target;
+        }
+
+        // Verify all initial placements are strictly non-overlapping (>= 7.0m separation)
+        for (int a = 0; a < count; a++)
+        {
+            for (int b = a + 1; b < count; b++)
+            {
+                float d = Vector2.Distance(startPositions[a], startPositions[b]);
+                if (d < 7.0f)
+                {
+                    throw new InvalidOperationException($"Initial overlap between units {a} and {b}: distance {d:F2}m < 7.0m");
+                }
+            }
+        }
+
+        // Enqueue in verified batches of <= 200 per tick so no command is dropped
+        int enqueued = 0;
+        uint cmdId = 1;
+        while (enqueued < count)
+        {
+            int batch = Math.Min(200, count - enqueued);
+            for (int b = 0; b < batch; b++)
+            {
+                int idx = enqueued + b;
+                bool ok = sim.TryEnqueue(1, new MoveCommand(cmdId++, sim.Tick, unitIds[idx], targets[idx]));
+                if (!ok) throw new InvalidOperationException($"Failed to enqueue command for unit {idx}!");
+            }
+            enqueued += batch;
+            sim.Step();
+        }
+
+        // Warmup 120 ticks so stream fronts converge into the intersection conflict zones
+        for (int i = 0; i < 120; i++)
+        {
+            sim.Step();
+        }
+
+        // Measure 200 ticks
+        const int measuredTicks = 200;
+        double[] tickTimesMs = new double[measuredTicks];
+        Stopwatch sw = new();
+
+        long beforeAllocated = GC.GetAllocatedBytesForCurrentThread();
+        for (int t = 0; t < measuredTicks; t++)
+        {
+            sw.Restart();
+            sim.Step();
+            sw.Stop();
+            tickTimesMs[t] = sw.Elapsed.TotalMilliseconds;
+        }
+        long allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - beforeAllocated;
+
+        int moving = 0;
+        int waiting = 0;
+        for (int i = 0; i < count; i++)
+        {
+            if (nav.GetUnitSpeed(unitIds[i]) > 0.001f) moving++;
+            if (nav.GetUnitStatus(unitIds[i]) == PathRequestStatus.WaitingForClearance) waiting++;
+        }
+
+        Array.Sort(tickTimesMs);
+        double mean = tickTimesMs.Average();
+        double min = tickTimesMs[0];
+        double max = tickTimesMs[^1];
+        double p50 = tickTimesMs[(int)(measuredTicks * 0.50)];
+        double p95 = tickTimesMs[(int)(measuredTicks * 0.95)];
+        double p99 = tickTimesMs[(int)(measuredTicks * 0.99)];
+
+        string status = p99 < 15.0 ? "PASS" : "FAIL";
+        Console.WriteLine($"Units: {count,4} (active: {moving + waiting,4}, moving: {moving,4}, waiting: {waiting,4}) | Mean: {mean,6:F3} ms | Min: {min,6:F3} ms | p50: {p50,6:F3} ms | p95: {p95,6:F3} ms | p99: {p99,6:F3} ms | Alloc/tick: {allocatedBytes / measuredTicks,5} B | [{status}]");
+    }
+
+    Console.WriteLine("\nScenario B: Free Parallel Motion (1000 Vehicles on Parallel Tracks)");
+    {
+        const int count = 1000;
+        HeightMap map = new(resolution, resolution, 2.0f, 0.01f, new ushort[resolution * resolution]);
+        NavigationGrid grid = new(map, [], enableHierarchical: true);
+
+        TestSeparationMovementCatalog catalog = new();
+        NavigationSystem nav = new(grid, catalog, new NavigationTuning(MaxPendingRequests: 2048), maxUnits: Math.Max(2048, count + 128));
+        WorldState world = new(map, capacity: Math.Max(2048, count + 128));
+        using Simulation sim = new(world, new RuleSet(nav));
+
+        EntityId[] unitIds = new EntityId[count];
+        Vector2[] targets = new Vector2[count];
+        int cols = 40;
+
+        for (int i = 0; i < count; i++)
+        {
+            int col = i % cols;
+            int row = i / cols;
+            Vector2 start = new(80f + col * 20f, 50f + row * 15f);
+            Vector2 target = new(start.X, start.Y + 400f);
+            EntityId id = world.CreateUnit(1, 1, start, 8.0f, initialTurretYaw: MathF.PI);
+            unitIds[i] = id;
+            targets[i] = target;
+        }
+
+        int enqueued = 0;
+        uint cmdId = 1;
+        while (enqueued < count)
+        {
+            int batch = Math.Min(200, count - enqueued);
+            for (int b = 0; b < batch; b++)
+            {
+                int idx = enqueued + b;
+                bool ok = sim.TryEnqueue(1, new MoveCommand(cmdId++, sim.Tick, unitIds[idx], targets[idx]));
+                if (!ok) throw new InvalidOperationException($"Failed to enqueue command for unit {idx}!");
+            }
+            enqueued += batch;
+            sim.Step();
+        }
+
+        for (int i = 0; i < 20; i++)
+        {
+            sim.Step();
+        }
+
+        const int measuredTicks = 200;
+        double[] tickTimesMs = new double[measuredTicks];
+        Stopwatch sw = new();
+
+        long beforeAllocated = GC.GetAllocatedBytesForCurrentThread();
+        for (int t = 0; t < measuredTicks; t++)
+        {
+            sw.Restart();
+            sim.Step();
+            sw.Stop();
+            tickTimesMs[t] = sw.Elapsed.TotalMilliseconds;
+        }
+        long allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - beforeAllocated;
+
+        int moving = 0;
+        int waiting = 0;
+        for (int i = 0; i < count; i++)
+        {
+            if (nav.GetUnitSpeed(unitIds[i]) > 0.001f) moving++;
+            if (nav.GetUnitStatus(unitIds[i]) == PathRequestStatus.WaitingForClearance) waiting++;
+        }
+
+        Array.Sort(tickTimesMs);
+        double mean = tickTimesMs.Average();
+        double min = tickTimesMs[0];
+        double max = tickTimesMs[^1];
+        double p50 = tickTimesMs[(int)(measuredTicks * 0.50)];
+        double p95 = tickTimesMs[(int)(measuredTicks * 0.95)];
+        double p99 = tickTimesMs[(int)(measuredTicks * 0.99)];
+
+        string status = p99 < 15.0 ? "PASS" : "FAIL";
+        Console.WriteLine($"Units: {count,4} (active: {moving + waiting,4}, moving: {moving,4}, waiting: {waiting,4}) | Mean: {mean,6:F3} ms | Min: {min,6:F3} ms | p50: {p50,6:F3} ms | p95: {p95,6:F3} ms | p99: {p99,6:F3} ms | Alloc/tick: {allocatedBytes / measuredTicks,5} B | [{status}]");
+    }
+    Console.WriteLine();
+}
+
 [MemoryDiagnoser]
 public class MovementBenchmark
 {
@@ -808,4 +1031,78 @@ internal sealed class SlowMovementCatalog : IUnitMovementCatalog
         profile = new UnitMovementProfile(0.001f, 1.0f);
         return true;
     }
+}
+
+internal sealed class TestSeparationMovementCatalog : IUnitMovementCatalog
+{
+    public bool TryGetProfile(ushort definition, out UnitMovementProfile profile)
+    {
+        profile = new UnitMovementProfile(
+            Speed: 8.0f,
+            Radius: 1.5f,
+            TurnRate: 30.0f,
+            ReverseSpeed: 4.0f,
+            Acceleration: 2.0f,
+            Deceleration: 4.0f,
+            CanPivot: true,
+            MinTurnRadius: 0.0f,
+            CollisionRadius: 3.5f,
+            Height: 2.4f);
+        return true;
+    }
+}
+
+[MemoryDiagnoser]
+public class VehicleSeparationBenchmark
+{
+    private WorldState _world = null!;
+    private Simulation _simulation = null!;
+    private const int TicksPerBatch = 50;
+
+    [Params(1, 20, 200, 1000)]
+    public int Units { get; set; }
+
+    [IterationSetup]
+    public void Setup()
+    {
+        const int resolution = 501;
+        HeightMap map = new(resolution, resolution, 2.0f, 0.01f, new ushort[resolution * resolution]);
+        NavigationGrid grid = new(map, [], enableHierarchical: true);
+        TestSeparationMovementCatalog catalog = new();
+        NavigationSystem nav = new(grid, catalog, new NavigationTuning(MaxPendingRequests: 2048), maxUnits: Math.Max(2048, Units + 128));
+        _world = new WorldState(map, capacity: Math.Max(2048, Units + 128));
+        _simulation = new Simulation(_world, new RuleSet(nav));
+
+        int cols = (int)MathF.Ceiling(MathF.Sqrt(Units));
+        for (int i = 0; i < Units; i++)
+        {
+            int col = i % cols;
+            int row = i / cols;
+            Vector2 start = new(100f + col * 20f, 100f + row * 15f);
+            Vector2 target = new(start.X, start.Y + 400f);
+            EntityId id = _world.CreateUnit(1, 1, start, 8.0f, initialTurretYaw: MathF.PI);
+            bool ok = _simulation.TryEnqueue(1, new MoveCommand((uint)(i + 1), _simulation.Tick, id, target));
+            if (!ok)
+            {
+                throw new InvalidOperationException($"Failed to enqueue move command for unit {i} (admission failure)!");
+            }
+        }
+
+        for (int i = 0; i < 20; i++)
+        {
+            _simulation.Step();
+        }
+    }
+
+    [Benchmark(OperationsPerInvoke = TicksPerBatch)]
+    public void SimulationStep()
+    {
+        for (int i = 0; i < TicksPerBatch; i++)
+        {
+            _simulation.Step();
+        }
+    }
+
+    [IterationCleanup]
+    public void Cleanup() => _simulation.Dispose();
 }
