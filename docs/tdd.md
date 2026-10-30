@@ -517,6 +517,42 @@ comes from the tracker even when the world heading changes after the last observ
 same commands gives the same headings. The reverse slice adds checks that the hull faces opposite
 to travel and respects `reverse_speed`. Stage 2 adds the wheeled tests listed above.
 
+### 9.6 Server-authoritative vehicle separation and distance keeping
+
+Status: dynamic vehicle separation, lookahead braking, and continuous swept collision resolution are implemented on the dedicated server. Vehicles do not pass through friendly or enemy hulls; following vehicles maintain distance and brake smoothly before leaders; halted units enter an explicit waiting state without failing path requests.
+
+Architecture and kinematics:
+- Two-phase motion integration in `NavigationSystem`:
+  - Phase 1 Corridor Lookahead: evaluates route waypoints and movement corridor within dynamic stopping distance using `VehicleSeparationSystem.ComputeLookaheadClearance`. Imposes a discrete safe speed ceiling `ComputeBrakingCeiling(sFree, deceleration, dt)` so the following vehicle slows down smoothly using its historical deceleration limit without abrupt jerk.
+  - Phase 2 Continuous Swept Step: resolves candidate step displacements against neighboring vehicles over the normalized interval tau in [0, 1] using quadratic swept circle intersections. Deterministic yield rules clamp step distance slightly before impact, preventing hull penetration and tunneling.
+- Allocation-free 2D spatial grid (`VehicleSpatialGrid`):
+  - Preallocated uniform grid with 16.0 m cells indexes vehicle positions every tick with zero managed heap allocations.
+  - Neighbor radius queries bound lookahead and swept collision checks to O(1) local candidate density, eliminating O(N^2) pairwise scanning.
+- Vertical elevation isolation:
+  - Vertical span check verifies surface elevation and vehicle height (`GetSurfaceHeight(pos, surface) + height`).
+  - Multi-level structures (such as bridge decks vs ground under-span) allow vehicles on different vertical layers to cross without false collision interference.
+- Observable waiting lifecycle:
+  - When blocked by a vehicle ahead, the unit decelerates to rest and transitions to `PathRequestStatus.WaitingForClearance = 7`.
+  - While waiting, progress watchdog timeouts are suspended and the active route is preserved.
+  - When the obstacle moves or clears, movement resumes automatically along the remaining route without reissuing orders.
+  - Player orders replacing destination while in waiting state transition immediately to path planning without getting stuck.
+- Historical vehicle dimensions in `content/coldwar/units.json`:
+  - T-62: collision_radius 3.7 m, height 2.4 m.
+  - M60A1: collision_radius 3.9 m, height 3.3 m.
+  - BTR-70: collision_radius 4.0 m, height 2.3 m.
+  - M113A1: collision_radius 2.8 m, height 2.5 m.
+  - BRDM-2: collision_radius 3.1 m, height 2.3 m.
+  - M151A2: collision_radius 1.9 m, height 1.8 m.
+- Protocol and replication:
+  - Protocol version bumped to 20 (`MatchSetup.CurrentProtocolVersion = 20`).
+  - Wire protocol snapshot records serialize `PathRequestStatus.WaitingForClearance` (offset 18 of unit record).
+  - Client SelectionCard displays `[Waiting for clearance]` on line 3.
+  - Order preview and unit view render status correctly without error styling.
+- Verification and benchmarks:
+  - 12 comprehensive unit test scenarios in `VehicleSeparationTests.cs` cover column braking, resume, parked allies/enemies, narrow passage deadlock safety, reverse gear obstruction, shared destination queuing, bridge vertical clearance, and order replacement.
+  - Benchmark measuring 1, 20, 200, and 1000 vehicles with dynamic motion active: achieves 0 B allocations per tick and p99 < 1.0 ms for 1000 units (far below the 15.0 ms budget).
+  - Interactive playground: `./tools/run-client.sh -- --scenario vehicle-traffic` with F8 collision overlay and Ctrl+R / F5 instant scene reset.
+
 ## 10. Detection and fog of war
 
 - Sensors and signatures, not `canSee()`. Start with visual only. Radar, thermal and SIGINT are new sensor types later.
@@ -802,6 +838,7 @@ Status: planned for M2. M1 units keep one weapon each, so the M1 exit does not d
 - Map objects use `MapObjectId`. Their static geometry stays in the map package; snapshots carry allowed mutable fields such as bridge condition and objective ownership. A missing knowledge entry does not mean the object was destroyed or restored to its initial state.
 - Clients apply a full snapshot only after the complete message is received. On reconnect the same state blocks restore the allowed view without needing earlier presentation events.
 - Protocol version 15: own unit records are 35 bytes (`ushort TurretYaw` (2) at offset 31, `ushort HullHeading` (2) at offset 33). Contact records are 24 bytes (`ushort TurretYaw` (2) at offset 20, `ushort HullHeading` (2) at offset 22). Both angles are quantized to 65536 steps per turn. Contacts carry the turret yaw and hull heading observed at the moment of sighting; `LastKnown` contacts freeze the last observed values. Combat event records are 40 bytes (`byte Result` (1) at offset 39: 0 None, 1 Penetrated, 2 Deflected, 3 Miss).
+- Protocol version 20: bumps wire protocol to version 20 (`MatchSetup.CurrentProtocolVersion = 20`), serializing `PathRequestStatus.WaitingForClearance = 7` in snapshot unit records to observe dynamic vehicle separation states across network clients.
 - Delta compression (acknowledged baselines, dirty fields) is added only if measurements exceed the budget.
 - Quantization: ground units send X, Z and support surface. Height is computed on the client (section 8.3). 10 cm precision on a 16 km map is 18 bits per axis.
 - Clients render about 100 to 150 ms behind the server and interpolate.

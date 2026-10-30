@@ -447,7 +447,7 @@ public static class WireProtocol
             uint navOrderSequence = BinaryPrimitives.ReadUInt32LittleEndian(record[35..]);
 
             if (id.Value == 0 || !float.IsFinite(position.X) || !float.IsFinite(position.Y) ||
-                navStatusByte > (byte)PathRequestStatus.CapacityExceeded ||
+                navStatusByte > (byte)PathRequestStatus.WaitingForClearance ||
                 attackStatusByte > (byte)AttackExecutionStatus.TargetLost ||
                 stanceByte > (byte)FireStance.HoldFire ||
                 !frame.Indices.TryAdd(id, i)) return false;

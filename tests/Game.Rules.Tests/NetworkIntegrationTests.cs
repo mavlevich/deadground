@@ -613,4 +613,50 @@ public sealed class NetworkIntegrationTests
         public void OnNetworkLatencyUpdate(NetPeer peer, int latency) { }
         public void OnConnectionRequest(ConnectionRequest request) => request.Reject();
     }
+
+    [Fact]
+    public void VehicleTrafficSmokeFlowTest()
+    {
+        var geo = VehicleTrafficScenario.CreateStaticGeometry();
+        var sim = VehicleTrafficScenario.CreateSimulation(geo);
+        using LocalSession session = new(sim, player: 1);
+
+        bool observedWaiting = false;
+        bool leaderCleared = false;
+        bool observedResumed = false;
+
+        int waitingTick = -1;
+
+        for (int tick = 0; tick < 200; tick++)
+        {
+            session.Advance(1d / Simulation.TickRate);
+            var ownUnits = session.Replica.OwnUnits;
+            for (int u = 0; u < ownUnits.Length; u++)
+            {
+                if (ownUnits[u].NavStatus == PathRequestStatus.WaitingForClearance)
+                {
+                    if (!observedWaiting) waitingTick = tick;
+                    observedWaiting = true;
+                }
+            }
+
+            if (observedWaiting && !leaderCleared && ownUnits.Length > 0)
+            {
+                bool moved = session.Move(ownUnits[0].Id, new Vector2(60f, 100f));
+                leaderCleared = true;
+            }
+
+            if (leaderCleared && ownUnits.Length > 1)
+            {
+                if (ownUnits[1].NavStatus == PathRequestStatus.PathFound)
+                {
+                    observedResumed = true;
+                }
+            }
+
+        }
+
+        Assert.True(observedWaiting, "Should observe waiting for clearance");
+        Assert.True(observedResumed, "Should observe resumed movement");
+    }
 }

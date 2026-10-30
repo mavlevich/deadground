@@ -295,6 +295,49 @@ The scenario map (200 m x 200 m) includes:
 - **Dense forest obstacle**: Requires `TraversabilityCapabilities.DenseForest` (foot infantry traverses, vehicles route around).
 - **Elevated direct combat and observation**: Authoritative 3D targeting, elevated contact tracking, and residue projection onto the bridge deck.
 
+### Vehicle traffic and separation scenario (vehicle-traffic)
+
+To run the interactive vehicle traffic and dynamic separation playground:
+
+For self-contained local play:
+
+```sh
+./tools/run-client.sh -- --scenario vehicle-traffic
+```
+
+On Windows with PowerShell:
+
+```powershell
+./tools/run-client.ps1 -GodotArgs @("--", "--scenario", "vehicle-traffic")
+```
+
+For dedicated server hosting:
+
+```sh
+dotnet run --project src/Game.Server --configuration Release -- --scenario vehicle-traffic --port 7777
+```
+
+In headless smoke-test mode:
+
+```sh
+./tools/run-client.sh --headless -- --smoke-test --scenario vehicle-traffic
+```
+
+Interactive controls and features:
+- **F8**: Toggle vehicle collision bounds overlay:
+  - Green: Free movement without obstruction.
+  - Yellow: Following distance deceleration / corridor lookahead braking.
+  - Red: Stopped and waiting for clearance ahead.
+- **Ctrl+R** or **F5**: Instant local scenario reset without restarting the client.
+- **Selection Card**: Displays `[Waiting for clearance]` status when a vehicle is paused by another vehicle.
+- **Traffic Situations**:
+  1. Column following: Follower maintains safety buffer and decelerates smoothly when the lead vehicle stops.
+  2. Parked ally obstacle: Waiting vehicle halts safely and resumes automatically when the path clears.
+  3. Narrow head-on passage: Opposing vehicles stop safely before impact without pathfinding failure.
+  4. Shared destination queue: Successive arrivals queue up safely without overlapping at the goal.
+  5. Multi-level bridge traffic: Vehicles on the bridge deck and ground under-span cross without false collision.
+  6. Mixed vehicle kinematics: Realistic dimensions, acceleration, deceleration, and turn rates.
+
 ### Recon Raid mission (recon-raid)
 
 To run the playable reconnaissance raid mission with authoritative objectives, enemy AI bot, and complete attempt lifecycle:

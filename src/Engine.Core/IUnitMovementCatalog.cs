@@ -14,8 +14,11 @@ public readonly record struct UnitMovementProfile(
     float Acceleration = 0.0f,
     float Deceleration = 0.0f,
     bool CanPivot = true,
-    float MinTurnRadius = 0.0f)
+    float MinTurnRadius = 0.0f,
+    float CollisionRadius = 0.0f,
+    float Height = 2.5f)
 {
+    public float EffectiveCollisionRadius => CollisionRadius;
     public MovementClass MovementClass => MovementClassExtensions.FromRadius(Radius);
 }
 

@@ -71,7 +71,7 @@ public sealed class WorldState : IDisposable
         int LastMovedTick = -1,
         bool HasSwitchedTargetThisReload = false);
 
-    public EntityId CreateUnit(int owner, ushort definition, Vector2 position, float speed, int maxHealth = 100, int ammo = 0, float initialTurretYaw = 0f)
+    public EntityId CreateUnit(int owner, ushort definition, Vector2 position, float speed, int maxHealth = 100, int ammo = 0, float initialTurretYaw = 0f, uint initialSupportSurface = 0)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (Count == Capacity) throw new InvalidOperationException("World capacity exceeded.");
@@ -96,7 +96,7 @@ public sealed class WorldState : IDisposable
             initialTurretYaw,
             initialTurretYaw);
         Entity entity = _storage.Create(new Identity(id, owner, definition),
-            new Position(position), new Motion(position, speed, false), combat);
+            new Position(position), new Motion(position, speed, false, initialSupportSurface), combat);
         _entities[Count] = entity;
         _indices.Add(id, Count++);
         return id;

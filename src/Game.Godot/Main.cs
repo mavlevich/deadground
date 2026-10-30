@@ -50,6 +50,27 @@ public partial class Main : Node3D
     private string? _screenshotPath;
     private double _screenshotTimer = 0.5;
     private bool _screenshotQuit;
+    private bool _showVehicleCollisionBounds;
+    private readonly MeshInstance3D _collisionDebugMeshInstance = new();
+    private readonly ImmediateMesh _collisionDebugMesh = new();
+    private static readonly StandardMaterial3D CollisionBoundsMaterial = new()
+    {
+        ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+        VertexColorUseAsAlbedo = true,
+        AlbedoColor = Colors.White,
+        Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+        NoDepthTest = false
+    };
+    private static readonly StandardMaterial3D VelocityDebugMaterial = new()
+    {
+        ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+        AlbedoColor = new Color(0.2f, 0.9f, 1.0f, 0.9f),
+        Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+        NoDepthTest = false
+    };
+    private bool _trafficObservedWaiting;
+    private bool _trafficObservedResumed;
+    private bool _trafficLeaderCleared;
 
     internal FogOfWarView? FogOfWar => _fogOfWar;
     internal CameraRig CameraRig => _cameraRig;
@@ -64,7 +85,7 @@ public partial class Main : Node3D
     internal ReadOnlySpan<Rect2> BadgeOccludingPanels => _badgeOccludingPanels;
     internal UnitViewSet UnitViews => _unitViews;
     internal ContactViewSet ContactViews => _contactViews;
-    internal IGameSession Session => _session;
+    internal IGameSession Session { get => _session; set => _session = value; }
     internal UnitCatalog Catalog => _catalog;
     internal CombatEffects CombatEffects => _combatEffects;
     internal OrderDestinationView DestinationMarker => _destination;
@@ -313,6 +334,12 @@ public partial class Main : Node3D
             _map = scenarioGeometry.HeightMap;
             setup = BridgeCrossingScenario.CreateMatchSetup(scenarioGeometry);
         }
+        else if (_scenario == "vehicle-traffic")
+        {
+            scenarioGeometry = VehicleTrafficScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = VehicleTrafficScenario.CreateMatchSetup(scenarioGeometry);
+        }
         else
         {
             _map = HeightMap.CreatePrototype();
@@ -347,6 +374,7 @@ public partial class Main : Node3D
                 "recon-raid" => ReconRaidScenario.CreateSimulation(scenarioGeometry!),
                 "battle" => BattleScenario.CreateSimulation(scenarioGeometry!),
                 "bridge-crossing" => BridgeCrossingScenario.CreateSimulation(scenarioGeometry!),
+                "vehicle-traffic" => VehicleTrafficScenario.CreateSimulation(scenarioGeometry!),
                 _ => PrototypeScenario.Create(_map)
             };
             // Test switch: the enemy holds fire, so own units can be tried out without losing them.
@@ -408,6 +436,7 @@ public partial class Main : Node3D
             "recon-raid" => 160,
             "battle" => 160,
             "bridge-crossing" => 120,
+            "vehicle-traffic" => 150,
             _ => 112
         };
         _camera = new Camera3D { Projection = Camera3D.ProjectionType.Orthogonal, Size = initialCameraSize, Far = 3500, Current = true };
@@ -419,6 +448,7 @@ public partial class Main : Node3D
             "recon-raid" => new Vector3(100, 0, 100),
             "battle" => new Vector3(BattleScenario.SovietStart.X, 0, BattleScenario.SovietStart.Y),
             "bridge-crossing" => new Vector3(100, 4, 100),
+            "vehicle-traffic" => new Vector3(100, 0, 100),
             _ => new Vector3(64, 0, 64)
         };
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
@@ -437,7 +467,7 @@ public partial class Main : Node3D
         _combatEffects = new CombatEffects(_map, _scenarioGeometry);
         AddChild(_combatEffects);
 
-        if (_session is LocalSession && _scenario != "visibility" && _scenario != "combat" && _scenario != "navigation-large" && _scenario != "recon-raid" && _scenario != "bridge-crossing")
+        if (_session is LocalSession && _scenario != "visibility" && _scenario != "combat" && _scenario != "navigation-large" && _scenario != "recon-raid" && _scenario != "bridge-crossing" && _scenario != "vehicle-traffic")
         {
             foreach (OwnUnitObservation unit in _session.Replica.OwnUnits)
             {
@@ -466,10 +496,16 @@ public partial class Main : Node3D
             // Auto-select player tank for immediate playability
             _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
         }
+        else if (_scenario == "vehicle-traffic" && _session.Replica.OwnUnits.Length > 1)
+        {
+            _unitViews.Selected.Add(_session.Replica.OwnUnits[1].Id);
+        }
 
 
         _destination = new OrderDestinationView();
         AddChild(_destination);
+        _collisionDebugMeshInstance.Mesh = _collisionDebugMesh;
+        AddChild(_collisionDebugMeshInstance);
         BuildHud();
         _previewController = new OrderPreviewController(
             _destinationEvaluator,
@@ -729,7 +765,36 @@ public partial class Main : Node3D
             }
 
             _smokeTimer += delta;
-            if (_smokeTimer >= 1)
+
+            if (_scenario == "vehicle-traffic")
+            {
+                var ownUnits = _session.Replica.OwnUnits;
+                for (int u = 0; u < ownUnits.Length; u++)
+                {
+                    if (ownUnits[u].NavStatus == PathRequestStatus.WaitingForClearance)
+                    {
+                        _trafficObservedWaiting = true;
+                    }
+                }
+
+                if (_trafficObservedWaiting && !_trafficLeaderCleared && ownUnits.Length > 0)
+                {
+                    // Move the parked leader (unit 0 at 60,60) North to (60, 100) to free the path for the follower immediately
+                    _session.Move(ownUnits[0].Id, new NumericsVector2(60f, 100f));
+                    _trafficLeaderCleared = true;
+                }
+
+                if (_trafficLeaderCleared && ownUnits.Length > 1)
+                {
+                    if (ownUnits[1].NavStatus == PathRequestStatus.PathFound)
+                    {
+                        _trafficObservedResumed = true;
+                    }
+                }
+            }
+
+            float smokeTimeout = _scenario == "vehicle-traffic" ? 5.0f : 1.0f;
+            if (_smokeTimer >= smokeTimeout)
             {
                 bool ok = _scenario switch
                 {
@@ -740,6 +805,7 @@ public partial class Main : Node3D
                     "recon-raid" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
                     "battle" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == BattleScenario.UnitsPerSide,
                     "bridge-crossing" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
+                    "vehicle-traffic" => _terrainWindingValid && _session.Tick >= 60 && _trafficObservedWaiting && _trafficObservedResumed && _session.Replica.OwnUnits.Length >= 6,
                     _ => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
                         _session.Replica.OwnUnits[0].Position.Y > 24
                 };
@@ -750,6 +816,7 @@ public partial class Main : Node3D
                     "recon-raid" => "M1_CLIENT_RECON_RAID_SMOKE",
                     "battle" => "M1_CLIENT_BATTLE_SMOKE",
                     "bridge-crossing" => "M1_CLIENT_BRIDGE_CROSSING_SMOKE",
+                    "vehicle-traffic" => "M1_CLIENT_VEHICLE_TRAFFIC_SMOKE",
                     _ => "M0_CLIENT_SMOKE"
                 };
                 string token = prefix + (ok ? "_OK" : "_FAILED");
@@ -866,6 +933,23 @@ public partial class Main : Node3D
             {
                 CancelActiveDrag();
                 _settingsPanel.Toggle();
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if (key.Keycode is Key.F8)
+            {
+                _showVehicleCollisionBounds = !_showVehicleCollisionBounds;
+                _status.Text = _showVehicleCollisionBounds ? "Collision bounds overlay: ON" : "Collision bounds overlay: OFF";
+                UpdateCollisionDebugOverlay();
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if ((key.Keycode == Key.F5 || (key.Keycode == Key.R && (key.CtrlPressed || key.MetaPressed))) && _session is LocalSession)
+            {
+                ResetLocalScenario();
+                _status.Text = "Scenario reset to initial state";
                 GetViewport().SetInputAsHandled();
                 return;
             }
@@ -1371,6 +1455,117 @@ public partial class Main : Node3D
             else
                 _status.Text = "No selection / unit or contact removed from view";
         }
+        UpdateCollisionDebugOverlay();
+    }
+
+    private void UpdateCollisionDebugOverlay()
+    {
+        _collisionDebugMesh.ClearSurfaces();
+        if (!_showVehicleCollisionBounds || _map is null)
+        {
+            return;
+        }
+
+        const int circleSegments = 36;
+        const float angleStep = Mathf.Tau / circleSegments;
+
+        var ownUnits = _session.Replica.OwnUnits;
+        if (ownUnits.Length == 0) return;
+
+        int totalCircleVertices = ownUnits.Length * circleSegments * 2;
+        if (totalCircleVertices > 0)
+        {
+            _collisionDebugMesh.SurfaceBegin(Mesh.PrimitiveType.Lines, CollisionBoundsMaterial);
+            for (int u = 0; u < ownUnits.Length; u++)
+            {
+                var unit = ownUnits[u];
+                float colRadius = 0f;
+                float nominalSpeed = 8.0f;
+                if (unit.Definition < _catalog.Units.Length)
+                {
+                    colRadius = _catalog.Units[unit.Definition].CollisionRadius;
+                    if (colRadius <= 0f) colRadius = _catalog.Units[unit.Definition].Radius;
+                    nominalSpeed = _catalog.Units[unit.Definition].Speed;
+                }
+                if (colRadius <= 0f) colRadius = 2.0f;
+
+                Color ringColor;
+                if (unit.NavStatus == PathRequestStatus.WaitingForClearance)
+                {
+                    ringColor = new Color(0.95f, 0.2f, 0.2f, 0.9f); // Red: stopped and waiting for clearance
+                }
+                else if (unit.NavStatus == PathRequestStatus.PathFound)
+                {
+                    float dtSeconds = 0.2f;
+                    float dtTicks = dtSeconds * Simulation.TickRate;
+                    NumericsVector2 pNow = _session.Replica.SamplePosition(unit.Id, _session.RenderTick);
+                    NumericsVector2 pPast = _session.Replica.SamplePosition(unit.Id, MathF.Max(0f, (float)_session.RenderTick - dtTicks));
+                    float curSpeed = (pNow - pPast).Length() / dtSeconds;
+                    if (curSpeed < nominalSpeed * 0.85f)
+                    {
+                        ringColor = new Color(0.95f, 0.85f, 0.2f, 0.9f); // Yellow: following distance deceleration / braking
+                    }
+                    else
+                    {
+                        ringColor = new Color(0.2f, 0.95f, 0.3f, 0.9f); // Green: free movement
+                    }
+                }
+                else
+                {
+                    ringColor = new Color(0.2f, 0.95f, 0.3f, 0.9f); // Green: free movement / idle
+                }
+
+                _collisionDebugMesh.SurfaceSetColor(ringColor);
+                System.Numerics.Vector2 pos = _session.Replica.SamplePosition(unit.Id, _session.RenderTick);
+                for (int s = 0; s < circleSegments; s++)
+                {
+                    float t0 = s * angleStep;
+                    float t1 = (s + 1) * angleStep;
+                    float x0 = pos.X + colRadius * Mathf.Cos(t0);
+                    float z0 = pos.Y + colRadius * Mathf.Sin(t0);
+                    float x1 = pos.X + colRadius * Mathf.Cos(t1);
+                    float z1 = pos.Y + colRadius * Mathf.Sin(t1);
+
+                    float y0 = _map.GetHeight(x0, z0) + 0.15f;
+                    float y1 = _map.GetHeight(x1, z1) + 0.15f;
+                    _collisionDebugMesh.SurfaceAddVertex(new Vector3(x0, y0, z0));
+                    _collisionDebugMesh.SurfaceAddVertex(new Vector3(x1, y1, z1));
+                }
+            }
+            _collisionDebugMesh.SurfaceEnd();
+        }
+
+        // Velocity vectors
+        int movingCount = 0;
+        for (int u = 0; u < ownUnits.Length; u++)
+        {
+            if (ownUnits[u].NavStatus == PathRequestStatus.PathFound) movingCount++;
+        }
+
+        if (movingCount > 0)
+        {
+            _collisionDebugMesh.SurfaceBegin(Mesh.PrimitiveType.Lines, VelocityDebugMaterial);
+            for (int u = 0; u < ownUnits.Length; u++)
+            {
+                var unit = ownUnits[u];
+                if (unit.NavStatus != PathRequestStatus.PathFound) continue;
+                System.Numerics.Vector2 pos = _session.Replica.SamplePosition(unit.Id, _session.RenderTick);
+                _session.Replica.SampleYaws(unit.Id, _session.RenderTick, out _, out float hullHeading);
+                float arrowLen = 3.0f;
+                if (unit.Definition < _catalog.Units.Length)
+                {
+                    float cr = _catalog.Units[unit.Definition].CollisionRadius;
+                    if (cr > 0f) arrowLen = cr * 1.2f;
+                }
+                NumericsVector2 dir = new(-MathF.Sin(hullHeading), -MathF.Cos(hullHeading));
+                NumericsVector2 end = pos + dir * arrowLen;
+                float y0 = _map.GetHeight(pos.X, pos.Y) + 0.3f;
+                float y1 = _map.GetHeight(end.X, end.Y) + 0.3f;
+                _collisionDebugMesh.SurfaceAddVertex(new Vector3(pos.X, y0, pos.Y));
+                _collisionDebugMesh.SurfaceAddVertex(new Vector3(end.X, y1, end.Y));
+            }
+            _collisionDebugMesh.SurfaceEnd();
+        }
     }
 
     public override void _Notification(int what)
@@ -1502,6 +1697,13 @@ public partial class Main : Node3D
 
     private void OnRetryMission()
     {
+        ResetLocalScenario();
+        _status.Text = "Mission restarted. Objective: Destroy enemy command vehicle. Preserve recon vehicle.";
+        _orderNotification?.ShowNotification("Mission restarted. Destroy enemy command vehicle.");
+    }
+
+    private void ResetLocalScenario()
+    {
         if (_session is not LocalSession || _scenarioGeometry is null) return;
 
         CancelActiveDrag();
@@ -1523,7 +1725,18 @@ public partial class Main : Node3D
         _presentedMultiHash = 0;
         _presentedContactId = default;
 
-        Simulation newSim = ReconRaidScenario.CreateSimulation(_scenarioGeometry);
+        Simulation newSim = _scenario switch
+        {
+            "recon-raid" => ReconRaidScenario.CreateSimulation(_scenarioGeometry),
+            "bridge-crossing" => BridgeCrossingScenario.CreateSimulation(_scenarioGeometry),
+            "vehicle-traffic" => VehicleTrafficScenario.CreateSimulation(_scenarioGeometry),
+            "battle" => BattleScenario.CreateSimulation(_scenarioGeometry),
+            "combat" => CombatScenario.CreateSimulation(_scenarioGeometry),
+            "visibility" => VisibilityScenario.CreateSimulation(_scenarioGeometry),
+            "navigation" => NavigationScenario.CreateSimulation(_scenarioGeometry),
+            "navigation-large" => LargeNavigationScenario.CreateSimulation(_scenarioGeometry),
+            _ => PrototypeScenario.Create(_map)
+        };
         _session = new LocalSession(newSim);
         _lastCommandResult = 0;
 
@@ -1534,10 +1747,9 @@ public partial class Main : Node3D
         if (_session.Replica.OwnUnits.Length > 0)
         {
             _fogOfWar?.UpdateAllNow(_session.Replica, _catalog);
-            _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
+            int selectIdx = _scenario == "vehicle-traffic" && _session.Replica.OwnUnits.Length > 1 ? 1 : 0;
+            _unitViews.Selected.Add(_session.Replica.OwnUnits[selectIdx].Id);
         }
-        _status.Text = "Mission restarted. Objective: Destroy enemy command vehicle. Preserve recon vehicle.";
-        _orderNotification?.ShowNotification("Mission restarted. Destroy enemy command vehicle.");
     }
 
     private static StyleBoxFlat PanelStyle() => new()
@@ -1563,6 +1775,7 @@ public partial class Main : Node3D
             "recon-raid" => "RECON RAID MISSION",
             "battle" => "MEETING ENGAGEMENT",
             "bridge-crossing" => "BRIDGE CROSSING",
+            "vehicle-traffic" => "VEHICLE TRAFFIC PLAYGROUND",
             _ => "M0 NETWORK TEST"
         };
         return $"DEAD GROUND   /   SIDE {assignedSide}   /   {name}";

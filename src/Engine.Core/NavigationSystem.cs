@@ -127,6 +127,20 @@ public sealed class NavigationSystem : ISimulationSystem
     private readonly int[] _slotGlobalPortalCounts;
     private readonly int[] _slotGlobalPortalIndices;
 
+    // Vehicle separation and dynamic collision system
+    private readonly VehicleSeparationSystem _separation;
+    private Vector2[] _candidateDisplacements;
+    private float[] _candidateSpeeds;
+    private float[] _candidateHeadings;
+    private float[] _candidateHeadingErrors;
+    private MoveMode[] _candidateModes;
+    private int[] _candidateIndices;
+    private bool[] _candidateBlockedAhead;
+    private uint[] _candidateSurfaces;
+    private float[] _candidateInitialDist;
+    private byte[] _candidateStage;
+    private readonly Vector2[] _singleTargetArray = new Vector2[1];
+
     // Static-graph corridor reuse. Fine paths and exact destinations remain per unit.
     private readonly record struct GlobalPlanKey(
         int StartSector,
@@ -179,6 +193,13 @@ public sealed class NavigationSystem : ISimulationSystem
 
     public int ChunkRequestsCompleted { get; private set; }
     public int ChunkWaitTicks { get; private set; }
+
+    public VehicleSeparationSystem Separation => _separation;
+    public int SeparationCandidatesChecked => _separation.CandidatesChecked;
+    public int SeparationExactChecks => _separation.ExactChecks;
+    public int SeparationWaitingUnits => _separation.WaitingUnits;
+    public int SeparationEmergencyStops => _separation.EmergencyStops;
+    public int SeparationBufferOverflows => _separation.BufferOverflows;
 
     public long EstimatedMemoryBytes
     {
@@ -301,6 +322,36 @@ public sealed class NavigationSystem : ISimulationSystem
         _slotGlobalPortals = new Vector2[_maxUnits * MaxGlobalPlanPortals];
         _slotGlobalPortalCounts = new int[_maxUnits];
         _slotGlobalPortalIndices = new int[_maxUnits];
+
+        _separation = new VehicleSeparationSystem(_grid, _grid.MapWidth, _grid.MapDepth, maxUnits: _maxUnits);
+        _candidateDisplacements = new Vector2[_maxUnits];
+        _candidateSpeeds = new float[_maxUnits];
+        _candidateHeadings = new float[_maxUnits];
+        _candidateHeadingErrors = new float[_maxUnits];
+        _candidateModes = new MoveMode[_maxUnits];
+        _candidateIndices = new int[_maxUnits];
+        _candidateBlockedAhead = new bool[_maxUnits];
+        _candidateSurfaces = new uint[_maxUnits];
+        _candidateInitialDist = new float[_maxUnits];
+        _candidateStage = new byte[_maxUnits];
+    }
+
+    private void EnsureCandidateArraysCapacity(int requiredCapacity)
+    {
+        if (_candidateDisplacements.Length < requiredCapacity)
+        {
+            int newCap = Math.Max(requiredCapacity, _candidateDisplacements.Length * 2);
+            Array.Resize(ref _candidateDisplacements, newCap);
+            Array.Resize(ref _candidateSpeeds, newCap);
+            Array.Resize(ref _candidateHeadings, newCap);
+            Array.Resize(ref _candidateHeadingErrors, newCap);
+            Array.Resize(ref _candidateModes, newCap);
+            Array.Resize(ref _candidateIndices, newCap);
+            Array.Resize(ref _candidateBlockedAhead, newCap);
+            Array.Resize(ref _candidateSurfaces, newCap);
+            Array.Resize(ref _candidateInitialDist, newCap);
+            Array.Resize(ref _candidateStage, newCap);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2035,6 +2086,14 @@ public sealed class NavigationSystem : ISimulationSystem
     {
         float dt = Simulation.TickSeconds;
         int unitCount = world.Count;
+
+        _separation.BeginTick(world, _catalog);
+        EnsureCandidateArraysCapacity(unitCount);
+        Array.Clear(_candidateDisplacements, 0, unitCount);
+        Array.Clear(_candidateSpeeds, 0, unitCount);
+        Array.Clear(_candidateStage, 0, unitCount);
+        Array.Clear(_candidateBlockedAhead, 0, unitCount);
+
         for (int i = 0; i < unitCount; i++)
         {
             UnitState unit = world.GetUnitAt(i);
@@ -2058,6 +2117,8 @@ public sealed class NavigationSystem : ISimulationSystem
             bool canPivot = true;
             float minTurnRadius = 0f;
             float radius = 1.0f;
+            float effectiveColRadius = 0.0f;
+            float vehicleHeight = 2.5f;
             TraversabilityCapabilities capabilities = TraversabilityCapabilities.DefaultVehicle;
 
             if (_catalog.TryGetProfile(unit.Definition, out UnitMovementProfile profile))
@@ -2070,6 +2131,8 @@ public sealed class NavigationSystem : ISimulationSystem
                 canPivot = profile.CanPivot;
                 minTurnRadius = profile.MinTurnRadius;
                 radius = profile.Radius;
+                effectiveColRadius = profile.EffectiveCollisionRadius;
+                vehicleHeight = profile.Height;
                 capabilities = profile.Capabilities;
             }
 
@@ -2095,6 +2158,14 @@ public sealed class NavigationSystem : ISimulationSystem
                     forwardDir = new Vector2(-MathF.Sin(currentHeading), -MathF.Cos(currentHeading));
                     moveDir = currentMode == MoveMode.Forward ? forwardDir : -forwardDir;
                     step = moveDir * (v * dt);
+                    if (step.LengthSquared() > 1e-8f)
+                    {
+                        if (effectiveColRadius > 0f)
+                        {
+                            _separation.CheckAndResolveSweptStep(world, _catalog, i, unit.Position, ref step, ref v, supportSurface, effectiveColRadius, vehicleHeight, _candidateDisplacements, dt);
+                        }
+                        _candidateDisplacements[i] = step;
+                    }
                     nextPos = unit.Position + step;
 
                     if (step.LengthSquared() > 1e-8f && _grid.IsSegmentClear(unit.Position, nextPos, radius, capabilities, supportSurface))
@@ -2275,8 +2346,28 @@ public sealed class NavigationSystem : ISimulationSystem
 
                             if (clear)
                             {
-                                currentSurface = UpdateSupportSurface(stepStart, stepEnd, capabilities, currentSurface);
-                                currentPosK = stepEnd;
+                                Vector2 kStep = stepEnd - stepStart;
+                                float kSpeed = kStep.Length() / dt;
+                                if (effectiveColRadius > 0f && _separation.CheckAndResolveSweptStep(world, _catalog, i, stepStart, ref kStep, ref kSpeed, currentSurface, effectiveColRadius, vehicleHeight, _candidateDisplacements, dt))
+                                {
+                                    stepEnd = stepStart + kStep;
+                                    remainingDistance = 0f;
+                                    if (kStep.LengthSquared() < 1e-8f)
+                                    {
+                                        clear = false;
+                                        if (_routeOrderGenerations[slot] == _unitOrderGenerations[slot])
+                                        {
+                                            _unitStatuses[slot] = PathRequestStatus.WaitingForClearance;
+                                        }
+                                        _separation.WaitingUnits++;
+                                    }
+                                }
+                                _candidateDisplacements[i] = kStep;
+                                if (clear)
+                                {
+                                    currentSurface = UpdateSupportSurface(stepStart, stepEnd, capabilities, currentSurface);
+                                    currentPosK = stepEnd;
+                                }
                             }
                         }
                     }
@@ -2360,7 +2451,20 @@ public sealed class NavigationSystem : ISimulationSystem
                     EnqueueNextChunkRequest(slot, unit, radius, capabilities);
                 }
 
-                if (reachedEndOfChunkK)
+                float actualMoved = Vector2.Distance(unit.Position, currentPosK);
+                bool isWaitingForClearanceK = _unitStatuses[slot] == PathRequestStatus.WaitingForClearance && actualMoved <= 1e-4f && !reachedFinalDestination;
+
+                if (actualMoved > 1e-4f && _unitStatuses[slot] == PathRequestStatus.WaitingForClearance && _routeOrderGenerations[slot] == _unitOrderGenerations[slot])
+                {
+                    _unitStatuses[slot] = PathRequestStatus.PathFound;
+                }
+
+                if (isWaitingForClearanceK)
+                {
+                    _unitLinearSpeed[slot] = 0f;
+                    world.UpdateUnitNavigation(unit.Id, currentPosK, finalTargetK, false, _currentTick, supportSurface, newHeading);
+                }
+                else if (reachedEndOfChunkK)
                 {
                     _unitChunkWaitTicks[slot]++;
                     ChunkWaitTicks++;
@@ -2369,7 +2473,7 @@ public sealed class NavigationSystem : ISimulationSystem
                 }
                 else
                 {
-                    _unitLinearSpeed[slot] = maxCruiseSpeedK;
+                    _unitLinearSpeed[slot] = actualMoved > 1e-4f ? MathF.Min(maxCruiseSpeedK, actualMoved / dt) : maxCruiseSpeedK;
                     world.UpdateUnitNavigation(unit.Id, currentPosK, finalTargetK, true, _currentTick, supportSurface, newHeading);
                 }
                 continue;
@@ -2385,6 +2489,14 @@ public sealed class NavigationSystem : ISimulationSystem
                     forwardDir = new Vector2(-MathF.Sin(currentHeading), -MathF.Cos(currentHeading));
                     moveDir = currentMode == MoveMode.Forward ? forwardDir : -forwardDir;
                     step = moveDir * (v * dt);
+                    if (step.LengthSquared() > 1e-8f)
+                    {
+                        if (effectiveColRadius > 0f)
+                        {
+                            _separation.CheckAndResolveSweptStep(world, _catalog, i, unit.Position, ref step, ref v, supportSurface, effectiveColRadius, vehicleHeight, _candidateDisplacements, dt);
+                        }
+                        _candidateDisplacements[i] = step;
+                    }
                     nextPos = unit.Position + step;
 
                     if (step.LengthSquared() > 1e-8f && _grid.IsSegmentClear(unit.Position, nextPos, radius, capabilities, supportSurface))
@@ -2685,6 +2797,54 @@ public sealed class NavigationSystem : ISimulationSystem
 
             float vTarget = MathF.Min(maxCruiseSpeed, vStop);
 
+            bool blockedAheadByVehicle = false;
+            if (effectiveColRadius > 0f)
+            {
+                // Phase 1 Corridor Lookahead for dynamic vehicle separation
+                ReadOnlySpan<Vector2> corridorWaypoints = ReadOnlySpan<Vector2>.Empty;
+                if (idx < count)
+                {
+                    int remainingWps = Math.Min(4, count - idx);
+                    corridorWaypoints = new ReadOnlySpan<Vector2>(_routeWaypoints, offset + idx, remainingWps);
+                }
+                else
+                {
+                    _singleTargetArray[0] = finalTarget;
+                    corridorWaypoints = _singleTargetArray;
+                }
+
+                Vector2 moveLookaheadDir = currentMode == MoveMode.Forward
+                    ? new Vector2(-MathF.Sin(currentHeading), -MathF.Cos(currentHeading))
+                    : new Vector2(MathF.Sin(currentHeading), MathF.Cos(currentHeading));
+
+                float sFree = _separation.ComputeLookaheadClearance(
+                    world,
+                    _catalog,
+                    i,
+                    currentPos,
+                    supportSurface,
+                    effectiveColRadius,
+                    vehicleHeight,
+                    moveLookaheadDir,
+                    corridorWaypoints,
+                    v,
+                    deceleration,
+                    dt,
+                    out int blockingUnitIdx,
+                    out float blockingForwardSpeed);
+
+                if (sFree < float.MaxValue)
+                {
+                    float vSafe = VehicleSeparationSystem.ComputeBrakingCeiling(sFree, deceleration, dt);
+                    vTarget = MathF.Min(vTarget, vSafe);
+                    if (sFree <= 0.05f && vSafe <= 1e-4f)
+                    {
+                        vTarget = 0f;
+                        blockedAheadByVehicle = true;
+                    }
+                }
+            }
+
             if (canPivot)
             {
                 if (v <= 1e-4f && absHeadingError > _tuning.PivotSteerAngleThreshold)
@@ -2766,7 +2926,105 @@ public sealed class NavigationSystem : ISimulationSystem
             }
 
             step = moveDir * stepDist;
-            nextPos = currentPos + step;
+
+            _candidateDisplacements[i] = step;
+            _candidateSpeeds[i] = v;
+            _candidateHeadings[i] = newHeading;
+            _candidateHeadingErrors[i] = headingError;
+            _candidateModes[i] = currentMode;
+            _candidateIndices[i] = idx;
+            _candidateBlockedAhead[i] = blockedAheadByVehicle;
+            _candidateSurfaces[i] = supportSurface;
+            _candidateInitialDist[i] = stepDist;
+            _candidateStage[i] = 3;
+        }
+
+        // Phase 2: Multi-vehicle displacement reconciliation
+        _separation.ReconcileDisplacements(
+            world,
+            _catalog,
+            _candidateDisplacements.AsSpan(0, unitCount),
+            _candidateSpeeds.AsSpan(0, unitCount),
+            dt);
+
+        // Phase 3: Dynamic commitment of physical vehicle steps
+        for (int i = 0; i < unitCount; i++)
+        {
+            if (_candidateStage[i] != 3) continue;
+
+            UnitState unit = world.GetUnitAt(i);
+            if (!TryGetSlot(unit.Id, out int slot)) continue;
+
+            Vector2 step = _candidateDisplacements[i];
+            float v = _candidateSpeeds[i];
+            float newHeading = _candidateHeadings[i];
+            MoveMode currentMode = _candidateModes[i];
+            int idx = _candidateIndices[i];
+            bool blockedAheadByVehicle = _candidateBlockedAhead[i];
+            uint supportSurface = _candidateSurfaces[i];
+            float initialStepDist = _candidateInitialDist[i];
+            float stepDist = step.Length();
+            bool sweptClamped = (stepDist < initialStepDist - 1e-4f);
+
+            float currentHeading = world.TryGetCombatState(unit.Id, out WorldState.CombatState cs) ? cs.HullHeading : 0f;
+            float maxForwardSpeed = 6.0f;
+            float maxReverseSpeed = 2.5f;
+            float deceleration = 5.0f;
+            float turnRateDeg = 45.0f;
+            bool canPivot = true;
+            float minTurnRadius = 0f;
+            float radius = 1.0f;
+            TraversabilityCapabilities capabilities = TraversabilityCapabilities.DefaultVehicle;
+            if (_catalog.TryGetProfile(unit.Definition, out UnitMovementProfile profile))
+            {
+                maxForwardSpeed = profile.Speed;
+                maxReverseSpeed = profile.ReverseSpeed;
+                deceleration = profile.Deceleration;
+                turnRateDeg = profile.TurnRate;
+                canPivot = profile.CanPivot;
+                minTurnRadius = profile.MinTurnRadius;
+                radius = profile.Radius;
+                capabilities = profile.Capabilities;
+            }
+
+            if (!canPivot)
+            {
+                if (stepDist <= 1e-6f)
+                {
+                    newHeading = currentHeading;
+                    step = Vector2.Zero;
+                    v = 0f;
+                    stepDist = 0f;
+                }
+                else if (minTurnRadius > 0.05f)
+                {
+                    float minRadius = MathF.Max(0.1f, minTurnRadius);
+                    float turnRateRadVal = turnRateDeg * (MathF.PI / 180f);
+                    float maxTurnStep = MathF.Min(turnRateRadVal * dt, stepDist / minRadius);
+                    float headingErr = _candidateHeadingErrors[i];
+                    float absErr = MathF.Abs(headingErr);
+                    float turn = MathF.Min(absErr, maxTurnStep);
+                    newHeading = CombatSystem.NormalizeYaw(currentHeading + MathF.Sign(headingErr) * turn);
+
+                    Vector2 forwardUnit = new(-MathF.Sin(newHeading), -MathF.Cos(newHeading));
+                    Vector2 moveDir = currentMode == MoveMode.Forward ? forwardUnit : -forwardUnit;
+                    step = moveDir * stepDist;
+                }
+            }
+
+            float maxCruiseSpeed = currentMode == MoveMode.Reverse ? maxReverseSpeed : maxForwardSpeed;
+            float turnRateRad = turnRateDeg * (MathF.PI / 180f);
+            float maxTurnRateThisTick = canPivot ? turnRateRad * dt : (minTurnRadius > 0.05f && v > 1e-4f ? MathF.Min(turnRateRad, v / minTurnRadius) * dt : 0f);
+            float maxDecelStep = (deceleration <= 0f ? 1000f : deceleration * dt);
+
+            Vector2 currentPos = unit.Position;
+            Vector2 finalTarget = _unitFinalTargets[slot];
+            float distToFinal = Vector2.Distance(currentPos, finalTarget);
+            bool hasFinalFacing = _unitHasFinalFacing[slot];
+            int offset = slot * _tuning.MaxWaypointsPerRoute;
+            int count = _routeCounts[slot];
+
+            Vector2 nextPos = currentPos + step;
 
             if (step.LengthSquared() > 1e-8f)
             {
@@ -2875,6 +3133,25 @@ public sealed class NavigationSystem : ISimulationSystem
             }
 
             _unitLinearSpeed[slot] = v;
+
+            bool isWaitingForClearance = (blockedAheadByVehicle || sweptClamped) && v <= 1e-4f && distToFinal > 0.15f;
+            if (isWaitingForClearance)
+            {
+                if (_routeOrderGenerations[slot] == _unitOrderGenerations[slot])
+                {
+                    _unitStatuses[slot] = PathRequestStatus.WaitingForClearance;
+                }
+                _separation.WaitingUnits++;
+                world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, false, _currentTick, supportSurface, newHeading);
+                continue;
+            }
+            else if (v > 1e-4f)
+            {
+                if (_unitStatuses[slot] == PathRequestStatus.WaitingForClearance && _routeOrderGenerations[slot] == _unitOrderGenerations[slot])
+                {
+                    _unitStatuses[slot] = PathRequestStatus.PathFound;
+                }
+            }
 
             bool inFinalManeuver = !canPivot && (idx >= count || (_unitHasFinalFacing[slot] && idx >= count - 1));
             if (inFinalManeuver)
