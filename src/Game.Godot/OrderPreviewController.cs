@@ -73,7 +73,13 @@ internal sealed class OrderPreviewController
     private bool _orderOutcomeHandled;
     private bool _hasDivergentTargets;
     private uint _lastHandledCommandResultSeq;
+    private uint _lastHandledGroupResultSeq;
     private Vector3 _lastOrderedTarget3D;
+
+    private readonly GroupUnitInput[] _previewGroupInputs = new GroupUnitInput[WireProtocol.MaxUnits];
+    private readonly Vector3[] _previewSlotTargets3D = new Vector3[OrderDestinationView.MaxGroupSlots];
+    private readonly Vector3[] _previewSlotOrigTargets3D = new Vector3[OrderDestinationView.MaxGroupSlots];
+    private readonly bool[] _previewSlotAdjusted = new bool[OrderDestinationView.MaxGroupSlots];
 
     public const float DragThresholdPixels = 14.0f;
     public const float DragThresholdWorldDistance = 0.5f;
@@ -196,6 +202,10 @@ internal sealed class OrderPreviewController
         if (_isFacingGestureActive)
         {
             UpdateFacingGesture(camera, mousePos, unitViews);
+            if (unitViews.Selected.Count > 1)
+            {
+                UpdateGroupPreviewDuringGesture(camera, unitViews, replica);
+            }
             _overlay.HideTooltip();
             _destinationView.HideGhost();
             return;
@@ -205,6 +215,7 @@ internal sealed class OrderPreviewController
         {
             _overlay.HideTooltip();
             _destinationView.HideGhost();
+            _destinationView.ClearGroupPreviewSlots();
             return;
         }
 
@@ -212,6 +223,7 @@ internal sealed class OrderPreviewController
         {
             _overlay.HideTooltip();
             _destinationView.HideGhost();
+            _destinationView.ClearGroupPreviewSlots();
             return;
         }
 
@@ -227,6 +239,122 @@ internal sealed class OrderPreviewController
         DestinationBlockReason primaryReason = DestinationBlockReason.None;
         DestinationValidity combinedValidity = DestinationValidity.Blocked;
         System.Numerics.Vector2 adjustedTarget = target2D;
+
+        if (unitViews.Selected.Count > 1)
+        {
+            float? dragFacing = _isFacingGestureActive && _isFacingDetermined ? _gestureFacing : null;
+            MoveMode moveMode = isReverse ? MoveMode.Reverse : MoveMode.Forward;
+
+            int inputCount = 0;
+            foreach (EntityId unitId in unitViews.Selected)
+            {
+                if (!replica.TryGetOwnUnit(unitId, out OwnUnitObservation own))
+                    continue;
+
+                float radius = 1.0f;
+                float colRadius = 0f;
+                TraversabilityCapabilities capabilities = TraversabilityCapabilities.DefaultVehicle;
+                bool canRev = true;
+                float revSpeed = 2.5f;
+
+                if (_movementCatalog.TryGetProfile(own.Definition, out UnitMovementProfile profile))
+                {
+                    radius = profile.Radius;
+                    colRadius = profile.EffectiveCollisionRadius;
+                    capabilities = profile.Capabilities;
+                    canRev = profile.ReverseSpeed > 0f;
+                    revSpeed = profile.ReverseSpeed;
+                }
+
+                if (inputCount < _previewGroupInputs.Length)
+                {
+                    _previewGroupInputs[inputCount++] = new GroupUnitInput(
+                        unitId,
+                        own.Position,
+                        own.HullHeading,
+                        radius,
+                        colRadius,
+                        capabilities,
+                        canRev,
+                        revSpeed);
+                }
+            }
+
+            if (inputCount == 0)
+            {
+                _overlay.HideTooltip();
+                _destinationView.HideGhost();
+                _destinationView.ClearGroupSlots();
+                return;
+            }
+
+            GroupPreviewResult preview = GroupDestinationDistribution.ComputePreview(
+                _previewGroupInputs.AsSpan(0, inputCount),
+                target2D,
+                hitSurface,
+                dragFacing,
+                moveMode,
+                _evaluator);
+
+            validCount = preview.PlacedCount + preview.AdjustedCount;
+            totalCount = preview.Slots.Length;
+            primaryReason = preview.PrimaryBlockedReason;
+
+            if (validCount == 0)
+            {
+                combinedValidity = DestinationValidity.Blocked;
+                _destinationView.ClearGroupPreviewSlots();
+            }
+            else
+            {
+                if (preview.IsTargetAdjusted || preview.AdjustedCount > 0)
+                {
+                    combinedValidity = DestinationValidity.Adjusted;
+                    float ghostH = _evaluator.GetSurfaceHeight(preview.SnappedTarget, hitSurface);
+                    _destinationView.ShowGhost(new Vector3(preview.SnappedTarget.X, ghostH + 0.12f, preview.SnappedTarget.Y));
+                }
+                else
+                {
+                    combinedValidity = DestinationValidity.Valid;
+                    _destinationView.HideGhost();
+                }
+
+                int slotIdx = 0;
+                ReadOnlySpan<GroupPreviewSlot> slots = preview.Slots.Span;
+                for (int s = 0; s < slots.Length && slotIdx < OrderDestinationView.MaxGroupSlots; s++)
+                {
+                    GroupPreviewSlot slot = slots[s];
+                    if (slot.Validity != DestinationValidity.Blocked)
+                    {
+                        float h = _evaluator.GetSurfaceHeight(slot.Target, hitSurface);
+                        float origH = _evaluator.GetSurfaceHeight(slot.OriginalTarget, hitSurface);
+                        _previewSlotTargets3D[slotIdx] = new Vector3(slot.Target.X, h + 0.12f, slot.Target.Y);
+                        _previewSlotOrigTargets3D[slotIdx] = new Vector3(slot.OriginalTarget.X, origH + 0.10f, slot.OriginalTarget.Y);
+                        _previewSlotAdjusted[slotIdx] = slot.Validity == DestinationValidity.Adjusted;
+                        slotIdx++;
+                    }
+                }
+
+                _destinationView.ShowGroupPreviewSlots(
+                    _previewSlotTargets3D.AsSpan(0, slotIdx),
+                    _previewSlotAdjusted.AsSpan(0, slotIdx),
+                    _previewSlotOrigTargets3D.AsSpan(0, slotIdx),
+                    dragFacing);
+            }
+
+            _overlay.SetPreviewState(
+                visible: true,
+                validity: combinedValidity,
+                reason: primaryReason,
+                validCount: validCount,
+                totalCount: totalCount,
+                isReverse: isReverse);
+
+            _overlay.UpdatePosition(mousePos, viewportSize);
+            return;
+        }
+
+        _destinationView.ClearGroupPreviewSlots();
 
         foreach (EntityId unitId in unitViews.Selected)
         {
@@ -470,6 +598,95 @@ internal sealed class OrderPreviewController
         return true;
     }
 
+    private void UpdateGroupPreviewDuringGesture(
+        Camera3D camera,
+        UnitViewSet unitViews,
+        ClientReplica replica)
+    {
+        float? dragFacing = _isFacingDetermined ? _gestureFacing : null;
+        MoveMode moveMode = _facingGestureMode;
+        System.Numerics.Vector2 target2D = _facingGestureTarget2D;
+        uint hitSurface = _facingGestureHitSurface;
+
+        int inputCount = 0;
+        foreach (EntityId unitId in unitViews.Selected)
+        {
+            if (!replica.TryGetOwnUnit(unitId, out OwnUnitObservation own))
+                continue;
+
+            float radius = 1.0f;
+            float colRadius = 0f;
+            TraversabilityCapabilities capabilities = TraversabilityCapabilities.DefaultVehicle;
+            bool canRev = true;
+            float revSpeed = 2.5f;
+
+            if (_movementCatalog.TryGetProfile(own.Definition, out UnitMovementProfile profile))
+            {
+                radius = profile.Radius;
+                colRadius = profile.EffectiveCollisionRadius;
+                capabilities = profile.Capabilities;
+                canRev = profile.ReverseSpeed > 0f;
+                revSpeed = profile.ReverseSpeed;
+            }
+
+            if (inputCount < _previewGroupInputs.Length)
+            {
+                _previewGroupInputs[inputCount++] = new GroupUnitInput(
+                    unitId,
+                    own.Position,
+                    own.HullHeading,
+                    radius,
+                    colRadius,
+                    capabilities,
+                    canRev,
+                    revSpeed);
+            }
+        }
+
+        if (inputCount == 0)
+        {
+            _destinationView.ClearGroupPreviewSlots();
+            return;
+        }
+
+        GroupPreviewResult preview = GroupDestinationDistribution.ComputePreview(
+            _previewGroupInputs.AsSpan(0, inputCount),
+            target2D,
+            hitSurface,
+            dragFacing,
+            moveMode,
+            _evaluator);
+
+        int validCount = preview.PlacedCount + preview.AdjustedCount;
+        if (validCount == 0)
+        {
+            _destinationView.ClearGroupPreviewSlots();
+            return;
+        }
+
+        int slotIdx = 0;
+        ReadOnlySpan<GroupPreviewSlot> slots = preview.Slots.Span;
+        for (int s = 0; s < slots.Length && slotIdx < OrderDestinationView.MaxGroupSlots; s++)
+        {
+            GroupPreviewSlot slot = slots[s];
+            if (slot.Validity != DestinationValidity.Blocked)
+            {
+                float h = _evaluator.GetSurfaceHeight(slot.Target, hitSurface);
+                float origH = _evaluator.GetSurfaceHeight(slot.OriginalTarget, hitSurface);
+                _previewSlotTargets3D[slotIdx] = new Vector3(slot.Target.X, h + 0.12f, slot.Target.Y);
+                _previewSlotOrigTargets3D[slotIdx] = new Vector3(slot.OriginalTarget.X, origH + 0.10f, slot.OriginalTarget.Y);
+                _previewSlotAdjusted[slotIdx] = slot.Validity == DestinationValidity.Adjusted;
+                slotIdx++;
+            }
+        }
+
+        _destinationView.ShowGroupPreviewSlots(
+            _previewSlotTargets3D.AsSpan(0, slotIdx),
+            _previewSlotAdjusted.AsSpan(0, slotIdx),
+            _previewSlotOrigTargets3D.AsSpan(0, slotIdx),
+            dragFacing);
+    }
+
     public void UpdateFacingGesture(Camera3D camera, Vector2 mousePos, UnitViewSet? unitViews = null)
     {
         if (!_isFacingGestureActive) return;
@@ -484,12 +701,6 @@ internal sealed class OrderPreviewController
         }
 
         float screenDist = mousePos.DistanceTo(_facingGestureStartScreenPos);
-        if (screenDist < DragThresholdPixels)
-        {
-            _isFacingDetermined = false;
-            _destinationView.HideFacingArrow();
-            return;
-        }
 
         Vector3 rayOrigin = camera.ProjectRayOrigin(mousePos);
         Vector3 rayDir = camera.ProjectRayNormal(mousePos);
@@ -510,7 +721,7 @@ internal sealed class OrderPreviewController
         float dz = hitPoint.Z - _facingGestureTarget3D.Z;
         float worldDistSq = dx * dx + dz * dz;
 
-        if (worldDistSq < DragThresholdWorldDistance * DragThresholdWorldDistance)
+        if (screenDist < DragThresholdPixels && worldDistSq < DragThresholdWorldDistance * DragThresholdWorldDistance)
         {
             _isFacingDetermined = false;
             _destinationView.HideFacingArrow();
@@ -705,10 +916,101 @@ internal sealed class OrderPreviewController
         _trackedOrderCount = 0;
         int sentMove = 0;
 
+        bool allSameTarget = true;
+        System.Numerics.Vector2 primaryTarget = _validUnitsBuffer[0].Target;
+        for (int i = 1; i < validCount; i++)
+        {
+            if (_validUnitsBuffer[i].Target != primaryTarget)
+            {
+                allSameTarget = false;
+                break;
+            }
+        }
+        _hasDivergentTargets = !allSameTarget;
+
+        if (validCount > 1)
+        {
+            EntityId[] groupUnits = new EntityId[validCount];
+            for (int i = 0; i < validCount; i++)
+            {
+                groupUnits[i] = _validUnitsBuffer[i].UnitId;
+            }
+
+            if (session.GroupMove(groupUnits, target2D, hitSurface, finalFacing, mode))
+            {
+                uint groupSeq = session.LastSubmittedCommandSequence;
+                sentMove = validCount;
+                _orderOutcomeHandled = false;
+                _trackedOrderCount = 0;
+
+                for (int i = 0; i < validCount; i++)
+                {
+                    if (_trackedOrderCount < _trackedOrders.Length)
+                    {
+                        _trackedOrders[_trackedOrderCount++] = new TrackedUnitOrder
+                        {
+                            UnitId = groupUnits[i],
+                            Sequence = groupSeq,
+                            LastObservedNavStatus = PathRequestStatus.None,
+                            HasResult = false
+                        };
+                    }
+                }
+
+                int slotIdx = 0;
+                for (int i = 0; i < validCount && slotIdx < OrderDestinationView.MaxGroupSlots; i++)
+                {
+                    System.Numerics.Vector2 target = _validUnitsBuffer[i].Target;
+                    float h = _evaluator.GetSurfaceHeight(target, hitSurface);
+                    _previewSlotTargets3D[slotIdx] = new Vector3(target.X, h + 0.12f, target.Y);
+                    _previewSlotOrigTargets3D[slotIdx] = _previewSlotTargets3D[slotIdx];
+                    _previewSlotAdjusted[slotIdx] = false;
+                    slotIdx++;
+                }
+
+                _destinationView.ClearGroupPreviewSlots();
+                _destinationView.ShowGroupSlots(
+                    _previewSlotTargets3D.AsSpan(0, slotIdx),
+                    _previewSlotAdjusted.AsSpan(0, slotIdx),
+                    _previewSlotOrigTargets3D.AsSpan(0, slotIdx),
+                    finalFacing,
+                    OrderMarkerVisualState.Sent);
+
+                if (allSameTarget)
+                {
+                    float markerHeight = _evaluator.GetSurfaceHeight(primaryTarget, hitSurface);
+                    _lastOrderedTarget3D = new Vector3(primaryTarget.X, markerHeight + 0.12f, primaryTarget.Y);
+                    _destinationView.Show(_lastOrderedTarget3D, OrderMarkerVisualState.Sent);
+                    _destinationView.HideGhost();
+                }
+                else
+                {
+                    _destinationView.ClearSubmittedMarker();
+                    _destinationView.HideGhost();
+                }
+
+                int totalSelectedCount = unitViews.Selected.Count;
+                if (skippedCount > 0)
+                {
+                    string skipReason = DestinationBlockReasons.GetReasonText(primaryBlockedReason);
+                    notificationMessage = $"Move order: destinations assigned to {validCount} of {totalSelectedCount} units; {skippedCount} could not be placed.";
+                }
+                else
+                {
+                    notificationMessage = finalFacing.HasValue
+                        ? $"Move order submitted / {validCount} units / separate destinations / facing {MathF.Round(finalFacing.Value * 180f / MathF.PI):F0}°"
+                        : $"Move order submitted / {validCount} units / separate destinations";
+                }
+
+                _notification?.ShowNotification(notificationMessage);
+                return true;
+            }
+        }
+
         for (int i = 0; i < validCount; i++)
         {
             ValidUnitOrder order = _validUnitsBuffer[i];
-            if (session.Move(order.UnitId, order.Target, finalFacing, mode))
+            if (session.Move(order.UnitId, order.Target, finalFacing, mode, hitSurface))
             {
                 sentMove++;
                 uint seq = session.LastSubmittedCommandSequence;
@@ -724,18 +1026,6 @@ internal sealed class OrderPreviewController
                 }
             }
         }
-
-        bool allSameTarget = true;
-        System.Numerics.Vector2 primaryTarget = _validUnitsBuffer[0].Target;
-        for (int i = 1; i < validCount; i++)
-        {
-            if (_validUnitsBuffer[i].Target != primaryTarget)
-            {
-                allSameTarget = false;
-                break;
-            }
-        }
-        _hasDivergentTargets = !allSameTarget;
 
         if (allSameTarget)
         {
@@ -797,22 +1087,81 @@ internal sealed class OrderPreviewController
         if (session.LastCommandResult is { } result && result.Sequence != _lastHandledCommandResultSeq)
         {
             _lastHandledCommandResultSeq = result.Sequence;
+            bool anyMatched = false;
             for (int i = 0; i < _trackedOrderCount; i++)
             {
                 if (_trackedOrders[i].Sequence == result.Sequence)
                 {
+                    anyMatched = true;
                     if (!result.Queued)
                     {
                         _trackedOrders[i].IsRejected = true;
                         _trackedOrders[i].HasResult = true;
                         _trackedOrders[i].LastObservedNavStatus = PathRequestStatus.InvalidDestination;
-                        _notification?.ShowNotification($"Order #{result.Sequence} rejected by server");
                     }
-                    else if (_destinationView.CurrentState == OrderMarkerVisualState.Sent && !_hasDivergentTargets)
+                }
+            }
+
+            if (anyMatched)
+            {
+                if (!result.Queued)
+                {
+                    _notification?.ShowNotification($"Order #{result.Sequence} rejected by server");
+                }
+                else if (_destinationView.CurrentState == OrderMarkerVisualState.Sent)
+                {
+                    if (!_hasDivergentTargets)
                     {
                         _destinationView.SetState(OrderMarkerVisualState.Processing);
                     }
-                    break;
+                    else
+                    {
+                        _destinationView.SetGroupState(OrderMarkerVisualState.Processing);
+                    }
+                }
+            }
+        }
+
+        if (session.LastGroupMoveResult is { } groupResult && groupResult.Sequence != _lastHandledGroupResultSeq)
+        {
+            _lastHandledGroupResultSeq = groupResult.Sequence;
+            if (_trackedOrderCount > 0 && _trackedOrders[0].Sequence == groupResult.Sequence)
+            {
+                ReadOnlySpan<GroupMoveAssignment> placed = groupResult.Placed.Span;
+                int slotIdx = 0;
+                for (int i = 0; i < placed.Length && slotIdx < OrderDestinationView.MaxGroupSlots; i++)
+                {
+                    System.Numerics.Vector2 target = placed[i].Target;
+                    float h = _evaluator.GetSurfaceHeight(target, groupResult.TargetSurface);
+                    _previewSlotTargets3D[slotIdx] = new Vector3(target.X, h + 0.12f, target.Y);
+                    _previewSlotOrigTargets3D[slotIdx] = _previewSlotTargets3D[slotIdx];
+                    _previewSlotAdjusted[slotIdx] = false;
+                    slotIdx++;
+                }
+
+                _destinationView.ClearGroupPreviewSlots();
+                _destinationView.ShowGroupSlots(
+                    _previewSlotTargets3D.AsSpan(0, slotIdx),
+                    _previewSlotAdjusted.AsSpan(0, slotIdx),
+                    _previewSlotOrigTargets3D.AsSpan(0, slotIdx),
+                    groupResult.Mode == MoveMode.Forward && groupResult.Placed.Length > 0 && groupResult.Placed.Span[0].FinalFacing.HasValue ? groupResult.Placed.Span[0].FinalFacing : null,
+                    _destinationView.CurrentState == OrderMarkerVisualState.Processing ? OrderMarkerVisualState.Processing : OrderMarkerVisualState.Sent);
+
+                // Mark unplaced participants as rejected so tracking resolves without indefinite hanging
+                ReadOnlySpan<GroupMoveUnplaced> unplaced = groupResult.Unplaced.Span;
+                for (int u = 0; u < unplaced.Length; u++)
+                {
+                    EntityId unplacedId = unplaced[u].Unit;
+                    for (int i = 0; i < _trackedOrderCount; i++)
+                    {
+                        if (_trackedOrders[i].UnitId == unplacedId && _trackedOrders[i].Sequence == groupResult.Sequence)
+                        {
+                            _trackedOrders[i].IsRejected = true;
+                            _trackedOrders[i].HasResult = true;
+                            _trackedOrders[i].LastObservedNavStatus = PathRequestStatus.InvalidDestination;
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -886,6 +1235,10 @@ internal sealed class OrderPreviewController
                 {
                     _destinationView.SetState(OrderMarkerVisualState.PathFound);
                 }
+                else
+                {
+                    _destinationView.SetGroupState(OrderMarkerVisualState.PathFound);
+                }
                 _orderOutcomeHandled = true;
             }
             else if (failedCount > 0 && pathFoundCount == 0)
@@ -893,6 +1246,10 @@ internal sealed class OrderPreviewController
                 if (!_hasDivergentTargets)
                 {
                     _destinationView.SetState(OrderMarkerVisualState.Failed);
+                }
+                else
+                {
+                    _destinationView.SetGroupState(OrderMarkerVisualState.Failed);
                 }
                 _notification?.ShowNotification("Route not found");
                 _orderOutcomeHandled = true;
@@ -903,13 +1260,24 @@ internal sealed class OrderPreviewController
                 {
                     _destinationView.SetState(OrderMarkerVisualState.Partial);
                 }
+                else
+                {
+                    _destinationView.SetGroupState(OrderMarkerVisualState.Partial);
+                }
                 _notification?.ShowNotification($"Move order: {pathFoundCount} of {activeTracked} units route found, {failedCount} failed");
                 _orderOutcomeHandled = true;
             }
         }
-        else if (searchingCount > 0 && _destinationView.CurrentState == OrderMarkerVisualState.Sent && !_hasDivergentTargets)
+        else if (searchingCount > 0 && _destinationView.CurrentState == OrderMarkerVisualState.Sent)
         {
-            _destinationView.SetState(OrderMarkerVisualState.Processing);
+            if (!_hasDivergentTargets)
+            {
+                _destinationView.SetState(OrderMarkerVisualState.Processing);
+            }
+            else
+            {
+                _destinationView.SetGroupState(OrderMarkerVisualState.Processing);
+            }
         }
     }
 
@@ -918,6 +1286,7 @@ internal sealed class OrderPreviewController
         CancelFacingGesture();
         _overlay.HideTooltip();
         _destinationView.HideGhost();
+        _destinationView.ClearGroupPreviewSlots();
     }
 
     public void Reset()
@@ -926,6 +1295,7 @@ internal sealed class OrderPreviewController
         _isFacingDetermined = false;
         _trackedOrderCount = 0;
         _lastHandledCommandResultSeq = 0;
+        _lastHandledGroupResultSeq = 0;
         _orderOutcomeHandled = false;
         _hasDivergentTargets = false;
         _destinationView.Clear();

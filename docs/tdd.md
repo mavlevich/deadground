@@ -581,7 +581,7 @@ Architecture and kinematics:
   - Own unit record is 35 bytes: `uint Id` (4 bytes), `ushort Definition` (2 bytes), `Vector2 Position` (8 bytes), `uint SupportSurface` (4 bytes), `byte NavStatus` (1 byte), `ushort Health` (2 bytes), `ushort Ammunition` (2 bytes), `ushort ReloadTicksRemaining` (2 bytes), `byte AttackStatus` (1 byte), `uint TargetContactId` (4 bytes), `byte Stance` (1 byte), `ushort TurretYaw` (2 bytes), `ushort HullHeading` (2 bytes).
   - Contact record is 24 bytes: `uint ContactId` (4 bytes), `byte State` (1 byte), `byte Classification` (1 byte), `ushort Type` (2 bytes), `Vector2 Position` (8 bytes), `int LastSeenTick` (4 bytes), `ushort TurretYaw` (2 bytes), `ushort HullHeading` (2 bytes).
   - Combat event record is 40 bytes: `uint EventId` (4 bytes), `int ServerTick` (4 bytes), `byte Kind` (1 byte), `ushort PresentationId` (2 bytes), `Vector3 Origin` (12 bytes), `Vector3 Target` (12 bytes), `uint ShooterUnitId` (4 bytes), `byte Result` (1 byte: 0 None, 1 Penetrated, 2 Deflected).
-  - Commands: `MoveCommand` is 22 bytes (`MoveKind = 1`), `AttackCommand` is 18 bytes (`AttackKind = 7`: `Version` (1), `Kind` (1), `Sequence` (4), `ClientTick` (4), `Unit` (4), `TargetContactId` (4)), `SetFireStanceCommand` is 15 bytes (`SetFireStanceKind = 8`). All commands share a single sequence stream per player.
+  - Commands: `MoveCommand` is 32 bytes (`MoveKind = 1`: `Version` (1), `Kind` (1), `Sequence` (4), `ClientTick` (4), `Unit` (4), `Target` (8), `HasFacing` (1), `FinalFacing` (4), `Mode` (1), `TargetSurface` (4)), `AttackCommand` is 18 bytes (`AttackKind = 7`: `Version` (1), `Kind` (1), `Sequence` (4), `ClientTick` (4), `Unit` (4), `TargetContactId` (4)), `SetFireStanceCommand` is 15 bytes (`SetFireStanceKind = 8`). All commands share a single sequence stream per player.
   - Information isolation: server-filtered snapshots only contain permitted observations and knowledge-filtered events for the recipient player. Foreign truth state and hidden firing origins are never transmitted.
 
 Detection is a measured CPU hotspot that fits the per-tick simulation budget: steady-state detection, combat resolution, and snapshot serialization execute with zero managed heap allocations.
@@ -703,8 +703,33 @@ and on-the-fly redirection are implemented. User waypoint queues below remain pl
   (section 9). Reaching an internal waypoint or finishing a navigation chunk never completes a user
   order; only arriving at the destination (and the final facing, if any) does, and then the next
   queued order starts.
-- Group moves keep the existing per-unit commands. Formation spreading of group destinations is later
-  work (M3).
+- Group move destinations:
+  - Authoritative group move destination distribution assigns distinct, non-overlapping arrival positions to a selected group of vehicles around a common target area.
+  - Wire protocol version 21 (`MatchSetup.CurrentProtocolVersion = 21`):
+    - `GroupMoveCommand` (Kind 9): client intent specifying `Sequence`, `ClientTick`, `Target` (Vector2), `TargetSurface`, `FinalFacing` (nullable float), `Mode` (Forward / Reverse), and `UnitIds` list (up to `WireProtocol.MaxUnits = 1024`).
+    - `GroupMoveResult` (Kind 10): server-authoritative response returning `Sequence`, `ServerTick`, `Target`, `TargetSurface`, `Mode`, `Placed` assignments (`UnitId`, `Target`, `TargetSurface`, `FinalFacing`), and `Unplaced` diagnostics (`UnitId`, `Reason`).
+  - Distribution algorithm (`GroupDestinationDistribution`):
+    - Conservative cell size S = 2 * max(R_collision) + destinationGap (where destinationGap = 1.0 m), ensuring physical separation clearance between any two adjacent slots.
+    - Concentric spiral candidate generation with lateral bias: offsets (c, r) ordered by c^2 + 1.5 * r^2 so vehicles expand into a line abreast before deepening formation depth.
+    - Lateral ordering preservation: projects vehicle starting positions onto the formation right axis R and forward axis F. A three-pass ordering pipeline ensures strict weak ordering independent of input array permutation:
+      - Canonical sort strictly by lateral offset and EntityId.
+      - Discrete lateral lane clustering (lane width based on collision radius, grouping vehicles in single-file columns).
+      - Strict ordering by lane index (left to right), longitudinal coordinate descending (leading vehicles first), and EntityId.
+    - Candidate validation via `DestinationEvaluator`: verifies static terrain bounds, building boundaries, water traversability, dense forest, and bridge deck vs under-span surfaces.
+    - Target snapping and anti-collapse rule: when target is near obstacle perimeter (<= 3.0 m), candidate positions snap to clear ground; snapped slots are rejected if closer than S to any previously accepted candidate.
+    - Dynamic clearance verification: for each placed vehicle u and previously placed vehicle p, enforces distance >= R_collision,u + R_collision,p + destinationGap.
+    - Partial placement policy: when slots are constrained, available slots are allocated to closest suitable units; unplaced vehicles receive explicit diagnostic reasons and preserve their active existing orders.
+    - Steady-state allocation characteristics:
+      - Client hover preview (`GroupDestinationDistribution.ComputePreview`) executes every frame with 0 B heap allocations via pre-allocated thread-static buffers.
+      - Server-authoritative command execution (`GroupDestinationDistribution.Distribute` and `NavigationSystem.ExecuteGroupMove`) allocates ~504 B per order for 20 units (one owned `GroupMoveAssignment[]` result array to guarantee memory isolation across concurrent players without result corruption, eliminating intermediate list and LINQ allocations).
+    - Known scale constraints and limitations:
+      - Group sizes up to 300 units are fully supported in a single order. Under standard configuration (`DefaultMaxPendingRequests = 512`), a maximum-sized group of 1024 units receives 512 placed assignments and 512 capacity rejections (`CapacityExceeded`) communicated in the result; full single-step execution of 1024 units is not yet supported.
+      - While typical distribution operations complete in 5-9 ms, the strict p99 < 15 ms latency budget for maximum 1024-unit groups showed occasional spikes above the budget during heavy obstacle scenes; root-cause localization remains open.
+  - Multi-unit client preview and visualization:
+    - `OrderPreviewController` invokes `GroupDestinationDistribution.ComputePreview` during mouse hover and drag gestures.
+    - `OrderDestinationView` pools up to 128 destination markers and facing arrows, rendering candidate slots (amber for valid, cyan for processing, green for path found, orange for partial, red for failed).
+    - Ghost preview rings indicate positions adjusted by obstacle edge snapping.
+    - HUD notification displays exact placement summary: "Move order: destinations assigned to X of Y units; Z could not be placed."
 - Destination pre-evaluation (`DestinationEvaluator`):
   - Shared allocation-free evaluation engine shared by client pre-click validation and server snapping.
   - Distinguishes destination validity from route reachability: pre-evaluation checks local point traversability and obstacle clearance, but does not guarantee the existence of an unobstructed transit corridor (for example, land across an unbridged river).

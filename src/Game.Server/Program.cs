@@ -91,6 +91,7 @@ StaticGeometry? scenarioGeometry = scenario switch
     "battle" => BattleScenario.CreateStaticGeometry(),
     "bridge-crossing" => BridgeCrossingScenario.CreateStaticGeometry(),
     "vehicle-traffic" => VehicleTrafficScenario.CreateStaticGeometry(),
+    "group-move" => GroupMoveScenario.CreateStaticGeometry(),
     _ => null
 };
 
@@ -107,6 +108,7 @@ MatchSetup setup = scenario switch
     "battle" => BattleScenario.CreateMatchSetup(scenarioGeometry!),
     "bridge-crossing" => BridgeCrossingScenario.CreateMatchSetup(scenarioGeometry!),
     "vehicle-traffic" => VehicleTrafficScenario.CreateMatchSetup(scenarioGeometry!),
+    "group-move" => GroupMoveScenario.CreateMatchSetup(scenarioGeometry!),
     _ => PrototypeScenario.CreateMatchSetup(map)
 };
 
@@ -135,6 +137,7 @@ Simulation CreateSimulation(ulong seed = 0)
         "battle" => BattleScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "bridge-crossing" => BridgeCrossingScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "vehicle-traffic" => VehicleTrafficScenario.CreateSimulation(scenarioGeometry!),
+        "group-move" => GroupMoveScenario.CreateSimulation(scenarioGeometry!),
         _ => PrototypeScenario.Create(map)
     };
 }
@@ -280,6 +283,45 @@ if (smokeTest)
             throw new InvalidOperationException($"Bridge-crossing smoke test failed: tank height dropped to {minHeightOnBridge:F2}m on bridge deck.");
 
         Console.WriteLine($"BRIDGE_CROSSING_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} start={startPos.X:F0} crossed_to_east_bank=true");
+        return;
+    }
+
+    if (scenario == "group-move")
+    {
+        for (int i = 0; i < 10; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.Replica.OwnUnits.Length < 10)
+            throw new InvalidOperationException("Group-move smoke test: expected at least 10 units.");
+
+        EntityId[] group = new EntityId[10];
+        Vector2[] startPositions = new Vector2[10];
+        for (int i = 0; i < 10; i++)
+        {
+            group[i] = session.Replica.OwnUnits[i].Id;
+            startPositions[i] = session.Replica.OwnUnits[i].Position;
+        }
+
+        Vector2 target = new(40f, 80f);
+        bool commanded = session.GroupMove(group, target);
+        if (!commanded) throw new InvalidOperationException("Group-move smoke test failed to issue group move.");
+
+        for (int i = 0; i < 120; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.LastGroupMoveResult is not { Placed.Length: 10 })
+            throw new InvalidOperationException("Group-move smoke test: group move result missing or incomplete.");
+
+        int movedCount = 0;
+        for (int i = 0; i < 10; i++)
+        {
+            Vector2 currentPos = session.Replica.SamplePosition(group[i], session.Replica.LatestTick);
+            if (Vector2.Distance(currentPos, startPositions[i]) > 2.0f)
+            {
+                movedCount++;
+            }
+        }
+
+        if (movedCount < 10)
+            throw new InvalidOperationException($"Group-move smoke test: only {movedCount}/10 units moved.");
+
+        Console.WriteLine($"GROUP_MOVE_SMOKE_OK tick={session.Tick} placed={session.LastGroupMoveResult.Value.Placed.Length} moved={movedCount} own_units={session.Replica.OwnUnits.Length}");
         return;
     }
 

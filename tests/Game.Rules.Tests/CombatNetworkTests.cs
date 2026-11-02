@@ -819,8 +819,8 @@ public sealed class CombatNetworkTests
     [Fact]
     public void WireProtocol_SetFireStance_RoundTrip_AndValidation()
     {
-        Assert.Equal(20, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(20, WireProtocol.Version);
+        Assert.Equal(21, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(21, WireProtocol.Version);
 
         byte[] buffer = new byte[32];
         SetFireStanceCommand cmd = new(42, 10, new EntityId(5), FireStance.ReturnFire);

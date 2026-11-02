@@ -38,6 +38,107 @@ internal sealed partial class OrderDestinationView : Node3D
     private double _timeInState;
     private Vector3 _targetPosition;
 
+    public const int MaxGroupSlots = 128;
+
+    internal sealed class PooledMarker
+    {
+        public readonly Node3D Root;
+        public readonly MeshInstance3D Ring;
+        public readonly MeshInstance3D CenterDot;
+        public readonly MeshInstance3D GhostRing;
+        public readonly Node3D FacingArrowRoot;
+        public readonly MeshInstance3D FacingArrowShaft;
+        public readonly MeshInstance3D FacingArrowHead;
+
+        public OrderMarkerVisualState State = OrderMarkerVisualState.Hidden;
+        public double TimeInState;
+        public bool IsActive;
+
+        public PooledMarker(
+            Node3D parent,
+            TorusMesh ringMesh,
+            CylinderMesh dotMesh,
+            TorusMesh ghostMesh,
+            BoxMesh shaftMesh,
+            CylinderMesh headMesh,
+            StandardMaterial3D initialMat,
+            StandardMaterial3D ghostMat)
+        {
+            Root = new Node3D { Visible = false };
+            parent.AddChild(Root);
+
+            Ring = new MeshInstance3D
+            {
+                Mesh = ringMesh,
+                Scale = new Vector3(1f, 0.15f, 1f),
+                MaterialOverride = initialMat
+            };
+            Root.AddChild(Ring);
+
+            CenterDot = new MeshInstance3D
+            {
+                Mesh = dotMesh,
+                MaterialOverride = initialMat
+            };
+            Root.AddChild(CenterDot);
+
+            GhostRing = new MeshInstance3D
+            {
+                Mesh = ghostMesh,
+                Scale = new Vector3(1f, 0.15f, 1f),
+                MaterialOverride = ghostMat,
+                Visible = false
+            };
+            Root.AddChild(GhostRing);
+
+            FacingArrowRoot = new Node3D { Visible = false };
+            Root.AddChild(FacingArrowRoot);
+
+            FacingArrowShaft = new MeshInstance3D
+            {
+                Mesh = shaftMesh,
+                Position = new Vector3(0f, 0.05f, -1.0f),
+                MaterialOverride = initialMat
+            };
+            FacingArrowRoot.AddChild(FacingArrowShaft);
+
+            FacingArrowHead = new MeshInstance3D
+            {
+                Mesh = headMesh,
+                Rotation = new Vector3(-Mathf.Pi / 2f, 0f, 0f),
+                Position = new Vector3(0f, 0.05f, -2.4f),
+                MaterialOverride = initialMat
+            };
+            FacingArrowRoot.AddChild(FacingArrowHead);
+        }
+
+        public void ApplyMaterial(StandardMaterial3D mat)
+        {
+            Ring.MaterialOverride = mat;
+            CenterDot.MaterialOverride = mat;
+            FacingArrowShaft.MaterialOverride = mat;
+            FacingArrowHead.MaterialOverride = mat;
+        }
+
+        public void Hide()
+        {
+            Root.Visible = false;
+            GhostRing.Visible = false;
+            FacingArrowRoot.Visible = false;
+            IsActive = false;
+            State = OrderMarkerVisualState.Hidden;
+            TimeInState = 0;
+        }
+    }
+
+    private readonly PooledMarker[] _markerPool = new PooledMarker[MaxGroupSlots];
+    private int _activeGroupSlotCount;
+    public int ActiveGroupSlotCount => _activeGroupSlotCount;
+
+    private readonly PooledMarker[] _previewPool = new PooledMarker[MaxGroupSlots];
+    private int _activePreviewSlotCount;
+    public int ActivePreviewSlotCount => _activePreviewSlotCount;
+
     public OrderMarkerVisualState CurrentState => _state;
     public Vector3 TargetPosition => _targetPosition;
     internal bool IsGhostVisible => _ghostRing.Visible;
@@ -146,6 +247,29 @@ internal sealed partial class OrderDestinationView : Node3D
         };
         _facingArrowRoot.AddChild(_facingArrowHead);
 
+        for (int i = 0; i < MaxGroupSlots; i++)
+        {
+            _markerPool[i] = new PooledMarker(
+                this,
+                ringMesh,
+                dotMesh,
+                ghostMesh,
+                shaftMesh,
+                headMesh,
+                _matSent,
+                _matGhost);
+
+            _previewPool[i] = new PooledMarker(
+                this,
+                ringMesh,
+                dotMesh,
+                ghostMesh,
+                shaftMesh,
+                headMesh,
+                _matSent,
+                _matGhost);
+        }
+
         Visible = true;
     }
 
@@ -169,26 +293,155 @@ internal sealed partial class OrderDestinationView : Node3D
 
     public void SetState(OrderMarkerVisualState state)
     {
-        if (_state == state) return;
         _state = state;
         _timeInState = 0;
         _markerRoot.Visible = state != OrderMarkerVisualState.Hidden;
         ApplyMaterialForState(state);
+        SetGroupState(state);
     }
+
+    public StandardMaterial3D GetMaterialForState(OrderMarkerVisualState state) => state switch
+    {
+        OrderMarkerVisualState.Sent => _matSent,
+        OrderMarkerVisualState.Processing => _matProcessing,
+        OrderMarkerVisualState.PathFound => _matSuccess,
+        OrderMarkerVisualState.Failed => _matFailed,
+        OrderMarkerVisualState.Partial => _matPartial,
+        _ => _matSent
+    };
 
     private void ApplyMaterialForState(OrderMarkerVisualState state)
     {
-        StandardMaterial3D mat = state switch
-        {
-            OrderMarkerVisualState.Sent => _matSent,
-            OrderMarkerVisualState.Processing => _matProcessing,
-            OrderMarkerVisualState.PathFound => _matSuccess,
-            OrderMarkerVisualState.Failed => _matFailed,
-            OrderMarkerVisualState.Partial => _matPartial,
-            _ => _matSent
-        };
+        StandardMaterial3D mat = GetMaterialForState(state);
         _ring.MaterialOverride = mat;
         _centerDot.MaterialOverride = mat;
+    }
+
+    public void ShowGroupSlots(
+        ReadOnlySpan<Vector3> targets,
+        ReadOnlySpan<bool> isAdjusted,
+        ReadOnlySpan<Vector3> originalTargets,
+        float? facing,
+        OrderMarkerVisualState state)
+    {
+        _state = state;
+        _activeGroupSlotCount = Math.Min(targets.Length, MaxGroupSlots);
+        StandardMaterial3D mat = GetMaterialForState(state);
+
+        for (int i = 0; i < _activeGroupSlotCount; i++)
+        {
+            PooledMarker marker = _markerPool[i];
+            marker.Root.Position = targets[i];
+            marker.Root.Visible = true;
+            marker.IsActive = true;
+            marker.State = state;
+            marker.TimeInState = 0;
+            marker.ApplyMaterial(mat);
+
+            if (isAdjusted.Length > i && isAdjusted[i] && originalTargets.Length > i)
+            {
+                marker.GhostRing.Position = originalTargets[i] - targets[i];
+                marker.GhostRing.Visible = true;
+            }
+            else
+            {
+                marker.GhostRing.Visible = false;
+            }
+
+            if (facing.HasValue)
+            {
+                marker.FacingArrowRoot.Rotation = new Vector3(0f, facing.Value, 0f);
+                marker.FacingArrowRoot.Visible = true;
+            }
+            else
+            {
+                marker.FacingArrowRoot.Visible = false;
+            }
+        }
+
+        for (int i = _activeGroupSlotCount; i < MaxGroupSlots; i++)
+        {
+            _markerPool[i].Hide();
+        }
+    }
+
+    public void SetGroupState(OrderMarkerVisualState state)
+    {
+        _state = state;
+        StandardMaterial3D mat = GetMaterialForState(state);
+        for (int i = 0; i < _activeGroupSlotCount; i++)
+        {
+            _markerPool[i].State = state;
+            _markerPool[i].TimeInState = 0;
+            _markerPool[i].ApplyMaterial(mat);
+        }
+    }
+
+    public void ClearGroupSlots()
+    {
+        for (int i = 0; i < _activeGroupSlotCount; i++)
+        {
+            _markerPool[i].Hide();
+        }
+        _activeGroupSlotCount = 0;
+    }
+
+    public void ShowGroupPreviewSlots(
+        ReadOnlySpan<Vector3> targets,
+        ReadOnlySpan<bool> isAdjusted,
+        ReadOnlySpan<Vector3> originalTargets,
+        float? facing)
+    {
+        _activePreviewSlotCount = Math.Min(targets.Length, MaxGroupSlots);
+        StandardMaterial3D mat = _matSent;
+
+        for (int i = 0; i < _activePreviewSlotCount; i++)
+        {
+            PooledMarker marker = _previewPool[i];
+            marker.Root.Position = targets[i];
+            marker.Root.Visible = true;
+            marker.IsActive = true;
+            marker.State = OrderMarkerVisualState.Sent;
+            marker.TimeInState = 0;
+            marker.ApplyMaterial(mat);
+
+            if (isAdjusted.Length > i && isAdjusted[i] && originalTargets.Length > i)
+            {
+                marker.GhostRing.Position = originalTargets[i] - targets[i];
+                marker.GhostRing.Visible = true;
+            }
+            else
+            {
+                marker.GhostRing.Visible = false;
+            }
+
+            if (facing.HasValue)
+            {
+                marker.FacingArrowRoot.Rotation = new Vector3(0f, facing.Value, 0f);
+                marker.FacingArrowRoot.Visible = true;
+            }
+            else
+            {
+                marker.FacingArrowRoot.Visible = false;
+            }
+        }
+
+        for (int i = _activePreviewSlotCount; i < MaxGroupSlots; i++)
+        {
+            if (_previewPool[i].IsActive)
+            {
+                _previewPool[i].Hide();
+            }
+        }
+    }
+
+    public void ClearGroupPreviewSlots()
+    {
+        for (int i = 0; i < _activePreviewSlotCount; i++)
+        {
+            _previewPool[i].Hide();
+        }
+        _activePreviewSlotCount = 0;
     }
 
     public void ShowGhost(Vector3 worldPos)
@@ -204,6 +457,98 @@ internal sealed partial class OrderDestinationView : Node3D
 
     public void Update(double delta)
     {
+        if (_activeGroupSlotCount > 0)
+        {
+            for (int i = 0; i < _activeGroupSlotCount; i++)
+            {
+                PooledMarker marker = _markerPool[i];
+                if (!marker.IsActive) continue;
+
+                marker.TimeInState += delta;
+                switch (marker.State)
+                {
+                    case OrderMarkerVisualState.Sent:
+                        {
+                            float pulse = 1.0f + 0.08f * MathF.Sin((float)marker.TimeInState * 8.0f);
+                            marker.Ring.Scale = new Vector3(pulse, 0.15f, pulse);
+                            break;
+                        }
+                    case OrderMarkerVisualState.Processing:
+                        {
+                            float pulse = 1.0f + 0.14f * MathF.Sin((float)marker.TimeInState * 10.0f);
+                            marker.Ring.Scale = new Vector3(pulse, 0.15f, pulse);
+                            break;
+                        }
+                    case OrderMarkerVisualState.PathFound:
+                        {
+                            float pulse = 1.0f + 0.03f * MathF.Sin((float)marker.TimeInState * 3.0f);
+                            marker.Ring.Scale = new Vector3(pulse, 0.15f, pulse);
+                            if (marker.TimeInState > 3.0)
+                            {
+                                float fade = (float)Math.Clamp(1.0 - (marker.TimeInState - 3.0) / 1.5, 0.0, 1.0);
+                                if (fade <= 0f)
+                                {
+                                    marker.Hide();
+                                }
+                            }
+                            break;
+                        }
+                    case OrderMarkerVisualState.Failed:
+                        {
+                            marker.Ring.Scale = new Vector3(1.1f, 0.15f, 1.1f);
+                            if (marker.TimeInState > 1.2)
+                            {
+                                float fade = (float)Math.Clamp(1.0 - (marker.TimeInState - 1.2) / 0.8, 0.0, 1.0);
+                                if (fade <= 0f)
+                                {
+                                    marker.Hide();
+                                }
+                            }
+                            break;
+                        }
+                    case OrderMarkerVisualState.Partial:
+                        {
+                            float pulse = 1.0f + 0.06f * MathF.Sin((float)marker.TimeInState * 5.0f);
+                            marker.Ring.Scale = new Vector3(pulse, 0.15f, pulse);
+                            if (marker.TimeInState > 4.0)
+                            {
+                                float fade = (float)Math.Clamp(1.0 - (marker.TimeInState - 4.0) / 1.5, 0.0, 1.0);
+                                if (fade <= 0f)
+                                {
+                                    marker.Hide();
+                                }
+                            }
+                            break;
+                        }
+                }
+
+                if (marker.GhostRing.Visible)
+                {
+                    float ghostPulse = 1.0f + 0.05f * MathF.Sin((float)marker.TimeInState * 6.0f);
+                    marker.GhostRing.Scale = new Vector3(ghostPulse, 0.15f, ghostPulse);
+                }
+            }
+        }
+
+        if (_activePreviewSlotCount > 0)
+        {
+            for (int i = 0; i < _activePreviewSlotCount; i++)
+            {
+                PooledMarker marker = _previewPool[i];
+                if (!marker.IsActive) continue;
+
+                marker.TimeInState += delta;
+                float pulse = 1.0f + 0.08f * MathF.Sin((float)marker.TimeInState * 8.0f);
+                marker.Ring.Scale = new Vector3(pulse, 0.15f, pulse);
+
+                if (marker.GhostRing.Visible)
+                {
+                    float ghostPulse = 1.0f + 0.05f * MathF.Sin((float)marker.TimeInState * 6.0f);
+                    marker.GhostRing.Scale = new Vector3(ghostPulse, 0.15f, ghostPulse);
+                }
+            }
+        }
+
         if (!_markerRoot.Visible && !_ghostRing.Visible) return;
 
         _timeInState += delta;
@@ -302,5 +647,7 @@ internal sealed partial class OrderDestinationView : Node3D
         ClearSubmittedMarker();
         HideGhost();
         HideFacingArrow();
+        ClearGroupSlots();
+        ClearGroupPreviewSlots();
     }
 }

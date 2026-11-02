@@ -15,6 +15,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
 
     private readonly QueuedCommand[] _commands;
     private readonly uint[] _lastAccepted = new uint[MaxPlayers];
+    private readonly Queue<GroupMoveResult>[] _pendingGroupMoveResults = new Queue<GroupMoveResult>[MaxPlayers];
     private int _commandCount;
 
     public int Tick { get; private set; }
@@ -26,12 +27,14 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
     public CombatSystem? Combat => _combat;
     public IMissionSystem? Mission => _mission;
     public bool IsMissionFinished => _mission?.IsFinished == true;
+    public GroupMoveResult? LastGroupMoveResult { get; private set; }
 
     private enum CommandKind : byte
     {
         Move = 0,
         Attack = 1,
-        SetFireStance = 2
+        SetFireStance = 2,
+        GroupMove = 3
     }
 
     private readonly record struct QueuedCommand(
@@ -39,16 +42,20 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         CommandKind Kind,
         MoveCommand Move,
         AttackCommand Attack,
-        SetFireStanceCommand SetFireStance)
+        SetFireStanceCommand SetFireStance,
+        GroupMoveCommand GroupMove)
     {
         public static QueuedCommand CreateMove(int player, MoveCommand move) =>
-            new(player, CommandKind.Move, move, default, default);
+            new(player, CommandKind.Move, move, default, default, default);
 
         public static QueuedCommand CreateAttack(int player, AttackCommand attack) =>
-            new(player, CommandKind.Attack, default, attack, default);
+            new(player, CommandKind.Attack, default, attack, default, default);
 
         public static QueuedCommand CreateSetFireStance(int player, SetFireStanceCommand stance) =>
-            new(player, CommandKind.SetFireStance, default, default, stance);
+            new(player, CommandKind.SetFireStance, default, default, stance, default);
+
+        public static QueuedCommand CreateGroupMove(int player, GroupMoveCommand groupMove) =>
+            new(player, CommandKind.GroupMove, default, default, default, groupMove);
     }
 
     public ulong MatchSeed { get; }
@@ -78,6 +85,17 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         _navigation = (_rules as RuleSet)?.FindSystem<NavigationSystem>();
         _combat = (_rules as RuleSet)?.FindSystem<CombatSystem>();
         _mission = (_rules as RuleSet)?.FindSystem<IMissionSystem>();
+        for (int i = 0; i < MaxPlayers; i++)
+        {
+            _pendingGroupMoveResults[i] = new Queue<GroupMoveResult>();
+        }
+    }
+
+    public bool TryPopGroupMoveResult(int player, out GroupMoveResult result)
+    {
+        result = default;
+        if (player < 1 || player > MaxPlayers) return false;
+        return _pendingGroupMoveResults[player - 1].TryDequeue(out result);
     }
 
     // Player identity is supplied by the authenticated connection, never by packet data.
@@ -134,6 +152,53 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         return true;
     }
 
+    public bool TryEnqueue(int player, GroupMoveCommand command)
+    {
+        if (IsMissionFinished) return false;
+        if (player < 1 || player > _lastAccepted.Length || command.Sequence == 0 ||
+            command.Sequence <= _lastAccepted[player - 1] || _commandCount == _commands.Length ||
+            !_world.Map.Contains(command.Target)) return false;
+
+        if (command.FinalFacing.HasValue && !float.IsFinite(command.FinalFacing.Value)) return false;
+
+        int unitCount = command.Units.Length;
+        if (unitCount <= 0 || unitCount > 1024) return false;
+
+        ReadOnlySpan<EntityId> units = command.Units.Span;
+
+        if (unitCount > 32)
+        {
+            var seen = new HashSet<uint>(unitCount);
+            for (int i = 0; i < unitCount; i++)
+            {
+                EntityId u = units[i];
+                if (u.Value == 0 || !seen.Add(u.Value)) return false;
+                if (!_world.TryGetUnit(u, out UnitState unit) || unit.Owner != player) return false;
+            }
+        }
+        else
+        {
+            for (int i = 0; i < unitCount; i++)
+            {
+                EntityId u = units[i];
+                if (u.Value == 0) return false;
+                for (int j = i + 1; j < unitCount; j++)
+                {
+                    if (units[j].Value == u.Value) return false;
+                }
+                if (!_world.TryGetUnit(u, out UnitState unit) || unit.Owner != player) return false;
+            }
+        }
+
+        // Copy participants into system-owned bounded storage
+        EntityId[] systemOwnedUnits = units.ToArray();
+        GroupMoveCommand boundedCommand = command with { Units = systemOwnedUnits };
+
+        _commands[_commandCount++] = QueuedCommand.CreateGroupMove(player, boundedCommand);
+        _lastAccepted[player - 1] = command.Sequence;
+        return true;
+    }
+
     private bool _missionCleanupPerformed;
 
     public void Step()
@@ -172,6 +237,30 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
                 _world.SetFireStance(queued.SetFireStance.Unit, queued.SetFireStance.Stance);
                 _combat?.OnUnitStanceChanged(queued.SetFireStance.Unit, queued.SetFireStance.Stance, _world);
             }
+            else if (queued.Kind == CommandKind.GroupMove)
+            {
+                if (_navigation is not null)
+                {
+                    GroupMoveResult result = _navigation.ExecuteGroupMove(queued.Player, queued.GroupMove, _world);
+                    LastGroupMoveResult = result;
+                    _pendingGroupMoveResults[queued.Player - 1].Enqueue(result);
+                }
+                else
+                {
+                    int count = queued.GroupMove.Units.Length;
+                    var placed = new GroupMoveAssignment[count];
+                    for (int u = 0; u < count; u++)
+                    {
+                        EntityId id = queued.GroupMove.Units.Span[u];
+                        placed[u] = new GroupMoveAssignment(id, queued.GroupMove.Target, queued.GroupMove.TargetSurface, queued.GroupMove.FinalFacing);
+                        _world.SetMoveTarget(queued.Player, id, queued.GroupMove.Target);
+                        _world.ClearAttackOrder(id);
+                    }
+                    var result = new GroupMoveResult(queued.GroupMove.Sequence, Tick, queued.GroupMove.Target, queued.GroupMove.TargetSurface, queued.GroupMove.Mode, placed, ReadOnlyMemory<GroupMoveUnplaced>.Empty);
+                    LastGroupMoveResult = result;
+                    _pendingGroupMoveResults[queued.Player - 1].Enqueue(result);
+                }
+            }
             else
             {
                 // A valid accepted movement order cancels an active attack order on this unit
@@ -199,7 +288,10 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
     public void ResetPlayer(int player)
     {
         if (player >= 1 && player <= _lastAccepted.Length)
+        {
             _lastAccepted[player - 1] = 0;
+            _pendingGroupMoveResults[player - 1].Clear();
+        }
 
         _navigation?.ResetPlayer(player);
         _combat?.ResetPlayer(player);

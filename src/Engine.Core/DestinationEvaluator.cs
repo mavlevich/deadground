@@ -551,6 +551,10 @@ public sealed class DestinationEvaluator
                     return false;
                 bridgeCovered = true;
             }
+            else
+            {
+                return false;
+            }
         }
 
         // Terrain obstacles

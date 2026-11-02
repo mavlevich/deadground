@@ -340,6 +340,12 @@ public partial class Main : Node3D
             _map = scenarioGeometry.HeightMap;
             setup = VehicleTrafficScenario.CreateMatchSetup(scenarioGeometry);
         }
+        else if (_scenario == "group-move")
+        {
+            scenarioGeometry = GroupMoveScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = GroupMoveScenario.CreateMatchSetup(scenarioGeometry);
+        }
         else
         {
             _map = HeightMap.CreatePrototype();
@@ -375,6 +381,7 @@ public partial class Main : Node3D
                 "battle" => BattleScenario.CreateSimulation(scenarioGeometry!),
                 "bridge-crossing" => BridgeCrossingScenario.CreateSimulation(scenarioGeometry!),
                 "vehicle-traffic" => VehicleTrafficScenario.CreateSimulation(scenarioGeometry!),
+                "group-move" => GroupMoveScenario.CreateSimulation(scenarioGeometry!),
                 _ => PrototypeScenario.Create(_map)
             };
             // Test switch: the enemy holds fire, so own units can be tried out without losing them.
@@ -437,6 +444,7 @@ public partial class Main : Node3D
             "battle" => 160,
             "bridge-crossing" => 120,
             "vehicle-traffic" => 150,
+            "group-move" => 140,
             _ => 112
         };
         _camera = new Camera3D { Projection = Camera3D.ProjectionType.Orthogonal, Size = initialCameraSize, Far = 3500, Current = true };
@@ -449,6 +457,7 @@ public partial class Main : Node3D
             "battle" => new Vector3(BattleScenario.SovietStart.X, 0, BattleScenario.SovietStart.Y),
             "bridge-crossing" => new Vector3(100, 4, 100),
             "vehicle-traffic" => new Vector3(100, 0, 100),
+            "group-move" => new Vector3(60, 0, 50),
             _ => new Vector3(64, 0, 64)
         };
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
@@ -467,7 +476,7 @@ public partial class Main : Node3D
         _combatEffects = new CombatEffects(_map, _scenarioGeometry);
         AddChild(_combatEffects);
 
-        if (_session is LocalSession && _scenario != "visibility" && _scenario != "combat" && _scenario != "navigation-large" && _scenario != "recon-raid" && _scenario != "bridge-crossing" && _scenario != "vehicle-traffic")
+        if (_session is LocalSession && _scenario != "visibility" && _scenario != "combat" && _scenario != "navigation-large" && _scenario != "recon-raid" && _scenario != "bridge-crossing" && _scenario != "vehicle-traffic" && _scenario != "group-move")
         {
             foreach (OwnUnitObservation unit in _session.Replica.OwnUnits)
             {
@@ -499,6 +508,13 @@ public partial class Main : Node3D
         else if (_scenario == "vehicle-traffic" && _session.Replica.OwnUnits.Length > 1)
         {
             _unitViews.Selected.Add(_session.Replica.OwnUnits[1].Id);
+        }
+        else if (_scenario == "group-move" && _session.Replica.OwnUnits.Length >= 10)
+        {
+            for (int i = 0; i < 10; i++)
+            {
+                _unitViews.Selected.Add(_session.Replica.OwnUnits[i].Id);
+            }
         }
 
 
@@ -806,6 +822,7 @@ public partial class Main : Node3D
                     "battle" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == BattleScenario.UnitsPerSide,
                     "bridge-crossing" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
                     "vehicle-traffic" => _terrainWindingValid && _session.Tick >= 60 && _trafficObservedWaiting && _trafficObservedResumed && _session.Replica.OwnUnits.Length >= 6,
+                    "group-move" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length >= 10,
                     _ => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
                         _session.Replica.OwnUnits[0].Position.Y > 24
                 };
@@ -817,6 +834,7 @@ public partial class Main : Node3D
                     "battle" => "M1_CLIENT_BATTLE_SMOKE",
                     "bridge-crossing" => "M1_CLIENT_BRIDGE_CROSSING_SMOKE",
                     "vehicle-traffic" => "M1_CLIENT_VEHICLE_TRAFFIC_SMOKE",
+                    "group-move" => "M1_CLIENT_GROUP_MOVE_SMOKE",
                     _ => "M0_CLIENT_SMOKE"
                 };
                 string token = prefix + (ok ? "_OK" : "_FAILED");
@@ -1730,6 +1748,7 @@ public partial class Main : Node3D
             "recon-raid" => ReconRaidScenario.CreateSimulation(_scenarioGeometry),
             "bridge-crossing" => BridgeCrossingScenario.CreateSimulation(_scenarioGeometry),
             "vehicle-traffic" => VehicleTrafficScenario.CreateSimulation(_scenarioGeometry),
+            "group-move" => GroupMoveScenario.CreateSimulation(_scenarioGeometry),
             "battle" => BattleScenario.CreateSimulation(_scenarioGeometry),
             "combat" => CombatScenario.CreateSimulation(_scenarioGeometry),
             "visibility" => VisibilityScenario.CreateSimulation(_scenarioGeometry),
@@ -1747,8 +1766,18 @@ public partial class Main : Node3D
         if (_session.Replica.OwnUnits.Length > 0)
         {
             _fogOfWar?.UpdateAllNow(_session.Replica, _catalog);
-            int selectIdx = _scenario == "vehicle-traffic" && _session.Replica.OwnUnits.Length > 1 ? 1 : 0;
-            _unitViews.Selected.Add(_session.Replica.OwnUnits[selectIdx].Id);
+            if (_scenario == "group-move" && _session.Replica.OwnUnits.Length >= 10)
+            {
+                for (int i = 0; i < 10; i++)
+                {
+                    _unitViews.Selected.Add(_session.Replica.OwnUnits[i].Id);
+                }
+            }
+            else
+            {
+                int selectIdx = _scenario == "vehicle-traffic" && _session.Replica.OwnUnits.Length > 1 ? 1 : 0;
+                _unitViews.Selected.Add(_session.Replica.OwnUnits[selectIdx].Id);
+            }
         }
     }
 

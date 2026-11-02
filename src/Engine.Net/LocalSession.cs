@@ -17,6 +17,7 @@ public sealed class LocalSession : IGameSession
     public long BytesReceived => _client.BytesReceived;
     public double PendingSeconds => _host.PendingSeconds;
     public CommandResult? LastCommandResult => _client.LastCommandResult;
+    public GroupMoveResult? LastGroupMoveResult => _client.LastGroupMoveResult;
     public uint LastSubmittedCommandSequence => _client.LastSubmittedCommandSequence;
     public long RejectedCommands => _client.RejectedCommands;
     public bool IsConnected => true;
@@ -41,7 +42,8 @@ public sealed class LocalSession : IGameSession
         _client.Advance(elapsedSeconds);
     }
 
-    public bool Move(EntityId unit, Vector2 target, float? finalFacing = null, MoveMode mode = MoveMode.Forward) => _client.Move(unit, target, finalFacing, mode);
+    public bool Move(EntityId unit, Vector2 target, float? finalFacing = null, MoveMode mode = MoveMode.Forward, uint? targetSurface = null) => _client.Move(unit, target, finalFacing, mode, targetSurface);
+    public bool GroupMove(ReadOnlyMemory<EntityId> units, Vector2 target, uint targetSurface = 0, float? finalFacing = null, MoveMode mode = MoveMode.Forward) => _client.GroupMove(units, target, targetSurface, finalFacing, mode);
     public bool Attack(EntityId unit, ContactId target) => _client.Attack(unit, target);
     public bool SetFireStance(EntityId unit, FireStance stance) => _client.SetFireStance(unit, stance);
 

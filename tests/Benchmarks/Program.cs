@@ -25,6 +25,12 @@ if (args.Length > 0 && (args[0] == "--vehicle-separation" || args[0] == "--vehic
     return;
 }
 
+if (args.Length > 0 && (args[0] == "--group-destination" || args[0] == "--group-move"))
+{
+    RunGroupDestinationBenchmark();
+    return;
+}
+
 if (args.Length > 0 && args[0] == "--probe")
 {
     RunProbe();
@@ -89,6 +95,11 @@ static void RunProbe()
     }
 
     if (!RunCombatProbe())
+    {
+        allPassed = false;
+    }
+
+    if (!RunGroupDestinationProbe())
     {
         allPassed = false;
     }
@@ -978,6 +989,252 @@ static void RunVehicleSeparationBenchmark()
         Console.WriteLine($"Units: {count,4} (active: {moving + waiting,4}, moving: {moving,4}, waiting: {waiting,4}) | Mean: {mean,6:F3} ms | Min: {min,6:F3} ms | p50: {p50,6:F3} ms | p95: {p95,6:F3} ms | p99: {p99,6:F3} ms | Alloc/tick: {allocatedBytes / measuredTicks,5} B | [{status}]");
     }
     Console.WriteLine();
+}
+
+static GroupUnitInput[] CreateBenchmarkUnits(int count) => GroupBenchmarkHelpers.CreateBenchmarkUnits(count);
+
+static void RunGroupDestinationBenchmark()
+{
+    Console.WriteLine("=== GROUP MOVE DESTINATION DISTRIBUTION BENCHMARK ===");
+    Console.WriteLine("Measures authoritative slot distribution and client preview generation.");
+    Console.WriteLine("Target budgets: < 15.0 ms per operation, 0 B allocations in steady state.\n");
+
+    const int size = 251;
+    HeightMap map = new(size, size, 2.0f, 0.01f, new ushort[size * size]);
+    OpaqueStructure building = new(new StructureId(1), 40f, 0f, 40f, 60f, 10f, 60f);
+    TerrainObstacle water = new(10f, 10f, 30f, 30f, TraversabilityCapabilities.Water);
+    StaticGeometry geo = new(map, [building], ReadOnlySpan<BridgeStructure>.Empty, [water]);
+    DestinationEvaluator evaluator = new(geo, cellSize: 1.0f);
+
+    int[] counts = [1, 20, 200, WireProtocol.MaxUnits];
+
+    var scenarios = new (string Name, Vector2 Target, float? Facing)[]
+    {
+        ("Open Field (no obstacles)", new Vector2(150f, 150f), null),
+        ("Near Obstacle (building at 40..60)", new Vector2(62f, 50f), null),
+        ("With Drag Facing (facing East)", new Vector2(150f, 150f), -MathF.PI * 0.5f)
+    };
+
+    foreach (var (scenName, target, facing) in scenarios)
+    {
+        Console.WriteLine($"--- Scenario: {scenName} ---");
+        Console.WriteLine($"{"Units",6} | {"Stage",12} | {"Median",10} | {"p95",10} | {"p99",10} | {"Max",10} | {"Allocated",10} | {"Placed",10}");
+        Console.WriteLine(new string('-', 88));
+
+        foreach (int count in counts)
+        {
+            GroupUnitInput[] units = CreateBenchmarkUnits(count);
+
+            // Warmup Distribute
+            for (int w = 0; w < 100; w++)
+            {
+                GroupDestinationDistribution.Distribute(
+                    1, 1, units.AsSpan(), target, 0, facing, MoveMode.Forward, evaluator);
+            }
+
+            // Measure Distribute
+            const int iters = 200;
+            double[] distTimes = new double[iters];
+            long allocBeforeDist = GC.GetAllocatedBytesForCurrentThread();
+
+            int lastPlaced = 0;
+            for (int it = 0; it < iters; it++)
+            {
+                long start = Stopwatch.GetTimestamp();
+                GroupMoveResult res = GroupDestinationDistribution.Distribute(
+                    (uint)(it + 1), it, units.AsSpan(), target, 0, facing, MoveMode.Forward, evaluator);
+                long elapsed = Stopwatch.GetTimestamp() - start;
+                distTimes[it] = (double)elapsed / Stopwatch.Frequency * 1000.0;
+                lastPlaced = res.Placed.Length;
+            }
+            long distAlloc = GC.GetAllocatedBytesForCurrentThread() - allocBeforeDist;
+
+            Array.Sort(distTimes);
+            double distP50 = distTimes[iters / 2];
+            double distP95 = distTimes[(int)(iters * 0.95)];
+            double distP99 = distTimes[(int)(iters * 0.99)];
+            double distMax = distTimes[iters - 1];
+
+            Console.WriteLine($"{count,6} | {"Distribute",12} | {distP50,8:F3} ms | {distP95,8:F3} ms | {distP99,8:F3} ms | {distMax,8:F3} ms | {distAlloc,8} B | {lastPlaced,6}/{count}");
+
+            // Warmup Preview
+            for (int w = 0; w < 100; w++)
+            {
+                GroupDestinationDistribution.ComputePreview(
+                    units.AsSpan(), target, 0, facing, MoveMode.Forward, evaluator);
+            }
+
+            // Measure Preview
+            double[] prevTimes = new double[iters];
+            long allocBeforePrev = GC.GetAllocatedBytesForCurrentThread();
+            int lastPrevPlaced = 0;
+
+            for (int it = 0; it < iters; it++)
+            {
+                long start = Stopwatch.GetTimestamp();
+                GroupPreviewResult prev = GroupDestinationDistribution.ComputePreview(
+                    units.AsSpan(), target, 0, facing, MoveMode.Forward, evaluator);
+                long elapsed = Stopwatch.GetTimestamp() - start;
+                prevTimes[it] = (double)elapsed / Stopwatch.Frequency * 1000.0;
+                lastPrevPlaced = prev.PlacedCount + prev.AdjustedCount;
+            }
+            long prevAlloc = GC.GetAllocatedBytesForCurrentThread() - allocBeforePrev;
+
+            Array.Sort(prevTimes);
+            double prevP50 = prevTimes[iters / 2];
+            double prevP95 = prevTimes[(int)(iters * 0.95)];
+            double prevP99 = prevTimes[(int)(iters * 0.99)];
+            double prevMax = prevTimes[iters - 1];
+
+            Console.WriteLine($"{count,6} | {"Preview",12} | {prevP50,8:F3} ms | {prevP95,8:F3} ms | {prevP99,8:F3} ms | {prevMax,8:F3} ms | {prevAlloc,8} B | {lastPrevPlaced,6}/{count}");
+        }
+        Console.WriteLine();
+    }
+}
+
+static bool RunGroupDestinationProbe()
+{
+    const int size = 251;
+    HeightMap map = new(size, size, 2.0f, 0.01f, new ushort[size * size]);
+    OpaqueStructure building = new(new StructureId(1), 40f, 0f, 40f, 60f, 10f, 60f);
+    TerrainObstacle water = new(10f, 10f, 30f, 30f, TraversabilityCapabilities.Water);
+    StaticGeometry geo = new(map, [building], ReadOnlySpan<BridgeStructure>.Empty, [water]);
+    DestinationEvaluator evaluator = new(geo, cellSize: 1.0f);
+
+    int[] counts = [1, 20, 200, WireProtocol.MaxUnits];
+    Vector2 target = new(150f, 150f);
+    bool allPassed = true;
+
+    foreach (int count in counts)
+    {
+        GroupUnitInput[] units = CreateBenchmarkUnits(count);
+
+        // Warmup
+        for (int w = 0; w < 50; w++)
+        {
+            GroupDestinationDistribution.Distribute(1, 1, units.AsSpan(), target, 0, null, MoveMode.Forward, evaluator);
+            GroupDestinationDistribution.ComputePreview(units.AsSpan(), target, 0, null, MoveMode.Forward, evaluator);
+        }
+
+        const int iters = 100;
+        double[] times = new double[iters];
+        long allocBefore = GC.GetAllocatedBytesForCurrentThread();
+
+        for (int it = 0; it < iters; it++)
+        {
+            long start = Stopwatch.GetTimestamp();
+            GroupDestinationDistribution.Distribute((uint)(it + 1), it, units.AsSpan(), target, 0, null, MoveMode.Forward, evaluator);
+            long elapsed = Stopwatch.GetTimestamp() - start;
+            times[it] = (double)elapsed / Stopwatch.Frequency * 1000.0;
+        }
+
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
+        Array.Sort(times);
+        bool ok = allocated == 0 && times[iters / 2] < 15.0;
+
+        Console.WriteLine($"Group Destination Probe ({count} units):");
+        Console.WriteLine($"  Median (p50): {times[iters / 2]:F3} ms");
+        Console.WriteLine($"  p99:          {times[(int)(iters * 0.99)]:F3} ms");
+        Console.WriteLine($"  Allocations:  {allocated} B");
+        Console.WriteLine($"  Budget:       {(ok ? "PASS (< 15 ms, 0 B)" : "FAIL")}");
+        Console.WriteLine();
+
+        if (!ok) allPassed = false;
+    }
+
+    return allPassed;
+}
+
+internal static class GroupBenchmarkHelpers
+{
+    public static GroupUnitInput[] CreateBenchmarkUnits(int count)
+    {
+        var units = new GroupUnitInput[count];
+        int cols = (int)MathF.Ceiling(MathF.Sqrt(count));
+        for (int i = 0; i < count; i++)
+        {
+            int col = i % cols;
+            int row = i / cols;
+            Vector2 pos = new(50f + col * 5f, 50f + row * 5f);
+            if (i % 3 == 0)
+            {
+                // Tank (T-62)
+                units[i] = new GroupUnitInput(
+                    new EntityId((uint)(i + 1)),
+                    pos,
+                    0f,
+                    1.65f,
+                    2.05f,
+                    TraversabilityCapabilities.Ground | TraversabilityCapabilities.Bridge,
+                    CanReverse: true,
+                    ReverseSpeed: 2.5f);
+            }
+            else if (i % 3 == 1)
+            {
+                // Wheeled APC (BTR-70)
+                units[i] = new GroupUnitInput(
+                    new EntityId((uint)(i + 1)),
+                    pos,
+                    0f,
+                    1.40f,
+                    1.80f,
+                    TraversabilityCapabilities.Ground | TraversabilityCapabilities.Bridge | TraversabilityCapabilities.Water,
+                    CanReverse: true,
+                    ReverseSpeed: 2.0f);
+            }
+            else
+            {
+                // Wheeled Recon (BRDM-2)
+                units[i] = new GroupUnitInput(
+                    new EntityId((uint)(i + 1)),
+                    pos,
+                    0f,
+                    1.15f,
+                    1.45f,
+                    TraversabilityCapabilities.Ground | TraversabilityCapabilities.Bridge | TraversabilityCapabilities.Water,
+                    CanReverse: true,
+                    ReverseSpeed: 3.0f);
+            }
+        }
+        return units;
+    }
+}
+
+[MemoryDiagnoser]
+public class GroupDestinationBenchmark
+{
+    private GroupUnitInput[] _units = null!;
+    private DestinationEvaluator _evaluator = null!;
+    private Vector2 _target;
+
+    [Params(1, 20, 200, 300)]
+    public int Units { get; set; }
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        const int size = 251;
+        HeightMap map = new(size, size, 2.0f, 0.01f, new ushort[size * size]);
+        OpaqueStructure building = new(new StructureId(1), 40f, 0f, 40f, 60f, 10f, 60f);
+        StaticGeometry geo = new(map, [building]);
+        _evaluator = new DestinationEvaluator(geo, cellSize: 1.0f);
+        _units = GroupBenchmarkHelpers.CreateBenchmarkUnits(Units);
+        _target = new Vector2(150f, 150f);
+    }
+
+    [Benchmark]
+    public GroupMoveResult Distribute()
+    {
+        return GroupDestinationDistribution.Distribute(
+            1, 1, _units.AsSpan(), _target, 0, null, MoveMode.Forward, _evaluator);
+    }
+
+    [Benchmark]
+    public GroupPreviewResult Preview()
+    {
+        return GroupDestinationDistribution.ComputePreview(
+            _units.AsSpan(), _target, 0, null, MoveMode.Forward, _evaluator);
+    }
 }
 
 [MemoryDiagnoser]

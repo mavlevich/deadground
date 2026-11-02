@@ -533,20 +533,6 @@ public sealed class NavigationGrid
                 bridgeCovered = true;
             }
         }
-        else if (supportSurface == 0 && (capabilities & TraversabilityCapabilities.Bridge) != 0 && _bridges.Length > 0)
-        {
-            for (int b = 0; b < _bridges.Length; b++)
-            {
-                BridgeStructure bridge = _bridges[b];
-                if (bridge.Contains(point))
-                {
-                    float sc = bridge.GetSideClearance(point);
-                    clearance = MathF.Min(clearance, sc);
-                    bridgeCovered = true;
-                    break;
-                }
-            }
-        }
 
         // Terrain obstacles (only apply to ground level or when not covered by bridge)
         if (!bridgeCovered)
@@ -642,21 +628,6 @@ public sealed class NavigationGrid
                 if (bridgeOnDeck.GetSideClearance(point) < effectiveRadius)
                     return false;
                 bridgeCovered = true;
-            }
-        }
-        else if (supportSurface == 0 && (capabilities & TraversabilityCapabilities.Bridge) != 0 && _bridges.Length > 0)
-        {
-            for (int b = 0; b < _bridges.Length; b++)
-            {
-                BridgeStructure bridge = _bridges[b];
-                if (bridge.Contains(point))
-                {
-                    if (bridge.GetSideClearance(point) >= effectiveRadius)
-                    {
-                        bridgeCovered = true;
-                        break;
-                    }
-                }
             }
         }
 
@@ -810,7 +781,14 @@ public sealed class NavigationGrid
                         }
                         float uStart = Vector2.Dot(start - bridgeOnDeck.Start, bridgeOnDeck.Direction);
                         float uEnd = Vector2.Dot(end - bridgeOnDeck.Start, bridgeOnDeck.Direction);
-                        if ((uStart < 0f && uEnd >= 0f) || (uStart >= 0f && uEnd < 0f))
+                        bool crossesStartRamp = (uStart < 0f && uEnd >= 0f) || (uStart >= 0f && uEnd < 0f);
+                        bool crossesEndRamp = (uStart > bridgeOnDeck.Length && uEnd <= bridgeOnDeck.Length) || (uStart <= bridgeOnDeck.Length && uEnd > bridgeOnDeck.Length);
+                        if (!crossesStartRamp && !crossesEndRamp)
+                        {
+                            return false;
+                        }
+
+                        if (crossesStartRamp)
                         {
                             float denom = MathF.Abs(uEnd - uStart);
                             float t = denom > 1e-4f ? MathF.Abs(uStart) / denom : 0f;
@@ -818,7 +796,7 @@ public sealed class NavigationGrid
                             if (bridgeOnDeck.GetSideClearance(crossPoint) < effectiveRadius)
                                 return false;
                         }
-                        else if ((uStart > bridgeOnDeck.Length && uEnd <= bridgeOnDeck.Length) || (uStart <= bridgeOnDeck.Length && uEnd > bridgeOnDeck.Length))
+                        else if (crossesEndRamp)
                         {
                             float denom = MathF.Abs(uEnd - uStart);
                             float t = denom > 1e-4f ? MathF.Abs(bridgeOnDeck.Length - uStart) / denom : 0f;
@@ -844,16 +822,20 @@ public sealed class NavigationGrid
                         Vector2 bridgePoint = startOnBridge ? start : end;
                         Vector2 landPoint = startOnBridge ? end : start;
 
+                        float uStart = Vector2.Dot(start - bridge.Start, bridge.Direction);
+                        float uEnd = Vector2.Dot(end - bridge.Start, bridge.Direction);
+                        bool crossesStartRamp = (uStart < 0f && uEnd >= 0f) || (uStart >= 0f && uEnd < 0f);
+                        bool crossesEndRamp = (uStart > bridge.Length && uEnd <= bridge.Length) || (uStart <= bridge.Length && uEnd > bridge.Length);
+
                         // Only if transitioning through designated ramp entries is this a bridge ramp traversal
-                        if (bridge.IsNearEntry(bridgePoint, threshold) && bridge.IsNearEntry(landPoint, threshold))
+                        if ((crossesStartRamp || crossesEndRamp) &&
+                            bridge.IsNearEntry(bridgePoint, threshold) && bridge.IsNearEntry(landPoint, threshold))
                         {
-                            if (bridge.GetSideClearance(bridgePoint) < effectiveRadius)
+                            if (endOnBridge && bridge.GetSideClearance(bridgePoint) < effectiveRadius)
                             {
                                 return false;
                             }
-                            float uStart = Vector2.Dot(start - bridge.Start, bridge.Direction);
-                            float uEnd = Vector2.Dot(end - bridge.Start, bridge.Direction);
-                            if ((uStart < 0f && uEnd >= 0f) || (uStart >= 0f && uEnd < 0f))
+                            if (crossesStartRamp)
                             {
                                 float denom = MathF.Abs(uEnd - uStart);
                                 float t = denom > 1e-4f ? MathF.Abs(uStart) / denom : 0f;
@@ -861,7 +843,7 @@ public sealed class NavigationGrid
                                 if (bridge.GetSideClearance(crossPoint) < effectiveRadius)
                                     return false;
                             }
-                            else if ((uStart > bridge.Length && uEnd <= bridge.Length) || (uStart <= bridge.Length && uEnd > bridge.Length))
+                            else if (crossesEndRamp)
                             {
                                 float denom = MathF.Abs(uEnd - uStart);
                                 float t = denom > 1e-4f ? MathF.Abs(bridge.Length - uStart) / denom : 0f;
