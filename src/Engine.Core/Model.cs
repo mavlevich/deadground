@@ -16,7 +16,36 @@ public readonly record struct MoveCommand(
     EntityId Unit,
     Vector2 Target,
     float? FinalFacing = null,
+    MoveMode Mode = MoveMode.Forward,
+    uint TargetSurface = 0);
+
+public readonly record struct GroupMoveCommand(
+    uint Sequence,
+    int ClientTick,
+    ReadOnlyMemory<EntityId> Units,
+    Vector2 Target,
+    uint TargetSurface = 0,
+    float? FinalFacing = null,
     MoveMode Mode = MoveMode.Forward);
+
+public readonly record struct GroupMoveAssignment(
+    EntityId Unit,
+    Vector2 Target,
+    uint TargetSurface = 0,
+    float? FinalFacing = null);
+
+public readonly record struct GroupMoveUnplaced(
+    EntityId Unit,
+    DestinationBlockReason Reason);
+
+public readonly record struct GroupMoveResult(
+    uint Sequence,
+    int ServerTick,
+    Vector2 Target,
+    uint TargetSurface,
+    MoveMode Mode,
+    ReadOnlyMemory<GroupMoveAssignment> Placed,
+    ReadOnlyMemory<GroupMoveUnplaced> Unplaced);
 
 public readonly record struct AttackCommand(uint Sequence, int ClientTick, EntityId Unit, ContactId Target);
 

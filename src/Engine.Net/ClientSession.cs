@@ -16,7 +16,7 @@ public sealed class ClientSession : IGameSession
     private readonly ITransport _transport;
     private readonly MatchSetup? _setup;
     private readonly byte[] _receive = new byte[WireProtocol.MaxMessageSize];
-    private readonly byte[] _command = new byte[WireProtocol.MoveSize];
+    private readonly byte[] _command = new byte[WireProtocol.MaxMessageSize];
     private readonly byte[] _handshakeBuffer = new byte[128];
     private readonly SnapshotAssembler _assembler = new();
     private uint _nextCommand = 1;
@@ -44,6 +44,7 @@ public sealed class ClientSession : IGameSession
     public double PendingSeconds => 0;
     public long BytesReceived { get; private set; }
     public CommandResult? LastCommandResult { get; private set; }
+    public GroupMoveResult? LastGroupMoveResult { get; private set; }
     public uint LastSubmittedCommandSequence => _nextCommand > 1 ? _nextCommand - 1 : 0;
     public long RejectedCommands { get; private set; }
     public int AssignedPlayerId { get; private set; }
@@ -169,12 +170,23 @@ public sealed class ClientSession : IGameSession
         }
     }
 
-    public bool Move(EntityId unit, Vector2 target, float? finalFacing = null, MoveMode mode = MoveMode.Forward)
+    public bool Move(EntityId unit, Vector2 target, float? finalFacing = null, MoveMode mode = MoveMode.Forward, uint? targetSurface = null)
     {
         if (State != SessionConnectionState.Connected) return false;
-        MoveCommand command = new(_nextCommand, Replica.LatestTick, unit, target, finalFacing, mode);
+        uint surface = targetSurface ?? (Replica.TryGetOwnUnit(unit, out var obs) ? obs.SupportSurface : 0u);
+        MoveCommand command = new(_nextCommand, Replica.LatestTick, unit, target, finalFacing, mode, surface);
         WireProtocol.WriteMove(_command, command);
         if (!_transport.TrySend(_command.AsSpan(0, WireProtocol.MoveSize))) return false;
+        _nextCommand = checked(_nextCommand + 1);
+        return true;
+    }
+
+    public bool GroupMove(ReadOnlyMemory<EntityId> units, Vector2 target, uint targetSurface = 0, float? finalFacing = null, MoveMode mode = MoveMode.Forward)
+    {
+        if (State != SessionConnectionState.Connected) return false;
+        GroupMoveCommand command = new(_nextCommand, Replica.LatestTick, units, target, targetSurface, finalFacing, mode);
+        int written = WireProtocol.WriteGroupMove(_command, command);
+        if (!_transport.TrySend(_command.AsSpan(0, written))) return false;
         _nextCommand = checked(_nextCommand + 1);
         return true;
     }
@@ -237,6 +249,16 @@ public sealed class ClientSession : IGameSession
                     if (result.Sequence >= _nextCommand || result.Sequence <= (LastCommandResult?.Sequence ?? 0)) continue;
                     LastCommandResult = result;
                     if (!result.Queued) RejectedCommands++;
+                }
+                continue;
+            }
+
+            if (kind == WireProtocol.GroupMoveResultKind)
+            {
+                if (WireProtocol.TryReadGroupMoveResult(_receive.AsSpan(0, length), out GroupMoveResult result))
+                {
+                    if (result.Sequence >= _nextCommand || result.Sequence <= (LastGroupMoveResult?.Sequence ?? 0)) continue;
+                    LastGroupMoveResult = result;
                 }
                 continue;
             }

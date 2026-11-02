@@ -29,6 +29,7 @@ internal static class OrderPreviewRegressionTests
             CheckSelectionOver256UnitsDispatchesAll(main);
             CheckSingleUnitSnappedTargetPosition(main);
             CheckOneRejectionOneSuccessYieldsPartial(main);
+            CheckGroupOrderRejection_MarksAllParticipants(main);
             CheckFacingGesture_ShortClickVsDrag_IssuesCorrectOrder(main);
             CheckFacingGesture_DragAndReturn_IssuesStandardMove(main);
             CheckFacingGesture_EscapeCancelsGesture_LeavesSelectionIntact(main);
@@ -105,7 +106,13 @@ internal static class OrderPreviewRegressionTests
             unitViews.Selected.Add(uTank.Id);
             unitViews.Selected.Add(uAmph.Id);
 
-            TestGameSession session = new() { Replica = replica };
+            DestinationEvaluator evaluator = new(geo, cellSize: 1.0f);
+            TestGameSession session = new()
+            {
+                Replica = replica,
+                Evaluator = evaluator,
+                MovementCatalog = new OpsMovementCatalog(catalog)
+            };
             Vector2 viewport = main.GetViewport().GetVisibleRect().Size;
 
             // 1. Hover over water at (50, 50): only amphibious unit can cross -> Mixed group
@@ -204,7 +211,13 @@ internal static class OrderPreviewRegressionTests
             unitViews.Selected.Clear();
             unitViews.Selected.Add(unitId);
 
-            TestGameSession session = new() { Replica = replica };
+            DestinationEvaluator evaluator = new(geo, cellSize: 1.0f);
+            TestGameSession session = new()
+            {
+                Replica = replica,
+                Evaluator = evaluator,
+                MovementCatalog = new OpsMovementCatalog(catalog)
+            };
 
             // 1. Issue first move order (Sequence 1)
             Vector2 targetScreen1 = camera.UnprojectPosition(new Vector3(40f, 0f, 40f));
@@ -277,7 +290,13 @@ internal static class OrderPreviewRegressionTests
             unitViews.Selected.Clear();
             unitViews.Selected.Add(unitId);
 
-            TestGameSession session = new() { Replica = replica };
+            DestinationEvaluator evaluator = new(geo, cellSize: 1.0f);
+            TestGameSession session = new()
+            {
+                Replica = replica,
+                Evaluator = evaluator,
+                MovementCatalog = new OpsMovementCatalog(catalog)
+            };
 
             // Issue order -> marker visible
             Vector2 targetScreen = camera.UnprojectPosition(new Vector3(45f, 0f, 45f));
@@ -506,7 +525,13 @@ internal static class OrderPreviewRegressionTests
             unitViews.Selected.Add(id1);
             unitViews.Selected.Add(id2);
 
-            TestGameSession session = new() { Replica = replica };
+            DestinationEvaluator evaluator = new(geo, cellSize: 1.0f);
+            TestGameSession session = new()
+            {
+                Replica = replica,
+                Evaluator = evaluator,
+                MovementCatalog = new OpsMovementCatalog(catalog)
+            };
 
             // Target is inside corner of building at (41, 0, 59)
             Vector2 targetScreen = camera.UnprojectPosition(new Vector3(41f, 0f, 59f));
@@ -620,7 +645,13 @@ internal static class OrderPreviewRegressionTests
             unitViews.Selected.Clear();
             unitViews.Selected.Add(unitId);
 
-            TestGameSession session = new() { Replica = replica };
+            DestinationEvaluator evaluator = new(geo, cellSize: 1.0f);
+            TestGameSession session = new()
+            {
+                Replica = replica,
+                Evaluator = evaluator,
+                MovementCatalog = new OpsMovementCatalog(catalog)
+            };
 
             // 1. Submit move order
             Vector2 targetScreen = camera.UnprojectPosition(new Vector3(40f, 0f, 40f));
@@ -695,7 +726,13 @@ internal static class OrderPreviewRegressionTests
             ApplyWithContacts(replica, bytes, 1, 1, army, []);
             unitViews.Sync(replica, 1.0);
 
-            TestGameSession session = new() { Replica = replica };
+            DestinationEvaluator evaluator = new(geo, cellSize: 1.0f);
+            TestGameSession session = new()
+            {
+                Replica = replica,
+                Evaluator = evaluator,
+                MovementCatalog = new OpsMovementCatalog(catalog)
+            };
 
             Vector2 targetScreen = camera.UnprojectPosition(new Vector3(50f, 0f, 50f));
             bool moveSuccess = controller.ExecuteMoveClick(camera, targetScreen, unitViews, session, out string msg);
@@ -746,7 +783,13 @@ internal static class OrderPreviewRegressionTests
             unitViews.Selected.Clear();
             unitViews.Selected.Add(id1);
 
-            TestGameSession session = new() { Replica = replica };
+            DestinationEvaluator evaluator = new(geo, cellSize: 1.0f);
+            TestGameSession session = new()
+            {
+                Replica = replica,
+                Evaluator = evaluator,
+                MovementCatalog = new OpsMovementCatalog(catalog)
+            };
 
             // Click inside building near west edge at (41, 0, 50)
             Vector2 targetScreen = camera.UnprojectPosition(new Vector3(41f, 0f, 50f));
@@ -804,7 +847,13 @@ internal static class OrderPreviewRegressionTests
             unitViews.Selected.Add(id1);
             unitViews.Selected.Add(id2);
 
-            TestGameSession session = new() { Replica = replica };
+            DestinationEvaluator evaluator = new(geo, cellSize: 1.0f);
+            TestGameSession session = new()
+            {
+                Replica = replica,
+                Evaluator = evaluator,
+                MovementCatalog = new OpsMovementCatalog(catalog)
+            };
 
             // Issue order for both units (same destination)
             Vector2 targetScreen = camera.UnprojectPosition(new Vector3(50f, 0f, 50f));
@@ -816,15 +865,24 @@ internal static class OrderPreviewRegressionTests
             uint seq1 = session.SubmittedMoves[0].Sequence;
             uint seq2 = session.SubmittedMoves[1].Sequence;
 
-            // Step 1: Server rejects unit 1 (Queued = false)
-            session.LastCommandResult = new CommandResult(seq1, 1, Queued: false);
+            // Step 1: Server accepts group command, but unit 1 could not be placed (Unplaced), while unit 2 is placed
+            session.LastCommandResult = new CommandResult(seq1, 1, Queued: true);
+            session.LastGroupMoveResult = new GroupMoveResult(
+                seq1,
+                1,
+                new NumericsVector2(50f, 50f),
+                0,
+                MoveMode.Forward,
+                Placed: new GroupMoveAssignment[] { new(id2, new NumericsVector2(50f, 50f)) },
+                Unplaced: new GroupMoveUnplaced[] { new(id1, DestinationBlockReason.InsufficientClearance) });
+
             // Unit 2 is still searching in the world
             OwnUnitObservation u2Searching = new(id2, 0, new NumericsVector2(32, 30), 0, NavOrderSequence: seq2, NavStatus: PathRequestStatus.Searching);
             ApplyWithContacts(replica, bytes, 2, 2, [u1, u2Searching], []);
 
             controller.UpdateOrders(session, delta: 0.05);
 
-            // Rejection of unit 1 must NOT finalize group tracking and must NOT mark order as Failed yet
+            // Unit 1 is unplaced, but unit 2 is still searching: order is Processing, NOT Failed!
             Require(destinationView.CurrentState != OrderMarkerVisualState.Failed,
                 "Group marker must NOT be Failed while unit 2 is still searching.");
             Require(destinationView.CurrentState == OrderMarkerVisualState.Processing,
@@ -836,9 +894,76 @@ internal static class OrderPreviewRegressionTests
 
             controller.UpdateOrders(session, delta: 0.05);
 
-            // Now that all units are resolved (1 failed, 1 succeeded), marker must become Partial!
+            // Now that all units are resolved (1 unplaced, 1 path found), marker must become Partial!
             Require(destinationView.CurrentState == OrderMarkerVisualState.Partial,
                 $"Group with 1 rejection and 1 path found must resolve to Partial, got: {destinationView.CurrentState}.");
+        }
+        finally
+        {
+            unitViews?.Clear();
+            parent.QueueFree();
+        }
+    }
+
+    private static void CheckGroupOrderRejection_MarksAllParticipants(Main main)
+    {
+        Node3D parent = new();
+        main.AddChild(parent);
+        UnitViewSet? unitViews = null;
+        try
+        {
+            HeightMap map = HeightMap.CreatePrototype();
+            UnitCatalog catalog = PrototypeScenario.LoadCatalog();
+            StaticGeometry geo = new(map, []);
+
+            unitViews = new UnitViewSet(parent, map, catalog);
+            Camera3D camera = CreateTestCamera(parent, new Vector3(30, 0, 30), 80f);
+
+            OrderCursorOverlay overlay = new();
+            parent.AddChild(overlay);
+            OrderDestinationView destinationView = new();
+            parent.AddChild(destinationView);
+
+            OrderPreviewController controller = new(geo, map, catalog, overlay, destinationView);
+
+            ClientReplica replica = new();
+            byte[] bytes = new byte[WireProtocol.MaxMessageSize];
+
+            EntityId id1 = new(501);
+            EntityId id2 = new(502);
+            EntityId id3 = new(503);
+            OwnUnitObservation u1 = new(id1, 0, new NumericsVector2(20, 20), 0);
+            OwnUnitObservation u2 = new(id2, 0, new NumericsVector2(25, 20), 0);
+            OwnUnitObservation u3 = new(id3, 0, new NumericsVector2(30, 20), 0);
+
+            ApplyWithContacts(replica, bytes, 1, 1, [u1, u2, u3], []);
+            unitViews.Sync(replica, 1.0);
+            unitViews.Selected.Clear();
+            unitViews.Selected.Add(id1);
+            unitViews.Selected.Add(id2);
+            unitViews.Selected.Add(id3);
+
+            DestinationEvaluator evaluator = new(geo, cellSize: 1.0f);
+            TestGameSession session = new()
+            {
+                Replica = replica,
+                Evaluator = evaluator,
+                MovementCatalog = new OpsMovementCatalog(catalog)
+            };
+
+            Vector2 targetScreen = camera.UnprojectPosition(new Vector3(50f, 0f, 50f));
+            Require(controller.ExecuteMoveClick(camera, targetScreen, unitViews, session, out _), "Group move should execute.");
+
+            uint groupSeq = session.SubmittedMoves[0].Sequence;
+
+            // Entire group rejected by server (e.g. rate limit, bad command, etc.)
+            session.LastCommandResult = new CommandResult(groupSeq, 1, Queued: false);
+
+            controller.UpdateOrders(session, delta: 0.05);
+
+            // Rejection of group command must immediately resolve all 3 participants and transition marker to Failed
+            Require(destinationView.CurrentState == OrderMarkerVisualState.Failed,
+                $"Group rejection must mark all participants rejected and transition to Failed, got: {destinationView.CurrentState}.");
         }
         finally
         {
@@ -876,7 +1001,13 @@ internal static class OrderPreviewRegressionTests
             unitViews.Selected.Clear();
             unitViews.Selected.Add(u1.Id);
 
-            TestGameSession session = new() { Replica = replica };
+            DestinationEvaluator evaluator = new(geo, cellSize: 1.0f);
+            TestGameSession session = new()
+            {
+                Replica = replica,
+                Evaluator = evaluator,
+                MovementCatalog = new OpsMovementCatalog(catalog)
+            };
             Vector2 screenPos = camera.UnprojectPosition(new Vector3(30, 0, 30));
 
             // 1. Short click: press and immediately release without dragging
@@ -943,7 +1074,13 @@ internal static class OrderPreviewRegressionTests
             unitViews.Selected.Clear();
             unitViews.Selected.Add(u1.Id);
 
-            TestGameSession session = new() { Replica = replica };
+            DestinationEvaluator evaluator = new(geo, cellSize: 1.0f);
+            TestGameSession session = new()
+            {
+                Replica = replica,
+                Evaluator = evaluator,
+                MovementCatalog = new OpsMovementCatalog(catalog)
+            };
             Vector2 screenPos = camera.UnprojectPosition(new Vector3(30, 0, 30));
 
             // Press and drag 50 pixels away
@@ -1035,7 +1172,13 @@ internal static class OrderPreviewRegressionTests
             unitViews.Selected.Clear();
             unitViews.Selected.Add(u1.Id);
 
-            TestGameSession session = new() { Replica = replica };
+            DestinationEvaluator evaluator = new(geo, cellSize: 1.0f);
+            TestGameSession session = new()
+            {
+                Replica = replica,
+                Evaluator = evaluator,
+                MovementCatalog = new OpsMovementCatalog(catalog)
+            };
             Vector3 worldTarget = new(40f, 0f, 50f);
             Vector2 screenPos = camera.UnprojectPosition(worldTarget);
 
@@ -1199,7 +1342,13 @@ internal static class OrderPreviewRegressionTests
             unitViews.Selected.Clear();
             unitViews.Selected.Add(u1.Id);
 
-            TestGameSession session = new() { Replica = replica };
+            DestinationEvaluator evaluator = new(geo, cellSize: 1.0f);
+            TestGameSession session = new()
+            {
+                Replica = replica,
+                Evaluator = evaluator,
+                MovementCatalog = new OpsMovementCatalog(catalog)
+            };
 
             Vector3 worldTarget = new(30, 0, 30);
             // World direction pointing East-South: delta = (15, 0, 15), angle = Atan2(-15, -15) = -2.35619 rad (-135 deg)
@@ -1297,7 +1446,13 @@ internal static class OrderPreviewRegressionTests
             unitViews.Selected.Clear();
             unitViews.Selected.Add(u1.Id);
 
-            TestGameSession session = new() { Replica = replica };
+            DestinationEvaluator evaluator = new(geo, cellSize: 1.0f);
+            TestGameSession session = new()
+            {
+                Replica = replica,
+                Evaluator = evaluator,
+                MovementCatalog = new OpsMovementCatalog(catalog)
+            };
             Vector2 screenPos = camera.UnprojectPosition(new Vector3(30, 0, 30));
 
             Require(controller.BeginFacingGesture(camera, screenPos, unitViews, session, out _), "BeginFacingGesture failed");
@@ -1357,7 +1512,13 @@ internal static class OrderPreviewRegressionTests
             unitViews.Selected.Clear();
             unitViews.Selected.Add(u1.Id);
 
-            TestGameSession session = new() { Replica = replica };
+            DestinationEvaluator evaluator = new(geo, cellSize: 1.0f);
+            TestGameSession session = new()
+            {
+                Replica = replica,
+                Evaluator = evaluator,
+                MovementCatalog = new OpsMovementCatalog(catalog)
+            };
             Vector2 screenPos = camera.UnprojectPosition(new Vector3(20, 0, 35));
 
             Require(controller.BeginFacingGesture(camera, screenPos, unitViews, session, out _, MoveMode.Reverse), "Reverse BeginFacingGesture should succeed for unit");
@@ -1488,6 +1649,9 @@ internal static class OrderPreviewRegressionTests
         public long BytesReceived => 0;
         public double PendingSeconds => 0;
         public CommandResult? LastCommandResult { get; set; }
+        public GroupMoveResult? LastGroupMoveResult { get; set; }
+        public DestinationEvaluator? Evaluator { get; set; }
+        public IUnitMovementCatalog? MovementCatalog { get; set; }
         public uint LastSubmittedCommandSequence { get; set; }
         public long RejectedCommands => 0;
         public bool IsConnected => true;
@@ -1495,15 +1659,74 @@ internal static class OrderPreviewRegressionTests
         public string StatusDescription => "TestSession";
 
         public List<(EntityId Unit, NumericsVector2 Target, uint Sequence, float? FinalFacing, MoveMode Mode)> SubmittedMoves { get; } = new();
+        public List<(ReadOnlyMemory<EntityId> Units, NumericsVector2 Target, uint TargetSurface, float? FinalFacing, MoveMode Mode, uint Sequence)> SubmittedGroupMoves { get; } = new();
 
         public bool Move(EntityId unit, NumericsVector2 target) => Move(unit, target, null, MoveMode.Forward);
 
         public bool Move(EntityId unit, NumericsVector2 target, float? finalFacing = null) => Move(unit, target, finalFacing, MoveMode.Forward);
 
-        public bool Move(EntityId unit, NumericsVector2 target, float? finalFacing = null, MoveMode mode = MoveMode.Forward)
+        public bool Move(EntityId unit, NumericsVector2 target, float? finalFacing = null, MoveMode mode = MoveMode.Forward, uint? targetSurface = null)
         {
             LastSubmittedCommandSequence++;
             SubmittedMoves.Add((unit, target, LastSubmittedCommandSequence, finalFacing, mode));
+            return true;
+        }
+
+        public bool GroupMove(ReadOnlyMemory<EntityId> units, NumericsVector2 target, uint targetSurface = 0, float? finalFacing = null, MoveMode mode = MoveMode.Forward)
+        {
+            LastSubmittedCommandSequence++;
+            SubmittedGroupMoves.Add((units, target, targetSurface, finalFacing, mode, LastSubmittedCommandSequence));
+
+            if (Evaluator is not null)
+            {
+                var inputs = new GroupUnitInput[units.Length];
+                for (int i = 0; i < units.Length; i++)
+                {
+                    EntityId u = units.Span[i];
+                    float radius = 1.0f;
+                    float colRadius = 1.5f;
+                    TraversabilityCapabilities caps = TraversabilityCapabilities.DefaultVehicle;
+                    bool canReverse = true;
+                    float revSpeed = 2.5f;
+                    if (MovementCatalog is not null && Replica.TryGetOwnUnit(u, out OwnUnitObservation own) &&
+                        MovementCatalog.TryGetProfile(own.Definition, out UnitMovementProfile prof))
+                    {
+                        radius = prof.Radius;
+                        colRadius = prof.EffectiveCollisionRadius;
+                        caps = prof.Capabilities;
+                        canReverse = prof.ReverseSpeed > 0f;
+                        revSpeed = prof.ReverseSpeed;
+                    }
+                    NumericsVector2 pos = Replica.TryGetOwnUnit(u, out OwnUnitObservation obs) ? obs.Position : NumericsVector2.Zero;
+                    inputs[i] = new GroupUnitInput(u, pos, 0f, radius, colRadius, caps, canReverse, revSpeed);
+                }
+
+                GroupMoveResult result = GroupDestinationDistribution.Distribute(
+                    LastSubmittedCommandSequence,
+                    1,
+                    inputs,
+                    target,
+                    targetSurface,
+                    finalFacing,
+                    mode,
+                    Evaluator);
+
+                LastGroupMoveResult = result;
+
+                ReadOnlySpan<GroupMoveAssignment> placed = result.Placed.Span;
+                for (int i = 0; i < placed.Length; i++)
+                {
+                    SubmittedMoves.Add((placed[i].Unit, placed[i].Target, LastSubmittedCommandSequence, placed[i].FinalFacing, mode));
+                }
+            }
+            else
+            {
+                for (int i = 0; i < units.Length; i++)
+                {
+                    EntityId u = units.Span[i];
+                    SubmittedMoves.Add((u, target, LastSubmittedCommandSequence, finalFacing, mode));
+                }
+            }
             return true;
         }
 

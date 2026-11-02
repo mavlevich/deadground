@@ -63,6 +63,7 @@ public sealed class NavigationSystem : ISimulationSystem
 
     // Local A* preallocated search buffers
     private readonly int _virtualGoalCell;
+    private readonly int _layerCapacity;
     private readonly int[] _heap;
     private int _heapCount;
     private readonly int[] _heapPosition;
@@ -101,6 +102,7 @@ public sealed class NavigationSystem : ISimulationSystem
     private readonly int[] _routeCounts;
     private readonly int[] _routeIndices;
     private readonly Vector2[] _unitFinalTargets;
+    private readonly uint[] _unitTargetSurfaces;
     private readonly bool[] _unitHasFinalFacing;
     private readonly float[] _unitFinalFacings;
     private readonly float[] _unitLinearSpeed;
@@ -116,6 +118,7 @@ public sealed class NavigationSystem : ISimulationSystem
     private readonly bool[] _unitHasActiveRoutes;
     private readonly bool[] _unitChunkPending;
     private readonly int[] _unitChunkWaitTicks;
+    private readonly GroupUnitInput[] _groupUnitInputsBuffer = new GroupUnitInput[GroupDestinationDistribution.MaxCandidates];
     private uint _nextOrderGeneration;
 
     // Next chunk staging buffers per unit slot
@@ -167,6 +170,8 @@ public sealed class NavigationSystem : ISimulationSystem
     public int GlobalPlanCacheMisses { get; private set; }
 
     public NavigationGrid Grid => _grid;
+    public IUnitMovementCatalog Catalog => _catalog;
+    public DestinationEvaluator Evaluator => _grid.Evaluator;
     public NavigationTuning Tuning => _tuning;
     public int PendingRequests => _queueCount + (_hasActiveSearch ? 1 : 0);
     public NavigationSearchStage ActiveStage => _activeStage;
@@ -232,7 +237,8 @@ public sealed class NavigationSystem : ISimulationSystem
         float Radius,
         uint OrderGeneration,
         bool IsChunkContinuation = false,
-        TraversabilityCapabilities Capabilities = TraversabilityCapabilities.DefaultVehicle);
+        TraversabilityCapabilities Capabilities = TraversabilityCapabilities.DefaultVehicle,
+        uint TargetSurface = 0);
 
     public NavigationSystem(
         NavigationGrid grid,
@@ -260,8 +266,9 @@ public sealed class NavigationSystem : ISimulationSystem
             ? _grid.TotalCells
             : Math.Min(MaxLocalWindowCells, Math.Max(4096, (int)MathF.Ceiling((_tuning.MaxLocalWindowSize / _grid.CellSize) * (_tuning.MaxLocalWindowSize / _grid.CellSize))));
 
-        int nodeCount = localCellCapacity + 1;
-        _virtualGoalCell = localCellCapacity;
+        _layerCapacity = localCellCapacity;
+        int nodeCount = _layerCapacity * 2 + 1;
+        _virtualGoalCell = _layerCapacity * 2;
 
         _localClearance = new float[localCellCapacity];
         _activeGlobalPortals = new Vector2[MaxGlobalPlanPortals];
@@ -276,7 +283,7 @@ public sealed class NavigationSystem : ISimulationSystem
         _goalAnchorGen = new uint[nodeCount];
         _cellSurface = new uint[nodeCount];
 
-        _rawPathBuffer = new Vector2[Math.Max(1024, localCellCapacity + 4)];
+        _rawPathBuffer = new Vector2[Math.Max(1024, nodeCount + 4)];
         _rawPathSurfaceBuffer = new uint[_rawPathBuffer.Length];
         _smoothedPathBuffer = new Vector2[_tuning.MaxWaypointsPerRoute];
 
@@ -299,6 +306,7 @@ public sealed class NavigationSystem : ISimulationSystem
         _routeCounts = new int[_maxUnits];
         _routeIndices = new int[_maxUnits];
         _unitFinalTargets = new Vector2[_maxUnits];
+        _unitTargetSurfaces = new uint[_maxUnits];
         _unitHasFinalFacing = new bool[_maxUnits];
         _unitFinalFacings = new float[_maxUnits];
         _unitLinearSpeed = new float[_maxUnits];
@@ -433,6 +441,7 @@ public sealed class NavigationSystem : ISimulationSystem
                 _unitOrderExecutionTicks[slot] = 0;
                 _unitBestFinalDist[slot] = float.MaxValue;
                 _unitFinalTargets[slot] = Vector2.Zero;
+                _unitTargetSurfaces[slot] = 0;
                 _unitHasFinalFacing[slot] = false;
                 _unitFinalFacings[slot] = 0f;
                 _unitLinearSpeed[slot] = 0f;
@@ -505,6 +514,7 @@ public sealed class NavigationSystem : ISimulationSystem
         _unitOrderExecutionTicks[slot] = 0;
         _unitBestFinalDist[slot] = float.MaxValue;
         _unitFinalTargets[slot] = Vector2.Zero;
+        _unitTargetSurfaces[slot] = 0;
         _unitHasFinalFacing[slot] = false;
         _unitFinalFacings[slot] = 0f;
         _unitLinearSpeed[slot] = 0f;
@@ -591,6 +601,8 @@ public sealed class NavigationSystem : ISimulationSystem
 
     public Vector2 GetUnitFinalTarget(EntityId unit) => TryGetSlot(unit, out int slot) ? _unitFinalTargets[slot] : Vector2.Zero;
 
+    public uint GetUnitTargetSurface(EntityId unit) => TryGetSlot(unit, out int slot) ? _unitTargetSurfaces[slot] : 0;
+
     public MoveMode GetUnitMoveMode(EntityId unit) => TryGetSlot(unit, out int slot) ? _unitMoveMode[slot] : MoveMode.Forward;
 
     public int GetRouteIndex(EntityId unit) => TryGetSlot(unit, out int slot) ? _routeIndices[slot] : -1;
@@ -619,7 +631,18 @@ public sealed class NavigationSystem : ISimulationSystem
         _unitOrderExecutionTicks[slot] = 0;
         _unitBestFinalDist[slot] = float.MaxValue;
 
-        if (_queueCount == _requestQueue.Length)
+        int existingQueueIdx = -1;
+        for (int i = 0; i < _queueCount; i++)
+        {
+            int qIdx = (_queueHead + i) % _requestQueue.Length;
+            if (_requestQueue[qIdx].Unit == command.Unit)
+            {
+                existingQueueIdx = qIdx;
+                break;
+            }
+        }
+
+        if (existingQueueIdx < 0 && _queueCount == _requestQueue.Length)
         {
             CapacityExceeded++;
             _unitOrderGenerations[slot] = checked(++_nextOrderGeneration);
@@ -632,6 +655,7 @@ public sealed class NavigationSystem : ISimulationSystem
         float radius = 1.0f;
         UnitMovementProfile profile = default;
         bool hasProfile = false;
+        uint destSurface = command.TargetSurface;
         if (world is not null && world.TryGetUnit(command.Unit, out UnitState unit))
         {
             if (_catalog.TryGetProfile(unit.Definition, out profile))
@@ -649,9 +673,24 @@ public sealed class NavigationSystem : ISimulationSystem
                 return false;
             }
 
-            if (!_grid.IsPointClear(command.Target, radius, capabilities, unit.SupportSurface))
+            if (destSurface == 0 && _grid.Bridges.Count > 0 && (capabilities & TraversabilityCapabilities.Bridge) != 0)
             {
-                if (!TrySnapDestination(unit.Position, command.Target, radius, capabilities, unit.SupportSurface, out _))
+                for (int b = 0; b < _grid.Bridges.Count; b++)
+                {
+                    BridgeStructure br = _grid.Bridges[b];
+                    if (br.Contains(command.Target) &&
+                        !_grid.IsPointClear(command.Target, radius, capabilities, 0) &&
+                        _grid.IsPointClear(command.Target, radius, capabilities, (uint)br.Id.Value))
+                    {
+                        destSurface = (uint)br.Id.Value;
+                        break;
+                    }
+                }
+            }
+
+            if (!_grid.IsPointClear(command.Target, radius, capabilities, destSurface))
+            {
+                if (!TrySnapDestination(unit.Position, command.Target, radius, capabilities, destSurface, out _))
                 {
                     _unitOrderGenerations[slot] = checked(++_nextOrderGeneration);
                     _unitStatuses[slot] = PathRequestStatus.InvalidDestination;
@@ -689,8 +728,8 @@ public sealed class NavigationSystem : ISimulationSystem
                 float approachDist = MathF.Max(2.0f * profile.MinTurnRadius, 4.0f);
                 Vector2 approachPoint = command.Target + approachDir * approachDist;
 
-                if (!_grid.IsPointClear(approachPoint, radius, capabilities, unit.SupportSurface) ||
-                    !_grid.IsSegmentClear(approachPoint, command.Target, radius, capabilities, unit.SupportSurface))
+                if (!_grid.IsPointClear(approachPoint, radius, capabilities, destSurface) ||
+                    !_grid.IsSegmentClear(approachPoint, command.Target, radius, capabilities, destSurface))
                 {
                     _unitOrderGenerations[slot] = checked(++_nextOrderGeneration);
                     _unitStatuses[slot] = PathRequestStatus.InvalidDestination;
@@ -709,6 +748,7 @@ public sealed class NavigationSystem : ISimulationSystem
         uint orderGen = checked(++_nextOrderGeneration);
         _unitOrderGenerations[slot] = orderGen;
         _unitFinalTargets[slot] = command.Target;
+        _unitTargetSurfaces[slot] = destSurface;
         if (command.FinalFacing.HasValue)
         {
             _unitHasFinalFacing[slot] = true;
@@ -734,10 +774,147 @@ public sealed class NavigationSystem : ISimulationSystem
         _slotGlobalPortalIndices[slot] = 0;
 
         Vector2 start = command.Target;
-        _requestQueue[_queueTail] = new PathRequest(player, command.Unit, start, command.Target, radius, orderGen, false, capabilities);
-        _queueTail = (_queueTail + 1) % _requestQueue.Length;
-        _queueCount++;
+        PathRequest req = new(player, command.Unit, start, command.Target, radius, orderGen, false, capabilities, destSurface);
+        if (existingQueueIdx >= 0)
+        {
+            _requestQueue[existingQueueIdx] = req;
+        }
+        else
+        {
+            _requestQueue[_queueTail] = req;
+            _queueTail = (_queueTail + 1) % _requestQueue.Length;
+            _queueCount++;
+        }
         return true;
+    }
+
+    public GroupMoveResult ExecuteGroupMove(int player, GroupMoveCommand command, WorldState world)
+    {
+        ReadOnlySpan<EntityId> unitIds = command.Units.Span;
+        int count = unitIds.Length;
+        if (count == 0)
+        {
+            return new GroupMoveResult(
+                command.Sequence,
+                _currentTick,
+                command.Target,
+                command.TargetSurface,
+                command.Mode,
+                ReadOnlyMemory<GroupMoveAssignment>.Empty,
+                ReadOnlyMemory<GroupMoveUnplaced>.Empty);
+        }
+
+        count = Math.Min(count, _groupUnitInputsBuffer.Length);
+        int validCount = 0;
+        for (int i = 0; i < count; i++)
+        {
+            EntityId id = unitIds[i];
+            if (!world.TryGetUnit(id, out UnitState unit) || unit.Owner != player)
+                continue;
+
+            float speed = 10f;
+            float radius = 1.0f;
+            float colRadius = 0f;
+            TraversabilityCapabilities capabilities = TraversabilityCapabilities.DefaultVehicle;
+            bool canReverse = true;
+            float reverseSpeed = 2.5f;
+
+            if (_catalog.TryGetProfile(unit.Definition, out UnitMovementProfile profile))
+            {
+                speed = profile.Speed;
+                radius = profile.Radius;
+                colRadius = profile.EffectiveCollisionRadius;
+                capabilities = profile.Capabilities;
+                canReverse = profile.ReverseSpeed > 0f;
+                reverseSpeed = profile.ReverseSpeed;
+            }
+
+            float heading = 0f;
+            if (world.TryGetCombatState(id, out WorldState.CombatState cs))
+            {
+                heading = cs.HullHeading;
+            }
+
+            _groupUnitInputsBuffer[validCount++] = new GroupUnitInput(
+                id,
+                unit.Position,
+                heading,
+                radius,
+                colRadius,
+                capabilities,
+                canReverse,
+                reverseSpeed);
+        }
+
+        GroupMoveResult result = GroupDestinationDistribution.Distribute(
+            command.Sequence,
+            _currentTick,
+            _groupUnitInputsBuffer.AsSpan(0, validCount),
+            command.Target,
+            command.TargetSurface,
+            command.FinalFacing,
+            command.Mode,
+            _grid.Evaluator);
+
+        ReadOnlySpan<GroupMoveAssignment> placed = result.Placed.Span;
+        int enqueuedCount = 0;
+        Span<bool> enqueuedFlags = placed.Length <= 1024 ? stackalloc bool[placed.Length] : new bool[placed.Length];
+        for (int i = 0; i < placed.Length; i++)
+        {
+            GroupMoveAssignment a = placed[i];
+            MoveCommand moveCmd = new(
+                command.Sequence,
+                command.ClientTick,
+                a.Unit,
+                a.Target,
+                a.FinalFacing,
+                command.Mode,
+                a.TargetSurface);
+
+            if (EnqueueCommand(player, moveCmd, world))
+            {
+                world.ClearAttackOrder(a.Unit);
+                enqueuedFlags[i] = true;
+                enqueuedCount++;
+            }
+            else
+            {
+                enqueuedFlags[i] = false;
+            }
+        }
+
+        if (enqueuedCount == placed.Length)
+        {
+            return result;
+        }
+
+        GroupMoveAssignment[] newPlaced = enqueuedCount > 0 ? new GroupMoveAssignment[enqueuedCount] : Array.Empty<GroupMoveAssignment>();
+        int failedCount = placed.Length - enqueuedCount;
+        GroupMoveUnplaced[] newUnplaced = new GroupMoveUnplaced[result.Unplaced.Length + failedCount];
+        result.Unplaced.Span.CopyTo(newUnplaced);
+
+        int pIdx = 0;
+        int uIdx = result.Unplaced.Length;
+        for (int i = 0; i < placed.Length; i++)
+        {
+            if (enqueuedFlags[i])
+            {
+                newPlaced[pIdx++] = placed[i];
+            }
+            else
+            {
+                newUnplaced[uIdx++] = new GroupMoveUnplaced(placed[i].Unit, DestinationBlockReason.InsufficientClearance);
+            }
+        }
+
+        return new GroupMoveResult(
+            result.Sequence,
+            result.ServerTick,
+            result.Target,
+            result.TargetSurface,
+            result.Mode,
+            newPlaced,
+            newUnplaced);
     }
 
     public void ResetPlayer(int player)
@@ -890,9 +1067,9 @@ public sealed class NavigationSystem : ISimulationSystem
             Vector2 start = req.IsChunkContinuation ? req.Start : unit.Position;
             Vector2 target = req.Target;
 
-            if (!_grid.IsPointClear(target, radius, req.Capabilities))
+            if (!_grid.IsPointClear(target, radius, req.Capabilities, req.TargetSurface))
             {
-                if (!TrySnapDestination(start, target, radius, req.Capabilities, out Vector2 snapped))
+                if (!TrySnapDestination(start, target, radius, req.Capabilities, req.TargetSurface, out Vector2 snapped))
                 {
                     _unitStatuses[slot] = PathRequestStatus.InvalidDestination;
                     FailedSearches++;
@@ -910,7 +1087,9 @@ public sealed class NavigationSystem : ISimulationSystem
                 req = req with { Target = target };
             }
 
-            if (Vector2.DistanceSquared(start, target) <= 1e-4f)
+            bool sameSurface = req.TargetSurface == unit.SupportSurface;
+
+            if (sameSurface && Vector2.DistanceSquared(start, target) <= 1e-4f)
             {
                 if (req.IsChunkContinuation)
                 {
@@ -941,7 +1120,7 @@ public sealed class NavigationSystem : ISimulationSystem
                 continue;
             }
 
-            bool isWheeledWithFacing = !req.IsChunkContinuation && !profile.CanPivot && _unitHasFinalFacing[slot];
+            bool isWheeledWithFacing = sameSurface && !req.IsChunkContinuation && !profile.CanPivot && _unitHasFinalFacing[slot];
             if (isWheeledWithFacing)
             {
                 float facing = _unitFinalFacings[slot];
@@ -979,7 +1158,7 @@ public sealed class NavigationSystem : ISimulationSystem
                 }
             }
 
-            if (_grid.IsSegmentClear(start, target, radius, req.Capabilities, unit.SupportSurface))
+            if (sameSurface && _grid.IsSegmentClear(start, target, radius, req.Capabilities, unit.SupportSurface))
             {
                 if (req.IsChunkContinuation)
                 {
@@ -1057,9 +1236,9 @@ public sealed class NavigationSystem : ISimulationSystem
         Vector2 start = req.IsChunkContinuation ? req.Start : unit.Position;
         Vector2 target = req.Target;
 
-        if (!_grid.IsPointClear(target, radius, req.Capabilities))
+        if (!_grid.IsPointClear(target, radius, req.Capabilities, req.TargetSurface))
         {
-            if (!TrySnapDestination(start, target, radius, req.Capabilities, out Vector2 snapped))
+            if (!TrySnapDestination(start, target, radius, req.Capabilities, req.TargetSurface, out Vector2 snapped))
             {
                 _unitStatuses[slot] = PathRequestStatus.InvalidDestination;
                 FailedSearches++;
@@ -1077,7 +1256,9 @@ public sealed class NavigationSystem : ISimulationSystem
             req = req with { Target = target };
         }
 
-        if (Vector2.DistanceSquared(start, target) <= 1e-4f)
+        bool sameSurface = req.TargetSurface == unit.SupportSurface;
+
+        if (sameSurface && Vector2.DistanceSquared(start, target) <= 1e-4f)
         {
             if (req.IsChunkContinuation)
             {
@@ -1108,7 +1289,7 @@ public sealed class NavigationSystem : ISimulationSystem
             return false;
         }
 
-        bool isWheeledWithFacing = !req.IsChunkContinuation && !profile.CanPivot && _unitHasFinalFacing[slot];
+        bool isWheeledWithFacing = sameSurface && !req.IsChunkContinuation && !profile.CanPivot && _unitHasFinalFacing[slot];
         if (isWheeledWithFacing)
         {
             float facing = _unitFinalFacings[slot];
@@ -1151,7 +1332,7 @@ public sealed class NavigationSystem : ISimulationSystem
             }
         }
 
-        if (_grid.IsSegmentClear(start, target, radius, req.Capabilities, unit.SupportSurface))
+        if (sameSurface && _grid.IsSegmentClear(start, target, radius, req.Capabilities, unit.SupportSurface))
         {
             if (req.IsChunkContinuation)
             {
@@ -1451,12 +1632,14 @@ public sealed class NavigationSystem : ISimulationSystem
         Vector2 target = _activeRequest.Target;
         float radius = _activeRadius;
 
+        bool isIntermediatePortal = false;
         if (!_grid.IsFlatGrid && !_activeRequest.IsChunkContinuation && _slotGlobalPortalCounts[TryGetSlot(_activeRequest.Unit, out int s) ? s : 0] > 0)
         {
             int pIdx = _slotGlobalPortalIndices[s];
             if (pIdx < _slotGlobalPortalCounts[s])
             {
                 target = _slotGlobalPortals[s * MaxGlobalPlanPortals + pIdx];
+                isIntermediatePortal = true;
             }
         }
 
@@ -1465,10 +1648,8 @@ public sealed class NavigationSystem : ISimulationSystem
         _cameFrom[_virtualGoalCell] = -1;
         _heapPosition[_virtualGoalCell] = -1;
 
-        uint targetSurface = 0;
-        BridgeStructure targetBridge = default!;
-        bool hasTargetBridge = false;
-        if ((_activeRequest.Capabilities & TraversabilityCapabilities.Bridge) != 0 && _grid.Bridges.Count > 0)
+        uint targetSurface = _activeRequest.TargetSurface;
+        if (isIntermediatePortal && _grid.Bridges.Count > 0)
         {
             for (int b = 0; b < _grid.Bridges.Count; b++)
             {
@@ -1476,11 +1657,29 @@ public sealed class NavigationSystem : ISimulationSystem
                 if (br.Contains(target))
                 {
                     targetSurface = (uint)br.Id.Value;
-                    targetBridge = br;
-                    hasTargetBridge = true;
                     break;
                 }
             }
+        }
+        else if (targetSurface == 0 && _grid.Bridges.Count > 0 && (_activeRequest.Capabilities & TraversabilityCapabilities.Bridge) != 0)
+        {
+            for (int b = 0; b < _grid.Bridges.Count; b++)
+            {
+                BridgeStructure br = _grid.Bridges[b];
+                if (br.Contains(target) &&
+                    !_grid.IsPointClear(target, radius, _activeRequest.Capabilities, 0) &&
+                    _grid.IsPointClear(target, radius, _activeRequest.Capabilities, (uint)br.Id.Value))
+                {
+                    targetSurface = (uint)br.Id.Value;
+                    break;
+                }
+            }
+        }
+        BridgeStructure targetBridge = default!;
+        bool hasTargetBridge = false;
+        if (targetSurface > 0 && _grid.Bridges.Count > 0)
+        {
+            hasTargetBridge = _grid.TryGetBridge(new StructureId((int)targetSurface), out targetBridge);
         }
         _cellSurface[_virtualGoalCell] = targetSurface;
 
@@ -1499,10 +1698,10 @@ public sealed class NavigationSystem : ISimulationSystem
                 int gc = goalCol + dc;
                 if (gc < 0 || gc >= _localWinCols) continue;
 
-                if (!IsLocalCellPassable(gc, gr, radius)) continue;
-
                 Vector2 center = LocalCellCenter(gc, gr);
                 uint anchorSurface = targetSurface;
+                if (!IsLocalCellPassable(gc, gr, radius, anchorSurface)) continue;
+
                 if (targetSurface > 0)
                 {
                     if (!hasTargetBridge || !targetBridge.Contains(center))
@@ -1514,8 +1713,9 @@ public sealed class NavigationSystem : ISimulationSystem
                 if (!_grid.IsSegmentClear(center, target, radius, _activeRequest.Capabilities, anchorSurface)) continue;
 
                 int cell = gr * _localWinCols + gc;
-                _goalAnchorGen[cell] = _searchGeneration;
-                _cellSurface[cell] = anchorSurface;
+                int goalNode = ToNode(cell, anchorSurface);
+                _goalAnchorGen[goalNode] = _searchGeneration;
+                _cellSurface[goalNode] = anchorSurface;
                 goalAnchorCount++;
             }
         }
@@ -1534,24 +1734,25 @@ public sealed class NavigationSystem : ISimulationSystem
         }
 
         bool startCellValid = IsInLocalBounds(startCol, startRow) &&
-            IsLocalCellPassable(startCol, startRow, radius) &&
+            IsLocalCellPassable(startCol, startRow, radius, startSurface) &&
             (startSurface == 0 || (hasStartBridge && startBridge.Contains(LocalCellCenter(startCol, startRow)))) &&
             _grid.IsSegmentClear(start, LocalCellCenter(startCol, startRow), radius, _activeRequest.Capabilities, startSurface);
 
         if (startCellValid)
         {
-            _searchGen[startCell] = _searchGeneration;
-            _gScore[startCell] = Vector2.Distance(start, LocalCellCenter(startCol, startRow));
-            _cameFrom[startCell] = -1;
-            _cellSurface[startCell] = startSurface;
-            HeapPush(startCell);
+            int startNode = ToNode(startCell, startSurface);
+            _searchGen[startNode] = _searchGeneration;
+            _gScore[startNode] = Vector2.Distance(start, LocalCellCenter(startCol, startRow));
+            _cameFrom[startNode] = -1;
+            _cellSurface[startNode] = startSurface;
+            HeapPush(startNode);
             startAnchorCount++;
 
-            if (_goalAnchorGen[startCell] == _searchGeneration && startSurface == targetSurface)
+            if (_goalAnchorGen[startNode] == _searchGeneration && startSurface == targetSurface)
             {
                 float distToTarget = Vector2.Distance(LocalCellCenter(startCol, startRow), target);
-                _gScore[_virtualGoalCell] = _gScore[startCell] + distToTarget;
-                _cameFrom[_virtualGoalCell] = startCell;
+                _gScore[_virtualGoalCell] = _gScore[startNode] + distToTarget;
+                _cameFrom[_virtualGoalCell] = startNode;
                 HeapPush(_virtualGoalCell);
             }
         }
@@ -1568,7 +1769,7 @@ public sealed class NavigationSystem : ISimulationSystem
                     int sc = startCol + dc;
                     if (sc < 0 || sc >= _localWinCols) continue;
 
-                    if (!IsLocalCellPassable(sc, sr, radius)) continue;
+                    if (!IsLocalCellPassable(sc, sr, radius, startSurface)) continue;
 
                     Vector2 center = LocalCellCenter(sc, sr);
                     if (startSurface > 0 && (!hasStartBridge || !startBridge.Contains(center)))
@@ -1580,21 +1781,22 @@ public sealed class NavigationSystem : ISimulationSystem
                     if (!_grid.IsSegmentClear(start, center, radius, _activeRequest.Capabilities, centerStartSurface)) continue;
 
                     int cell = sr * _localWinCols + sc;
-                    _searchGen[cell] = _searchGeneration;
-                    _gScore[cell] = Vector2.Distance(start, center);
-                    _cameFrom[cell] = -1;
-                    _cellSurface[cell] = centerStartSurface;
-                    HeapPush(cell);
+                    int startNode = ToNode(cell, centerStartSurface);
+                    _searchGen[startNode] = _searchGeneration;
+                    _gScore[startNode] = Vector2.Distance(start, center);
+                    _cameFrom[startNode] = -1;
+                    _cellSurface[startNode] = centerStartSurface;
+                    HeapPush(startNode);
                     startAnchorCount++;
 
-                    if (_goalAnchorGen[cell] == _searchGeneration && centerStartSurface == targetSurface)
+                    if (_goalAnchorGen[startNode] == _searchGeneration && centerStartSurface == targetSurface)
                     {
                         float distToTarget = Vector2.Distance(center, target);
-                        float cost = _gScore[cell] + distToTarget;
+                        float cost = _gScore[startNode] + distToTarget;
                         if (cost < _gScore[_virtualGoalCell])
                         {
                             _gScore[_virtualGoalCell] = cost;
-                            _cameFrom[_virtualGoalCell] = cell;
+                            _cameFrom[_virtualGoalCell] = startNode;
                         }
                     }
                 }
@@ -1647,8 +1849,9 @@ public sealed class NavigationSystem : ISimulationSystem
                 return false;
             }
 
-            int col = current % _localWinCols;
-            int row = current / _localWinCols;
+            int currentCell = NodeToCell(current);
+            int col = currentCell % _localWinCols;
+            int row = currentCell / _localWinCols;
             Vector2 currentCenter = LocalCellCenter(col, row);
             float currentClearance = GetLocalCellClearance(col, row);
             float currentG = _gScore[current];
@@ -1687,28 +1890,12 @@ public sealed class NavigationSystem : ISimulationSystem
 
                 if (!IsInLocalBounds(nextCol, nextRow)) continue;
 
-                if (n.isDiagonal)
-                {
-                    int c1Col = col + n.c1Col;
-                    int c1Row = row + n.c1Row;
-                    int c2Col = col + n.c2Col;
-                    int c2Row = row + n.c2Row;
-                    if (!IsLocalCellPassable(c1Col, c1Row, radius) || !IsLocalCellPassable(c2Col, c2Row, radius))
-                        continue;
-                }
-
-                if (!IsLocalCellPassable(nextCol, nextRow, radius)) continue;
-
                 int nextCell = nextRow * _localWinCols + nextCol;
-                if (_closedGen[nextCell] == _searchGeneration) continue;
-
-                float stepCost = n.isDiagonal ? 1.41421356f * _grid.CellSize : _grid.CellSize;
-                float nextClearance = GetLocalCellClearance(nextCol, nextRow);
-                float safeThreshold = radius + stepCost * 0.5f;
-                Vector2 nextCenter = LocalCellCenter(nextCol, nextRow);
                 uint currentSurface = _cellSurface[current];
                 uint nextSurface = currentSurface;
                 bool surfaceTransitionRejected = false;
+                Vector2 nextCenter = LocalCellCenter(nextCol, nextRow);
+                float stepCost = n.isDiagonal ? 1.41421356f * _grid.CellSize : _grid.CellSize;
 
                 if (_grid.Bridges.Count > 0 && (_activeRequest.Capabilities & TraversabilityCapabilities.Bridge) != 0)
                 {
@@ -1723,10 +1910,42 @@ public sealed class NavigationSystem : ISimulationSystem
                             if (!currentOnBridge && nextOnBridge)
                             {
                                 float threshold = MathF.Max(6.0f, br.Width * 0.5f + 1.0f);
-                                if (br.IsNearEntry(currentCenter, threshold) && br.IsNearEntry(nextCenter, threshold))
+                                float uCur = Vector2.Dot(currentCenter - br.Start, br.Direction);
+                                float uNext = Vector2.Dot(nextCenter - br.Start, br.Direction);
+                                bool crossesStartRamp = (uCur < 0f && uNext >= 0f) || (uCur >= 0f && uNext < 0f);
+                                bool crossesEndRamp = (uCur > br.Length && uNext <= br.Length) || (uCur <= br.Length && uNext > br.Length);
+
+                                if ((crossesStartRamp || crossesEndRamp) &&
+                                    br.IsNearEntry(currentCenter, threshold) && br.IsNearEntry(nextCenter, threshold))
                                 {
-                                    nextSurface = (uint)br.Id.Value;
-                                    break;
+                                    int deckNode = ToNode(nextCell, (uint)br.Id.Value);
+                                    if (_closedGen[deckNode] != _searchGeneration)
+                                    {
+                                        if (IsLocalCellPassable(nextCol, nextRow, radius, (uint)br.Id.Value) &&
+                                            _grid.IsSegmentClear(currentCenter, nextCenter, radius, _activeRequest.Capabilities, (uint)br.Id.Value))
+                                        {
+                                            float tentativeDeckG = currentG + stepCost;
+                                            if (_searchGen[deckNode] != _searchGeneration)
+                                            {
+                                                _searchGen[deckNode] = _searchGeneration;
+                                                _gScore[deckNode] = float.PositiveInfinity;
+                                            }
+                                            if (tentativeDeckG < _gScore[deckNode] - 1e-4f)
+                                            {
+                                                _gScore[deckNode] = tentativeDeckG;
+                                                _cameFrom[deckNode] = current;
+                                                _cellSurface[deckNode] = (uint)br.Id.Value;
+                                                if (!IsInHeap(deckNode))
+                                                {
+                                                    HeapPush(deckNode);
+                                                }
+                                                else
+                                                {
+                                                    HeapDecreaseKey(deckNode);
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1735,7 +1954,13 @@ public sealed class NavigationSystem : ISimulationSystem
                             if (!nextOnBridge)
                             {
                                 float threshold = MathF.Max(6.0f, br.Width * 0.5f + 1.0f);
-                                if (!br.IsNearEntry(currentCenter, threshold) || !br.IsNearEntry(nextCenter, threshold))
+                                float uCur = Vector2.Dot(currentCenter - br.Start, br.Direction);
+                                float uNext = Vector2.Dot(nextCenter - br.Start, br.Direction);
+                                bool crossesStartRamp = (uCur < 0f && uNext >= 0f) || (uCur >= 0f && uNext < 0f);
+                                bool crossesEndRamp = (uCur > br.Length && uNext <= br.Length) || (uCur <= br.Length && uNext > br.Length);
+
+                                if (!crossesStartRamp && !crossesEndRamp ||
+                                    !br.IsNearEntry(currentCenter, threshold) || !br.IsNearEntry(nextCenter, threshold))
                                 {
                                     surfaceTransitionRejected = true;
                                     break;
@@ -1749,6 +1974,24 @@ public sealed class NavigationSystem : ISimulationSystem
 
                 if (surfaceTransitionRejected) continue;
 
+                if (n.isDiagonal)
+                {
+                    int c1Col = col + n.c1Col;
+                    int c1Row = row + n.c1Row;
+                    int c2Col = col + n.c2Col;
+                    int c2Row = row + n.c2Row;
+                    if (!IsLocalCellPassable(c1Col, c1Row, radius, currentSurface) || !IsLocalCellPassable(c2Col, c2Row, radius, currentSurface))
+                        continue;
+                }
+
+                if (!IsLocalCellPassable(nextCol, nextRow, radius, nextSurface)) continue;
+
+                float nextClearance = GetLocalCellClearance(nextCol, nextRow, nextSurface);
+                float safeThreshold = radius + stepCost * 0.5f;
+
+                int nextNode = ToNode(nextCell, nextSurface);
+                if (_closedGen[nextNode] == _searchGeneration) continue;
+
                 if (_grid.Bridges.Count > 0 || currentClearance < safeThreshold || nextClearance < safeThreshold)
                 {
                     uint stepSurface = currentSurface > 0 ? currentSurface : nextSurface;
@@ -1758,24 +2001,24 @@ public sealed class NavigationSystem : ISimulationSystem
 
                 float tentativeG = currentG + stepCost;
 
-                if (_searchGen[nextCell] != _searchGeneration)
+                if (_searchGen[nextNode] != _searchGeneration)
                 {
-                    _searchGen[nextCell] = _searchGeneration;
-                    _gScore[nextCell] = float.PositiveInfinity;
+                    _searchGen[nextNode] = _searchGeneration;
+                    _gScore[nextNode] = float.PositiveInfinity;
                 }
 
-                if (tentativeG < _gScore[nextCell] - 1e-4f)
+                if (tentativeG < _gScore[nextNode] - 1e-4f)
                 {
-                    _gScore[nextCell] = tentativeG;
-                    _cameFrom[nextCell] = current;
-                    _cellSurface[nextCell] = nextSurface;
-                    if (!IsInHeap(nextCell))
+                    _gScore[nextNode] = tentativeG;
+                    _cameFrom[nextNode] = current;
+                    _cellSurface[nextNode] = nextSurface;
+                    if (!IsInHeap(nextNode))
                     {
-                        HeapPush(nextCell);
+                        HeapPush(nextNode);
                     }
                     else
                     {
-                        HeapDecreaseKey(nextCell);
+                        HeapDecreaseKey(nextNode);
                     }
                 }
             }
@@ -1803,8 +2046,9 @@ public sealed class NavigationSystem : ISimulationSystem
         int trace = (endNode == _virtualGoalCell) ? _cameFrom[_virtualGoalCell] : endNode;
         while (trace != -1 && _rawPathCount < _rawPathBuffer.Length - 4)
         {
-            int col = trace % _localWinCols;
-            int row = trace / _localWinCols;
+            int cell = NodeToCell(trace);
+            int col = cell % _localWinCols;
+            int row = cell / _localWinCols;
             _rawPathSurfaceBuffer[_rawPathCount] = _cellSurface[trace];
             _rawPathBuffer[_rawPathCount++] = LocalCellCenter(col, row);
             trace = _cameFrom[trace];
@@ -1872,8 +2116,15 @@ public sealed class NavigationSystem : ISimulationSystem
                             float threshold = MathF.Max(6.0f, br.Width * 0.5f + 1.0f);
                             if (br.IsNearEntry(_smoothingCurrentAnchor, threshold) && br.IsNearEntry(_rawPathBuffer[nextIdx], threshold))
                             {
-                                nearRamp = true;
-                                break;
+                                float uAnchor = Vector2.Dot(_smoothingCurrentAnchor - br.Start, br.Direction);
+                                float uCand = Vector2.Dot(_rawPathBuffer[nextIdx] - br.Start, br.Direction);
+                                bool crossesStartRamp = (uAnchor < 0f && uCand >= 0f) || (uAnchor >= 0f && uCand < 0f);
+                                bool crossesEndRamp = (uAnchor > br.Length && uCand <= br.Length) || (uAnchor <= br.Length && uCand > br.Length);
+                                if (crossesStartRamp || crossesEndRamp)
+                                {
+                                    nearRamp = true;
+                                    break;
+                                }
                             }
                         }
                         if (!nearRamp) continue;
@@ -2046,7 +2297,7 @@ public sealed class NavigationSystem : ISimulationSystem
     private bool TrySnapDestination(Vector2 start, Vector2 target, float radius, TraversabilityCapabilities capabilities, uint targetSurface, out Vector2 snapped) =>
         _grid.TrySnapDestination(start, target, radius, capabilities, targetSurface, _tuning.MaxSnapDistance, out snapped);
 
-    private uint UpdateSupportSurface(Vector2 from, Vector2 to, TraversabilityCapabilities capabilities, uint currentSurface)
+    private uint UpdateSupportSurface(Vector2 from, Vector2 to, TraversabilityCapabilities capabilities, uint currentSurface, uint targetSurface = 0, Vector2 finalTarget = default)
     {
         if (currentSurface == 0)
         {
@@ -2057,9 +2308,20 @@ public sealed class NavigationSystem : ISimulationSystem
                     BridgeStructure bridge = _grid.Bridges[b];
                     if (bridge.Contains(to))
                     {
-                        if (!bridge.Contains(from) && (bridge.IsNearEntry(from) || bridge.IsNearEntry(to)))
+                        float uFrom = Vector2.Dot(from - bridge.Start, bridge.Direction);
+                        float uTo = Vector2.Dot(to - bridge.Start, bridge.Direction);
+                        bool crossesStartRamp = (uFrom < 0f && uTo >= 0f) || (uFrom >= 0f && uTo < 0f);
+                        bool crossesEndRamp = (uFrom > bridge.Length && uTo <= bridge.Length) || (uFrom <= bridge.Length && uTo > bridge.Length);
+
+                        if ((crossesStartRamp || crossesEndRamp) &&
+                            (bridge.IsNearEntry(from) || bridge.IsNearEntry(to)))
                         {
-                            return (uint)bridge.Id.Value;
+                            bool groundUnderBridge = targetSurface == 0 && bridge.Contains(finalTarget);
+                            bool groundBlocked = !_grid.IsSegmentClear(from, to, 0.5f, capabilities, 0);
+                            if (!groundUnderBridge || groundBlocked)
+                            {
+                                return (uint)bridge.Id.Value;
+                            }
                         }
                     }
                 }
@@ -2170,7 +2432,7 @@ public sealed class NavigationSystem : ISimulationSystem
 
                     if (step.LengthSquared() > 1e-8f && _grid.IsSegmentClear(unit.Position, nextPos, radius, capabilities, supportSurface))
                     {
-                        supportSurface = UpdateSupportSurface(unit.Position, nextPos, capabilities, supportSurface);
+                        supportSurface = UpdateSupportSurface(unit.Position, nextPos, capabilities, supportSurface, _unitTargetSurfaces[slot], _unitFinalTargets[slot]);
                         world.UpdateUnitNavigation(unit.Id, nextPos, unit.Position, true, _currentTick, supportSurface, currentHeading);
                     }
                     else
@@ -2365,7 +2627,7 @@ public sealed class NavigationSystem : ISimulationSystem
                                 _candidateDisplacements[i] = kStep;
                                 if (clear)
                                 {
-                                    currentSurface = UpdateSupportSurface(stepStart, stepEnd, capabilities, currentSurface);
+                                    currentSurface = UpdateSupportSurface(stepStart, stepEnd, capabilities, currentSurface, _unitTargetSurfaces[slot], _unitFinalTargets[slot]);
                                     currentPosK = stepEnd;
                                 }
                             }
@@ -2393,7 +2655,8 @@ public sealed class NavigationSystem : ISimulationSystem
                     countK = nextCount;
                 }
 
-                reachedFinalDestination = Vector2.Distance(currentPosK, finalTargetK) <= 0.05f;
+                reachedFinalDestination = Vector2.Distance(currentPosK, finalTargetK) <= 0.05f &&
+                    (currentSurface == _unitTargetSurfaces[slot]);
 
                 if (reachedFinalDestination)
                 {
@@ -2501,7 +2764,7 @@ public sealed class NavigationSystem : ISimulationSystem
 
                     if (step.LengthSquared() > 1e-8f && _grid.IsSegmentClear(unit.Position, nextPos, radius, capabilities, supportSurface))
                     {
-                        supportSurface = UpdateSupportSurface(unit.Position, nextPos, capabilities, supportSurface);
+                        supportSurface = UpdateSupportSurface(unit.Position, nextPos, capabilities, supportSurface, _unitTargetSurfaces[slot], _unitFinalTargets[slot]);
                         world.UpdateUnitNavigation(unit.Id, nextPos, _unitFinalTargets[slot], true, _currentTick, supportSurface, currentHeading);
                     }
                     else
@@ -2527,7 +2790,8 @@ public sealed class NavigationSystem : ISimulationSystem
             float finalFacing = _unitFinalFacings[slot];
 
             float maxDecelStep = (deceleration <= 0f ? 1000f : deceleration * dt);
-            bool nearTarget = (distToFinal <= 0.05f && v <= maxDecelStep + 1e-4f) || (distToFinal <= 0.15f && v <= 1e-4f);
+            bool nearTarget = ((distToFinal <= 0.05f && v <= maxDecelStep + 1e-4f) || (distToFinal <= 0.15f && v <= 1e-4f)) &&
+                (supportSurface == _unitTargetSurfaces[slot]);
 
             if (nearTarget)
             {
@@ -2616,6 +2880,22 @@ public sealed class NavigationSystem : ISimulationSystem
                     : MathF.Max(MathF.Max(1.0f, minTurnRadius * 1.2f), v * dt * 1.5f);
                 if (distSq <= maxAdvanceDist * maxAdvanceDist && _grid.IsSegmentClear(currentPos, nextWp, radius, capabilities, supportSurface))
                 {
+                    if (_unitTargetSurfaces[slot] != supportSurface && _grid.Bridges.Count > 0)
+                    {
+                        bool curWpBridge = false;
+                        bool nextWpBridge = false;
+                        for (int b = 0; b < _grid.Bridges.Count; b++)
+                        {
+                            var br = _grid.Bridges[b];
+                            if (br.Contains(_routeWaypoints[offset + idx])) curWpBridge = true;
+                            if (br.Contains(nextWp)) nextWpBridge = true;
+                        }
+                        if (curWpBridge != nextWpBridge)
+                        {
+                            break;
+                        }
+                    }
+
                     Vector2 seg = nextWp - _routeWaypoints[offset + idx];
                     float segLenSq = seg.LengthSquared();
                     if (segLenSq > 1e-4f)
@@ -2742,6 +3022,25 @@ public sealed class NavigationSystem : ISimulationSystem
                     {
                         Vector2 segStart = _routeWaypoints[offset + k];
                         Vector2 segEnd = _routeWaypoints[offset + k + 1];
+
+                        if (_unitTargetSurfaces[slot] != supportSurface && _grid.Bridges.Count > 0)
+                        {
+                            bool startOnBr = false;
+                            bool endOnBr = false;
+                            for (int b = 0; b < _grid.Bridges.Count; b++)
+                            {
+                                var br = _grid.Bridges[b];
+                                if (br.Contains(segStart)) startOnBr = true;
+                                if (br.Contains(segEnd)) endOnBr = true;
+                            }
+                            if (startOnBr != endOnBr && k == idx)
+                            {
+                                lookaheadPoint = segStart;
+                                pointFound = true;
+                                break;
+                            }
+                        }
+
                         float segLen = Vector2.Distance(segStart, segEnd);
                         if (remDist <= segLen && segLen > 1e-4f)
                         {
@@ -2796,6 +3095,7 @@ public sealed class NavigationSystem : ISimulationSystem
             float absHeadingError = MathF.Abs(headingError);
 
             float vTarget = MathF.Min(maxCruiseSpeed, vStop);
+
 
             bool blockedAheadByVehicle = false;
             if (effectiveColRadius > 0f)
@@ -2918,7 +3218,7 @@ public sealed class NavigationSystem : ISimulationSystem
             Vector2 forwardUnit = new(-MathF.Sin(newHeading), -MathF.Cos(newHeading));
             moveDir = currentMode == MoveMode.Forward ? forwardUnit : -forwardUnit;
             float stepDist = v * dt;
-            if (distToFinal <= stepDist && v <= maxDecelStep + 1e-4f)
+            if (idx >= count && supportSurface == _unitTargetSurfaces[slot] && distToFinal <= stepDist && v <= maxDecelStep + 1e-4f)
             {
                 stepDist = distToFinal;
                 float minV = prevLinearSpeed - maxDecelStep;
@@ -2987,6 +3287,7 @@ public sealed class NavigationSystem : ISimulationSystem
                 capabilities = profile.Capabilities;
             }
 
+
             if (!canPivot)
             {
                 if (stepDist <= 1e-6f)
@@ -3030,7 +3331,7 @@ public sealed class NavigationSystem : ISimulationSystem
             {
                 if (_grid.IsSegmentClear(currentPos, nextPos, radius, capabilities, supportSurface))
                 {
-                    supportSurface = UpdateSupportSurface(currentPos, nextPos, capabilities, supportSurface);
+                    supportSurface = UpdateSupportSurface(currentPos, nextPos, capabilities, supportSurface, _unitTargetSurfaces[slot], _unitFinalTargets[slot]);
                     currentPos = nextPos;
                     if (idx < count)
                     {
@@ -3084,7 +3385,7 @@ public sealed class NavigationSystem : ISimulationSystem
                                     Vector2 subNext = currentPos + subStep;
                                     if (_grid.IsSegmentClear(currentPos, subNext, radius, capabilities, supportSurface))
                                     {
-                                        supportSurface = UpdateSupportSurface(currentPos, subNext, capabilities, supportSurface);
+                                        supportSurface = UpdateSupportSurface(currentPos, subNext, capabilities, supportSurface, _unitTargetSurfaces[slot], _unitFinalTargets[slot]);
                                         currentPos = subNext;
                                     }
                                     remDist = 0f;
@@ -3094,7 +3395,7 @@ public sealed class NavigationSystem : ISimulationSystem
                                 {
                                     if (_grid.IsSegmentClear(currentPos, targetWp, radius, capabilities, supportSurface))
                                     {
-                                        supportSurface = UpdateSupportSurface(currentPos, targetWp, capabilities, supportSurface);
+                                        supportSurface = UpdateSupportSurface(currentPos, targetWp, capabilities, supportSurface, _unitTargetSurfaces[slot], _unitFinalTargets[slot]);
                                         currentPos = targetWp;
                                         remDist -= d;
                                         idx++;
@@ -3200,7 +3501,8 @@ public sealed class NavigationSystem : ISimulationSystem
             }
 
             float distToFinalNow = Vector2.Distance(currentPos, finalTarget);
-            bool reachedDestinationThisTick = canPivot && distToFinalNow <= 0.05f && v <= maxDecelStep + 1e-4f;
+            bool reachedDestinationThisTick = canPivot && distToFinalNow <= 0.05f && v <= maxDecelStep + 1e-4f &&
+                (supportSurface == _unitTargetSurfaces[slot]);
             if (reachedDestinationThisTick && !hasFinalFacing)
             {
                 _unitHasActiveRoutes[slot] = false;
@@ -3233,17 +3535,30 @@ public sealed class NavigationSystem : ISimulationSystem
 
         Vector2 chunkStart = _routeWaypoints[slot * _tuning.MaxWaypointsPerRoute + Math.Max(0, _routeCounts[slot] - 1)];
         Vector2 nextTarget = _unitFinalTargets[slot];
+        uint targetSurface = _unitTargetSurfaces[slot];
 
         if (_slotGlobalPortalCounts[slot] > 0 && _slotGlobalPortalIndices[slot] < _slotGlobalPortalCounts[slot])
         {
             nextTarget = _slotGlobalPortals[slot * MaxGlobalPlanPortals + _slotGlobalPortalIndices[slot]];
+            if (_grid.Bridges.Count > 0)
+            {
+                for (int b = 0; b < _grid.Bridges.Count; b++)
+                {
+                    BridgeStructure br = _grid.Bridges[b];
+                    if (br.Contains(nextTarget))
+                    {
+                        targetSurface = (uint)br.Id.Value;
+                        break;
+                    }
+                }
+            }
         }
 
         uint orderGen = _unitOrderGenerations[slot];
         _unitChunkPending[slot] = true;
 
         _requestQueue[_queueTail] = new PathRequest(
-            unit.Owner, unit.Id, chunkStart, nextTarget, radius, orderGen, IsChunkContinuation: true, Capabilities: capabilities);
+            unit.Owner, unit.Id, chunkStart, nextTarget, radius, orderGen, IsChunkContinuation: true, Capabilities: capabilities, TargetSurface: targetSurface);
         _queueTail = (_queueTail + 1) % _requestQueue.Length;
         _queueCount++;
     }
@@ -3252,6 +3567,12 @@ public sealed class NavigationSystem : ISimulationSystem
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool IsInLocalBounds(int col, int row) =>
         (uint)col < (uint)_localWinCols && (uint)row < (uint)_localWinRows;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int ToNode(int cell, uint surface) => surface > 0 ? _layerCapacity + cell : cell;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int NodeToCell(int node) => node == _virtualGoalCell ? node : (node >= _layerCapacity ? node - _layerCapacity : node);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private Vector2 LocalCellCenter(int col, int row) =>
@@ -3266,9 +3587,18 @@ public sealed class NavigationSystem : ISimulationSystem
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private float GetLocalCellClearance(int col, int row)
+    private float GetLocalCellClearance(int col, int row, uint surface = 0)
     {
         if (!IsInLocalBounds(col, row)) return 0f;
+        if (surface > 0 && _grid.TryGetBridge(new StructureId((int)surface), out BridgeStructure bridge))
+        {
+            Vector2 p = LocalCellCenter(col, row);
+            if (bridge.Contains(p))
+            {
+                return bridge.GetSideClearance(p);
+            }
+            return 0f;
+        }
         if (_grid.IsFlatGrid)
         {
             if (_grid.TerrainObstacles.Count == 0 && _grid.Bridges.Count == 0)
@@ -3276,14 +3606,14 @@ public sealed class NavigationSystem : ISimulationSystem
                 (int gCol, int gRow) = _grid.WorldToCell(LocalCellCenter(col, row));
                 return _grid.GetCellClearance(gCol, gRow);
             }
-            return _grid.ComputePointClearance(LocalCellCenter(col, row), _activeRequest.Capabilities);
+            return _grid.ComputePointClearance(LocalCellCenter(col, row), _activeRequest.Capabilities, surface);
         }
         return _localClearance[row * _localWinCols + col];
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool IsLocalCellPassable(int col, int row, float radius) =>
-        GetLocalCellClearance(col, row) >= radius;
+    private bool IsLocalCellPassable(int col, int row, float radius, uint surface = 0) =>
+        GetLocalCellClearance(col, row, surface) >= radius;
 
     // Indexed min-heap operations
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -3378,9 +3708,10 @@ public sealed class NavigationSystem : ISimulationSystem
         return cellA < cellB;
     }
 
-    private float Heuristic(int cell)
+    private float Heuristic(int node)
     {
-        if (cell == _virtualGoalCell) return 0f;
+        if (node == _virtualGoalCell) return 0f;
+        int cell = NodeToCell(node);
         int col = cell % _localWinCols;
         int row = cell / _localWinCols;
         return Vector2.Distance(LocalCellCenter(col, row), _activeRequest.Target);

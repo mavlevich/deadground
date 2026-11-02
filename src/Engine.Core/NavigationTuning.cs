@@ -55,7 +55,7 @@ public sealed record NavigationTuning(
     int MaxOrderExecutionTicks = NavigationTuning.DefaultMaxOrderExecutionTicks)
 {
     public const int DefaultMaxNodeExpansionsPerTick = 1000;
-    public const int DefaultMaxPendingRequests = 256;
+    public const int DefaultMaxPendingRequests = 512;
     public const int DefaultMaxWaypointsPerRoute = 64;
     public const float DefaultCellSize = 0.5f;
     public const float DefaultMaxSnapDistance = 3.0f;

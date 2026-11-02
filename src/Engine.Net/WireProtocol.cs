@@ -19,7 +19,7 @@ public enum HandshakeReason : byte
 public static class WireProtocol
 {
     public const byte Version = MatchSetup.CurrentProtocolVersion;
-    public const int MoveSize = 28;
+    public const int MoveSize = 32;
     public const int AttackSize = 18;
     public const int SetFireStanceSize = 15;
     public const int CommandResultSize = 11;
@@ -35,6 +35,10 @@ public static class WireProtocol
     public const int HandshakeResponseSize = 5;
     public const int FragmentHeaderSize = 22;
     public const int MaxFragmentPayloadSize = 960;
+    public const int GroupMoveHeaderSize = 30;
+    public const int GroupMoveResultHeaderSize = 27;
+    public const int GroupMovePlacedRecordSize = 21;
+    public const int GroupMoveUnplacedRecordSize = 5;
 
     public const byte MoveKind = 1;
     public const byte SnapshotKind = 2;
@@ -44,6 +48,8 @@ public static class WireProtocol
     public const byte HandshakeResponseKind = 6;
     public const byte AttackKind = 7;
     public const byte SetFireStanceKind = 8;
+    public const byte GroupMoveKind = 9;
+    public const byte GroupMoveResultKind = 10;
 
     // Yaw in 65536 steps over a full turn: code 32768 is exactly 0, and the quarter turns are exact too.
     // +pi and -pi share code 0.
@@ -102,6 +108,7 @@ public static class WireProtocol
             BinaryPrimitives.WriteSingleLittleEndian(bytes[23..], 0f);
         }
         bytes[27] = (byte)command.Mode;
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[28..], command.TargetSurface);
     }
 
     public static bool TryReadMove(ReadOnlySpan<byte> bytes, out MoveCommand command)
@@ -125,8 +132,198 @@ public static class WireProtocol
         byte modeByte = bytes[27];
         if (modeByte > 1) return false;
         MoveMode mode = (MoveMode)modeByte;
+        uint targetSurface = BinaryPrimitives.ReadUInt32LittleEndian(bytes[28..]);
         if (sequence == 0 || id == 0 || tick < 0 || !float.IsFinite(target.X) || !float.IsFinite(target.Y)) return false;
-        command = new MoveCommand(sequence, tick, new EntityId(id), target, finalFacing, mode);
+        command = new MoveCommand(sequence, tick, new EntityId(id), target, finalFacing, mode, targetSurface);
+        return true;
+    }
+
+    public static int WriteGroupMove(Span<byte> bytes, GroupMoveCommand command)
+    {
+        int unitCount = command.Units.Length;
+        if (unitCount <= 0 || unitCount > MaxUnits)
+            throw new ArgumentException("Group move unit count must be between 1 and MaxUnits.");
+        int length = GroupMoveHeaderSize + unitCount * 4;
+        if (bytes.Length < length) throw new ArgumentException("Group move buffer is too small.");
+        bytes[0] = Version;
+        bytes[1] = GroupMoveKind;
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[2..], command.Sequence);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[6..], command.ClientTick);
+        BinaryPrimitives.WriteSingleLittleEndian(bytes[10..], command.Target.X);
+        BinaryPrimitives.WriteSingleLittleEndian(bytes[14..], command.Target.Y);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[18..], command.TargetSurface);
+        if (command.FinalFacing.HasValue)
+        {
+            bytes[22] = 1;
+            BinaryPrimitives.WriteSingleLittleEndian(bytes[23..], command.FinalFacing.Value);
+        }
+        else
+        {
+            bytes[22] = 0;
+            BinaryPrimitives.WriteSingleLittleEndian(bytes[23..], 0f);
+        }
+        bytes[27] = (byte)command.Mode;
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes[28..], (ushort)unitCount);
+
+        ReadOnlySpan<EntityId> units = command.Units.Span;
+        for (int i = 0; i < unitCount; i++)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.Slice(GroupMoveHeaderSize + i * 4, 4), units[i].Value);
+        }
+        return length;
+    }
+
+    public static bool TryReadGroupMove(ReadOnlySpan<byte> bytes, out GroupMoveCommand command)
+    {
+        command = default;
+        if (bytes.Length < GroupMoveHeaderSize || bytes[0] != Version || bytes[1] != GroupMoveKind) return false;
+        uint sequence = BinaryPrimitives.ReadUInt32LittleEndian(bytes[2..]);
+        int tick = BinaryPrimitives.ReadInt32LittleEndian(bytes[6..]);
+        Vector2 target = new(
+            BinaryPrimitives.ReadSingleLittleEndian(bytes[10..]),
+            BinaryPrimitives.ReadSingleLittleEndian(bytes[14..]));
+        uint targetSurface = BinaryPrimitives.ReadUInt32LittleEndian(bytes[18..]);
+        byte hasFacing = bytes[22];
+        if (hasFacing > 1) return false;
+        float? finalFacing = null;
+        if (hasFacing == 1)
+        {
+            float facing = BinaryPrimitives.ReadSingleLittleEndian(bytes[23..]);
+            if (!float.IsFinite(facing)) return false;
+            finalFacing = facing;
+        }
+        byte modeByte = bytes[27];
+        if (modeByte > 1) return false;
+        MoveMode mode = (MoveMode)modeByte;
+        ushort unitCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes[28..]);
+        if (unitCount == 0 || unitCount > MaxUnits) return false;
+        int expectedLength = GroupMoveHeaderSize + unitCount * 4;
+        if (bytes.Length != expectedLength) return false;
+        if (sequence == 0 || tick < 0 || !float.IsFinite(target.X) || !float.IsFinite(target.Y)) return false;
+
+        EntityId[] unitIds = new EntityId[unitCount];
+        for (int i = 0; i < unitCount; i++)
+        {
+            uint id = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(GroupMoveHeaderSize + i * 4, 4));
+            if (id == 0) return false;
+            unitIds[i] = new EntityId(id);
+        }
+        command = new GroupMoveCommand(sequence, tick, unitIds, target, targetSurface, finalFacing, mode);
+        return true;
+    }
+
+    public static int WriteGroupMoveResult(Span<byte> bytes, GroupMoveResult result)
+    {
+        int placedCount = result.Placed.Length;
+        int unplacedCount = result.Unplaced.Length;
+        if (placedCount > MaxUnits || unplacedCount > MaxUnits)
+            throw new ArgumentException("Group move result unit count exceeds capacity.");
+        int length = GroupMoveResultHeaderSize + placedCount * GroupMovePlacedRecordSize + unplacedCount * GroupMoveUnplacedRecordSize;
+        if (bytes.Length < length) throw new ArgumentException("Group move result buffer is too small.");
+        bytes[0] = Version;
+        bytes[1] = GroupMoveResultKind;
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[2..], result.Sequence);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[6..], result.ServerTick);
+        BinaryPrimitives.WriteSingleLittleEndian(bytes[10..], result.Target.X);
+        BinaryPrimitives.WriteSingleLittleEndian(bytes[14..], result.Target.Y);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[18..], result.TargetSurface);
+        bytes[22] = (byte)result.Mode;
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes[23..], (ushort)placedCount);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes[25..], (ushort)unplacedCount);
+
+        int offset = GroupMoveResultHeaderSize;
+        ReadOnlySpan<GroupMoveAssignment> placed = result.Placed.Span;
+        for (int i = 0; i < placedCount; i++)
+        {
+            GroupMoveAssignment a = placed[i];
+            Span<byte> record = bytes.Slice(offset, GroupMovePlacedRecordSize);
+            BinaryPrimitives.WriteUInt32LittleEndian(record[0..], a.Unit.Value);
+            BinaryPrimitives.WriteSingleLittleEndian(record[4..], a.Target.X);
+            BinaryPrimitives.WriteSingleLittleEndian(record[8..], a.Target.Y);
+            BinaryPrimitives.WriteUInt32LittleEndian(record[12..], a.TargetSurface);
+            if (a.FinalFacing.HasValue)
+            {
+                record[16] = 1;
+                BinaryPrimitives.WriteSingleLittleEndian(record[17..], a.FinalFacing.Value);
+            }
+            else
+            {
+                record[16] = 0;
+                BinaryPrimitives.WriteSingleLittleEndian(record[17..], 0f);
+            }
+            offset += GroupMovePlacedRecordSize;
+        }
+
+        ReadOnlySpan<GroupMoveUnplaced> unplaced = result.Unplaced.Span;
+        for (int i = 0; i < unplacedCount; i++)
+        {
+            GroupMoveUnplaced u = unplaced[i];
+            Span<byte> record = bytes.Slice(offset, GroupMoveUnplacedRecordSize);
+            BinaryPrimitives.WriteUInt32LittleEndian(record[0..], u.Unit.Value);
+            record[4] = (byte)u.Reason;
+            offset += GroupMoveUnplacedRecordSize;
+        }
+
+        return length;
+    }
+
+    public static bool TryReadGroupMoveResult(ReadOnlySpan<byte> bytes, out GroupMoveResult result)
+    {
+        result = default;
+        if (bytes.Length < GroupMoveResultHeaderSize || bytes[0] != Version || bytes[1] != GroupMoveResultKind) return false;
+        uint sequence = BinaryPrimitives.ReadUInt32LittleEndian(bytes[2..]);
+        int tick = BinaryPrimitives.ReadInt32LittleEndian(bytes[6..]);
+        Vector2 target = new(
+            BinaryPrimitives.ReadSingleLittleEndian(bytes[10..]),
+            BinaryPrimitives.ReadSingleLittleEndian(bytes[14..]));
+        uint targetSurface = BinaryPrimitives.ReadUInt32LittleEndian(bytes[18..]);
+        byte modeByte = bytes[22];
+        if (modeByte > 1) return false;
+        MoveMode mode = (MoveMode)modeByte;
+        ushort placedCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes[23..]);
+        ushort unplacedCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes[25..]);
+        if (placedCount > MaxUnits || unplacedCount > MaxUnits) return false;
+        int expectedLength = GroupMoveResultHeaderSize + placedCount * GroupMovePlacedRecordSize + unplacedCount * GroupMoveUnplacedRecordSize;
+        if (bytes.Length != expectedLength) return false;
+        if (sequence == 0 || tick < 0 || !float.IsFinite(target.X) || !float.IsFinite(target.Y)) return false;
+
+        GroupMoveAssignment[] placed = new GroupMoveAssignment[placedCount];
+        int offset = GroupMoveResultHeaderSize;
+        for (int i = 0; i < placedCount; i++)
+        {
+            ReadOnlySpan<byte> record = bytes.Slice(offset, GroupMovePlacedRecordSize);
+            uint unitId = BinaryPrimitives.ReadUInt32LittleEndian(record[0..]);
+            Vector2 unitTarget = new(
+                BinaryPrimitives.ReadSingleLittleEndian(record[4..]),
+                BinaryPrimitives.ReadSingleLittleEndian(record[8..]));
+            uint surface = BinaryPrimitives.ReadUInt32LittleEndian(record[12..]);
+            byte hasFacing = record[16];
+            if (hasFacing > 1) return false;
+            float? facing = null;
+            if (hasFacing == 1)
+            {
+                float f = BinaryPrimitives.ReadSingleLittleEndian(record[17..]);
+                if (!float.IsFinite(f)) return false;
+                facing = f;
+            }
+            if (unitId == 0 || !float.IsFinite(unitTarget.X) || !float.IsFinite(unitTarget.Y)) return false;
+            placed[i] = new GroupMoveAssignment(new EntityId(unitId), unitTarget, surface, facing);
+            offset += GroupMovePlacedRecordSize;
+        }
+
+        GroupMoveUnplaced[] unplaced = new GroupMoveUnplaced[unplacedCount];
+        for (int i = 0; i < unplacedCount; i++)
+        {
+            ReadOnlySpan<byte> record = bytes.Slice(offset, GroupMoveUnplacedRecordSize);
+            uint unitId = BinaryPrimitives.ReadUInt32LittleEndian(record[0..]);
+            byte reasonByte = record[4];
+            if (reasonByte > (byte)DestinationBlockReason.NoReverseGear) return false;
+            if (unitId == 0) return false;
+            unplaced[i] = new GroupMoveUnplaced(new EntityId(unitId), (DestinationBlockReason)reasonByte);
+            offset += GroupMoveUnplacedRecordSize;
+        }
+
+        result = new GroupMoveResult(sequence, tick, target, targetSurface, mode, placed, unplaced);
         return true;
     }
 

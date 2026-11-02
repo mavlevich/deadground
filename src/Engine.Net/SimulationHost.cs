@@ -212,6 +212,21 @@ public sealed class SimulationHost : IDisposable
                         DroppedCommandResults++;
                 }
             }
+            else if (kind == WireProtocol.GroupMoveKind)
+            {
+                if (connectionId == 0 || _admittedConnectionIds[player - 1] != connectionId)
+                    continue;
+
+                if (WireProtocol.TryReadGroupMove(_receive.AsSpan(0, length), out GroupMoveCommand command))
+                {
+                    bool queued = _simulation.TryEnqueue(player, command);
+                    WireProtocol.WriteCommandResult(_reply, new CommandResult(command.Sequence, Tick, queued));
+                    if (_transport.TrySend(player, _reply.AsSpan(0, WireProtocol.CommandResultSize)))
+                        BytesSent += WireProtocol.CommandResultSize;
+                    else
+                        DroppedCommandResults++;
+                }
+            }
         }
 
         // Bound work per call, not elapsed time. Later calls drain the remaining debt.
@@ -222,6 +237,20 @@ public sealed class SimulationHost : IDisposable
             long allocated = GC.GetAllocatedBytesForCurrentThread();
             long started = Stopwatch.GetTimestamp();
             _simulation.Step();
+
+            for (int p = 1; p <= Simulation.MaxPlayers; p++)
+            {
+                if (_admittedConnectionIds[p - 1] != 0)
+                {
+                    while (_simulation.TryPopGroupMoveResult(p, out GroupMoveResult groupResult))
+                    {
+                        int written = WireProtocol.WriteGroupMoveResult(_send, groupResult);
+                        if (_transport.TrySend(p, _send.AsSpan(0, written)))
+                            BytesSent += written;
+                    }
+                }
+            }
+
             if (Tick % 2 == 0) PublishAll();
             LastTickMilliseconds = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             LastTickAllocatedBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;

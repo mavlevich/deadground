@@ -338,6 +338,52 @@ Interactive controls and features:
   5. Multi-level bridge traffic: Vehicles on the bridge deck and ground under-span cross without false collision.
   6. Mixed vehicle kinematics: Realistic dimensions, acceleration, deceleration, and turn rates.
 
+### Group move destinations playground (group-move)
+
+To run the interactive group move destinations playground with multi-vehicle slot allocation, obstacle avoidance, and pre-click preview:
+
+On macOS:
+
+```sh
+./tools/run-client.sh -- --scenario group-move
+```
+
+On Windows with PowerShell:
+
+```powershell
+./tools/run-client.ps1 -GodotArgs @("--", "--scenario", "group-move")
+```
+
+For dedicated server hosting:
+
+```sh
+dotnet run --project src/Game.Server --configuration Release -- --scenario group-move --port 7777
+```
+
+In headless smoke-test mode:
+
+```sh
+./tools/run-client.sh --headless -- --smoke-test --scenario group-move
+dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario group-move
+```
+
+Interactive controls and presets:
+- **Group Move Order**: Box-select or Shift-click multiple units, then right-click on the ground. A single group move command is dispatched (`GroupMoveCommand`), and the server calculates individual non-overlapping destination slots for each participant.
+- **RMB Drag (Facing)**: Click and drag right mouse button to designate the orientation of the distributed line and the final hull facing of all units on arrival.
+- **R + RMB (Reverse)**: Hold R while clicking or dragging RMB to issue a group reverse order. Units incapable of reverse gear are rejected with explicit feedback.
+- **Pre-click Hover Preview**: Hovering with a group selected renders candidate slots in real time with 0 B allocations:
+  - Cyan/Amber rings: Valid candidate positions.
+  - Ghost preview rings: Target snapped to clear ground near obstacle perimeters.
+  - HUD notification: Shows total suitable and unplaceable unit count.
+- **F6 / F7**: Cycle through test situations:
+  1. Open Field: 10 tanks (T-62) assigned a compact lateral line abreast.
+  2. Mixed Armor: Tanks, BTR-70 wheeled APCs, and BRDM-2 recon scouts respecting distinct dimensions, water capabilities, and speeds.
+  3. Building Obstacle: Formations near opaque structures snap candidates outside walls without overlapping.
+  4. Bottleneck Passage: Constrained corridors assign available slots while unplaced units preserve active orders.
+  5. Bridge Approach: Separates bridge deck elevation from ground surface beneath the span.
+  6. Moving Group Redirection: Re-issuing orders on the move updates destination slots without stopping vehicles.
+- **Ctrl+R** or **F5**: Reset scenario to initial state.
+
 ### Recon Raid mission (recon-raid)
 
 To run the playable reconnaissance raid mission with authoritative objectives, enemy AI bot, and complete attempt lifecycle:
@@ -591,9 +637,13 @@ dotnet run --project src/Game.Server --configuration Release --no-build -- --smo
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario navigation-large
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario recon-raid
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario bridge-crossing
+dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario vehicle-traffic
+dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario group-move
 ./tools/run-client.sh --headless -- --smoke-test
 ./tools/run-client.sh --headless -- --smoke-test --scenario recon-raid
 ./tools/run-client.sh --headless -- --smoke-test --scenario bridge-crossing
+./tools/run-client.sh --headless -- --smoke-test --scenario vehicle-traffic
+./tools/run-client.sh --headless -- --smoke-test --scenario group-move
 ```
 
 To automatically format C# code according to the repository rules:
