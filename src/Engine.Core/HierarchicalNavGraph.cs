@@ -77,7 +77,10 @@ public sealed class HierarchicalNavGraph
     private Vector2 _activeStart;
     private Vector2 _activeTarget;
     private float _activeRadius;
+    private uint _activeStartSupportSurface;
+    private uint _activeTargetSupportSurface;
     private int _activeTotalExpansions;
+    private readonly bool[] _sectorHasBridges;
 
     public int SectorCols => _sectorCols;
     public int SectorRows => _sectorRows;
@@ -97,7 +100,7 @@ public sealed class HierarchicalNavGraph
         (long)(_portalEdgeOffsets.Length + _portalEdgeCounts.Length) * 4 +
         (long)(_sectorCellsOffset.Length + _sectorGridCols.Length + _sectorGridRows.Length) * 4 +
         (long)_sectorComponentGrid.Length * 2 + (long)(_sectorRegionOffsets.Length + _globalRegionIds.Length) * 4 +
-        (long)_totalGraphNodes * 28 + (long)_portalTraceBuffer.Length * 4;
+        (long)_totalGraphNodes * 28 + (long)_portalTraceBuffer.Length * 4 + (long)_sectorHasBridges.Length;
     public bool HasActiveGlobalSearch => _hasActiveGlobalSearch;
 
     public HierarchicalNavGraph(
@@ -155,6 +158,7 @@ public sealed class HierarchicalNavGraph
         _sectorGridCols = new int[_totalSectors];
         _sectorGridRows = new int[_totalSectors];
         _sectorRegionOffsets = new int[_totalSectors + 1];
+        _sectorHasBridges = new bool[_totalSectors];
 
         // Sizing sector component grids
         int totalSectorCells = 0;
@@ -163,17 +167,23 @@ public sealed class HierarchicalNavGraph
             var bounds = GetSectorBounds(s);
             int cols = Math.Max(1, (int)MathF.Ceiling((bounds.MaxX - bounds.MinX) / _cellSize));
             int rows = Math.Max(1, (int)MathF.Ceiling((bounds.MaxZ - bounds.MinZ) / _cellSize));
+            int cellCount = cols * rows;
+            bool hasBridgesInSector = (Capabilities & TraversabilityCapabilities.Bridge) != 0 &&
+                                      _grid.Bridges.Count > 0 &&
+                                      _grid.HasBridgesInBox(bounds.MinX, bounds.MinZ, bounds.MaxX, bounds.MaxZ);
+            _sectorHasBridges[s] = hasBridgesInSector;
             bool needsDetail = _grid.HasObstaclesInBox(bounds.MinX - ClassRadius, bounds.MinZ - ClassRadius,
                 bounds.MaxX + ClassRadius, bounds.MaxZ + ClassRadius) ||
                 _grid.HasTerrainObstaclesInBox(bounds.MinX - ClassRadius, bounds.MinZ - ClassRadius,
                 bounds.MaxX + ClassRadius, bounds.MaxZ + ClassRadius, Capabilities) ||
-                _grid.HasBridgesInBox(bounds.MinX, bounds.MinZ, bounds.MaxX, bounds.MaxZ);
+                hasBridgesInSector;
             _sectorCellsOffset[s] = needsDetail ? totalSectorCells : -1;
             _sectorGridCols[s] = cols;
             _sectorGridRows[s] = rows;
             if (needsDetail)
             {
-                long required = (long)totalSectorCells + (long)cols * rows;
+                long sectorCellPayload = hasBridgesInSector ? (long)cellCount * 2 : (long)cellCount;
+                long required = (long)totalSectorCells + sectorCellPayload;
                 if (required > _buildLimits.MaxDetailedCells)
                     throw new InvalidOperationException($"Navigation detailed-cell budget exceeded for {MovementClass}: {required}, limit {_buildLimits.MaxDetailedCells}.");
                 totalSectorCells = (int)required;
@@ -245,7 +255,9 @@ public sealed class HierarchicalNavGraph
         int maxSectorCells = 0;
         for (int s = 0; s < _totalSectors; s++)
         {
-            int cellCount = _sectorCellsOffset[s] < 0 ? 0 : _sectorGridCols[s] * _sectorGridRows[s];
+            if (_sectorCellsOffset[s] < 0) continue;
+            int cellCount = _sectorGridCols[s] * _sectorGridRows[s];
+            if (_sectorHasBridges[s]) cellCount *= 2;
             if (cellCount > maxSectorCells) maxSectorCells = cellCount;
         }
 
@@ -264,6 +276,8 @@ public sealed class HierarchicalNavGraph
                 continue;
             }
             int cellCount = cols * rows;
+            bool hasBridges = _sectorHasBridges[s];
+            int numLayers = hasBridges ? 2 : 1;
 
             bool isMapBoundarySector = bounds.MinX < ClassRadius || bounds.MaxX > _grid.MapWidth - ClassRadius ||
                                        bounds.MinZ < ClassRadius || bounds.MaxZ > _grid.MapDepth - ClassRadius;
@@ -278,8 +292,9 @@ public sealed class HierarchicalNavGraph
             float effectiveRadius = MathF.Max(0.2f, ClassRadius - _cellSize * 0.5f);
             float radiusSq = (effectiveRadius - 1e-4f) * (effectiveRadius - 1e-4f);
 
-            Array.Clear(_sectorComponentGrid, baseOffset, cellCount);
+            Array.Clear(_sectorComponentGrid, baseOffset, cellCount * numLayers);
 
+            // Layer 0 (Ground): Map boundaries
             if (isMapBoundarySector)
             {
                 for (int r = 0; r < rows; r++)
@@ -298,6 +313,7 @@ public sealed class HierarchicalNavGraph
                 }
             }
 
+            // Layer 0 (Ground): Grounded buildings
             for (int o = 0; o < localObsCount; o++)
             {
                 ref readonly NavigationGrid.GroundedObstacle obs = ref _grid.GroundedObstacles[sectorObstacles[o]];
@@ -331,6 +347,7 @@ public sealed class HierarchicalNavGraph
                 }
             }
 
+            // Layer 0 (Ground): Terrain obstacles (water/dense forest)
             for (int t = 0; t < _grid.TerrainObstacles.Count; t++)
             {
                 TerrainObstacle tobs = _grid.TerrainObstacles[t];
@@ -350,22 +367,6 @@ public sealed class HierarchicalNavGraph
                         if (_sectorComponentGrid[rowIdx + c] == ushort.MaxValue) continue;
                         float cx = bounds.MinX + (c + 0.5f) * _cellSize;
 
-                        bool onBridge = false;
-                        if ((Capabilities & TraversabilityCapabilities.Bridge) != 0)
-                        {
-                            Vector2 pt = new(cx, cz);
-                            for (int b = 0; b < _grid.Bridges.Count; b++)
-                            {
-                                BridgeStructure br = _grid.Bridges[b];
-                                if (br.Contains(pt) && br.GetSideClearance(pt) >= effectiveRadius)
-                                {
-                                    onBridge = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if (onBridge) continue;
-
                         if (cx >= tobs.MinX && cx <= tobs.MaxX && cz >= tobs.MinZ && cz <= tobs.MaxZ)
                         {
                             _sectorComponentGrid[rowIdx + c] = ushort.MaxValue;
@@ -382,46 +383,139 @@ public sealed class HierarchicalNavGraph
                 }
             }
 
-            // BFS flood fill to label connected components (1, 2, 3...)
-            ushort currentComponent = 1;
-            for (int r = 0; r < rows; r++)
+            // Bridges: configure Layer 0 (under-bridge ground headroom) and Layer 1 (bridge deck)
+            if (hasBridges)
             {
-                for (int c = 0; c < cols; c++)
+                int layer1Offset = baseOffset + cellCount;
+                // Layer 1 is impassable by default except on bridge decks
+                Array.Fill(_sectorComponentGrid, ushort.MaxValue, layer1Offset, cellCount);
+
+                for (int r = 0; r < rows; r++)
                 {
-                    int idx = baseOffset + r * cols + c;
-                    if (_sectorComponentGrid[idx] != 0) continue; // Already labeled or impassable
+                    float cz = bounds.MinZ + (r + 0.5f) * _cellSize;
+                    int rowIdx0 = baseOffset + r * cols;
+                    int rowIdx1 = layer1Offset + r * cols;
 
-                    int head = 0;
-                    int tail = 0;
-                    bfsQueue[tail++] = (r << 16) | c;
-                    _sectorComponentGrid[idx] = currentComponent;
-
-                    while (head < tail)
+                    for (int c = 0; c < cols; c++)
                     {
-                        int packed = bfsQueue[head++];
-                        int cr = packed >> 16;
-                        int cc = packed & 0xFFFF;
+                        float cx = bounds.MinX + (c + 0.5f) * _cellSize;
+                        Vector2 pt = new(cx, cz);
 
-                        for (int i = 0; i < s_cardinalNeighbors.Length; i++)
+                        for (int b = 0; b < _grid.Bridges.Count; b++)
                         {
-                            int nr = cr + s_cardinalNeighbors[i].dr;
-                            int nc = cc + s_cardinalNeighbors[i].dc;
-                            if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
-
-                            int nIdx = baseOffset + nr * cols + nc;
-                            if (_sectorComponentGrid[nIdx] == 0)
+                            BridgeStructure br = _grid.Bridges[b];
+                            if (br.Contains(pt))
                             {
-                                _sectorComponentGrid[nIdx] = currentComponent;
-                                bfsQueue[tail++] = (nr << 16) | nc;
+                                // Bridge deck in Layer 1
+                                if (br.GetSideClearance(pt) >= effectiveRadius)
+                                {
+                                    _sectorComponentGrid[rowIdx1 + c] = 0;
+                                }
+
+                                // Ground in Layer 0: if clearance under bridge is < 3.0m, ground is blocked
+                                float deckH = br.GetHeight(pt);
+                                float groundH = _grid.HeightMap?.GetHeight(cx, cz) ?? 0f;
+                                if (deckH - groundH < 3.0f)
+                                {
+                                    _sectorComponentGrid[rowIdx0 + c] = ushort.MaxValue;
+                                }
+                                break;
                             }
                         }
                     }
+                }
+            }
 
-                    if (currentComponent == ushort.MaxValue - 1)
+            // BFS flood fill to label connected components (1, 2, 3...) across Layer 0 and Layer 1
+            ushort currentComponent = 1;
+            for (int layer = 0; layer < numLayers; layer++)
+            {
+                for (int r = 0; r < rows; r++)
+                {
+                    for (int c = 0; c < cols; c++)
                     {
-                        throw new InvalidOperationException($"Sector {s} exceeded maximum supported connected components ({ushort.MaxValue - 1}).");
+                        int cellIdx = layer * cellCount + r * cols + c;
+                        int idx = baseOffset + cellIdx;
+                        if (_sectorComponentGrid[idx] != 0) continue; // Already labeled or impassable
+
+                        int head = 0;
+                        int tail = 0;
+                        bfsQueue[tail++] = cellIdx;
+                        _sectorComponentGrid[idx] = currentComponent;
+
+                        while (head < tail)
+                        {
+                            int curr = bfsQueue[head++];
+                            int curLayer = curr / cellCount;
+                            int inIdx = curr % cellCount;
+                            int cr = inIdx / cols;
+                            int cc = inIdx % cols;
+                            Vector2 posCur = new(bounds.MinX + (cc + 0.5f) * _cellSize, bounds.MinZ + (cr + 0.5f) * _cellSize);
+
+                            // 1. Cardinal neighbors in SAME layer
+                            for (int i = 0; i < s_cardinalNeighbors.Length; i++)
+                            {
+                                int nr = cr + s_cardinalNeighbors[i].dr;
+                                int nc = cc + s_cardinalNeighbors[i].dc;
+                                if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+
+                                int nIdx = baseOffset + curLayer * cellCount + nr * cols + nc;
+                                if (_sectorComponentGrid[nIdx] == 0)
+                                {
+                                    _sectorComponentGrid[nIdx] = currentComponent;
+                                    bfsQueue[tail++] = curLayer * cellCount + nr * cols + nc;
+                                }
+                            }
+
+                            // 2. Cross-layer ramp transitions between Layer 0 and Layer 1
+                            if (hasBridges)
+                            {
+                                int otherLayer = 1 - curLayer;
+                                for (int i = 0; i < s_cardinalNeighbors.Length; i++)
+                                {
+                                    int nr = cr + s_cardinalNeighbors[i].dr;
+                                    int nc = cc + s_cardinalNeighbors[i].dc;
+                                    if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+
+                                    int nIdx = baseOffset + otherLayer * cellCount + nr * cols + nc;
+                                    if (_sectorComponentGrid[nIdx] == 0)
+                                    {
+                                        Vector2 posNext = new(bounds.MinX + (nc + 0.5f) * _cellSize, bounds.MinZ + (nr + 0.5f) * _cellSize);
+                                        bool canCrossRamp = false;
+                                        for (int b = 0; b < _grid.Bridges.Count; b++)
+                                        {
+                                            BridgeStructure br = _grid.Bridges[b];
+                                            float threshold = MathF.Max(6.0f, br.Width * 0.5f + 1.0f);
+                                            if (br.IsNearEntry(posCur, threshold) && br.IsNearEntry(posNext, threshold))
+                                            {
+                                                float uCur = Vector2.Dot(posCur - br.Start, br.Direction);
+                                                float uNext = Vector2.Dot(posNext - br.Start, br.Direction);
+                                                bool crossesStartRamp = (uCur < 0f && uNext >= 0f) || (uCur >= 0f && uNext < 0f);
+                                                bool crossesEndRamp = (uCur > br.Length && uNext <= br.Length) || (uCur <= br.Length && uNext > br.Length);
+                                                if (crossesStartRamp || crossesEndRamp)
+                                                {
+                                                    canCrossRamp = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+
+                                        if (canCrossRamp)
+                                        {
+                                            _sectorComponentGrid[nIdx] = currentComponent;
+                                            bfsQueue[tail++] = otherLayer * cellCount + nr * cols + nc;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (currentComponent == ushort.MaxValue - 1)
+                        {
+                            throw new InvalidOperationException($"Sector {s} exceeded maximum supported connected components ({ushort.MaxValue - 1}).");
+                        }
+                        currentComponent++;
                     }
-                    currentComponent++;
                 }
             }
             _sectorRegionOffsets[s + 1] = currentComponent - 1;
@@ -589,10 +683,16 @@ public sealed class HierarchicalNavGraph
         sectorPortals[sectorB].Add(index);
     }
 
-    private ushort GetSectorCellComponent(int sector, int col, int row)
+    private ushort GetSectorCellComponent(int sector, int col, int row, int layer = 0)
     {
         int offset = _sectorCellsOffset[sector];
-        if (offset >= 0) return _sectorComponentGrid[offset + row * _sectorGridCols[sector] + col];
+        if (offset >= 0)
+        {
+            int cols = _sectorGridCols[sector];
+            int rows = _sectorGridRows[sector];
+            int cellCount = cols * rows;
+            return _sectorComponentGrid[offset + layer * cellCount + row * cols + col];
+        }
         // Obstacle-free sectors are implicit, including boundary sectors. Preserve map-edge clearance.
         var bounds = GetSectorBounds(sector);
         float x = bounds.MinX + (col + 0.5f) * _cellSize;
@@ -609,24 +709,81 @@ public sealed class HierarchicalNavGraph
             int sA = _portalSectorA[p];
             int sB = _portalSectorB[p];
 
-            _portalCompA[p] = FindClosestComponentInSector(sA, pos);
-            _portalCompB[p] = FindClosestComponentInSector(sB, pos);
+            uint bridgeSurf = 0;
+            if ((Capabilities & TraversabilityCapabilities.Bridge) != 0 && _grid.Bridges.Count > 0)
+            {
+                for (int b = 0; b < _grid.Bridges.Count; b++)
+                {
+                    if (_grid.Bridges[b].Contains(pos))
+                    {
+                        bridgeSurf = (uint)_grid.Bridges[b].Id.Value;
+                        break;
+                    }
+                }
+            }
+
+            _portalCompA[p] = FindClosestComponentInSector(sA, pos, bridgeSurf);
+            _portalCompB[p] = FindClosestComponentInSector(sB, pos, bridgeSurf);
         }
     }
 
-    private int FindClosestComponentInSector(int sector, Vector2 point)
+    private int FindClosestComponentInSector(int sector, Vector2 point, uint supportSurface = 0)
     {
         var bounds = GetSectorBounds(sector);
         int cols = _sectorGridCols[sector];
         int rows = _sectorGridRows[sector];
 
+        bool hasBridges = _sectorHasBridges[sector];
+        int preferredLayer = 0;
+        int pointBridge = -1;
+
+        if (hasBridges)
+        {
+            if (supportSurface > 0)
+            {
+                preferredLayer = 1;
+                pointBridge = (int)supportSurface - 1;
+            }
+            else
+            {
+                // If supportSurface == 0, check if ground is impassable at point (e.g. over river) but bridge deck is present
+                int c0 = Math.Clamp((int)((point.X - bounds.MinX) / _cellSize), 0, cols - 1);
+                int r0 = Math.Clamp((int)((point.Y - bounds.MinZ) / _cellSize), 0, rows - 1);
+                ushort groundComp = GetSectorCellComponent(sector, c0, r0, 0);
+                if (groundComp == 0 || groundComp == ushort.MaxValue)
+                {
+                    for (int b = 0; b < _grid.Bridges.Count; b++)
+                    {
+                        if (_grid.Bridges[b].Contains(point))
+                        {
+                            preferredLayer = 1;
+                            pointBridge = b;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         int c = Math.Clamp((int)((point.X - bounds.MinX) / _cellSize), 0, cols - 1);
         int r = Math.Clamp((int)((point.Y - bounds.MinZ) / _cellSize), 0, rows - 1);
 
-        ushort directComp = GetSectorCellComponent(sector, c, r);
-        if (directComp > 0 && directComp != ushort.MaxValue) return directComp;
+        ushort directComp = GetSectorCellComponent(sector, c, r, preferredLayer);
+        if (directComp > 0 && directComp != ushort.MaxValue)
+        {
+            if (preferredLayer == 1 && pointBridge >= 0)
+            {
+                Vector2 directPt = new(bounds.MinX + (c + 0.5f) * _cellSize, bounds.MinZ + (r + 0.5f) * _cellSize);
+                if (_grid.Bridges[pointBridge].Contains(directPt))
+                    return directComp;
+            }
+            else
+            {
+                return directComp;
+            }
+        }
 
-        // Search small window for closest clear component cell
+        // Search small window for closest clear component cell in preferredLayer
         int bestComp = -1;
         float bestDistSq = float.MaxValue;
 
@@ -639,16 +796,53 @@ public sealed class HierarchicalNavGraph
                 int nc = c + dc;
                 if (nc < 0 || nc >= cols) continue;
 
-                ushort comp = GetSectorCellComponent(sector, nc, nr);
+                ushort comp = GetSectorCellComponent(sector, nc, nr, preferredLayer);
                 if (comp > 0 && comp != ushort.MaxValue)
                 {
                     float cx = bounds.MinX + (nc + 0.5f) * _cellSize;
                     float cz = bounds.MinZ + (nr + 0.5f) * _cellSize;
-                    float dSq = Vector2.DistanceSquared(point, new Vector2(cx, cz));
+                    Vector2 cellPt = new(cx, cz);
+                    if (preferredLayer == 1 && pointBridge >= 0)
+                    {
+                        if (!_grid.Bridges[pointBridge].Contains(cellPt)) continue;
+                    }
+
+                    float dSq = Vector2.DistanceSquared(point, cellPt);
                     if (dSq < bestDistSq)
                     {
                         bestDistSq = dSq;
                         bestComp = comp;
+                    }
+                }
+            }
+        }
+
+        if (bestComp > 0) return bestComp;
+
+        // Fallback to Layer 0 if preferredLayer was 1 and no valid cell was found
+        if (preferredLayer == 1)
+        {
+            for (int dr = -4; dr <= 4; dr++)
+            {
+                int nr = r + dr;
+                if (nr < 0 || nr >= rows) continue;
+                for (int dc = -4; dc <= 4; dc++)
+                {
+                    int nc = c + dc;
+                    if (nc < 0 || nc >= cols) continue;
+
+                    ushort comp = GetSectorCellComponent(sector, nc, nr, 0);
+                    if (comp > 0 && comp != ushort.MaxValue)
+                    {
+                        float cx = bounds.MinX + (nc + 0.5f) * _cellSize;
+                        float cz = bounds.MinZ + (nr + 0.5f) * _cellSize;
+                        Vector2 cellPt = new(cx, cz);
+                        float dSq = Vector2.DistanceSquared(point, cellPt);
+                        if (dSq < bestDistSq)
+                        {
+                            bestDistSq = dSq;
+                            bestComp = comp;
+                        }
                     }
                 }
             }
@@ -758,28 +952,43 @@ public sealed class HierarchicalNavGraph
                _globalRegionIds[_sectorRegionOffsets[targetSector] + targetComponent - 1];
     }
 
-    public int GetComponentId(Vector2 point, float radius)
+    public int GetComponentId(Vector2 point, float radius, uint supportSurface = 0)
     {
         int sector = GetSectorIndex(point);
-        return FindClosestComponentInSector(sector, point);
+        return FindClosestComponentInSector(sector, point, supportSurface);
     }
 
-    private float ComputePointClearance(Vector2 point) =>
-        _grid.ComputePointClearance(point, Capabilities);
+    private float ComputePointClearance(Vector2 point)
+    {
+        if ((Capabilities & TraversabilityCapabilities.Bridge) != 0 && _grid.Bridges.Count > 0)
+        {
+            for (int b = 0; b < _grid.Bridges.Count; b++)
+            {
+                BridgeStructure br = _grid.Bridges[b];
+                if (br.Contains(point))
+                {
+                    return br.GetSideClearance(point);
+                }
+            }
+        }
+        return _grid.ComputePointClearance(point, Capabilities);
+    }
 
-    public void StartGlobalSearch(Vector2 start, Vector2 target, float radius)
+    public void StartGlobalSearch(Vector2 start, Vector2 target, float radius, uint startSupportSurface = 0, uint targetSupportSurface = 0)
     {
         _globalSearchGeneration++;
         _heapCount = 0;
         _activeStart = start;
         _activeTarget = target;
         _activeRadius = radius;
+        _activeStartSupportSurface = startSupportSurface;
+        _activeTargetSupportSurface = targetSupportSurface;
         _activeTotalExpansions = 0;
 
         int startSector = GetSectorIndex(start);
         int targetSector = GetSectorIndex(target);
-        int startComp = FindClosestComponentInSector(startSector, start);
-        int targetComp = FindClosestComponentInSector(targetSector, target);
+        int startComp = FindClosestComponentInSector(startSector, start, startSupportSurface);
+        int targetComp = FindClosestComponentInSector(targetSector, target, targetSupportSurface);
 
         if (!AreComponentsConnected(startSector, startComp, targetSector, targetComp))
         {
@@ -835,7 +1044,7 @@ public sealed class HierarchicalNavGraph
         }
 
         int targetSector = GetSectorIndex(_activeTarget);
-        int targetComp = FindClosestComponentInSector(targetSector, _activeTarget);
+        int targetComp = FindClosestComponentInSector(targetSector, _activeTarget, _activeTargetSupportSurface);
 
         while (_heapCount > 0 && expansionsUsed < maxExpansions)
         {

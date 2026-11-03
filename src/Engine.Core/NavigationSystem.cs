@@ -1373,7 +1373,32 @@ public sealed class NavigationSystem : ISimulationSystem
 
         _activeRequest = req with { Start = start, Target = target, Radius = radius };
         _activeRadius = radius;
-        _activeSurface = unit.SupportSurface;
+        _activeSurface = 0;
+        if ((req.Capabilities & TraversabilityCapabilities.Bridge) != 0 && _grid.Bridges.Count > 0)
+        {
+            if (unit.SupportSurface > 0 && _grid.TryGetBridge(new StructureId((int)unit.SupportSurface), out BridgeStructure curBridge) && curBridge.Contains(start))
+            {
+                _activeSurface = unit.SupportSurface;
+            }
+            else
+            {
+                for (int b = 0; b < _grid.Bridges.Count; b++)
+                {
+                    BridgeStructure br = _grid.Bridges[b];
+                    if (br.Contains(start) && _grid.IsPointClear(start, radius, req.Capabilities, (uint)br.Id.Value))
+                    {
+                        bool onBridgeDeck = req.TargetSurface == (uint)br.Id.Value ||
+                                            !_grid.IsPointClear(start, radius, req.Capabilities, 0) ||
+                                            (req.IsChunkContinuation && _slotGlobalPortalCounts[slot] > 0);
+                        if (onBridgeDeck)
+                        {
+                            _activeSurface = (uint)br.Id.Value;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         _activeTotalExpansions = 0;
         _hasActiveSearch = true;
         if (!req.IsChunkContinuation)
@@ -1406,8 +1431,8 @@ public sealed class NavigationSystem : ISimulationSystem
         HierarchicalNavGraph graph = _grid.GetHierarchicalGraph(radius, req.Capabilities);
         int startSector = graph.GetSectorIndex(start);
         int targetSector = graph.GetSectorIndex(target);
-        int startComp = graph.GetComponentId(start, radius);
-        int targetComp = graph.GetComponentId(target, radius);
+        int startComp = graph.GetComponentId(start, radius, unit.SupportSurface);
+        int targetComp = graph.GetComponentId(target, radius, (byte)req.TargetSurface);
 
         if (!graph.AreComponentsConnected(startSector, startComp, targetSector, targetComp))
         {
@@ -1437,7 +1462,7 @@ public sealed class NavigationSystem : ISimulationSystem
             InstallGlobalPlan(slot);
             return true;
         }
-        graph.StartGlobalSearch(start, target, radius);
+        graph.StartGlobalSearch(start, target, radius, unit.SupportSurface, (byte)req.TargetSurface);
         _activeStage = NavigationSearchStage.GlobalPlanning;
         return true;
     }
@@ -1567,15 +1592,38 @@ public sealed class NavigationSystem : ISimulationSystem
     private void SetupLocalWindow(Vector2 start, Vector2 target)
     {
         float margin = 15f;
-        _localWinMinX = MathF.Max(0f, MathF.Min(start.X, target.X) - margin);
-        _localWinMinZ = MathF.Max(0f, MathF.Min(start.Y, target.Y) - margin);
+        float minX = MathF.Max(0f, MathF.Min(start.X, target.X) - margin);
+        float minZ = MathF.Max(0f, MathF.Min(start.Y, target.Y) - margin);
         float maxX = MathF.Min(_grid.MapWidth, MathF.Max(start.X, target.X) + margin);
         float maxZ = MathF.Min(_grid.MapDepth, MathF.Max(start.Y, target.Y) + margin);
 
         float maxDim = _tuning.MaxLocalWindowSize;
-        if (maxX - _localWinMinX > maxDim) maxX = _localWinMinX + maxDim;
-        if (maxZ - _localWinMinZ > maxDim) maxZ = _localWinMinZ + maxDim;
+        if (maxX - minX > maxDim)
+        {
+            if (start.X <= target.X)
+            {
+                maxX = minX + maxDim;
+            }
+            else
+            {
+                minX = maxX - maxDim;
+            }
+        }
 
+        if (maxZ - minZ > maxDim)
+        {
+            if (start.Y <= target.Y)
+            {
+                maxZ = minZ + maxDim;
+            }
+            else
+            {
+                minZ = maxZ - maxDim;
+            }
+        }
+
+        _localWinMinX = minX;
+        _localWinMinZ = minZ;
         _localWinCols = Math.Max(1, (int)MathF.Ceiling((maxX - _localWinMinX) / _grid.CellSize));
         _localWinRows = Math.Max(1, (int)MathF.Ceiling((maxZ - _localWinMinZ) / _grid.CellSize));
         _localWinTotalCells = _localWinCols * _localWinRows;
@@ -1726,11 +1774,43 @@ public sealed class NavigationSystem : ISimulationSystem
         int startAnchorCount = 0;
 
         uint startSurface = _activeSurface;
+        if (startSurface == 0 && _grid.Bridges.Count > 0 && (_activeRequest.Capabilities & TraversabilityCapabilities.Bridge) != 0)
+        {
+            for (int b = 0; b < _grid.Bridges.Count; b++)
+            {
+                BridgeStructure br = _grid.Bridges[b];
+                if (br.Contains(start) && _grid.IsPointClear(start, radius, _activeRequest.Capabilities, (uint)br.Id.Value))
+                {
+                    bool onBridgeDeck = targetSurface == (uint)br.Id.Value ||
+                                        !_grid.IsPointClear(start, radius, _activeRequest.Capabilities, 0) ||
+                                        (_activeRequest.IsChunkContinuation && _slotGlobalPortalCounts[TryGetSlot(_activeRequest.Unit, out int sSlot) ? sSlot : 0] > 0);
+                    if (onBridgeDeck)
+                    {
+                        startSurface = (uint)br.Id.Value;
+                        break;
+                    }
+                }
+            }
+        }
         BridgeStructure startBridge = default!;
         bool hasStartBridge = false;
         if (startSurface > 0 && _grid.Bridges.Count > 0)
         {
-            hasStartBridge = _grid.TryGetBridge(new StructureId((int)startSurface), out startBridge);
+            if (_grid.TryGetBridge(new StructureId((int)startSurface), out startBridge))
+            {
+                if (startBridge.Contains(start))
+                {
+                    hasStartBridge = true;
+                }
+                else
+                {
+                    startSurface = 0;
+                }
+            }
+            else
+            {
+                startSurface = 0;
+            }
         }
 
         bool startCellValid = IsInLocalBounds(startCol, startRow) &&
@@ -2709,7 +2789,7 @@ public sealed class NavigationSystem : ISimulationSystem
                 Vector2 chunkEndK = _routeWaypoints[offsetK + Math.Max(0, countK - 1)];
                 bool chunkReachesFinalTargetK = Vector2.Distance(chunkEndK, finalTargetK) <= 0.05f;
 
-                if (!chunkReachesFinalTargetK && !reachedFinalDestination && !_unitChunkPending[slot] && _slotNextChunkCounts[slot] == 0 && idxK >= Math.Max(0, countK - _tuning.ChunkLookaheadWaypoints))
+                if (!chunkReachesFinalTargetK && !reachedFinalDestination && !_unitChunkPending[slot] && _slotNextChunkCounts[slot] == 0 && (reachedEndOfChunkK || idxK >= Math.Max(0, countK - _tuning.ChunkLookaheadWaypoints)))
                 {
                     EnqueueNextChunkRequest(slot, unit, radius, capabilities);
                 }
@@ -2912,7 +2992,7 @@ public sealed class NavigationSystem : ISimulationSystem
             }
             _routeIndices[slot] = idx;
 
-            if (idx >= count && _slotNextChunkCounts[slot] > 0)
+            if ((idx >= count || (idx == count - 1 && Vector2.Distance(currentPos, _routeWaypoints[offset + count - 1]) <= MathF.Max(0.5f, v * dt * 2f))) && _slotNextChunkCounts[slot] > 0)
             {
                 int nextCount = _slotNextChunkCounts[slot];
                 for (int w = 0; w < nextCount; w++)
@@ -3336,7 +3416,7 @@ public sealed class NavigationSystem : ISimulationSystem
                     if (idx < count)
                     {
                         float distToWp = Vector2.Distance(currentPos, _routeWaypoints[offset + idx]);
-                        if (distToWp <= stepDist)
+                        if (distToWp <= MathF.Max(0.2f, stepDist))
                         {
                             idx++;
                             _routeIndices[slot] = idx;
@@ -3520,7 +3600,7 @@ public sealed class NavigationSystem : ISimulationSystem
             Vector2 chunkEnd = _routeWaypoints[offset + Math.Max(0, count - 1)];
             bool chunkReachesFinalTarget = Vector2.Distance(chunkEnd, finalTarget) <= 0.05f;
 
-            if (!chunkReachesFinalTarget && !reachedEndOfChunk && !_unitChunkPending[slot] && _slotNextChunkCounts[slot] == 0 && idx >= Math.Max(0, count - _tuning.ChunkLookaheadWaypoints))
+            if (!chunkReachesFinalTarget && !_unitChunkPending[slot] && _slotNextChunkCounts[slot] == 0 && (reachedEndOfChunk || idx >= Math.Max(0, count - _tuning.ChunkLookaheadWaypoints)))
             {
                 EnqueueNextChunkRequest(slot, unit, radius, capabilities);
             }

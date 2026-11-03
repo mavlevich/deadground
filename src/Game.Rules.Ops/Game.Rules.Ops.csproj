@@ -3,5 +3,6 @@
     <ProjectReference Include="../Engine.Core/Engine.Core.csproj" />
     <EmbeddedResource Include="../../content/prototype/units.json" LogicalName="DeadGround.Units.json" />
     <EmbeddedResource Include="../../content/coldwar/units.json" LogicalName="DeadGround.ColdWarUnits.json" />
+    <EmbeddedResource Include="../../docs/maps/ustye/layout.json" LogicalName="DeadGround.Ustye.layout.json" />
   </ItemGroup>
 </Project>

@@ -29,14 +29,15 @@ public sealed class OpsRules : RuleSet
         IUnitCombatCatalog? combatCatalog,
         NavigationTuning? navTuning = null,
         DetectionTuning? detTuning = null,
-        DeterministicRandom? combatRandom = null)
-        : base(CreateSystems(geometry, perceptionCatalog, movementCatalog, combatCatalog, navTuning, detTuning, combatRandom))
+        DeterministicRandom? combatRandom = null,
+        NavigationBuildLimits? buildLimits = null)
+        : base(CreateSystems(geometry, perceptionCatalog, movementCatalog, combatCatalog, navTuning, detTuning, combatRandom, buildLimits))
     { }
 
     public OpsRules(StaticGeometry geometry, UnitCatalog catalog, DeterministicRandom? combatRandom = null)
         : this(geometry, new OpsPerceptionCatalog(catalog), new OpsMovementCatalog(catalog), new OpsCombatCatalog(catalog), null, PrototypeScenario.CreateDetectionTuning(catalog), combatRandom) { }
 
-    public OpsRules(StaticGeometry geometry, UnitCatalog catalog, NavigationTuning? navTuning, DetectionTuning? detTuning = null, DeterministicRandom? combatRandom = null)
+    public OpsRules(StaticGeometry geometry, UnitCatalog catalog, NavigationTuning? navTuning, DetectionTuning? detTuning = null, DeterministicRandom? combatRandom = null, NavigationBuildLimits? buildLimits = null)
         : this(
             geometry,
             new OpsPerceptionCatalog(catalog),
@@ -44,7 +45,8 @@ public sealed class OpsRules : RuleSet
             new OpsCombatCatalog(catalog),
             navTuning,
             detTuning ?? PrototypeScenario.CreateDetectionTuning(catalog),
-            combatRandom)
+            combatRandom,
+            buildLimits)
     { }
 
     private static ISimulationSystem[] CreateSystems(
@@ -54,9 +56,10 @@ public sealed class OpsRules : RuleSet
         IUnitCombatCatalog? combatCatalog,
         NavigationTuning? navTuning,
         DetectionTuning? detTuning,
-        DeterministicRandom? combatRandom = null)
+        DeterministicRandom? combatRandom = null,
+        NavigationBuildLimits? buildLimits = null)
     {
-        NavigationSystem nav = new(new NavigationGrid(geometry, navTuning?.CellSize ?? NavigationTuning.DefaultCellSize, enableHierarchical: true, sectorSize: navTuning?.SectorSize ?? NavigationTuning.DefaultSectorSize), movementCatalog, navTuning);
+        NavigationSystem nav = new(new NavigationGrid(geometry, navTuning?.CellSize ?? NavigationTuning.DefaultCellSize, enableHierarchical: true, buildLimits: buildLimits, sectorSize: navTuning?.SectorSize ?? NavigationTuning.DefaultSectorSize), movementCatalog, navTuning);
         DetectionSystem det = new(geometry, perceptionCatalog, detTuning);
         if (combatCatalog is not null)
         {

@@ -71,6 +71,8 @@ public partial class Main : Node3D
     private bool _trafficObservedWaiting;
     private bool _trafficObservedResumed;
     private bool _trafficLeaderCleared;
+    private int _ustyeSetupIndex;
+    private UstyeMapView? _ustyeMapView;
 
     internal FogOfWarView? FogOfWar => _fogOfWar;
     internal CameraRig CameraRig => _cameraRig;
@@ -234,6 +236,11 @@ public partial class Main : Node3D
                     _scenario = args[i + 1].ToLowerInvariant();
                     i++;
                 }
+                else if (args[i] == "--setup" && i + 1 < args.Length && int.TryParse(args[i + 1], out int sIdx))
+                {
+                    _ustyeSetupIndex = Math.Clamp(sIdx, 0, 3);
+                    i++;
+                }
                 else if (args[i] == "--screenshot" && i + 1 < args.Length)
                 {
                     _screenshotPath = args[i + 1];
@@ -346,6 +353,12 @@ public partial class Main : Node3D
             _map = scenarioGeometry.HeightMap;
             setup = GroupMoveScenario.CreateMatchSetup(scenarioGeometry);
         }
+        else if (_scenario == "ustye-ground")
+        {
+            scenarioGeometry = UstyeGroundScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = UstyeGroundScenario.CreateMatchSetup(scenarioGeometry);
+        }
         else
         {
             _map = HeightMap.CreatePrototype();
@@ -382,6 +395,7 @@ public partial class Main : Node3D
                 "bridge-crossing" => BridgeCrossingScenario.CreateSimulation(scenarioGeometry!),
                 "vehicle-traffic" => VehicleTrafficScenario.CreateSimulation(scenarioGeometry!),
                 "group-move" => GroupMoveScenario.CreateSimulation(scenarioGeometry!),
+                "ustye-ground" => UstyeGroundScenario.CreateSimulation(scenarioGeometry!, setupIndex: _ustyeSetupIndex),
                 _ => PrototypeScenario.Create(_map)
             };
             // Test switch: the enemy holds fire, so own units can be tried out without losing them.
@@ -391,14 +405,24 @@ public partial class Main : Node3D
 
 
         _fogOfWar = new FogOfWarView(_map, scenarioGeometry);
-        MeshInstance3D terrain = TerrainView.Create(_map, _fogOfWar);
-        AddChild(terrain);
-        _terrainWindingValid = !_smokeTest || TerrainView.HasUpwardFrontFaces(terrain);
-        AddChild(TerrainView.CreateGrid(_map));
-
-        if (scenarioGeometry is not null)
+        if (_scenario == "ustye-ground")
         {
-            SetupStructures(scenarioGeometry);
+            UstyePlanData plan = UstyePlanData.Load();
+            _ustyeMapView = new(plan, includeScaleVehicles: false, fogOverlay: _fogOfWar);
+            AddChild(_ustyeMapView);
+            _terrainWindingValid = !_smokeTest || _ustyeMapView.HasUpwardFrontFaces();
+        }
+        else
+        {
+            MeshInstance3D terrain = TerrainView.Create(_map, _fogOfWar);
+            AddChild(terrain);
+            _terrainWindingValid = !_smokeTest || TerrainView.HasUpwardFrontFaces(terrain);
+            AddChild(TerrainView.CreateGrid(_map));
+
+            if (scenarioGeometry is not null)
+            {
+                SetupStructures(scenarioGeometry);
+            }
         }
 
         AddChild(new DirectionalLight3D
@@ -445,6 +469,7 @@ public partial class Main : Node3D
             "bridge-crossing" => 120,
             "vehicle-traffic" => 150,
             "group-move" => 140,
+            "ustye-ground" => 220,
             _ => 112
         };
         _camera = new Camera3D { Projection = Camera3D.ProjectionType.Orthogonal, Size = initialCameraSize, Far = 3500, Current = true };
@@ -458,9 +483,16 @@ public partial class Main : Node3D
             "bridge-crossing" => new Vector3(100, 4, 100),
             "vehicle-traffic" => new Vector3(100, 0, 100),
             "group-move" => new Vector3(60, 0, 50),
+            "ustye-ground" => new Vector3(2550f, 4.5f, 2450f),
             _ => new Vector3(64, 0, 64)
         };
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
+        if (_scenario == "ustye-ground")
+        {
+            _cameraRig.Model.SetSizeLimits(30f, 5500f);
+            _cameraRig.FarClipMargin = 3000f;
+            _cameraRig.GroundHeight = (x, z) => _map.GetHeight(x, z);
+        }
         _cameraRig.SetDefaultView(initialFocus, initialCameraSize);
 
         // Historical scenarios use the Cold War catalog; the small test maps keep prototype data.
@@ -476,7 +508,7 @@ public partial class Main : Node3D
         _combatEffects = new CombatEffects(_map, _scenarioGeometry);
         AddChild(_combatEffects);
 
-        if (_session is LocalSession && _scenario != "visibility" && _scenario != "combat" && _scenario != "navigation-large" && _scenario != "recon-raid" && _scenario != "bridge-crossing" && _scenario != "vehicle-traffic" && _scenario != "group-move")
+        if (_session is LocalSession && _scenario != "visibility" && _scenario != "combat" && _scenario != "navigation-large" && _scenario != "recon-raid" && _scenario != "bridge-crossing" && _scenario != "vehicle-traffic" && _scenario != "group-move" && _scenario != "ustye-ground")
         {
             foreach (OwnUnitObservation unit in _session.Replica.OwnUnits)
             {
@@ -512,6 +544,13 @@ public partial class Main : Node3D
         else if (_scenario == "group-move" && _session.Replica.OwnUnits.Length >= 10)
         {
             for (int i = 0; i < 10; i++)
+            {
+                _unitViews.Selected.Add(_session.Replica.OwnUnits[i].Id);
+            }
+        }
+        else if (_scenario == "ustye-ground" && _session.Replica.OwnUnits.Length >= 6)
+        {
+            for (int i = 0; i < 6; i++)
             {
                 _unitViews.Selected.Add(_session.Replica.OwnUnits[i].Id);
             }
@@ -823,6 +862,7 @@ public partial class Main : Node3D
                     "bridge-crossing" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
                     "vehicle-traffic" => _terrainWindingValid && _session.Tick >= 60 && _trafficObservedWaiting && _trafficObservedResumed && _session.Replica.OwnUnits.Length >= 6,
                     "group-move" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length >= 10,
+                    "ustye-ground" => (_terrainWindingValid || (_ustyeMapView?.HasUpwardFrontFaces() ?? false)) && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 6,
                     _ => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
                         _session.Replica.OwnUnits[0].Position.Y > 24
                 };
@@ -835,6 +875,7 @@ public partial class Main : Node3D
                     "bridge-crossing" => "M1_CLIENT_BRIDGE_CROSSING_SMOKE",
                     "vehicle-traffic" => "M1_CLIENT_VEHICLE_TRAFFIC_SMOKE",
                     "group-move" => "M1_CLIENT_GROUP_MOVE_SMOKE",
+                    "ustye-ground" => "USTYE_GROUND_SMOKE",
                     _ => "M0_CLIENT_SMOKE"
                 };
                 string token = prefix + (ok ? "_OK" : "_FAILED");
@@ -964,10 +1005,25 @@ public partial class Main : Node3D
                 return;
             }
 
+            if (_scenario == "ustye-ground" && _session is LocalSession && key.Keycode is Key.F1 or Key.F2 or Key.F3 or Key.F4)
+            {
+                int newSetup = (int)(key.Keycode - Key.F1);
+                SwitchUstyeSetup(newSetup);
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
             if ((key.Keycode == Key.F5 || (key.Keycode == Key.R && (key.CtrlPressed || key.MetaPressed))) && _session is LocalSession)
             {
-                ResetLocalScenario();
-                _status.Text = "Scenario reset to initial state";
+                if (_scenario == "ustye-ground")
+                {
+                    SwitchUstyeSetup((_ustyeSetupIndex + 1) % 4);
+                }
+                else
+                {
+                    ResetLocalScenario();
+                    _status.Text = "Scenario reset to initial state";
+                }
                 GetViewport().SetInputAsHandled();
                 return;
             }
@@ -1749,6 +1805,7 @@ public partial class Main : Node3D
             "bridge-crossing" => BridgeCrossingScenario.CreateSimulation(_scenarioGeometry),
             "vehicle-traffic" => VehicleTrafficScenario.CreateSimulation(_scenarioGeometry),
             "group-move" => GroupMoveScenario.CreateSimulation(_scenarioGeometry),
+            "ustye-ground" => UstyeGroundScenario.CreateSimulation(_scenarioGeometry, setupIndex: _ustyeSetupIndex),
             "battle" => BattleScenario.CreateSimulation(_scenarioGeometry),
             "combat" => CombatScenario.CreateSimulation(_scenarioGeometry),
             "visibility" => VisibilityScenario.CreateSimulation(_scenarioGeometry),
@@ -1773,12 +1830,53 @@ public partial class Main : Node3D
                     _unitViews.Selected.Add(_session.Replica.OwnUnits[i].Id);
                 }
             }
+            else if (_scenario == "ustye-ground" && _session.Replica.OwnUnits.Length >= 6)
+            {
+                for (int i = 0; i < 6; i++)
+                {
+                    _unitViews.Selected.Add(_session.Replica.OwnUnits[i].Id);
+                }
+            }
             else
             {
                 int selectIdx = _scenario == "vehicle-traffic" && _session.Replica.OwnUnits.Length > 1 ? 1 : 0;
                 _unitViews.Selected.Add(_session.Replica.OwnUnits[selectIdx].Id);
             }
         }
+    }
+
+    private void SwitchUstyeSetup(int index)
+    {
+        _ustyeSetupIndex = Math.Clamp(index, 0, 3);
+        ResetLocalScenario();
+        Vector3 newFocus = _ustyeSetupIndex switch
+        {
+            0 => new Vector3(2550f, 4.5f, 2450f),
+            1 => new Vector3(2860f, 4.5f, 3550f),
+            2 => new Vector3(2250f, 4.5f, 2260f),
+            3 => new Vector3(2050f, 4.5f, 2160f),
+            _ => new Vector3(2550f, 4.5f, 2450f)
+        };
+        float newSize = _ustyeSetupIndex switch
+        {
+            0 => 220f,
+            1 => 200f,
+            2 => 180f,
+            3 => 160f,
+            _ => 220f
+        };
+        _cameraRig.SetDefaultView(newFocus, newSize);
+        _cameraRig.ResetToDefault();
+        string name = _ustyeSetupIndex switch
+        {
+            0 => "Central Bridge (CROSS-C)",
+            1 => "Southern Crossing (CROSS-S)",
+            2 => "City Maneuver (Panel Blocks)",
+            3 => "Reconnaissance & LOS Occlusion",
+            _ => "Default"
+        };
+        _status.Text = $"Ustye setup {_ustyeSetupIndex + 1}/4: {name}";
+        _orderNotification?.ShowNotification($"Setup {_ustyeSetupIndex + 1}: {name}");
     }
 
     private static StyleBoxFlat PanelStyle() => new()
@@ -1805,6 +1903,8 @@ public partial class Main : Node3D
             "battle" => "MEETING ENGAGEMENT",
             "bridge-crossing" => "BRIDGE CROSSING",
             "vehicle-traffic" => "VEHICLE TRAFFIC PLAYGROUND",
+            "group-move" => "GROUP MOVE PLAYGROUND",
+            "ustye-ground" => "USTYE PLAYGROUND",
             _ => "M0 NETWORK TEST"
         };
         return $"DEAD GROUND   /   SIDE {assignedSide}   /   {name}";

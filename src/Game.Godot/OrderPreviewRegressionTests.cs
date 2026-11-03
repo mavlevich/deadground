@@ -1116,7 +1116,10 @@ internal static class OrderPreviewRegressionTests
         main.UnitViews.Selected.Add(unitId);
         main.UnitViews.UpdateSelectionVisuals();
 
-        Vector2 screenPos = main.Camera.UnprojectPosition(new Vector3(30, 0, 30));
+        Vector3 unitPos3D = main.UnitViews.Views.TryGetValue(unitId, out UnitView? view)
+            ? view.Root.Position
+            : new Vector3(main.Session.Replica.OwnUnits[0].Position.X, 0f, main.Session.Replica.OwnUnits[0].Position.Y);
+        Vector2 screenPos = main.Camera.UnprojectPosition(unitPos3D + new Vector3(2f, 0f, 2f));
 
         // Press and drag via main PreviewController
         Require(main.PreviewController.BeginFacingGesture(main.Camera, screenPos, main.UnitViews, main.Session, out _), "BeginFacingGesture failed");
@@ -1227,7 +1230,10 @@ internal static class OrderPreviewRegressionTests
         main.UnitViews.Selected.Add(unit1);
         main.UnitViews.UpdateSelectionVisuals();
 
-        Vector2 screenPos = main.Camera.UnprojectPosition(new Vector3(30, 0, 30));
+        Vector3 unitPos3D = main.UnitViews.Views.TryGetValue(unit1, out UnitView? view)
+            ? view.Root.Position
+            : new Vector3(main.Session.Replica.OwnUnits[0].Position.X, 0f, main.Session.Replica.OwnUnits[0].Position.Y);
+        Vector2 screenPos = main.Camera.UnprojectPosition(unitPos3D + new Vector3(2f, 0f, 2f));
 
         // Start facing gesture for Group 1
         Require(main.PreviewController.BeginFacingGesture(main.Camera, screenPos, main.UnitViews, main.Session, out _), "BeginFacingGesture failed");
@@ -1253,7 +1259,10 @@ internal static class OrderPreviewRegressionTests
         main.UnitViews.Selected.Add(unit1);
         main.UnitViews.UpdateSelectionVisuals();
 
-        Vector2 screenPos = main.Camera.UnprojectPosition(new Vector3(30, 0, 30));
+        Vector3 unitPos3D = main.UnitViews.Views.TryGetValue(unit1, out UnitView? view)
+            ? view.Root.Position
+            : new Vector3(main.Session.Replica.OwnUnits[0].Position.X, 0f, main.Session.Replica.OwnUnits[0].Position.Y);
+        Vector2 screenPos = main.Camera.UnprojectPosition(unitPos3D + new Vector3(2f, 0f, 2f));
         Vector2 viewport = main.GetViewport().GetVisibleRect().Size;
 
         // Start facing gesture and drag to reveal facing arrow
