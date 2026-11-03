@@ -87,6 +87,7 @@ public sealed class DestinationEvaluator
     public ReadOnlySpan<NavigationGrid.GroundedObstacle> GroundedObstacles => _obstacles;
     public ReadOnlySpan<BridgeStructure> Bridges => _bridges;
     public ReadOnlySpan<TerrainObstacle> TerrainObstacles => _terrainObstacles;
+    public HeightMap? HeightMap => _heightMap;
 
     public DestinationEvaluator(StaticGeometry geometry, float cellSize = NavigationTuning.DefaultCellSize)
         : this(

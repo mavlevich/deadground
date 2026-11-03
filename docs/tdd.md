@@ -321,6 +321,48 @@ The preview partitions terrain into 10 x 10 chunks of 500 x 500 m. Inland chunks
 Forest foliage is batched into `MultiMeshInstance3D` instances without per-tree scene nodes.
 This inspection mode is visual only; combat units, occupation, destruction, and fake gameplay collisions are not introduced.
 
+### 8.5 Ustye playable ground scenario (ustye-ground)
+
+The playable ground mode (`ustye-ground`) connects the canonical 5000 x 5000 m Ustye map to authoritative gameplay simulation and rendering:
+
+```sh
+./tools/run-client.sh -- --scenario ustye-ground
+```
+
+#### Authoritative geometry and environment
+- **Authoritative HeightMap**: 2001 x 2001 grid resolution with 2.5 m cell spacing (5000 x 5000 m total extent). Elevation is sampled directly from `UstyePlanData.SampleTerrainElevation()`.
+- **Three bridge structures**:
+  - `CROSS-N`: Span 240 m (X=2280..2520, Z=1000), deck width 8 m, deck height ~4.5 m (SupportSurface 1).
+  - `CROSS-C`: Span 260 m (X=2520..2780, Z=2450), deck width 14 m, deck height ~4.5 m (SupportSurface 2).
+  - `CROSS-S`: Span 240 m (X=2740..2980, Z=3550), deck width 6 m, deck height ~4.5 m (SupportSurface 3).
+  All bridges enforce deck height >= 3.0 m, longitudinal ramp entry/exit geometry, lateral side clearance, and traversability over water.
+- **23 opaque structures**:
+  - 12 residential panel blocks: `BLOCK-WEST-1-1` to `1-6`, `BLOCK-EAST-1-1` to `1-6`.
+  - 6 warehouses: `WH-W1` to `W3`, `WH-E1` to `E3`.
+  - 4 timber log stacks: `STACK-1` to `STACK-4`.
+  - 1 industrial water tower: `TOWER-SAW`.
+  All 23 buildings are grounded obstacles with structure IDs starting at 101 (to prevent collisions with bridge deck IDs 1..3) that block land vehicle traversal and occlude direct line of sight.
+- **590 terrain water slices**:
+  - 200 river slices along the winding river channel (step Delta Z = 25 m, half-width 50 m).
+  - 390 bay slices along the southeastern coastal bay (step Delta Z = 5 m, extending to map boundaries X=5000, Z=5000).
+  - Water blocks all non-amphibious units on surface 0, requiring units to traverse crossings on elevated deck surfaces.
+- **Vegetation**: Multi-mesh visual canopy trees and shrubs are rendered by the client for landscape appearance without occluding movement paths or blocking line of sight.
+- **Fog of war visibility shroud**: Terrain shading on all 100 terrain chunks is hooked up to `_fogOfWar.Material`, dynamically revealing explored territory and desaturating/shading unobserved ground while preserving vertex hillshade.
+
+#### Tactical setups (F1-F4 direct switch, F5 cycling)
+- **Setup 0 (Central Crossing)**: Soviet column deployed on the western bank approaching CROSS-C (2x T-62, 2x BTR-70, 2x BRDM-2); US defense across the river (2x M60A1, 2x M113A1, 2x M151A2).
+- **Setup 1 (Narrow Southern Crossing)**: Single-file column approaching CROSS-S narrow bridge on the southern road.
+- **Setup 2 (City Maneuvering and Head-on Engagement)**: Close-quarters urban maneuvering and street defense around western panel blocks with open engagement corridors.
+- **Setup 3 (Reconnaissance and Occlusion)**: Reconnaissance units separated by panel block `BLOCK-WEST-1-1` testing line-of-sight occlusion.
+
+#### Performance and build limits
+- The 5000 x 5000 m map uses 100 x 100 navigation sectors (50 m sector size). To prevent allocation truncation, `NavigationBuildLimits` configures:
+  - `MaxDetailedCells = 16_000_000`
+  - `MaxPortals = 65_536`
+  - `MaxSectorEdges = 262_144`
+- `NavigationTuning` sets `MaxLocalWindowSize = 320.0f` to accommodate long-distance directional maneuvers.
+- Payload memory footprint: NavigationGrid (clearance grid + multi-class hierarchical sectors/portals) and NavigationSystem combine for ~258 MiB array payload (excluding double-counting). Steady-state navigation updates for active units require zero dynamic heap allocations.
+
 ## 9. Navigation and movement
 
 ### 9.1 Planning
@@ -380,6 +422,15 @@ This inspection mode is visual only; combat units, occupation, destruction, and 
   - 0 B allocations in steady state during simulation ticks.
 - Performance gate:
   - The 5 km probe checks navigation-only p99 < 15 ms, load < 3 seconds, array payload < 128 MiB at 1024 unit slots, zero measured tick allocations and per-stage work limits. Request latency is reported separately; low tick cost does not imply immediate orders.
+  - Scale footprint and memory footprint on playable 5x5 km maps (Ustye):
+    - While synthetic prototype fixtures with uniform ground conformed to the early 128 MiB target, the production 5000 x 5000 m Ustye terrain (6,250,000 fine cells at 2.0 m resolution) requires approximately 250 to 260 MiB of array payload.
+    - Payload breakdown for 5x5 km production geometry:
+      - Fine clearance grid: 6.25M cells * 4 bytes = 25.0 MB.
+      - Spatial bucket obstacle partitioning (590 terrain obstacles and buildings, bucket offsets, window scratch): ~2.5 MB.
+      - Multi-layer hierarchical navigation graphs across 4 mobility classes (tracked, wheeled, light vehicle, amphibious): 10,000 sectors (50 x 50 m) with sector component grids (supporting Layer 0 ground and Layer 1 elevated bridge decks), boundary portals, and intra-sector connectivity edges: ~225 MB total across all mobility graphs.
+      - Navigation system runtime buffers (4096 unit slots, chunk continuation buffers, global plan LRU cache, separation scratch): ~5.5 MB.
+    - Metric reporting note:
+      - `NavigationSystem.EstimatedMemoryBytes` already includes `NavigationGrid.EstimatedMemoryBytes`. External diagnostic scripts summing `(grid.EstimatedMemoryBytes + nav.EstimatedMemoryBytes)` double-count the grid payload (~258 MiB counted twice) and report ~516 MiB. The actual retained navigation payload is ~258 MiB.
 - Prototype limitations for this slice:
   - Static geometry only. Vehicle-vehicle dynamic avoidance, formation spacing, and moving obstacles are deferred to subsequent slices. Headless static geometry fixtures cover 5x5 km. Forest/water movement rules, bridge support surfaces and a playable 5 km map remain separate work. Neither 10 km support nor 50 km streaming is claimed.
 

@@ -44,6 +44,7 @@ public sealed class NavigationGrid
     public IReadOnlyList<BridgeStructure> Bridges => _bridges;
     public IReadOnlyList<TerrainObstacle> TerrainObstacles => _terrainObstacles;
     public DestinationEvaluator Evaluator => _evaluator;
+    public HeightMap? HeightMap => _evaluator.HeightMap;
 
     // Owned array payload, including all movement graphs, excluding object headers and build scratch.
     public long EstimatedMemoryBytes

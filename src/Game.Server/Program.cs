@@ -92,6 +92,7 @@ StaticGeometry? scenarioGeometry = scenario switch
     "bridge-crossing" => BridgeCrossingScenario.CreateStaticGeometry(),
     "vehicle-traffic" => VehicleTrafficScenario.CreateStaticGeometry(),
     "group-move" => GroupMoveScenario.CreateStaticGeometry(),
+    "ustye-ground" => UstyeGroundScenario.CreateStaticGeometry(),
     _ => null
 };
 
@@ -109,6 +110,7 @@ MatchSetup setup = scenario switch
     "bridge-crossing" => BridgeCrossingScenario.CreateMatchSetup(scenarioGeometry!),
     "vehicle-traffic" => VehicleTrafficScenario.CreateMatchSetup(scenarioGeometry!),
     "group-move" => GroupMoveScenario.CreateMatchSetup(scenarioGeometry!),
+    "ustye-ground" => UstyeGroundScenario.CreateMatchSetup(scenarioGeometry!),
     _ => PrototypeScenario.CreateMatchSetup(map)
 };
 
@@ -138,6 +140,7 @@ Simulation CreateSimulation(ulong seed = 0)
         "bridge-crossing" => BridgeCrossingScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "vehicle-traffic" => VehicleTrafficScenario.CreateSimulation(scenarioGeometry!),
         "group-move" => GroupMoveScenario.CreateSimulation(scenarioGeometry!),
+        "ustye-ground" => UstyeGroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         _ => PrototypeScenario.Create(map)
     };
 }
@@ -322,6 +325,24 @@ if (smokeTest)
             throw new InvalidOperationException($"Group-move smoke test: only {movedCount}/10 units moved.");
 
         Console.WriteLine($"GROUP_MOVE_SMOKE_OK tick={session.Tick} placed={session.LastGroupMoveResult.Value.Placed.Length} moved={movedCount} own_units={session.Replica.OwnUnits.Length}");
+        return;
+    }
+
+    if (scenario == "ustye-ground")
+    {
+        for (int i = 0; i < 10; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.Replica.OwnUnits.Length != 6)
+            throw new InvalidOperationException("Ustye-ground smoke test: expected 6 Soviet units.");
+
+        EntityId mover = session.Replica.OwnUnits[0].Id;
+        Vector2 startPos = session.Replica.OwnUnits[0].Position;
+        session.Move(mover, startPos + new Vector2(40f, 0f));
+        for (int i = 0; i < 130; i++) session.Advance(1d / Simulation.TickRate);
+        Vector2 endPos = session.Replica.SamplePosition(mover, session.Replica.LatestTick);
+        if (Vector2.Distance(startPos, endPos) < 5f)
+            throw new InvalidOperationException($"Ustye-ground smoke test: unit did not move. start={startPos} end={endPos}");
+
+        Console.WriteLine($"USTYE_GROUND_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} moved={Vector2.Distance(startPos, endPos):F1}");
         return;
     }
 

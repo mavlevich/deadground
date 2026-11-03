@@ -1,5 +1,7 @@
 using System.IO;
+using DeadGround.Rules.Ops;
 using Godot;
+using NumericsVector2 = System.Numerics.Vector2;
 
 namespace DeadGround.Client;
 
@@ -348,15 +350,15 @@ public static class UstyeMapPreviewRegressionTests
             $"Bay coast height tear at (4762, 3408.8): delta={deltaReported:F3} m (hA={hA:F2}, hB={hB:F2})");
 
         // 2. Dense continuity scan along the entire BayCoastSpline
-        Vector2[] coast = plan.BayCoastSpline;
+        NumericsVector2[] coast = plan.BayCoastSpline;
         for (int i = 1; i < coast.Length - 1; i++)
         {
-            Vector2 p = coast[i];
-            Vector2 tangent = (coast[i + 1] - coast[i - 1]).Normalized();
-            Vector2 normal = new(-tangent.Y, tangent.X);
+            NumericsVector2 p = coast[i];
+            NumericsVector2 tangent = NumericsVector2.Normalize(coast[i + 1] - coast[i - 1]);
+            NumericsVector2 normal = new(-tangent.Y, tangent.X);
 
-            Vector2 p1 = p + normal * 0.2f;
-            Vector2 p2 = p - normal * 0.2f;
+            NumericsVector2 p1 = p + normal * 0.2f;
+            NumericsVector2 p2 = p - normal * 0.2f;
 
             float h1 = plan.SampleTerrainElevation(p1.X, p1.Y);
             float h2 = plan.SampleTerrainElevation(p2.X, p2.Y);
@@ -380,7 +382,7 @@ public static class UstyeMapPreviewRegressionTests
         Require(plan.BayCoastSpline.Length >= 100, $"Expected >= 100 points on BayCoastSpline, got {plan.BayCoastSpline.Length}");
 
         // Verify that river spline interpolates all 9 original river waypoints exactly
-        foreach (Vector2 p in plan.River)
+        foreach (NumericsVector2 p in plan.River)
         {
             float dist = UstyePlanData.DistanceToPolyline(p, plan.RiverSpline);
             Require(dist < 0.05f, $"River spline must interpolate declared point ({p.X},{p.Y}), distance={dist}");
@@ -424,7 +426,7 @@ public static class UstyeMapPreviewRegressionTests
         // Check crossing bridge positions and channel depth
         foreach (UstyePlanData.Crossing cr in plan.Crossings)
         {
-            Vector2 mid = (cr.EndA + cr.EndB) * 0.5f;
+            NumericsVector2 mid = (cr.EndA + cr.EndB) * 0.5f;
             float rDist = UstyePlanData.DistanceToPolyline(mid, plan.RiverSpline);
             Require(rDist < 50f, $"Crossing {cr.Id} center must align with RiverSpline, got dist {rDist}");
 
@@ -473,7 +475,9 @@ public static class UstyeMapPreviewRegressionTests
             Vector3[] verts = arrays[(int)Mesh.ArrayType.Vertex].AsVector3Array();
             int[] indices = arrays[(int)Mesh.ArrayType.Index].AsInt32Array();
 
-            Vector2 span = crossing.EndB - crossing.EndA;
+            Vector2 endA = new(crossing.EndA.X, crossing.EndA.Y);
+            Vector2 endB = new(crossing.EndB.X, crossing.EndB.Y);
+            Vector2 span = endB - endA;
             float spanLen = span.Length();
             Vector2 spanDir = span / spanLen;
 
@@ -486,8 +490,8 @@ public static class UstyeMapPreviewRegressionTests
                 Vector3 centroid = (v0 + v1 + v2) / 3f;
                 Vector2 c2 = new(centroid.X, centroid.Z);
 
-                float proj = (c2 - crossing.EndA).Dot(spanDir);
-                float perp = MathF.Abs((c2 - crossing.EndA).Cross(spanDir));
+                float proj = (c2 - endA).Dot(spanDir);
+                float perp = MathF.Abs((c2 - endA).Cross(spanDir));
 
                 // Inside the span between EndA and EndB (with 5 m clearance buffer from ends)
                 bool insideSpan = proj > 5.0f && proj < spanLen - 5.0f && perp < crossing.DeckWidth * 1.5f;

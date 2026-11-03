@@ -384,6 +384,51 @@ Interactive controls and presets:
   6. Moving Group Redirection: Re-issuing orders on the move updates destination slots without stopping vehicles.
 - **Ctrl+R** or **F5**: Reset scenario to initial state.
 
+### Ustye ground playground (ustye-ground)
+
+To run the playable Ustye ground playground across the 5000 x 5000 m map with historical Cold War vehicles, 3 bridges, 23 static buildings, and river slicing:
+
+On macOS:
+
+```sh
+./tools/run-client.sh -- --scenario ustye-ground
+```
+
+On Windows with PowerShell:
+
+```powershell
+./tools/run-client.ps1 -GodotArgs @("--", "--scenario", "ustye-ground")
+```
+
+For dedicated server hosting:
+
+```sh
+dotnet run --project src/Game.Server --configuration Release -- --scenario ustye-ground --port 7777
+```
+
+In headless smoke-test mode:
+
+```sh
+./tools/run-client.sh --headless -- --scenario ustye-ground --smoke-test
+dotnet run --project src/Game.Server --configuration Release --no-build -- --scenario ustye-ground --smoke-test
+```
+
+For standalone map visual preview:
+
+```sh
+./tools/run-client.sh -- --map-preview ustye
+./tools/run-client.sh --headless -- --map-preview ustye --smoke-test
+```
+
+Interactive controls and tactical setups:
+- **F1 - F4**: Switch directly between 4 tactical starting setups:
+  1. **F1 (Central Crossing)**: Soviet column approaching CROSS-C from the west bank; US defensive position across the river.
+  2. **F2 (Narrow Southern Crossing)**: Single-file column approaching CROSS-S narrow crossing on the southern road.
+  3. **F3 (City Maneuvering)**: Urban maneuvering and street defense around western panel blocks (BLOCK-WEST-1-1 to 1-6).
+  4. **F4 (Reconnaissance and Occlusion)**: Reconnaissance units separated by panel block BLOCK-WEST-1-1 testing line-of-sight occlusion.
+- **F5 / Ctrl+R**: Cycle through tactical setups (Setup 0 -> 1 -> 2 -> 3 -> 0).
+- **Group Move Orders**: Normal group box selection, formation line assignment, facing direction gestures, and reverse maneuvers across bridges and streets.
+
 ### Recon Raid mission (recon-raid)
 
 To run the playable reconnaissance raid mission with authoritative objectives, enemy AI bot, and complete attempt lifecycle:
@@ -639,11 +684,14 @@ dotnet run --project src/Game.Server --configuration Release --no-build -- --smo
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario bridge-crossing
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario vehicle-traffic
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario group-move
+dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario ustye-ground
 ./tools/run-client.sh --headless -- --smoke-test
 ./tools/run-client.sh --headless -- --smoke-test --scenario recon-raid
 ./tools/run-client.sh --headless -- --smoke-test --scenario bridge-crossing
 ./tools/run-client.sh --headless -- --smoke-test --scenario vehicle-traffic
 ./tools/run-client.sh --headless -- --smoke-test --scenario group-move
+./tools/run-client.sh --headless -- --smoke-test --scenario ustye-ground
+./tools/run-client.sh --headless -- --map-preview ustye --smoke-test
 ```
 
 To automatically format C# code according to the repository rules:
