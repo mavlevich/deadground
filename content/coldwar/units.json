@@ -302,6 +302,31 @@
       "armor_front": 0.0,
       "armor_side": 0.0,
       "armor_rear": 0.0
+    },
+    {
+      "id": "m577",
+      "name": "M577",
+      "faction": "us",
+      "classification": "command",
+      "speed_road": 17.8,
+      "speed_offroad": 9.7,
+      "reverse_speed": 4.2,
+      "water_speed": 1.6,
+      "sensor_range": 1500.0,
+      "eye_height": 2.6,
+      "target_points": [0.9, 2.6],
+      "radius": 1.35,
+      "collision_radius": 2.8,
+      "height": 2.7,
+      "max_health": 50,
+      "turn_rate": 36.0,
+      "can_pivot": true,
+      "min_turn_radius": 0.0,
+      "acceleration": 2.5,
+      "deceleration": 4.5,
+      "armor_front": 20.0,
+      "armor_side": 12.0,
+      "armor_rear": 12.0
     }
   ]
 }

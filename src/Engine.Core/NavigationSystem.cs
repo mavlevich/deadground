@@ -12,7 +12,7 @@ public sealed class NavigationSystem : ISimulationSystem
 {
     private const float GeometryTolerance = 1e-4f;
     private const int MaxGlobalPlanPortals = 1024;
-    private const int MaxLocalWindowCells = 262_144;
+    private const int MaxLocalWindowCells = 524_288;
 
     private readonly NavigationGrid _grid;
     private readonly IUnitMovementCatalog _catalog;
@@ -1597,7 +1597,10 @@ public sealed class NavigationSystem : ISimulationSystem
         float maxX = MathF.Min(_grid.MapWidth, MathF.Max(start.X, target.X) + margin);
         float maxZ = MathF.Min(_grid.MapDepth, MathF.Max(start.Y, target.Y) + margin);
 
-        float maxDim = _tuning.MaxLocalWindowSize;
+        int maxDimCells = (int)MathF.Floor(MathF.Sqrt(_layerCapacity));
+        float maxAllowedDim = maxDimCells * _grid.CellSize;
+        float maxDim = MathF.Min(_tuning.MaxLocalWindowSize, maxAllowedDim);
+
         if (maxX - minX > maxDim)
         {
             if (start.X <= target.X)
@@ -1624,8 +1627,16 @@ public sealed class NavigationSystem : ISimulationSystem
 
         _localWinMinX = minX;
         _localWinMinZ = minZ;
-        _localWinCols = Math.Max(1, (int)MathF.Ceiling((maxX - _localWinMinX) / _grid.CellSize));
-        _localWinRows = Math.Max(1, (int)MathF.Ceiling((maxZ - _localWinMinZ) / _grid.CellSize));
+        _localWinCols = Math.Clamp((int)MathF.Ceiling((maxX - _localWinMinX) / _grid.CellSize), 1, maxDimCells);
+        _localWinRows = Math.Clamp((int)MathF.Ceiling((maxZ - _localWinMinZ) / _grid.CellSize), 1, maxDimCells);
+
+        if ((long)_localWinCols * _localWinRows > _layerCapacity)
+        {
+            int safeDim = (int)MathF.Floor(MathF.Sqrt(_layerCapacity));
+            _localWinCols = Math.Min(_localWinCols, safeDim);
+            _localWinRows = Math.Min(_localWinRows, safeDim);
+        }
+
         _localWinTotalCells = _localWinCols * _localWinRows;
         _areaPrepCurrentRow = 0;
         _areaPrepCurrentCol = 0;

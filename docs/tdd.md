@@ -361,7 +361,36 @@ The playable ground mode (`ustye-ground`) connects the canonical 5000 x 5000 m U
   - `MaxPortals = 65_536`
   - `MaxSectorEdges = 262_144`
 - `NavigationTuning` sets `MaxLocalWindowSize = 320.0f` to accommodate long-distance directional maneuvers.
-- Payload memory footprint: NavigationGrid (clearance grid + multi-class hierarchical sectors/portals) and NavigationSystem combine for ~258 MiB array payload (excluding double-counting). Steady-state navigation updates for active units require zero dynamic heap allocations.
+- Payload memory footprint: NavigationGrid (clearance grid + multi-class hierarchical sectors/portals) and NavigationSystem combine for ~309 MiB array payload (excluding double-counting). Steady-state navigation updates for active units require zero dynamic heap allocations.
+
+### 8.6 Ustye reconnaissance raid mission (ustye-raid)
+
+The playable mission mode (`ustye-raid`) connects the canonical 5000 x 5000 m Ustye map to authoritative mission rules, historical Cold War rosters, and automated enemy bot tactics:
+
+```sh
+./tools/run-client.sh -- --scenario ustye-raid
+```
+
+#### Scenario structure and tactical environment
+- **Map and operational sector**: Canonical 5000 x 5000 m Ustye terrain with three bridges (`CROSS-N`, `CROSS-C`, `CROSS-S`), 23 static buildings, and river/bay water slicing. Primary tactical focus spans ~1.5 - 2 km across the central river corridor (`CROSS-C` at Z = 2450) and the eastern Ammunition Depot (`WH-E1` to `WH-E3`).
+- **Forces and equipment**:
+  - Player (Side 1, Soviet): 1x BRDM-2 (`brdm2`, 3000 m sensor range, 14.5 mm KPVT, 50 HP) and 2x T-62 medium tanks (`t62`, 2000 m sensor range, 115 mm U-5TS gun with 40 rounds, 100 HP).
+  - Opponent (Side 2, US, AI bot): 1x M577 Command Post Carrier (`m577`, unarmed, 1500 m sensor range, 50 HP) sheltered in the Depot courtyard at (3560, 2690) facing North, 1x stationary M60A1 guard tank (`m60a1`, 2000 m sensor range, 105 mm gun with 63 rounds, 100 HP) at (3330, 2690) facing West, 1x patrol M60A1 tank (`m60a1`, 2000 m sensor range, 105 mm gun, 100 HP), and 1x patrol M151A2 recon vehicle (`m151a2`, 3000 m sensor range, 7.62 mm machine gun, 30 HP).
+- **Spawn occlusion, orientation, and routes**:
+  - Player vehicles spawn in Town-West at (2140..2180, 2325) facing East towards the river crossing avenue, completely occluded by panel block `BLOCK-WEST-2-2` (100% line-of-sight blockage to all enemy positions at tick 0).
+  - Enemy command post faces North and guard tank faces West towards the approach road.
+  - Initial contact occurs within 10-30 seconds if advancing onto the avenue (130 m advance), opening sensor line-of-sight across the river to enemy patrol vehicles (2000-3000 m sensor range).
+  - Two distinct tactical approaches:
+    1. Direct frontal approach across bridge `CROSS-C` (Z = 2450) with ~1.5-2.5 minute transit time under heavy patrol engagement.
+    2. Detour/flank via northern bridge `CROSS-N` (Z = 1000) or open northern ground (~5-8 minute deliberate maneuver) for covered infiltration into the Depot courtyard.
+- **Mission lifecycle rules**:
+  - Reuses authoritative `ReconRaidMissionSystem` and `ReconRaidBot` with custom patrol routes and armed recon vehicle handling.
+  - Objective: Locate and destroy the enemy command vehicle (M577); preserve the player reconnaissance vehicle (BRDM-2).
+  - Target area: Search indicator radius 180 m centered at (3450, 2700) displays until the M577 is spotted by player sensors.
+  - Victory: Enemy command vehicle destroyed AND player reconnaissance vehicle alive.
+  - Defeat: Player recon vehicle destroyed, OR both player tanks destroyed, OR mission timer reaches 12:00 limit (14,400 ticks). Defeat takes strict priority if victory and defeat conditions trigger on the same tick.
+  - Cessation: Immediate order rejection, unit halt, and combat cancellation upon mission completion. Immutability guarantees that once Victory or Defeat is reached, the outcome never changes.
+  - Dedicated server hosting: Reserves player slot 2 for the bot (`reservedBotPlayer = 2`), accepts 1 connecting client on player slot 1 (`maxClients = 1`), and rejects remote client scenario restarts.
 
 ## 9. Navigation and movement
 
@@ -423,14 +452,14 @@ The playable ground mode (`ustye-ground`) connects the canonical 5000 x 5000 m U
 - Performance gate:
   - The 5 km probe checks navigation-only p99 < 15 ms, load < 3 seconds, array payload < 128 MiB at 1024 unit slots, zero measured tick allocations and per-stage work limits. Request latency is reported separately; low tick cost does not imply immediate orders.
   - Scale footprint and memory footprint on playable 5x5 km maps (Ustye):
-    - While synthetic prototype fixtures with uniform ground conformed to the early 128 MiB target, the production 5000 x 5000 m Ustye terrain (6,250,000 fine cells at 2.0 m resolution) requires approximately 250 to 260 MiB of array payload.
+    - While synthetic prototype fixtures with uniform ground conformed to the early 128 MiB target, the production 5000 x 5000 m Ustye terrain (6,250,000 fine cells at 2.0 m resolution) with expanded local search buffers (MaxLocalWindowCells = 524,288) requires approximately 300 to 310 MiB of array payload.
     - Payload breakdown for 5x5 km production geometry:
       - Fine clearance grid: 6.25M cells * 4 bytes = 25.0 MB.
       - Spatial bucket obstacle partitioning (590 terrain obstacles and buildings, bucket offsets, window scratch): ~2.5 MB.
       - Multi-layer hierarchical navigation graphs across 4 mobility classes (tracked, wheeled, light vehicle, amphibious): 10,000 sectors (50 x 50 m) with sector component grids (supporting Layer 0 ground and Layer 1 elevated bridge decks), boundary portals, and intra-sector connectivity edges: ~225 MB total across all mobility graphs.
-      - Navigation system runtime buffers (4096 unit slots, chunk continuation buffers, global plan LRU cache, separation scratch): ~5.5 MB.
+      - Navigation system runtime buffers (4096 unit slots, chunk continuation buffers, global plan LRU cache, separation scratch, expanded 524K-cell local search buffers): ~56 MB.
     - Metric reporting note:
-      - `NavigationSystem.EstimatedMemoryBytes` already includes `NavigationGrid.EstimatedMemoryBytes`. External diagnostic scripts summing `(grid.EstimatedMemoryBytes + nav.EstimatedMemoryBytes)` double-count the grid payload (~258 MiB counted twice) and report ~516 MiB. The actual retained navigation payload is ~258 MiB.
+      - `NavigationSystem.EstimatedMemoryBytes` already includes `NavigationGrid.EstimatedMemoryBytes`. External diagnostic scripts summing `(grid.EstimatedMemoryBytes + nav.EstimatedMemoryBytes)` double-count the grid payload (~207 MiB grid counted twice) and report ~516 MiB. The actual retained navigation payload is ~309 MiB.
 - Prototype limitations for this slice:
   - Static geometry only. Vehicle-vehicle dynamic avoidance, formation spacing, and moving obstacles are deferred to subsequent slices. Headless static geometry fixtures cover 5x5 km. Forest/water movement rules, bridge support surfaces and a playable 5 km map remain separate work. Neither 10 km support nor 50 km streaming is claimed.
 

@@ -126,5 +126,9 @@
   "m151a2": {
     "scene": "res://Assets/Vehicles/recon.glb",
     "scale": 1.0
+  },
+  "m577": {
+    "scene": "res://Assets/Vehicles/recon.glb",
+    "scale": 1.0
   }
 }

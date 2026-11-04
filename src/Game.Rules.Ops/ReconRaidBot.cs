@@ -47,6 +47,7 @@ public sealed class ReconRaidBot
         status is PathRequestStatus.PathFound or PathRequestStatus.Searching or PathRequestStatus.Pending;
 
     private readonly Vector2[] _patrolWaypoints;
+    private readonly Vector2[] _reconWaypoints;
     private readonly Vector2 _guardAnchor;
     private readonly EntityId _guardTankId;
     private readonly EntityId _patrolTankId;
@@ -79,12 +80,14 @@ public sealed class ReconRaidBot
         EntityId guardTankId,
         EntityId patrolTankId,
         EntityId patrolReconId,
-        UnitCatalog? catalog = null)
+        UnitCatalog? catalog = null,
+        Vector2[]? reconWaypoints = null)
     {
         _patrolWaypoints = patrolWaypoints ?? throw new ArgumentNullException(nameof(patrolWaypoints));
         if (_patrolWaypoints.Length == 0)
             throw new ArgumentException("Patrol waypoints cannot be empty.", nameof(patrolWaypoints));
 
+        _reconWaypoints = (reconWaypoints is { Length: > 0 }) ? reconWaypoints : _patrolWaypoints;
         _guardAnchor = guardAnchor;
         _guardTankId = guardTankId;
         _patrolTankId = patrolTankId;
@@ -354,6 +357,41 @@ public sealed class ReconRaidBot
                 RecordLastMoveTarget(unit.Id, targetWp, tick);
             }
         }
+        else if (unit.Id.Value == _patrolReconId.Value)
+        {
+            Vector2 targetWp = _reconWaypoints[_reconPatrolIndex];
+            float distToWp = Vector2.Distance(unit.Position, targetWp);
+
+            if (distToWp <= WaypointArrivalDistance)
+            {
+                _reconPatrolIndex = (_reconPatrolIndex + 1) % _reconWaypoints.Length;
+                _reconPatrolRetries = 0;
+                targetWp = _reconWaypoints[_reconPatrolIndex];
+                sink.EnqueueMove(new MoveCommand(_nextSequence++, tick, unit.Id, targetWp));
+                RecordLastMoveTarget(unit.Id, targetWp, tick);
+            }
+            else if (unit.NavStatus is PathRequestStatus.NoPath or PathRequestStatus.InvalidDestination)
+            {
+                _reconPatrolRetries++;
+                if (_reconPatrolRetries >= MaxPatrolRetries)
+                {
+                    _reconPatrolIndex = (_reconPatrolIndex + 1) % _reconWaypoints.Length;
+                    _reconPatrolRetries = 0;
+                    targetWp = _reconWaypoints[_reconPatrolIndex];
+                }
+                sink.EnqueueMove(new MoveCommand(_nextSequence++, tick, unit.Id, targetWp));
+                RecordLastMoveTarget(unit.Id, targetWp, tick);
+            }
+            else if (IsUnitSearching(unit.NavStatus))
+            {
+                // Route search in progress, wait
+            }
+            else if (!IsUnitActivelyMovingTowards(unit.Id, targetWp, WaypointArrivalDistance))
+            {
+                sink.EnqueueMove(new MoveCommand(_nextSequence++, tick, unit.Id, targetWp));
+                RecordLastMoveTarget(unit.Id, targetWp, tick);
+            }
+        }
     }
 
     private void ProcessReconUnit(
@@ -384,14 +422,14 @@ public sealed class ReconRaidBot
             return;
         }
 
-        Vector2 targetWp = _patrolWaypoints[_reconPatrolIndex];
+        Vector2 targetWp = _reconWaypoints[_reconPatrolIndex];
         float distToWp = Vector2.Distance(unit.Position, targetWp);
 
         if (distToWp <= WaypointArrivalDistance)
         {
-            _reconPatrolIndex = (_reconPatrolIndex + 1) % _patrolWaypoints.Length;
+            _reconPatrolIndex = (_reconPatrolIndex + 1) % _reconWaypoints.Length;
             _reconPatrolRetries = 0;
-            targetWp = _patrolWaypoints[_reconPatrolIndex];
+            targetWp = _reconWaypoints[_reconPatrolIndex];
             sink.EnqueueMove(new MoveCommand(_nextSequence++, tick, unit.Id, targetWp));
             RecordLastMoveTarget(unit.Id, targetWp, tick);
         }
@@ -400,9 +438,9 @@ public sealed class ReconRaidBot
             _reconPatrolRetries++;
             if (_reconPatrolRetries >= MaxPatrolRetries)
             {
-                _reconPatrolIndex = (_reconPatrolIndex + 1) % _patrolWaypoints.Length;
+                _reconPatrolIndex = (_reconPatrolIndex + 1) % _reconWaypoints.Length;
                 _reconPatrolRetries = 0;
-                targetWp = _patrolWaypoints[_reconPatrolIndex];
+                targetWp = _reconWaypoints[_reconPatrolIndex];
             }
             sink.EnqueueMove(new MoveCommand(_nextSequence++, tick, unit.Id, targetWp));
             RecordLastMoveTarget(unit.Id, targetWp, tick);

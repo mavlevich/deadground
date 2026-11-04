@@ -359,6 +359,12 @@ public partial class Main : Node3D
             _map = scenarioGeometry.HeightMap;
             setup = UstyeGroundScenario.CreateMatchSetup(scenarioGeometry);
         }
+        else if (_scenario == "ustye-raid")
+        {
+            scenarioGeometry = UstyeRaidScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = UstyeRaidScenario.CreateMatchSetup(scenarioGeometry);
+        }
         else
         {
             _map = HeightMap.CreatePrototype();
@@ -396,6 +402,7 @@ public partial class Main : Node3D
                 "vehicle-traffic" => VehicleTrafficScenario.CreateSimulation(scenarioGeometry!),
                 "group-move" => GroupMoveScenario.CreateSimulation(scenarioGeometry!),
                 "ustye-ground" => UstyeGroundScenario.CreateSimulation(scenarioGeometry!, setupIndex: _ustyeSetupIndex),
+                "ustye-raid" => UstyeRaidScenario.CreateSimulation(scenarioGeometry!),
                 _ => PrototypeScenario.Create(_map)
             };
             // Test switch: the enemy holds fire, so own units can be tried out without losing them.
@@ -405,7 +412,7 @@ public partial class Main : Node3D
 
 
         _fogOfWar = new FogOfWarView(_map, scenarioGeometry);
-        if (_scenario == "ustye-ground")
+        if (_scenario == "ustye-ground" || _scenario == "ustye-raid")
         {
             UstyePlanData plan = UstyePlanData.Load();
             _ustyeMapView = new(plan, includeScaleVehicles: false, fogOverlay: _fogOfWar);
@@ -470,6 +477,7 @@ public partial class Main : Node3D
             "vehicle-traffic" => 150,
             "group-move" => 140,
             "ustye-ground" => 220,
+            "ustye-raid" => 160,
             _ => 112
         };
         _camera = new Camera3D { Projection = Camera3D.ProjectionType.Orthogonal, Size = initialCameraSize, Far = 3500, Current = true };
@@ -484,10 +492,11 @@ public partial class Main : Node3D
             "vehicle-traffic" => new Vector3(100, 0, 100),
             "group-move" => new Vector3(60, 0, 50),
             "ustye-ground" => new Vector3(2550f, 4.5f, 2450f),
+            "ustye-raid" => new Vector3(2160f, 10f, 2325f),
             _ => new Vector3(64, 0, 64)
         };
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
-        if (_scenario == "ustye-ground")
+        if (_scenario == "ustye-ground" || _scenario == "ustye-raid")
         {
             _cameraRig.Model.SetSizeLimits(30f, 5500f);
             _cameraRig.FarClipMargin = 3000f;
@@ -508,7 +517,7 @@ public partial class Main : Node3D
         _combatEffects = new CombatEffects(_map, _scenarioGeometry);
         AddChild(_combatEffects);
 
-        if (_session is LocalSession && _scenario != "visibility" && _scenario != "combat" && _scenario != "navigation-large" && _scenario != "recon-raid" && _scenario != "bridge-crossing" && _scenario != "vehicle-traffic" && _scenario != "group-move" && _scenario != "ustye-ground")
+        if (_session is LocalSession && _scenario != "visibility" && _scenario != "combat" && _scenario != "navigation-large" && _scenario != "recon-raid" && _scenario != "bridge-crossing" && _scenario != "vehicle-traffic" && _scenario != "group-move" && _scenario != "ustye-ground" && _scenario != "ustye-raid")
         {
             foreach (OwnUnitObservation unit in _session.Replica.OwnUnits)
             {
@@ -551,6 +560,13 @@ public partial class Main : Node3D
         else if (_scenario == "ustye-ground" && _session.Replica.OwnUnits.Length >= 6)
         {
             for (int i = 0; i < 6; i++)
+            {
+                _unitViews.Selected.Add(_session.Replica.OwnUnits[i].Id);
+            }
+        }
+        else if (_scenario == "ustye-raid" && _session.Replica.OwnUnits.Length >= 3)
+        {
+            for (int i = 0; i < 3; i++)
             {
                 _unitViews.Selected.Add(_session.Replica.OwnUnits[i].Id);
             }
@@ -863,6 +879,7 @@ public partial class Main : Node3D
                     "vehicle-traffic" => _terrainWindingValid && _session.Tick >= 60 && _trafficObservedWaiting && _trafficObservedResumed && _session.Replica.OwnUnits.Length >= 6,
                     "group-move" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length >= 10,
                     "ustye-ground" => (_terrainWindingValid || (_ustyeMapView?.HasUpwardFrontFaces() ?? false)) && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 6,
+                    "ustye-raid" => (_terrainWindingValid || (_ustyeMapView?.HasUpwardFrontFaces() ?? false)) && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
                     _ => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
                         _session.Replica.OwnUnits[0].Position.Y > 24
                 };
@@ -876,6 +893,7 @@ public partial class Main : Node3D
                     "vehicle-traffic" => "M1_CLIENT_VEHICLE_TRAFFIC_SMOKE",
                     "group-move" => "M1_CLIENT_GROUP_MOVE_SMOKE",
                     "ustye-ground" => "USTYE_GROUND_SMOKE",
+                    "ustye-raid" => "USTYE_RAID_SMOKE",
                     _ => "M0_CLIENT_SMOKE"
                 };
                 string token = prefix + (ok ? "_OK" : "_FAILED");
@@ -1760,9 +1778,16 @@ public partial class Main : Node3D
         _orderCursorOverlay = new OrderCursorOverlay();
         canvas.AddChild(_orderCursorOverlay);
 
-        if (_scenario == "recon-raid")
+        if (_scenario == "recon-raid" || _scenario == "ustye-raid")
         {
             _missionPanel = new MissionPanel(this, _map);
+            if (_scenario == "ustye-raid")
+            {
+                _missionPanel.SetBriefing(
+                    "OPERATION: USTYE RAID",
+                    "Primary: Destroy enemy command vehicle. Preserve recon vehicle.",
+                    "Roster: 1x BRDM-2 (3000m sensor), 2x T-62 (115mm gun)");
+            }
             canvas.AddChild(_missionPanel);
             _missionPanel.SetLocalMode(_session is LocalSession);
             _missionPanel.RetryRequested += OnRetryMission;
@@ -1806,6 +1831,7 @@ public partial class Main : Node3D
             "vehicle-traffic" => VehicleTrafficScenario.CreateSimulation(_scenarioGeometry),
             "group-move" => GroupMoveScenario.CreateSimulation(_scenarioGeometry),
             "ustye-ground" => UstyeGroundScenario.CreateSimulation(_scenarioGeometry, setupIndex: _ustyeSetupIndex),
+            "ustye-raid" => UstyeRaidScenario.CreateSimulation(_scenarioGeometry),
             "battle" => BattleScenario.CreateSimulation(_scenarioGeometry),
             "combat" => CombatScenario.CreateSimulation(_scenarioGeometry),
             "visibility" => VisibilityScenario.CreateSimulation(_scenarioGeometry),
@@ -1833,6 +1859,13 @@ public partial class Main : Node3D
             else if (_scenario == "ustye-ground" && _session.Replica.OwnUnits.Length >= 6)
             {
                 for (int i = 0; i < 6; i++)
+                {
+                    _unitViews.Selected.Add(_session.Replica.OwnUnits[i].Id);
+                }
+            }
+            else if (_scenario == "ustye-raid" && _session.Replica.OwnUnits.Length >= 3)
+            {
+                for (int i = 0; i < 3; i++)
                 {
                     _unitViews.Selected.Add(_session.Replica.OwnUnits[i].Id);
                 }
@@ -1905,6 +1938,7 @@ public partial class Main : Node3D
             "vehicle-traffic" => "VEHICLE TRAFFIC PLAYGROUND",
             "group-move" => "GROUP MOVE PLAYGROUND",
             "ustye-ground" => "USTYE PLAYGROUND",
+            "ustye-raid" => "USTYE RECON RAID",
             _ => "M0 NETWORK TEST"
         };
         return $"DEAD GROUND   /   SIDE {assignedSide}   /   {name}";
