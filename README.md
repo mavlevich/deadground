@@ -479,6 +479,65 @@ In a second terminal, connect the client:
   - Result card displays Victory/Defeat, specific reason, and attempt duration.
   - In local play, clicking RETRY MISSION or pressing R starts a clean restart with fresh simulation state.
 
+### Ustye Recon Raid mission (ustye-raid)
+
+To run the playable reconnaissance raid mission on the 5000 x 5000 m Ustye map with historical Cold War vehicles, tactical river crossings, fortified depot objective, and AI opponent:
+
+For self-contained local play with retry:
+
+```sh
+./tools/run-client.sh -- --scenario ustye-raid
+```
+
+On Windows with PowerShell:
+
+```powershell
+./tools/run-client.ps1 -GodotArgs @("--", "--scenario", "ustye-raid")
+```
+
+For dedicated server hosting (1 human player vs server bot):
+
+```sh
+dotnet run --project src/Game.Server --configuration Release -- --scenario ustye-raid --port 7777
+```
+
+In a second terminal, connect the client:
+
+```sh
+./tools/run-client.sh -- --scenario ustye-raid --connect 127.0.0.1:7777
+```
+
+In headless smoke-test mode:
+
+```sh
+./tools/run-client.sh --headless -- --scenario ustye-raid --smoke-test
+dotnet run --project src/Game.Server --configuration Release --no-build -- --scenario ustye-raid --smoke-test
+```
+
+#### Mission structure and tactical approaches
+
+- **Objective**: "Locate and destroy the enemy command vehicle. Preserve your reconnaissance vehicle."
+- **Forces**:
+  - Player (Side 1, Soviet): 1x BRDM-2 (`brdm2`, 3000 m sensor range, 14.5 mm KPVT, 50 HP) and 2x T-62 combat tanks (`t62`, 2000 m sensor range, 115 mm smoothbore gun, 40 rounds, 100 HP).
+  - Enemy (Side 2, US, AI bot): 1x M577 Command Post Carrier (`m577`, unarmed, 1500 m sensor range, 50 HP) in the eastern Depot courtyard, 1x stationary M60A1 guard tank (`m60a1`, 2000 m sensor range, 105 mm gun, 63 rounds, 100 HP), 1x patrol M60A1 tank, and 1x patrol M151A2 recon vehicle (`m151a2`, 3000 m sensor range, 7.62 mm M60, 1000 rounds, 30 HP).
+- **Tactical layout and timing (Town, River Corridors, and Depot)**:
+  - Southwest/West town deployment for player forces at (2140..2180, 2325), completely hidden behind panel block `BLOCK-WEST-2-2` with 100% line-of-sight occlusion at start.
+  - Enemy command post hidden in the Depot courtyard at (3560, 2690) behind industrial structures.
+  - Initial contact occurs within 10-30 seconds if moving onto the main avenue: exiting the courtyard (130 m advance) provides direct line-of-sight across the river to enemy patrol vehicles within sensor range (2000-3000 m).
+  - Two primary tactical approaches:
+    1. Direct central crossing via bridge `CROSS-C` (Z = 2450): fast 1.5-2.5 minute transit, but closely contested by enemy patrol routes and guarded chokepoints.
+    2. Northern flanking maneuver via bridge `CROSS-N` (Z = 1000) or open terrain: 5-8 minute deliberate maneuver with superior concealment and flanking angles into the Depot courtyard.
+- **Victory and defeat conditions**:
+  - Victory: Enemy command vehicle (M577) destroyed and player reconnaissance vehicle (BRDM-2) is alive.
+  - Defeat: Player recon vehicle destroyed, both player combat tanks destroyed, or 12:00 mission time limit expired (14,400 ticks).
+  - Precedence: Defeat strictly takes precedence over victory if triggered simultaneously.
+  - Outcome immutability: The announced result is fixed once reached and cannot be altered.
+  - Cessation: Once the mission finishes, units halt, combat orders are cleared, and subsequent gameplay orders are rejected.
+- **Mission HUD and controls**:
+  - Briefing card displays "OPERATION: USTYE RAID", target spotted status, active roster, and mission timer.
+  - Approximate target search area is shown via a 3D ground ring (center 3450, 2700, radius 180 m) until the target is spotted.
+  - In local play, clicking RETRY MISSION or pressing R restarts the attempt with a fresh simulation state.
+
 ### Prototype vehicle models
 
 Own tanks and reconnaissance vehicles use distinct original GLB models. Run the mission:

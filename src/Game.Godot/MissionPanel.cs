@@ -6,6 +6,7 @@ namespace DeadGround.Client;
 internal sealed partial class MissionPanel : Control
 {
     private readonly PanelContainer _briefingCard;
+    private readonly Label _headerLabel;
     private readonly Label _objectiveLabel;
     private readonly Label _targetStatusLabel;
     private readonly Label _timerLabel;
@@ -53,14 +54,14 @@ internal sealed partial class MissionPanel : Control
         VBoxContainer stack = new() { MouseFilter = MouseFilterEnum.Ignore };
         stack.AddThemeConstantOverride("separation", 4);
 
-        Label header = new()
+        _headerLabel = new Label
         {
             Text = "OPERATION: RECON RAID",
             MouseFilter = MouseFilterEnum.Ignore
         };
-        header.AddThemeFontSizeOverride("font_size", 14);
-        header.AddThemeColorOverride("font_color", new Color("edc76b"));
-        stack.AddChild(header);
+        _headerLabel.AddThemeFontSizeOverride("font_size", 14);
+        _headerLabel.AddThemeColorOverride("font_color", new Color("edc76b"));
+        stack.AddChild(_headerLabel);
 
         _objectiveLabel = new Label
         {
@@ -345,11 +346,18 @@ internal sealed partial class MissionPanel : Control
         _searchAreaRing.Mesh = mesh;
     }
 
+    public void SetBriefing(string title, string objective, string roster)
+    {
+        _headerLabel.Text = title;
+        _objectiveLabel.Text = objective;
+        _squadLabel.Text = roster;
+    }
+
     public void ResetUi()
     {
         _hasFinished = false;
         _resultCard.Visible = false;
-        _targetStatusLabel.Text = "Target: Area ~[420, 420] (Radius 70m) / Unlocated";
+        _targetStatusLabel.Text = "Target: Locating...";
         _targetStatusLabel.AddThemeColorOverride("font_color", new Color("a8b8a0"));
         _timerLabel.Text = "Time Remaining: 12:00";
     }

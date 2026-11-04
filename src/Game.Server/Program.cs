@@ -76,7 +76,7 @@ if (diagnose)
     return;
 }
 
-if (scenario == "recon-raid")
+if (scenario == "recon-raid" || scenario == "ustye-raid")
 {
     maxClients = 1;
 }
@@ -93,6 +93,7 @@ StaticGeometry? scenarioGeometry = scenario switch
     "vehicle-traffic" => VehicleTrafficScenario.CreateStaticGeometry(),
     "group-move" => GroupMoveScenario.CreateStaticGeometry(),
     "ustye-ground" => UstyeGroundScenario.CreateStaticGeometry(),
+    "ustye-raid" => UstyeRaidScenario.CreateStaticGeometry(),
     _ => null
 };
 
@@ -111,6 +112,7 @@ MatchSetup setup = scenario switch
     "vehicle-traffic" => VehicleTrafficScenario.CreateMatchSetup(scenarioGeometry!),
     "group-move" => GroupMoveScenario.CreateMatchSetup(scenarioGeometry!),
     "ustye-ground" => UstyeGroundScenario.CreateMatchSetup(scenarioGeometry!),
+    "ustye-raid" => UstyeRaidScenario.CreateMatchSetup(scenarioGeometry!),
     _ => PrototypeScenario.CreateMatchSetup(map)
 };
 
@@ -141,6 +143,7 @@ Simulation CreateSimulation(ulong seed = 0)
         "vehicle-traffic" => VehicleTrafficScenario.CreateSimulation(scenarioGeometry!),
         "group-move" => GroupMoveScenario.CreateSimulation(scenarioGeometry!),
         "ustye-ground" => UstyeGroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
+        "ustye-raid" => UstyeRaidScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         _ => PrototypeScenario.Create(map)
     };
 }
@@ -238,6 +241,18 @@ if (smokeTest)
             throw new InvalidOperationException("Recon-raid smoke test initial mission status mismatch.");
 
         Console.WriteLine($"RECON_RAID_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} mission_status={session.Mission.Status}");
+        return;
+    }
+
+    if (scenario == "ustye-raid")
+    {
+        for (int i = 0; i < 150; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.Tick != 150 || session.Replica.OwnUnits.Length != 3)
+            throw new InvalidOperationException("Ustye-raid smoke test initial units check failed.");
+        if (session.Mission.Status != MissionStatus.InProgress)
+            throw new InvalidOperationException("Ustye-raid smoke test initial mission status mismatch.");
+
+        Console.WriteLine($"USTYE_RAID_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} mission_status={session.Mission.Status}");
         return;
     }
 
@@ -362,7 +377,7 @@ if (smokeTest)
 }
 
 using LiteNetLibServerTransport transport = LiteNetLibTransport.CreateServer(port, maxClients);
-int reservedBotPlayer = scenario == "recon-raid" ? 2 : 0;
+int reservedBotPlayer = (scenario == "recon-raid" || scenario == "ustye-raid") ? 2 : 0;
 using SimulationHost host = new(CreateSimulation(), transport, setup, reservedBotPlayer);
 
 using CancellationTokenSource cancellation = new();
