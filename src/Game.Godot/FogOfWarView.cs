@@ -95,6 +95,7 @@ void fragment() {
     public int Columns { get; }
     public int Rows { get; }
     public bool IsEnabled { get; private set; } = true;
+    public bool IsCalculationSuspended { get; set; }
     public ShaderMaterial Material => _material;
     public ImageTexture Texture => _texture;
     internal bool IsCycleInProgress => _cycleInProgress;
@@ -218,6 +219,11 @@ void fragment() {
 
     public void Update(float delta, ClientReplica replica, UnitCatalog catalog)
     {
+        if (IsCalculationSuspended)
+        {
+            return;
+        }
+
         ReadOnlySpan<OwnUnitObservation> ownUnits = replica.OwnUnits;
         _timeSinceCycleStart += delta;
 

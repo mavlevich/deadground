@@ -94,6 +94,7 @@ public partial class Main : Node3D
     internal OrderCursorOverlay OrderCursorOverlay => _orderCursorOverlay;
     internal OrderPreviewController PreviewController => _previewController;
     internal DestinationEvaluator DestinationEvaluator => _destinationEvaluator;
+    internal string Scenario => _scenario;
 
     public override void _Ready()
     {
@@ -191,6 +192,24 @@ public partial class Main : Node3D
             return;
         }
 
+        bool isPerfMicrobench = userArgs.Contains("--perf-microbench") || allArgs.Contains("--perf-microbench");
+        if (isPerfMicrobench)
+        {
+            SetProcess(false);
+            SetProcessUnhandledInput(false);
+            Node3D benchRoot = new();
+            AddChild(benchRoot);
+            _ = ClientPerfProbe.RunMicrobenchmark(benchRoot).ContinueWith(task =>
+            {
+                if (task.IsFaulted)
+                {
+                    GD.PushError($"CLIENT_PERF_MICROBENCH_FAULT: {task.Exception}");
+                    GetTree().Quit(1);
+                }
+            }, System.Threading.Tasks.TaskScheduler.Default);
+            return;
+        }
+
         _smokeTest = userArgs.Contains("--smoke-test") || allArgs.Contains("--smoke-test");
 
         bool isCombatProbe = userArgs.Contains("--combat-feedback-probe") || allArgs.Contains("--combat-feedback-probe");
@@ -216,12 +235,22 @@ public partial class Main : Node3D
         Vector3? overrideCameraFocus = null;
         int port = 7777;
         bool enemyHoldFire = false;
+        bool noPrewarm = false;
+        bool suspendFogCalc = false;
 
         void ParseArgs(string[] args)
         {
             for (int i = 0; i < args.Length; i++)
             {
-                if (args[i] == "--connect" && i + 1 < args.Length)
+                if (args[i] == "--no-prewarm")
+                {
+                    noPrewarm = true;
+                }
+                else if (args[i] == "--suspend-fog-calc")
+                {
+                    suspendFogCalc = true;
+                }
+                else if (args[i] == "--connect" && i + 1 < args.Length)
                 {
                     connectTarget = args[i + 1];
                     i++;
@@ -506,9 +535,17 @@ public partial class Main : Node3D
 
         // Historical scenarios use the Cold War catalog; the small test maps keep prototype data.
         _catalog = ScenarioContent.LoadCatalog(_scenario);
+        if (!noPrewarm)
+        {
+            VehicleVisualCatalog.PrewarmScenario(setup, _catalog);
+        }
+        if (suspendFogCalc && _fogOfWar is not null)
+        {
+            _fogOfWar.IsCalculationSuspended = true;
+        }
         if (_session.Replica.OwnUnits.Length > 0)
         {
-            _fogOfWar.UpdateAllNow(_session.Replica, _catalog);
+            _fogOfWar?.UpdateAllNow(_session.Replica, _catalog);
         }
         // Factions are part of the public match setup; the side is known once the session assigns it.
         MatchSetup matchSetup = setup;
@@ -596,6 +633,21 @@ public partial class Main : Node3D
         }
 
         GD.Print($"M0_CLIENT_READY runtime={System.Environment.Version} own_units={_session.Replica.OwnUnits.Length}");
+
+        bool isPerfProbe = userArgs.Contains("--perf-probe") || allArgs.Contains("--perf-probe");
+        if (isPerfProbe)
+        {
+            SetProcess(false);
+            _ = ClientPerfProbe.Run(this, noPrewarm).ContinueWith(task =>
+            {
+                if (task.IsFaulted)
+                {
+                    GD.PushError($"CLIENT_PERF_PROBE_FAULT: {task.Exception}");
+                    GetTree().Quit(1);
+                }
+            }, System.Threading.Tasks.TaskScheduler.Default);
+            return;
+        }
 
         if (effectsCaptureDir is not null)
         {
@@ -998,6 +1050,19 @@ public partial class Main : Node3D
 
         if (@event is InputEventKey { Pressed: true, Echo: false } key)
         {
+            if (key.Keycode == Key.F7 || ((key.Keycode is Key.F9 or Key.V) && key.ShiftPressed))
+            {
+                if (_fogOfWar is not null)
+                {
+                    _fogOfWar.IsCalculationSuspended = !_fogOfWar.IsCalculationSuspended;
+                    _status.Text = _fogOfWar.IsCalculationSuspended
+                        ? "Diagnostic: Fog of war CPU calculation SUSPENDED"
+                        : "Diagnostic: Fog of war CPU calculation RESUMED";
+                }
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
             if (key.Keycode is Key.F9 or Key.V)
             {
                 _fogOfWar?.Toggle();
@@ -1528,7 +1593,7 @@ public partial class Main : Node3D
         return false;
     }
 
-    private void UpdateViews()
+    internal void UpdateViews()
     {
         int selectedUnits = _unitViews.Selected.Count;
         int selectedContacts = _contactViews.Selected.Count;
@@ -1801,7 +1866,7 @@ public partial class Main : Node3D
         _orderNotification?.ShowNotification("Mission restarted. Destroy enemy command vehicle.");
     }
 
-    private void ResetLocalScenario()
+    internal void ResetLocalScenario()
     {
         if (_session is not LocalSession || _scenarioGeometry is null) return;
 
