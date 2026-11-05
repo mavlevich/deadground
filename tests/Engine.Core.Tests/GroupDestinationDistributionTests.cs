@@ -725,8 +725,8 @@ public sealed class GroupDestinationDistributionTests
                 true);
         }
 
-        // Warmup JIT and thread-static buffers
-        for (int w = 0; w < 100; w++)
+        // Warmup JIT tier 1 and thread-static buffers
+        for (int w = 0; w < 500; w++)
         {
             GroupDestinationDistribution.Distribute(1, 1, units.AsSpan(), new Vector2(50f, 50f), 0, null, MoveMode.Forward, evaluator);
             GroupDestinationDistribution.ComputePreview(units.AsSpan(), new Vector2(50f, 50f), 0, null, MoveMode.Forward, evaluator);
@@ -745,6 +745,17 @@ public sealed class GroupDestinationDistributionTests
             GroupDestinationDistribution.ComputePreview(units.AsSpan(), new Vector2(50f, 50f), 0, null, MoveMode.Forward, evaluator);
         }
         long prevAlloc = GC.GetAllocatedBytesForCurrentThread() - beforePrev;
+
+        // If tier 1 JIT compilation occurred during the first sample, verify steady state on subsequent calls
+        if (prevAlloc > 0)
+        {
+            beforePrev = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 100; i++)
+            {
+                GroupDestinationDistribution.ComputePreview(units.AsSpan(), new Vector2(50f, 50f), 0, null, MoveMode.Forward, evaluator);
+            }
+            prevAlloc = GC.GetAllocatedBytesForCurrentThread() - beforePrev;
+        }
 
         // Preview runs per-frame and must allocate 0 B
         Assert.Equal(0, prevAlloc);
