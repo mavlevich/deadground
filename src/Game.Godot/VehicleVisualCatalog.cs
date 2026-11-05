@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using DeadGround.Engine;
+using DeadGround.Rules.Ops;
 using Godot;
 
 namespace DeadGround.Client;
@@ -66,6 +68,110 @@ internal static class VehicleVisualCatalog
 
     private static readonly Lazy<Dictionary<string, VisualDefinition>> Definitions = new(LoadDefinitions);
     private static readonly Dictionary<string, PackedScene> Scenes = new(StringComparer.Ordinal);
+
+    internal readonly record struct PrewarmResult(int TotalPaths, int NewlyLoadedCount, double ElapsedMs);
+
+    internal static bool IsSceneLoaded(string path) => Scenes.ContainsKey(path);
+    internal static int CachedSceneCount => Scenes.Count;
+    internal static IReadOnlyCollection<string> CachedScenePaths => Scenes.Keys;
+    internal static void ClearCache() => Scenes.Clear();
+
+    internal static bool AreVisualsLoaded(string key, string? faction)
+    {
+        if (!Definitions.Value.TryGetValue(key, out VisualDefinition? def))
+            return false;
+
+        VisualVariant variant = faction is not null && def.Factions is not null &&
+            def.Factions.TryGetValue(faction, out VisualVariant? factionVariant)
+                ? factionVariant
+                : new VisualVariant(def.Scene, def.Scale, def.Lods, def.TrackGauge, def.TrackWrap);
+
+        if (!Scenes.ContainsKey(variant.Scene)) return false;
+        if (variant.Lods is not null)
+        {
+            for (int i = 0; i < variant.Lods.Length; i++)
+                if (!Scenes.ContainsKey(variant.Lods[i])) return false;
+        }
+        return true;
+    }
+
+    internal static PrewarmResult PrewarmScenario(MatchSetup? setup, UnitCatalog? catalog = null)
+    {
+        long start = System.Diagnostics.Stopwatch.GetTimestamp();
+        HashSet<string> candidateKeys = new(StringComparer.Ordinal)
+        {
+            "contact_tank",
+            "contact_recon",
+            "contact_apc",
+            "recon_vehicle",
+            "prototype_tank"
+        };
+
+        string[]? playerFactions = setup?.PlayerFactions;
+
+        if (catalog is not null)
+        {
+            for (int i = 0; i < catalog.Units.Length; i++)
+            {
+                UnitDefinition unit = catalog.Units[i];
+                if (unit.Faction is null || playerFactions is null || Array.IndexOf(playerFactions, unit.Faction) >= 0)
+                {
+                    candidateKeys.Add(unit.Id);
+                }
+            }
+        }
+        else
+        {
+            foreach (string key in Definitions.Value.Keys)
+            {
+                candidateKeys.Add(key);
+            }
+        }
+
+        HashSet<string> pathsToLoad = new(StringComparer.Ordinal);
+        foreach (string key in candidateKeys)
+        {
+            if (!Definitions.Value.TryGetValue(key, out VisualDefinition? def))
+                continue;
+
+            pathsToLoad.Add(def.Scene);
+            if (def.Lods is not null)
+            {
+                for (int i = 0; i < def.Lods.Length; i++)
+                    pathsToLoad.Add(def.Lods[i]);
+            }
+
+            if (def.Factions is not null && playerFactions is not null)
+            {
+                for (int f = 0; f < playerFactions.Length; f++)
+                {
+                    string faction = playerFactions[f];
+                    if (def.Factions.TryGetValue(faction, out VisualVariant? variant))
+                    {
+                        pathsToLoad.Add(variant.Scene);
+                        if (variant.Lods is not null)
+                        {
+                            for (int i = 0; i < variant.Lods.Length; i++)
+                                pathsToLoad.Add(variant.Lods[i]);
+                        }
+                    }
+                }
+            }
+        }
+
+        int newlyLoaded = 0;
+        foreach (string path in pathsToLoad)
+        {
+            if (!Scenes.ContainsKey(path))
+            {
+                LoadScene(path);
+                newlyLoaded++;
+            }
+        }
+
+        double elapsedMs = (System.Diagnostics.Stopwatch.GetTimestamp() - start) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        return new PrewarmResult(pathsToLoad.Count, newlyLoaded, elapsedMs);
+    }
 
     internal static VehicleVisual? InstantiateVisual(string? key, string? faction)
     {
