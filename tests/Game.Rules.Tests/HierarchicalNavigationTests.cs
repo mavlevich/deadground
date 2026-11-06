@@ -752,4 +752,406 @@ public sealed class HierarchicalNavigationTests
         Assert.True(distinctComponents.Max() >= 200,
             $"Component IDs must not wrap around at 127. Max component ID was {distinctComponents.Max()}");
     }
+
+    [Fact]
+    public void SpatialBucketPartitioning_DenseWaterSlices_QueryCostRemainsFastAndAccurate()
+    {
+        const int size = 201; // 200m x 200m at 1m spacing
+        HeightMap map = new(size, size, 1.0f, 0.01f, new ushort[size * size]);
+
+        // Add 200 water slices slicing across the map along X=100
+        List<TerrainObstacle> water = new();
+        for (int i = 0; i < 200; i++)
+        {
+            float z0 = i * 1.0f;
+            float z1 = (i + 1) * 1.0f;
+            water.Add(new TerrainObstacle(95f, z0, 105f, z1, TraversabilityCapabilities.Water));
+        }
+
+        StaticGeometry geo = new(map, ReadOnlySpan<OpaqueStructure>.Empty, ReadOnlySpan<BridgeStructure>.Empty, water.ToArray());
+        NavigationGrid grid = new(geo, cellSize: 0.5f, enableHierarchical: true);
+
+        // Point far from water on dry land (X=20, Z=50)
+        Vector2 dryPoint = new(20f, 50f);
+        Assert.True(grid.IsPointClear(dryPoint, 1.4f, TraversabilityCapabilities.DefaultVehicle));
+        float dryClearance = grid.ComputePointClearance(dryPoint, TraversabilityCapabilities.DefaultVehicle);
+        Assert.True(dryClearance >= 19.5f && dryClearance <= 20.5f);
+
+        // Point inside water at (100, 50)
+        Vector2 inWater = new(100f, 50f);
+        Assert.False(grid.IsPointClear(inWater, 1.4f, TraversabilityCapabilities.DefaultVehicle));
+        Assert.True(grid.IsPointClear(inWater, 1.4f, TraversabilityCapabilities.Water));
+        Assert.Equal(0f, grid.ComputePointClearance(inWater, TraversabilityCapabilities.DefaultVehicle));
+
+        // Point query sanity checks on 200 water slices
+        for (int q = 0; q < 100; q++)
+        {
+            float qx = 10f + (q % 80);
+            float qz = 10f + (q / 80 % 80);
+            bool isClear = grid.IsPointClear(new Vector2(qx, qz), 1.0f, TraversabilityCapabilities.DefaultVehicle);
+            if (qx >= 94f && qx <= 106f)
+            {
+                Assert.False(isClear);
+            }
+        }
+    }
+
+    [Fact]
+    public void ComputePointClearance_DistantObstacle_ReturnsExactClearanceWithoutCap()
+    {
+        const int size = 501; // 500m x 500m map
+        HeightMap map = new(size, size, 1.0f, 0.01f, new ushort[size * size]);
+
+        // Water strip at X in [300..350], across entire Z
+        TerrainObstacle water = new(300f, 0f, 350f, 500f, TraversabilityCapabilities.Water);
+        StaticGeometry geo = new(map, ReadOnlySpan<OpaqueStructure>.Empty, ReadOnlySpan<BridgeStructure>.Empty, [water]);
+        NavigationGrid grid = new(geo, cellSize: 0.5f, enableHierarchical: true);
+
+        // Point at (200, 250). Distance to water (X=300) is 100m.
+        // Distances to map borders: min(200, 300, 250, 250) = 200m.
+        Vector2 queryPoint = new(200f, 250f);
+
+        // Exact clearance must be 100m (distance to water), not 200m (boundary) due to 50m search radius clamp
+        float gridClearance = grid.ComputePointClearance(queryPoint, TraversabilityCapabilities.DefaultVehicle);
+        Assert.True(MathF.Abs(gridClearance - 100f) < 0.1f, $"Expected 100m clearance to water, got {gridClearance}m");
+
+        float evalClearance = grid.Evaluator.ComputePointClearance(queryPoint, TraversabilityCapabilities.DefaultVehicle);
+        Assert.True(MathF.Abs(evalClearance - 100f) < 0.1f, $"Expected 100m evaluator clearance, got {evalClearance}m");
+
+        // IsPointClear consistency checks
+        Assert.True(grid.IsPointClear(queryPoint, 90f, TraversabilityCapabilities.DefaultVehicle));
+        Assert.False(grid.IsPointClear(queryPoint, 110f, TraversabilityCapabilities.DefaultVehicle));
+
+        Assert.True(grid.Evaluator.IsPointClear(queryPoint, 90f, TraversabilityCapabilities.DefaultVehicle));
+        Assert.False(grid.Evaluator.IsPointClear(queryPoint, 110f, TraversabilityCapabilities.DefaultVehicle));
+    }
+
+    [Fact]
+    public void PreparedWindowClearanceReuse_AdjacentUnitsInSameArea_ReusesPreparedWindow()
+    {
+        const int size = 301; // 300m x 300m at 1m spacing -> 600x600 cells at 0.5m = 360,000 cells > 262,144 (hierarchical)
+        HeightMap map = new(size, size, 1.0f, 0.01f, new ushort[size * size]);
+
+        // A single 10m building in sector (1, 1) [100..200, 100..200]
+        OpaqueStructure building = new(new StructureId(1), 145f, 0f, 145f, 155f, 5f, 155f, isGrounded: true);
+        StaticGeometry geo = new(map, [building]);
+        NavigationGrid grid = new(geo, cellSize: 0.5f, enableHierarchical: true);
+
+        TestMovementCatalog catalog = new();
+        catalog.Register(1, speed: 10f, radius: 1.0f);
+
+        NavigationTuning tuning = new(MaxWaypointsPerRoute: 64, MaxNodeExpansionsPerTick: 3000, MaxLocalExpansionsPerTick: 3000);
+        NavigationSystem nav = new(grid, catalog, tuning);
+        WorldState world = new(geo.HeightMap);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        // Unit 1 maneuvers around the building from (135, 150) to (165, 150). Direct raycast is blocked.
+        EntityId u1 = world.CreateUnit(1, 1, new Vector2(135f, 150f), 10f);
+        sim.TryEnqueue(1, new MoveCommand(1, 0, u1, new Vector2(165f, 150f)));
+
+        for (int i = 0; i < 50; i++)
+        {
+            sim.Step();
+            if (nav.GetUnitStatus(u1) == PathRequestStatus.PathFound) break;
+        }
+
+        int cellsAfterUnit1 = nav.TotalAreaPrepCells;
+        Assert.True(cellsAfterUnit1 > 0, $"Unit 1 must have prepared area cells, got {cellsAfterUnit1}.");
+        Assert.Equal(PathRequestStatus.PathFound, nav.GetUnitStatus(u1));
+
+        // Unit 2 nearby at (136, 150) moving to (164, 150), strictly contained within Unit 1 window
+        EntityId u2 = world.CreateUnit(1, 1, new Vector2(136f, 150f), 10f);
+        sim.TryEnqueue(1, new MoveCommand(2, 0, u2, new Vector2(164f, 150f)));
+
+        for (int i = 0; i < 50; i++)
+        {
+            sim.Step();
+            if (nav.GetUnitStatus(u2) == PathRequestStatus.PathFound) break;
+        }
+
+        // Unit 2 must have reused the prepared static window without adding new area prep cells
+        Assert.Equal(cellsAfterUnit1, nav.TotalAreaPrepCells);
+        Assert.Equal(PathRequestStatus.PathFound, nav.GetUnitStatus(u2));
+    }
+
+    [Fact]
+    public void WindowClearanceCache_CancellationMidway_InvalidatesCache()
+    {
+        const int size = 301; // 300m x 300m at 1m spacing -> 600x600 cells at 0.5m = 360,000 cells > 262,144 (hierarchical)
+        HeightMap map = new(size, size, 1.0f, 0.01f, new ushort[size * size]);
+
+        // Building 1 in sector (1, 1) and Building 2 in sector (0, 0)
+        OpaqueStructure building1 = new(new StructureId(1), 145f, 0f, 145f, 155f, 5f, 155f, isGrounded: true);
+        OpaqueStructure building2 = new(new StructureId(2), 45f, 0f, 45f, 55f, 5f, 55f, isGrounded: true);
+        StaticGeometry geo = new(map, [building1, building2]);
+        NavigationGrid grid = new(geo, cellSize: 0.5f, enableHierarchical: true);
+
+        TestMovementCatalog catalog = new();
+        catalog.Register(1, speed: 10f, radius: 1.0f);
+
+        // Limit area prep budget to 500 cells per tick so multi-row preparation takes multiple ticks
+        NavigationTuning tuning = new(MaxWaypointsPerRoute: 64, MaxAreaPrepCellsPerTick: 500);
+        NavigationSystem nav = new(grid, catalog, tuning);
+        WorldState world = new(geo.HeightMap);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        // Step 1: Unit 1 maneuvers around building 1 from (135, 150) to (165, 150). Window A is fully prepared.
+        EntityId u1 = world.CreateUnit(1, 1, new Vector2(135f, 150f), 10f);
+        sim.TryEnqueue(1, new MoveCommand(1, 0, u1, new Vector2(165f, 150f)));
+
+        for (int i = 0; i < 200; i++)
+        {
+            sim.Step();
+            if (nav.GetUnitStatus(u1) == PathRequestStatus.PathFound) break;
+        }
+
+        int cellsAfterUnit1 = nav.TotalAreaPrepCells;
+        Assert.True(cellsAfterUnit1 > 0, $"Unit 1 must have prepared area cells, got {cellsAfterUnit1}.");
+        Assert.Equal(PathRequestStatus.PathFound, nav.GetUnitStatus(u1));
+
+        // Step 2: Unit 2 maneuvers around building 2 from (35, 50) to (65, 50). Window B starts preparation.
+        EntityId u2 = world.CreateUnit(1, 1, new Vector2(35f, 50f), 10f);
+        sim.TryEnqueue(1, new MoveCommand(2, 0, u2, new Vector2(65f, 50f)));
+
+        // Step 1 tick: Window B preparation starts and partially fills _localClearance (at most 500 cells)
+        sim.Step();
+        Assert.Equal(NavigationSearchStage.AreaPreparation, nav.ActiveStage);
+        int cellsDuringUnit2 = nav.TotalAreaPrepCells;
+        Assert.True(cellsDuringUnit2 > cellsAfterUnit1, "Unit 2 must have started area preparation.");
+
+        // Step 3: Cancel Unit 2 while its area preparation is in progress
+        world.RemoveUnit(u2);
+        sim.Step();
+        Assert.Equal(NavigationSearchStage.None, nav.ActiveStage);
+
+        // Step 4: Unit 1 requests movement again strictly inside Window A
+        sim.TryEnqueue(1, new MoveCommand(4, 0, u1, new Vector2(164f, 150f)));
+
+        for (int i = 0; i < 200; i++)
+        {
+            sim.Step();
+            if (nav.GetUnitStatus(u1) == PathRequestStatus.PathFound) break;
+        }
+
+        Assert.Equal(PathRequestStatus.PathFound, nav.GetUnitStatus(u1));
+        // Total area prep cells must increase: Window A was invalidated and re-prepared from scratch
+        Assert.True(nav.TotalAreaPrepCells > cellsDuringUnit2,
+            $"Interrupted window preparation must invalidate cache; cells remained {nav.TotalAreaPrepCells}");
+    }
+
+    [Fact]
+    public void UnreachableTarget_EnclosedInWater_ReturnsNoPathPromptly()
+    {
+        const int size = 301; // 300m x 300m -> 600x600 cells at 0.5m = 360,000 cells > 262,144 (hierarchical)
+        HeightMap map = new(size, size, 1.0f, 0.01f, new ushort[size * size]);
+
+        // Completely enclose island [130..170, 130..170] in wide water moat [120..130, 170..180]
+        List<TerrainObstacle> water = new()
+        {
+            new TerrainObstacle(120f, 120f, 180f, 130f, TraversabilityCapabilities.Water),
+            new TerrainObstacle(120f, 170f, 180f, 180f, TraversabilityCapabilities.Water),
+            new TerrainObstacle(120f, 130f, 130f, 170f, TraversabilityCapabilities.Water),
+            new TerrainObstacle(170f, 130f, 180f, 170f, TraversabilityCapabilities.Water)
+        };
+
+        StaticGeometry geo = new(map, ReadOnlySpan<OpaqueStructure>.Empty, ReadOnlySpan<BridgeStructure>.Empty, water.ToArray());
+        NavigationGrid grid = new(geo, cellSize: 0.5f, enableHierarchical: true);
+
+        TestMovementCatalog catalog = new();
+        catalog.Register(1, speed: 10f, radius: 1.0f);
+
+        NavigationSystem nav = new(grid, catalog);
+        WorldState world = new(map);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        // Unit starts outside moat at (50, 50)
+        EntityId unit = world.CreateUnit(1, 1, new Vector2(50f, 50f), 10f);
+
+        // Target is inside the enclosed island at (150, 150)
+        sim.TryEnqueue(1, new MoveCommand(1, 0, unit, new Vector2(150f, 150f)));
+
+        for (int i = 0; i < 50; i++)
+        {
+            sim.Step();
+            if (nav.GetUnitStatus(unit) == PathRequestStatus.NoPath) break;
+        }
+
+        Assert.Equal(PathRequestStatus.NoPath, nav.GetUnitStatus(unit));
+        Assert.Equal(1, nav.FailedSearches);
+    }
+
+    [Fact]
+    public void WindowClearanceCache_SearchFromBridgeDeck_DoesNotCorruptGroundClearanceUnderBridge()
+    {
+        // P2 regression: When preparing local window for a unit on bridge deck over water,
+        // _localClearance (the ground clearance cache) must record ground clearance (0m for water),
+        // not the bridge deck side clearance (5.75m). Ground searches reusing the window must
+        // not treat the water cell under the bridge span as passable dry land.
+        const int size = 301; // 300m x 300m -> 600x600 cells at 0.5m = 360,000 cells > 262,144 (hierarchical)
+        HeightMap map = new(size, size, 1.0f, 0.01f, new ushort[size * size]);
+
+        // Bridge spanning over water at Z=150: X from 120 to 180, width 8m (Z in [146..154]), height 4m
+        BridgeStructure bridge = new(
+            new StructureId(1),
+            new Vector2(120f, 150f),
+            new Vector2(180f, 150f),
+            width: 8.0f,
+            startHeight: 4.0f,
+            endHeight: 4.0f,
+            thickness: 0.8f);
+
+        // Water obstacle under bridge span: X in [130..170], Z in [100..200]
+        TerrainObstacle water = new(130f, 100f, 170f, 200f, TraversabilityCapabilities.Water);
+
+        StaticGeometry geo = new(map, ReadOnlySpan<OpaqueStructure>.Empty, [bridge], [water]);
+        NavigationGrid grid = new(geo, cellSize: 0.5f, enableHierarchical: true);
+
+        TestMovementCatalog catalog = new();
+        catalog.Register(1, speed: 10f, radius: 0.8f);
+
+        NavigationTuning tuning = new(MaxWaypointsPerRoute: 64, MaxNodeExpansionsPerTick: 3000, MaxLocalExpansionsPerTick: 3000);
+        NavigationSystem nav = new(grid, catalog, tuning);
+        WorldState world = new(map);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        // Unit 1 starts on bridge deck over water at (145, 150) with supportSurface: 1,
+        // and orders movement to the west bank at (110, 150) on ground (TargetSurface: 0).
+        // Since start is far from bridge entry, direct raycast cannot skip area preparation.
+        EntityId u1 = world.CreateUnit(1, 1, new Vector2(145f, 150f), 10f);
+        world.UpdateUnitNavigation(u1, new Vector2(145f, 150f), new Vector2(145f, 150f), false, supportSurface: 1u);
+
+        Assert.True(sim.TryEnqueue(1, new MoveCommand(1, 0, u1, new Vector2(110f, 150f), TargetSurface: 0u)));
+
+        for (int i = 0; i < 50; i++)
+        {
+            sim.Step();
+            if (nav.GetUnitStatus(u1) == PathRequestStatus.PathFound) break;
+        }
+
+        Assert.Equal(PathRequestStatus.PathFound, nav.GetUnitStatus(u1));
+        Assert.True(nav.IsWindowCacheValid, "Window cache must be valid after Unit 1 search.");
+
+        // Check cached clearance under the bridge span at (145, 150) in water.
+        // Before fix: stored bridge deck clearance (~5.75m).
+        // With fix: must be 0m (water on ground surface 0).
+        Vector2 underBridgeRiverPoint = new(145f, 150f);
+        Assert.True(nav.TryGetCachedLocalClearanceAt(underBridgeRiverPoint, out float cachedClearance),
+            "Point under bridge must be covered by the prepared local window.");
+        Assert.Equal(0.0f, cachedClearance);
+
+        int cellsAfterUnit1 = nav.TotalAreaPrepCells;
+        Assert.True(cellsAfterUnit1 > 0, $"Unit 1 must have prepared area cells, got {cellsAfterUnit1}.");
+
+        // Ground request reuse: Unit 2 on ground (surface 0) west of water at (112, 150) moves to (114, 150)
+        EntityId u2 = world.CreateUnit(1, 1, new Vector2(112f, 150f), 10f);
+        Assert.True(sim.TryEnqueue(1, new MoveCommand(2, 0, u2, new Vector2(114f, 150f))));
+
+        for (int i = 0; i < 50; i++)
+        {
+            sim.Step();
+            if (nav.GetUnitStatus(u2) == PathRequestStatus.PathFound) break;
+        }
+
+        Assert.Equal(PathRequestStatus.PathFound, nav.GetUnitStatus(u2));
+        // Total area prep cells must not increase, confirming window reuse
+        Assert.Equal(cellsAfterUnit1, nav.TotalAreaPrepCells);
+    }
+
+    [Fact]
+    public void SmallAreaPreparation_AndLocalPlanning_FinishInSingleTick()
+    {
+        // When area preparation consumes less than half the tick cell budget,
+        // it must not force an early yield. Small local windows (e.g. around local obstacles)
+        // should finish area preparation and local planning in the same tick.
+        const int size = 301;
+        HeightMap map = new(size, size, 1.0f, 0.01f, new ushort[size * size]);
+
+        // Building inside sector (2, 2) [100..150, 100..150]
+        OpaqueStructure building = new(new StructureId(1), 123f, 0f, 123f, 127f, 5f, 127f, isGrounded: true);
+        StaticGeometry geo = new(map, [building]);
+        NavigationGrid grid = new(geo, cellSize: 0.5f, enableHierarchical: true);
+
+        TestMovementCatalog catalog = new();
+        catalog.Register(1, speed: 10f, radius: 0.8f);
+
+        NavigationTuning tuning = new(MaxWaypointsPerRoute: 64);
+        NavigationSystem nav = new(grid, catalog, tuning);
+        WorldState world = new(geo.HeightMap);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        // Unit maneuvers around building inside sector (2, 2) from (115, 125) to (135, 125).
+        // Direct raycast is blocked by building.
+        EntityId u1 = world.CreateUnit(1, 1, new Vector2(115f, 125f), 10f);
+        sim.TryEnqueue(1, new MoveCommand(1, 0, u1, new Vector2(135f, 125f)));
+
+        // Step simulation exactly ONCE
+        sim.Step();
+
+        // Small window preparation and local planning must both complete in this single tick
+        Assert.Equal(PathRequestStatus.PathFound, nav.GetUnitStatus(u1));
+        Assert.True(nav.AreaPrepCellsThisTick > 0, "Area preparation cells must be evaluated in tick 1.");
+        Assert.True(nav.LocalExpansionsThisTick > 0, "Local planning expansions must execute in the same tick.");
+    }
+
+    [Fact]
+    public void GeometryVersion_Increment_InvalidatesWindowClearanceAndCorridorCache()
+    {
+        // Incrementing GeometryVersion on NavigationGrid must invalidate both
+        // prepared window clearance cache and cached global corridor plans.
+        const int size = 301;
+        HeightMap map = new(size, size, 1.0f, 0.01f, new ushort[size * size]);
+
+        OpaqueStructure building = new(new StructureId(1), 145f, 0f, 145f, 155f, 5f, 155f, isGrounded: true);
+        StaticGeometry geo = new(map, [building]);
+        NavigationGrid grid = new(geo, cellSize: 0.5f, enableHierarchical: true);
+
+        TestMovementCatalog catalog = new();
+        catalog.Register(1, speed: 10f, radius: 1.0f);
+
+        NavigationTuning tuning = new(MaxWaypointsPerRoute: 64, MaxNodeExpansionsPerTick: 3000, MaxLocalExpansionsPerTick: 3000);
+        NavigationSystem nav = new(grid, catalog, tuning);
+        WorldState world = new(geo.HeightMap);
+        RuleSet rules = new(nav);
+        using Simulation sim = new(world, rules);
+
+        // Step 1: Unit 1 maneuvers around building from (135, 150) to (165, 150).
+        EntityId u1 = world.CreateUnit(1, 1, new Vector2(135f, 150f), 10f);
+        sim.TryEnqueue(1, new MoveCommand(1, 0, u1, new Vector2(165f, 150f)));
+
+        for (int i = 0; i < 50; i++)
+        {
+            sim.Step();
+            if (nav.GetUnitStatus(u1) == PathRequestStatus.PathFound) break;
+        }
+
+        Assert.Equal(PathRequestStatus.PathFound, nav.GetUnitStatus(u1));
+        Assert.True(nav.IsWindowCacheValid, "Window cache must be valid after Unit 1 search.");
+        int cellsAfterUnit1 = nav.TotalAreaPrepCells;
+
+        // Step 2: Invalidate geometry version (simulates bridge destruction / map changes)
+        grid.InvalidateGeometry();
+
+        // Cached point clearance must report false because version no longer matches
+        Assert.False(nav.TryGetCachedLocalClearanceAt(new Vector2(135f, 150f), out _));
+
+        // Step 3: Unit 2 nearby inside the same window bounds requests path
+        EntityId u2 = world.CreateUnit(1, 1, new Vector2(136f, 150f), 10f);
+        sim.TryEnqueue(1, new MoveCommand(2, 0, u2, new Vector2(164f, 150f)));
+
+        for (int i = 0; i < 50; i++)
+        {
+            sim.Step();
+            if (nav.GetUnitStatus(u2) == PathRequestStatus.PathFound) break;
+        }
+
+        Assert.Equal(PathRequestStatus.PathFound, nav.GetUnitStatus(u2));
+        // Total area prep cells must increase, confirming window cache was not reused
+        Assert.True(nav.TotalAreaPrepCells > cellsAfterUnit1,
+            $"Geometry invalidation must force area re-preparation; total cells remained {nav.TotalAreaPrepCells}.");
+    }
 }

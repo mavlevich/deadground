@@ -7,6 +7,12 @@ using DeadGround.Engine.Net;
 using DeadGround.Rules.Ops;
 using DeadGround.Rules.Sandbox;
 
+if (args.Length > 0 && args[0] == "--ustye-nav")
+{
+    RunUstyeNavigationBenchmark();
+    return;
+}
+
 if (args.Length > 0 && args[0] == "--navigation-5km")
 {
     Environment.ExitCode = DeadGround.Benchmarks.NavigationScaleProbe.Run(args.Length == 3 && args[1] == "--json" ? args[2] : null) ? 0 : 1;
@@ -989,6 +995,132 @@ static void RunVehicleSeparationBenchmark()
         Console.WriteLine($"Units: {count,4} (active: {moving + waiting,4}, moving: {moving,4}, waiting: {waiting,4}) | Mean: {mean,6:F3} ms | Min: {min,6:F3} ms | p50: {p50,6:F3} ms | p95: {p95,6:F3} ms | p99: {p99,6:F3} ms | Alloc/tick: {allocatedBytes / measuredTicks,5} B | [{status}]");
     }
     Console.WriteLine();
+}
+
+static void RunUstyeNavigationBenchmark()
+{
+    Console.WriteLine("=== USTYE RAID NAVIGATION TICK BENCHMARK ===");
+    Console.WriteLine("Map: Ustye (5000 x 5000 m), seed 1337, 3 units moving to (2200, 2400)");
+
+    var sim = UstyeRaidScenario.CreateSimulation(
+        matchSeed: 1337UL,
+        navTuning: UstyeGroundScenario.CreateNavigationTuning() with { CollectStageTimings = true });
+    using var session = new LocalSession(sim);
+
+    for (int f = 0; f < 60; f++)
+    {
+        session.Advance(0.016667);
+    }
+
+    foreach (var u in session.Replica.OwnUnits)
+    {
+        session.Move(u.Id, new Vector2(2200f, 2400f));
+    }
+
+    double maxAdvance = 0;
+    int slow = 0;
+    int slow50 = 0;
+    int firstContactFrame = -1;
+    int firstContactTick = -1;
+    List<double> simTickTimes = new();
+    long totalAllocated = 0;
+
+    int lastSimTick = sim.Tick;
+
+    for (int f = 0; f < 300; f++)
+    {
+        long allocBefore = GC.GetAllocatedBytesForCurrentThread();
+        long start = Stopwatch.GetTimestamp();
+        session.Advance(0.016667);
+        double ms = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        long allocDelta = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
+        totalAllocated += allocDelta;
+        if (allocDelta > 0)
+        {
+            Console.WriteLine($"ALLOC frame={f} tick={sim.Tick} bytes={allocDelta} hostAlloc={session.LastTickAllocatedBytes}");
+        }
+
+        maxAdvance = Math.Max(maxAdvance, ms);
+
+        if (sim.Tick > lastSimTick)
+        {
+            lastSimTick = sim.Tick;
+            double simTickMs = session.LastTickMilliseconds;
+            simTickTimes.Add(simTickMs);
+
+            if (simTickMs > 20.0)
+            {
+                slow++;
+                if (simTickMs > 50.0) slow50++;
+                var nav = sim.Navigation;
+                Console.WriteLine($"SLOW tick={sim.Tick} frame={f} totalMs={ms:F2} simTickMs={simTickMs:F2} stage={nav?.ActiveStage} areaCells={nav?.AreaPrepCellsThisTick} expansions={nav?.NodesExpandedThisTick} [Global={nav?.LastTickGlobalPlanMs:F2} AreaPrep={nav?.LastTickAreaPrepMs:F2} Local={nav?.LastTickLocalPlanMs:F2} Smooth={nav?.LastTickSmoothingMs:F2} Move={nav?.LastTickMovementMs:F2} Sep={nav?.LastTickSeparationMs:F2}]");
+            }
+        }
+
+        if (firstContactFrame < 0 && session.Replica.Contacts.Length > 0)
+        {
+            firstContactFrame = f;
+            firstContactTick = sim.Tick;
+            Console.WriteLine($"FIRST_CONTACT frame={f} tick={sim.Tick}");
+        }
+    }
+
+    Console.WriteLine($"SUMMARY tick={sim.Tick} maxAdvanceMs={maxAdvance:F2} slow={slow} firstContact={firstContactFrame}");
+
+    simTickTimes.Sort();
+    double p50 = simTickTimes[(int)(simTickTimes.Count * 0.50)];
+    double p95 = simTickTimes[(int)(simTickTimes.Count * 0.95)];
+    double p99 = simTickTimes[(int)(simTickTimes.Count * 0.99)];
+    double maxTick = simTickTimes[^1];
+
+    Console.WriteLine("\n=== USTYE NAVIGATION BENCHMARK DETAILED STATS ===");
+    Console.WriteLine($"Simulation Ticks:      {simTickTimes.Count}");
+    Console.WriteLine($"Sim Tick Median (p50): {p50:F2} ms");
+    Console.WriteLine($"Sim Tick p95:          {p95:F2} ms");
+    Console.WriteLine($"Sim Tick p99:          {p99:F2} ms");
+    Console.WriteLine($"Sim Tick Max:          {maxTick:F2} ms");
+    Console.WriteLine($"Ticks > 20 ms:         {slow}");
+    Console.WriteLine($"Ticks > 50 ms:         {slow50}");
+    Console.WriteLine($"Steady-state alloc:    {totalAllocated} B");
+
+    if (sim.Navigation != null)
+    {
+        var nav = sim.Navigation;
+        Console.WriteLine("Navigation System Totals:");
+        Console.WriteLine($"  Global Planning:     {nav.TotalGlobalPlanMs:F2} ms ({nav.TotalGlobalExpansions} expansions, cache hits: {nav.GlobalPlanCacheHits}, misses: {nav.GlobalPlanCacheMisses})");
+        Console.WriteLine($"  Area Preparation:    {nav.TotalAreaPrepMs:F2} ms ({nav.TotalAreaPrepCells} cells evaluated)");
+        Console.WriteLine($"  Local Planning:      {nav.TotalLocalPlanMs:F2} ms ({nav.TotalLocalExpansions} node expansions)");
+        Console.WriteLine($"  Path Smoothing:      {nav.TotalSmoothingMs:F2} ms ({nav.TotalSmoothingRaycasts} raycasts)");
+        Console.WriteLine($"  Movement Advance:    {nav.TotalMovementMs:F2} ms");
+        Console.WriteLine($"  Vehicle Separation:  {nav.TotalSeparationMs:F2} ms ({nav.SeparationCandidatesChecked} checks, {nav.SeparationEmergencyStops} stops)");
+        Console.WriteLine($"  Completed Searches:  {nav.CompletedSearches}");
+        Console.WriteLine($"  Failed Searches:     {nav.FailedSearches}");
+        Console.WriteLine($"  Capacity Exceeded:   {nav.CapacityExceeded}");
+    }
+
+    Console.WriteLine("\n=== TERRAIN SPATIAL INDEX BATCH QUERY BENCHMARK ===");
+    const int queryMapSize = 201;
+    HeightMap queryMap = new(queryMapSize, queryMapSize, 1.0f, 0.01f, new ushort[queryMapSize * queryMapSize]);
+    List<TerrainObstacle> batchWater = new();
+    for (int i = 0; i < 200; i++)
+    {
+        batchWater.Add(new TerrainObstacle(95f, i * 1.0f, 105f, (i + 1) * 1.0f, TraversabilityCapabilities.Water));
+    }
+    StaticGeometry batchGeo = new(queryMap, ReadOnlySpan<OpaqueStructure>.Empty, ReadOnlySpan<BridgeStructure>.Empty, batchWater.ToArray());
+    NavigationGrid batchGrid = new(batchGeo, cellSize: 0.5f, enableHierarchical: true);
+
+    for (int q = 0; q < 1_000; q++)
+    {
+        batchGrid.IsPointClear(new Vector2(10f + (q % 80), 10f + (q / 80 % 80)), 1.0f, TraversabilityCapabilities.DefaultVehicle);
+    }
+
+    Stopwatch swBatch = Stopwatch.StartNew();
+    for (int q = 0; q < 10_000; q++)
+    {
+        batchGrid.IsPointClear(new Vector2(10f + (q % 80), 10f + (q / 80 % 80)), 1.0f, TraversabilityCapabilities.DefaultVehicle);
+    }
+    swBatch.Stop();
+    Console.WriteLine($"10,000 point queries on 200 water slices took {swBatch.Elapsed.TotalMilliseconds:F2} ms (budget < 50 ms)");
 }
 
 static GroupUnitInput[] CreateBenchmarkUnits(int count) => GroupBenchmarkHelpers.CreateBenchmarkUnits(count);

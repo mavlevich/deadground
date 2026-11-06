@@ -416,6 +416,62 @@ public sealed class OrderPreviewTests
         Assert.NotEqual(snapWest.AdjustedTarget, snapNorth.AdjustedTarget);
     }
 
+    [Fact]
+    public void DiagnoseBlockReason_NearWaterEdge_ReportsWaterNotInsufficientClearance()
+    {
+        // P3 regression: Vehicle radius 1.0m at distance 0.98m from water edge.
+        // IsPointClear returns false, and DiagnoseBlockReason must report Water (not InsufficientClearance).
+        HeightMap map = CreateFlatMap(65, 2.0f); // 128m x 128m
+        TerrainObstacle water = new(60f, 0f, 70f, 128f, TraversabilityCapabilities.Water);
+        StaticGeometry geo = new(map, ReadOnlySpan<OpaqueStructure>.Empty, ReadOnlySpan<BridgeStructure>.Empty, [water]);
+        DestinationEvaluator evaluator = new(geo, cellSize: 0.5f);
+
+        const float radius = 1.0f;
+        // Distance to water obstacle (X=60) is 60.0 - 59.02 = 0.98m < radius 1.0m
+        Vector2 nearWaterTarget = new(59.02f, 50.0f);
+
+        Assert.False(evaluator.IsPointClear(nearWaterTarget, radius, TraversabilityCapabilities.DefaultVehicle));
+        Assert.Equal(DestinationBlockReason.Water, evaluator.DiagnoseBlockReason(nearWaterTarget, radius, TraversabilityCapabilities.DefaultVehicle));
+
+        DestinationEvaluationResult result = evaluator.Evaluate(nearWaterTarget, radius, TraversabilityCapabilities.DefaultVehicle);
+        Assert.Equal(DestinationBlockReason.Water, result.Reason);
+        Assert.Equal(DestinationBlockReasons.Water, result.ReasonText);
+
+        DestinationEvaluationResult noSnapResult = evaluator.Evaluate(nearWaterTarget, radius, TraversabilityCapabilities.DefaultVehicle, maxSnapDistance: 0f);
+        Assert.Equal(DestinationValidity.Blocked, noSnapResult.Validity);
+        Assert.Equal(DestinationBlockReason.Water, noSnapResult.Reason);
+        Assert.Equal(DestinationBlockReasons.Water, noSnapResult.ReasonText);
+    }
+
+    [Fact]
+    public void DiagnoseBlockReason_PointInsideForestNearWater_ReportsDenseForestNotWater()
+    {
+        // Prioritize containment over proximity:
+        // Point is strictly inside DenseForest [40..50, 40..60] at (49.5, 50).
+        // Nearby Water obstacle [51..60, 40..60] is at distance 1.5m < radius 2.0m.
+        // Interface / diagnostic must report DenseForest, not Water.
+        HeightMap map = CreateFlatMap(65, 2.0f);
+        TerrainObstacle forest = new(40f, 40f, 50f, 60f, TraversabilityCapabilities.DenseForest);
+        TerrainObstacle water = new(51f, 40f, 60f, 60f, TraversabilityCapabilities.Water);
+        StaticGeometry geo = new(map, ReadOnlySpan<OpaqueStructure>.Empty, ReadOnlySpan<BridgeStructure>.Empty, [water, forest]);
+        DestinationEvaluator evaluator = new(geo, cellSize: 0.5f);
+
+        const float radius = 2.0f;
+        Vector2 insideForestNearWater = new(49.5f, 50.0f);
+
+        Assert.True(forest.Contains(insideForestNearWater));
+        Assert.False(water.Contains(insideForestNearWater));
+        Assert.True(water.DistanceTo(insideForestNearWater) < radius);
+
+        Assert.Equal(DestinationBlockReason.DenseForest,
+            evaluator.DiagnoseBlockReason(insideForestNearWater, radius, TraversabilityCapabilities.DefaultVehicle));
+
+        DestinationEvaluationResult result = evaluator.Evaluate(insideForestNearWater, radius, TraversabilityCapabilities.DefaultVehicle, maxSnapDistance: 0f);
+        Assert.Equal(DestinationValidity.Blocked, result.Validity);
+        Assert.Equal(DestinationBlockReason.DenseForest, result.Reason);
+        Assert.Equal(DestinationBlockReasons.DenseForest, result.ReasonText);
+    }
+
     private sealed class NavigationTests_MovementCatalog : IUnitMovementCatalog
     {
         private readonly Dictionary<ushort, UnitMovementProfile> _profiles = new();
