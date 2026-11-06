@@ -750,8 +750,9 @@ public sealed class CombatTests
             world.TryGetCombatState(target, out WorldState.CombatState ts1);
             Assert.Equal(50, ts1.CurrentHealth);
 
-            // Move target behind wall corner (Z = 12.5) within correlation slack
+            // Move target behind wall corner (Z = 12.5) within correlation slack and attacker behind cover
             world.UpdateUnitNavigation(target, new Vector2(30f, 12.5f), new Vector2(30f, 12.5f), false);
+            world.UpdateUnitNavigation(attacker, new Vector2(10f, 13f), new Vector2(10f, 13f), false);
             for (int i = 0; i < 4; i++) sim.Step();
 
             // Contact transitions to LastKnown
@@ -770,7 +771,8 @@ public sealed class CombatTests
                 Assert.Equal(50, tsHidden.CurrentHealth); // No new damage
             }
 
-            // Move target back into view (Z = 10)
+            // Move target and attacker back into view (Z = 10)
+            world.UpdateUnitNavigation(attacker, new Vector2(10f, 10f), new Vector2(10f, 10f), false);
             world.UpdateUnitNavigation(target, new Vector2(30f, 10f), new Vector2(30f, 10f), false);
             for (int i = 0; i < 4; i++) sim.Step();
 
@@ -1131,16 +1133,16 @@ public sealed class CombatTests
     [Fact]
     public void AttackOrder_LastKnownTarget_DrivesToLastKnownPositionAndHolds_DropsOnExpiry()
     {
-        // Wall between (20, 5) and (24, 15)
+        // Wall between (20, 5) and (24, 35)
         OpaqueStructure wall = new(
-            new StructureId(1), minX: 20f, minY: 0f, minZ: 5f, maxX: 24f, maxY: 6f, maxZ: 15f, isGrounded: true);
+            new StructureId(1), minX: 20f, minY: 0f, minZ: 5f, maxX: 24f, maxY: 6f, maxZ: 35f, isGrounded: true);
         StaticGeometry geo = new(CreateFlatMap(), [wall]);
 
         var (sim, world, _) = CreateSetup(geo, weaponRange: 20f, reloadTicks: 10, damage: 50);
         using (sim)
         {
-            // Attacker at (10, 10)
-            EntityId attacker = world.CreateUnit(1, 1, new Vector2(10f, 10f), 10f, 100, 10);
+            // Attacker at (10, 40) with view clear of wall [5..35]
+            EntityId attacker = world.CreateUnit(1, 1, new Vector2(10f, 40f), 10f, 100, 10);
             // Target at (40, 30) with unobstructed view initially
             EntityId target = world.CreateUnit(2, 1, new Vector2(40f, 30f), 10f, 100, 10);
             world.SetFireStance(attacker, FireStance.HoldFire);
@@ -1153,7 +1155,8 @@ public sealed class CombatTests
             Assert.True(sim.TryEnqueue(1, new AttackCommand(1, sim.Tick, attacker, contact.Id)));
             sim.Step();
 
-            // Now move target behind wall to (40, 10), so attacker loses line of sight and target becomes LastKnown
+            // Now move attacker to (10, 10) behind wall and target to (40, 10) behind wall, so attacker loses line of sight to target and last known position
+            world.SetPosition(attacker, new Vector2(10f, 10f));
             world.SetPosition(target, new Vector2(40f, 10f));
             for (int i = 0; i < 4; i++) sim.Step();
 
@@ -1213,8 +1216,9 @@ public sealed class CombatTests
             Assert.Equal(CombatEventKind.ShotFired, k1Init.Events[0].Kind);
             sim.AcknowledgeCombatEvents(1, 1);
 
-            // Player 2 moves behind wall (Z = 12.5) - hidden from Player 1, but in direct view of Player 3
+            // Player 2 moves behind wall (Z = 12.5) and Player 1 behind cover (Z = 13) - hidden from Player 1, but in direct view of Player 3
             world.UpdateUnitNavigation(p2Target, new Vector2(30f, 12.5f), new Vector2(30f, 12.5f), false);
+            world.UpdateUnitNavigation(p1Attacker, new Vector2(10f, 13f), new Vector2(10f, 13f), false);
             for (int i = 0; i < 4; i++) sim.Step();
 
             // For Player 1, contact transitioned to LastKnown

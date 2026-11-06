@@ -1085,22 +1085,89 @@ internal static class ClientRegressionTests
             Require(t62View.EnemyModel.Scale.IsEqualApprox(Vector3.One),
                 $"Enemy t62 model scale must be 1.0, got {t62View.EnemyModel.Scale}.");
 
-            // Role badge reads "T-62"
+            // Role badge and SelectionCard via real update loop
+            Camera3D camera = new()
+            {
+                Projection = Camera3D.ProjectionType.Orthogonal,
+                Size = 100,
+                Far = 1000,
+                Position = new Vector3(25, 50, 75)
+            };
+            parent.AddChild(camera);
+            camera.LookAt(new Vector3(25, 0, 25), Vector3.Up);
+
+            UnitViewSet unitViews = new(parent, map, catalog);
             RoleBadgeOverlay overlay = new(catalog);
             parent.AddChild(overlay);
-            string badgeText = overlay.GetRoleText(t62Def, ContactClassification.Tank);
-            Require(badgeText == "T-62", $"Role badge text for t62 should be 'T-62', got '{badgeText}'.");
 
-            RoleBadge badge = new();
-            parent.AddChild(badge);
-            badge.BindContact(t62Contact.Id, t62Contact.State, badgeText, t62Contact.Classification, 0f);
-            Require(badge.LabelText == "T-62", $"Role badge label must read 'T-62', got '{badge.LabelText}'.");
-
-            // SelectionCard shows "T-62"
             SelectionCard card = new(catalog);
             parent.AddChild(card);
+
+            overlay.UpdateBadges(camera, camera.Size, unitViews, contactViews, replica, 10, []);
+            RoleBadge? badge = overlay.GetChildren().OfType<RoleBadge>().FirstOrDefault(b => b.BoundContactId == t62Contact.Id);
+            Require(badge is not null, "RoleBadge for t62Contact must be created by UpdateBadges.");
+            Require(badge!.LabelText == "T-62", $"Role badge label must read 'T-62', got '{badge.LabelText}'.");
+
             card.UpdateContact(t62Contact, 10);
             Require(card.Line2Text.Contains("T-62"), $"SelectionCard must show 'T-62', got '{card.Line2Text}'.");
+
+            // 1b. LastKnown contact: age increases with server tick, marker coordinates remain frozen
+            ContactObservation t62Lost = new(
+                new ContactId(201),
+                ContactState.LastKnown,
+                ContactClassification.Tank,
+                t62Def,
+                new NumericsVector2(25, 25),
+                10);
+
+            // 20 ticks elapsed (1.0s)
+            ApplyWithContacts(replica, bytes, 2, 30, [], [t62Lost]);
+            contactViews.Sync(replica);
+            Require(contactViews.Views.TryGetValue(t62Lost.Id, out ContactView? lostView1),
+                "LastKnown contact view must exist.");
+            Require(lostView1!.Observation.State == ContactState.LastKnown, "Contact state must be LastKnown.");
+            Require(lostView1.Root.Position.X == 25f && lostView1.Root.Position.Z == 25f,
+                "LastKnown position must remain frozen at (25, 25).");
+
+            overlay.UpdateBadges(camera, camera.Size, unitViews, contactViews, replica, 30, []);
+            badge = overlay.GetChildren().OfType<RoleBadge>().FirstOrDefault(b => b.BoundContactId == t62Lost.Id);
+            Require(badge is not null, "RoleBadge for t62Lost must exist in overlay.");
+            Require(badge!.LabelText == "T-62 1s", $"RoleBadge for LastKnown must show age 1s via UpdateBadges, got '{badge.LabelText}'.");
+
+            card.UpdateContact(t62Lost, 30);
+            Require(card.Line3Text.Contains("Lost 1.0s ago"), $"SelectionCard must display age 1.0s, got '{card.Line3Text}'.");
+
+            // 40 ticks elapsed (2.0s)
+            ApplyWithContacts(replica, bytes, 3, 50, [], [t62Lost]);
+            contactViews.Sync(replica);
+            Require(contactViews.Views.TryGetValue(t62Lost.Id, out ContactView? lostView2),
+                "LastKnown contact view must persist.");
+            Require(lostView2!.Root.Position.X == 25f && lostView2.Root.Position.Z == 25f,
+                "LastKnown position must still remain frozen at (25, 25).");
+
+            overlay.UpdateBadges(camera, camera.Size, unitViews, contactViews, replica, 50, []);
+            badge = overlay.GetChildren().OfType<RoleBadge>().FirstOrDefault(b => b.BoundContactId == t62Lost.Id);
+            Require(badge is not null, "RoleBadge for t62Lost must exist in overlay.");
+            Require(badge!.LabelText == "T-62 2s", $"RoleBadge for LastKnown must show age 2s via UpdateBadges, got '{badge.LabelText}'.");
+
+            card.UpdateContact(t62Lost, 50);
+            Require(card.Line3Text.Contains("Lost 2.0s ago"), $"SelectionCard must display age 2.0s, got '{card.Line3Text}'.");
+
+            // 1c. Removal upon empty confirmation or expiry: contact views clear, RoleBadge removed by UpdateBadges, SelectionCard resets to empty
+            contactViews.Selected.Add(t62Contact.Id);
+            ApplyWithContacts(replica, bytes, 4, 60, [], []);
+            contactViews.Sync(replica);
+            Require(!contactViews.Views.ContainsKey(t62Contact.Id), "Removed contact view must be removed from contactViews.");
+
+            overlay.UpdateBadges(camera, camera.Size, unitViews, contactViews, replica, 60, []);
+            badge = overlay.GetChildren().OfType<RoleBadge>().FirstOrDefault(b => b.BoundContactId == t62Lost.Id);
+            Require(badge is null, "RoleBadge for removed contact must be removed from overlay via UpdateBadges.");
+
+            if (!contactViews.Views.ContainsKey(t62Contact.Id))
+            {
+                card.UpdateEmpty();
+            }
+            Require(card.TitleText == "No Selection", $"SelectionCard must reset to 'No Selection', got '{card.TitleText}'.");
 
             // 2. Contact whose Type is outside catalog: falls back to classification model without exception
             ushort outsideType = 9999;
@@ -1110,9 +1177,9 @@ internal static class ClientRegressionTests
                 ContactClassification.Tank,
                 outsideType,
                 new NumericsVector2(30, 30),
-                12);
+                62);
 
-            ApplyWithContacts(replica, bytes, 2, 12, [], [outsideContact]);
+            ApplyWithContacts(replica, bytes, 5, 62, [], [outsideContact]);
             contactViews.Sync(replica);
 
             Require(contactViews.Views.TryGetValue(outsideContact.Id, out ContactView? outsideView),
@@ -1122,7 +1189,7 @@ internal static class ClientRegressionTests
                     outsideView.EnemyModel.GetChild<Node3D>(0).SceneFilePath.EndsWith("tank.glb", StringComparison.Ordinal),
                 "Outside catalog contact must use classification fallback model.");
 
-            card.UpdateContact(outsideContact, 12);
+            card.UpdateContact(outsideContact, 62);
             Require(card.Line2Text.Contains("Tank"),
                 $"SelectionCard for outside contact must show fallback classification name 'Tank', got '{card.Line2Text}'.");
         }

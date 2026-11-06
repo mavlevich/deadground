@@ -147,6 +147,7 @@ public sealed class SideContactTracker
         public Vector2 Position;
         public int LastSeenTick;
         public bool ObservedThisStep;
+        public bool PositionObservedThisStep;
         public bool HasBoundEntity;
         public EntityId BoundEntityId; // Internal tracker link for continuous tracking only
         public float TurretYaw;
@@ -167,6 +168,7 @@ public sealed class SideContactTracker
     public int Capacity => _entries.Length;
     public int Count => _count;
     public ReadOnlySpan<ContactObservation> Contacts => ExportContacts();
+    internal ReadOnlySpan<Entry> InternalEntries => _entries.AsSpan(0, _count);
     public long OverflowEvictionCount { get; private set; }
     public long DroppedDueToCapacityCount { get; private set; }
 
@@ -192,6 +194,38 @@ public sealed class SideContactTracker
         for (int i = 0; i < _count; i++)
         {
             _entries[i].ObservedThisStep = false;
+            _entries[i].PositionObservedThisStep = false;
+        }
+    }
+
+    internal void MarkPositionObserved(int index)
+    {
+        if ((uint)index < (uint)_count)
+        {
+            _entries[index].PositionObservedThisStep = true;
+        }
+    }
+
+    public void MarkPositionObserved(ContactId id)
+    {
+        for (int i = 0; i < _count; i++)
+        {
+            if (_entries[i].Id.Value == id.Value)
+            {
+                _entries[i].PositionObservedThisStep = true;
+                break;
+            }
+        }
+    }
+
+    public void MarkAllLastKnownPositionsObserved()
+    {
+        for (int i = 0; i < _count; i++)
+        {
+            if (_entries[i].State == ContactState.LastKnown)
+            {
+                _entries[i].PositionObservedThisStep = true;
+            }
         }
     }
 
@@ -267,9 +301,10 @@ public sealed class SideContactTracker
         {
             ObservedTarget target = _unassignedBuffer[u];
 
-            // Rediscovery / Correlation: Check against LastKnown contacts
+            // Rediscovery / Correlation: Check against LastKnown contacts at the same position
             int bestMatchIndex = -1;
             float bestDistanceSq = float.PositiveInfinity;
+            float toleranceSq = _tuning.SamePositionTolerance * _tuning.SamePositionTolerance;
 
             for (int i = 0; i < _count; i++)
             {
@@ -277,16 +312,21 @@ public sealed class SideContactTracker
                 if (entry.State != ContactState.LastKnown || entry.ObservedThisStep)
                     continue;
 
+                // Old position must be confirmed observed by a friendly observer;
+                // while old position remains hidden in fog of war, new target receives a separate contact.
+                if (!entry.PositionObservedThisStep)
+                    continue;
+
+                // Support surface must match (e.g. ground vs bridge deck)
+                if (entry.SupportSurface != target.SupportSurface)
+                    continue;
+
                 int elapsedTicks = currentTick - entry.LastSeenTick;
                 if (elapsedTicks < 0 || elapsedTicks > _tuning.CorrelationWindowTicks)
                     continue;
 
-                float elapsedSeconds = elapsedTicks * Simulation.TickSeconds;
-                float gate = MathF.Min(_tuning.MaxGate, _tuning.Slack + elapsedSeconds * _tuning.MaxCorrelationSpeed);
-                float gateSq = gate * gate;
-
                 float distSq = Vector2.DistanceSquared(entry.Position, target.Position);
-                if (distSq <= gateSq)
+                if (distSq <= toleranceSq)
                 {
                     if (distSq < bestDistanceSq - 1e-4f ||
                         (MathF.Abs(distSq - bestDistanceSq) <= 1e-4f &&
@@ -450,6 +490,23 @@ public sealed class SideContactTracker
         _entries[lastIndex] = default;
         _count--;
         _exportDirty = true;
+    }
+
+    internal void RemoveConfirmedEmpty(ReadOnlySpan<ContactId> emptyContactIds)
+    {
+        if (emptyContactIds.IsEmpty) return;
+        for (int e = 0; e < emptyContactIds.Length; e++)
+        {
+            ContactId id = emptyContactIds[e];
+            for (int i = 0; i < _count; i++)
+            {
+                if (_entries[i].Id.Value == id.Value && _entries[i].State == ContactState.LastKnown)
+                {
+                    RemoveAt(i);
+                    break;
+                }
+            }
+        }
     }
 
     /// <summary>

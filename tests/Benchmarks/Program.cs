@@ -37,6 +37,18 @@ if (args.Length > 0 && (args[0] == "--group-destination" || args[0] == "--group-
     return;
 }
 
+if (args.Length > 0 && (args[0] == "--contact-memory" || args[0] == "--contact-recheck"))
+{
+    RunContactMemoryRecheckBenchmark();
+    return;
+}
+
+if (args.Length > 0 && (args[0] == "--ustye-contacts" || args[0] == "--ustye-contact-reproduction"))
+{
+    RunUstyeContactReproduction();
+    return;
+}
+
 if (args.Length > 0 && args[0] == "--probe")
 {
     RunProbe();
@@ -106,6 +118,11 @@ static void RunProbe()
     }
 
     if (!RunGroupDestinationProbe())
+    {
+        allPassed = false;
+    }
+
+    if (!RunContactMemoryRecheckProbe())
     {
         allPassed = false;
     }
@@ -1275,6 +1292,267 @@ static bool RunGroupDestinationProbe()
     }
 
     return allPassed;
+}
+
+static void RunContactMemoryRecheckBenchmark()
+{
+    bool passed = RunContactMemoryRecheckProbe();
+    Environment.ExitCode = passed ? 0 : 1;
+}
+
+static bool RunContactMemoryRecheckProbe()
+{
+    Console.WriteLine("=== CONTACT MEMORY RECHECK PROBE (80 LASTKNOWN MARKERS) ===");
+    const int size = 129;
+    HeightMap map = new(size, size, 2.0f, 0.01f, new ushort[size * size]);
+
+    // Wall between observer patrol area and markers:
+    // Observers at X=40, wall at X=68..72, Z=0..110, height 8m.
+    // Markers at X=85, Z=15..94.
+    OpaqueStructure wall = new(new StructureId(1), 68f, 0f, 0f, 72f, 8f, 110f, isGrounded: true);
+    StaticGeometry geo = new(map, [wall]);
+    UnitCatalog catalog = PrototypeScenario.LoadCatalog();
+
+    DetectionTuning tuning = new(
+        memoryDurationTicks: 1000,
+        correlationWindowTicks: 100,
+        correlationDistanceGate: 30.0f,
+        evaluationIntervalTicks: 2,
+        samePositionTolerance: 3.0f);
+
+    OpsRules rules = new(geo, new OpsPerceptionCatalog(catalog), tuning);
+    WorldState world = new(map, capacity: 256, playerTeams: [1, 2]);
+    using Simulation sim = new(world, rules);
+
+    ushort reconIdx = catalog.RequireDefinitionIndex("recon_vehicle");
+    ushort tankIdx = catalog.RequireDefinitionIndex("prototype_tank");
+    UnitDefinition reconDef = catalog.RequireDefinition("recon_vehicle");
+    UnitDefinition tankDef = catalog.RequireDefinition("prototype_tank");
+
+    // 10 friendly observers on Side 1: 5 near the wall (X=40, Z=20..60), 5 far back (X=10, Z=70..110)
+    const int observerCount = 10;
+    EntityId[] observers = new EntityId[observerCount];
+    for (int i = 0; i < observerCount; i++)
+    {
+        float x = i < 5 ? 40f : 10f;
+        float y = 20f + i * 9.0f;
+        observers[i] = world.CreateUnit(1, reconIdx, new Vector2(x, y), reconDef.Speed);
+        world.SetFireStance(observers[i], FireStance.HoldFire);
+    }
+
+    // 80 enemy targets on Side 2:
+    // Initially positioned at X=85, Y=15..94
+    const int targetCount = 80;
+    EntityId[] targets = new EntityId[targetCount];
+    for (int i = 0; i < targetCount; i++)
+    {
+        float y = 15f + i * 1.0f;
+        targets[i] = world.CreateUnit(2, tankIdx, new Vector2(85f, y), tankDef.Speed);
+        world.SetFireStance(targets[i], FireStance.HoldFire);
+    }
+
+    // Temporarily place observers in direct sight at X=83 for 4 ticks to establish Current contacts
+    for (int i = 0; i < observerCount; i++)
+    {
+        world.SetPosition(observers[i], new Vector2(83f, 20f + i * 8.0f));
+    }
+    for (int t = 0; t < 4; t++) sim.Step();
+
+    PlayerKnowledge k1 = new(1);
+    sim.UpdateKnowledge(k1);
+    if (k1.ContactCount != targetCount)
+    {
+        Console.WriteLine($"[FAIL] Expected {targetCount} initial contacts, got {k1.ContactCount}");
+        return false;
+    }
+
+    // Move targets away into fog of war:
+    // 40 targets move behind the wall to X=150, Y=15..54
+    // 40 targets move far east to X=240, Y=55..94
+    for (int i = 0; i < 40; i++)
+    {
+        world.SetPosition(targets[i], new Vector2(150f, 15f + i * 1.0f));
+    }
+    for (int i = 40; i < targetCount; i++)
+    {
+        world.SetPosition(targets[i], new Vector2(240f, 15f + i * 1.0f));
+    }
+
+    // Move observers to their patrol stations:
+    // 5 observers at X=40 (behind the wall from markers 0..39)
+    // 5 observers at X=10 (out of sensor range from markers 40..79)
+    for (int i = 0; i < 5; i++)
+    {
+        world.SetPosition(observers[i], new Vector2(40f, 20f + i * 8.0f));
+    }
+    for (int i = 5; i < observerCount; i++)
+    {
+        world.SetPosition(observers[i], new Vector2(10f, 20f + i * 8.0f));
+    }
+
+    // Step 4 ticks so detection transitions all 80 contacts to LastKnown at (85, y)
+    for (int t = 0; t < 4; t++) sim.Step();
+
+    sim.UpdateKnowledge(k1);
+    int lkCount = 0;
+    for (int i = 0; i < k1.ContactCount; i++)
+    {
+        if (k1.Contacts[i].State == ContactState.LastKnown) lkCount++;
+    }
+    if (lkCount != targetCount)
+    {
+        Console.WriteLine($"[FAIL] Expected {targetCount} LastKnown contacts, got {lkCount}");
+        return false;
+    }
+
+    // Observers patrol slowly keeping them active
+    for (int i = 0; i < observerCount; i++)
+    {
+        world.TryGetUnit(observers[i], out UnitState u);
+        sim.TryEnqueue(1, new MoveCommand((uint)(i + 1), sim.Tick, observers[i], new Vector2(u.Position.X, 100f)));
+    }
+
+    byte[] b1 = new byte[WireProtocol.MaxMessageSize];
+
+    // Warmup JIT and snapshot buffers over 10 ticks
+    for (int i = 0; i < 10; i++)
+    {
+        sim.Step();
+        if (sim.Tick % 2 == 0)
+        {
+            sim.UpdateKnowledge(k1);
+            WireProtocol.WriteSnapshot(b1, (uint)sim.Tick, sim.Tick, k1.OwnUnits, k1.Contacts);
+        }
+    }
+
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    GC.Collect();
+
+    const int measuredTicks = 100;
+    double[] times = new double[measuredTicks];
+    long totalAllocated = 0;
+    int totalConfirmedEmpty = 0;
+
+    for (int i = 0; i < measuredTicks; i++)
+    {
+        // On tick 80, move 2 observers around the wall to X=85 to recheck and confirm empty
+        if (i == 80)
+        {
+            world.SetPosition(observers[0], new Vector2(85f, 20f));
+            world.SetPosition(observers[1], new Vector2(85f, 30f));
+        }
+
+        long startAlloc = GC.GetAllocatedBytesForCurrentThread();
+        long start = Stopwatch.GetTimestamp();
+
+        sim.Step();
+        totalConfirmedEmpty += sim.Detection?.ConfirmedEmptyPositionsCount ?? 0;
+        if (sim.Tick % 2 == 0)
+        {
+            sim.UpdateKnowledge(k1);
+            WireProtocol.WriteSnapshot(b1, (uint)sim.Tick, sim.Tick, k1.OwnUnits, k1.Contacts);
+        }
+
+        long elapsed = Stopwatch.GetTimestamp() - start;
+        long alloc = GC.GetAllocatedBytesForCurrentThread() - startAlloc;
+
+        times[i] = (double)elapsed / Stopwatch.Frequency * 1000.0;
+        totalAllocated += alloc;
+    }
+
+    Array.Sort(times);
+    double p50 = times[(int)(measuredTicks * 0.50)];
+    double p95 = times[(int)(measuredTicks * 0.95)];
+    double p99 = times[(int)(measuredTicks * 0.99)];
+    double max = times[measuredTicks - 1];
+
+    Console.WriteLine($"[CONTACT RECHECK] 80 LastKnown markers across 10 observers:");
+    Console.WriteLine($"  p50: {p50:F2} ms, p95: {p95:F2} ms, p99: {p99:F2} ms, max: {max:F2} ms");
+    Console.WriteLine($"  Total Allocations: {totalAllocated} B (steady-state: 0 B)");
+    Console.WriteLine($"  Total Confirmed Empty Positions Removed: {totalConfirmedEmpty}");
+
+    bool passed = p99 < 15.0 && totalAllocated == 0 && totalConfirmedEmpty > 0;
+    Console.WriteLine(passed ? "[PASS] Contact memory recheck met performance budget." : "[FAIL] Contact memory recheck exceeded budget or allocated memory.");
+    return passed;
+}
+
+static void RunUstyeContactReproduction()
+{
+    Console.WriteLine("=== USTYE RAID CONTACT MEMORY & RECHECK REPRODUCTION ===");
+    Console.WriteLine("Map: Ustye (5000 x 5000 m), seed 1337, BRDM-2 scouting western approaches");
+
+    var sim = UstyeRaidScenario.CreateSimulation(matchSeed: 1337UL);
+    using var session = new LocalSession(sim);
+
+    // Warmup 20 frames
+    for (int f = 0; f < 20; f++) session.Advance(0.016667);
+
+    EntityId brdmId = session.Replica.OwnUnits[0].Id;
+    // Dispatch BRDM-2 forward into depot / eastern road approach
+    session.Move(brdmId, new Vector2(2850f, 2650f));
+    Console.WriteLine("[1] BRDM-2 dispatched towards depot road approach (2850, 2650).");
+
+    int contactAcquiredTick = -1;
+    ContactId spottedContactId = default;
+
+    for (int f = 0; f < 500; f++)
+    {
+        session.Advance(0.016667);
+        if (session.Replica.ContactCount > 0 && contactAcquiredTick == -1)
+        {
+            var c = session.Replica.Contacts[0];
+            if (c.State == ContactState.Current)
+            {
+                contactAcquiredTick = sim.Tick;
+                spottedContactId = c.Id;
+                Console.WriteLine($"[2] Contact #{c.Id.Value} SPOTTED as Current at tick {sim.Tick} ({c.Classification}, pos: {c.Position.X:F1}, {c.Position.Y:F1}).");
+                break;
+            }
+        }
+    }
+
+    if (contactAcquiredTick == -1)
+    {
+        Console.WriteLine("[WARN] Contact was not spotted within initial search window.");
+        return;
+    }
+
+    // Retreat BRDM-2 behind courtyard building to break line of sight
+    session.Move(brdmId, new Vector2(2450f, 2300f));
+    Console.WriteLine("[3] BRDM-2 retreating behind Town-West building (2450, 2300) to break line of sight.");
+
+    int contactLostTick = -1;
+    int lastReportedAgeSecond = 0;
+    for (int f = 0; f < 500; f++)
+    {
+        session.Advance(0.016667);
+        if (session.Replica.TryGetContact(spottedContactId, out ContactObservation c))
+        {
+            if (c.State == ContactState.LastKnown && contactLostTick == -1)
+            {
+                contactLostTick = sim.Tick;
+                Console.WriteLine($"[4] Contact #{c.Id.Value} transitioned to LastKnown at tick {sim.Tick} (frozen pos: {c.Position.X:F1}, {c.Position.Y:F1}).");
+            }
+            if (contactLostTick != -1)
+            {
+                int ageSecond = (int)((sim.Tick - c.LastSeenTick) / (float)Simulation.TickRate);
+                if (ageSecond > lastReportedAgeSecond && ageSecond <= 5)
+                {
+                    lastReportedAgeSecond = ageSecond;
+                    float ageExact = (sim.Tick - c.LastSeenTick) / (float)Simulation.TickRate;
+                    Console.WriteLine($"    HUD RoleBadgeOverlay & SelectionCard: Contact #{c.Id.Value} age is {ageExact:F1}s (LastSeenTick: {c.LastSeenTick}, ServerTick: {sim.Tick}).");
+                }
+            }
+        }
+        else if (contactLostTick != -1)
+        {
+            Console.WriteLine($"[5] Contact #{spottedContactId.Value} expired / removed from ClientReplica at tick {sim.Tick}.");
+            break;
+        }
+    }
+
+    Console.WriteLine("[PASS] Ustye-Raid contact memory & presentation reproduction complete.");
 }
 
 internal static class GroupBenchmarkHelpers
