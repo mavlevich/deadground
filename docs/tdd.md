@@ -61,7 +61,7 @@ Non-goals for now:
 |---|---|---|
 | Entity storage | Arch ECS (provisional choice), or plain arrays per component | Start with Arch. Storage stays hidden inside `Engine.Core`, so a switch is local. Revisit if it gets in the way of saves or snapshots. |
 | Allied intel in 2v2 | Full sharing, or delayed or limited sharing | Game design decision. Hostility is evaluated by team mapping (allies on the same team are never tracked as enemy contacts), but how contact intelligence is shared or grouped across allied players is deferred to 2v2. |
-| Contact correlation tuning | Time window and dynamic speed-based distance gate for keeping the same contact ID | Play testing in M1 (section 7.1). |
+| Contact correlation tuning | Time window and same-position tolerance gate for keeping the same contact ID | Play testing in M1 (section 7.1). |
 | Save format | MemoryPack in version-tolerant mode, or our own binary writer | Decided in M1 when the first save is implemented. |
 | Automatic reverse | Reverse only on explicit order, or also when the destination is close behind the vehicle | Play testing after heading lands (section 9.5). |
 | Direct fire numbers | Hit probability curves, movement penalties, ranging bonus, armor values per side | First values from period sources, then play testing (section 12.3). |
@@ -233,11 +233,14 @@ Seen means known:
 Contact lifecycle:
 
 - A contact stays the same while the side keeps a continuous track.
-- When the track is lost, the contact becomes a last known contact and ages.
-- When an enemy is detected again, the server reuses the old contact only if a real observer could make that link: inside a correlation time window (default 60 ticks / 3.0 s), and within a dynamic distance gate bounded by plausible speed: `min(MaxGate, Slack + elapsedSeconds * MaxCorrelationSpeed)`. Global plausible speed comes from tuning (`MaxCorrelationSpeed`), never from the true entity speed, to prevent truth information leaks. Otherwise it creates a new contact. The server knows the truth, but it must not use it to link contacts beyond this rule, or it leaks information.
-- Old contacts expire after a time set in data (`MemoryDurationTicks`, default 100 ticks / 5.0 s).
+- When the track is lost, the contact transitions to `LastKnown` and ages based on `LastSeenTick` and current server tick. Marker coordinates, vehicle type, and classification remain frozen.
+- While the previous position A is hidden in fog of war, any new detection at position B creates a separate `Current` contact. The old marker at A remains, regardless of vehicle type or proximity. Vehicle type match alone never links separate positions.
+- Rediscovery at same position: When a detected unit matches the observed position of an existing `LastKnown` marker within `SamePositionTolerance` (default 3.0 m) on the identical `SupportSurface` within the correlation time window (`CorrelationWindowTicks`, default 60 ticks / 3.0 s), the contact resumes under the existing `ContactId` and transitions back to `Current`. The old position must have confirmed line of sight by a friendly observer; while the old position remains occluded in fog of war, any new sighting receives a separate contact.
+- Empty position confirmation: Friendly observers actively recheck `LastKnown` contact positions during perception evaluations. If a friendly observer has the marker within sensor range, on the matching support surface (or with appropriate bridge volume checks), and has unobstructed line of sight to the target observation points, but detects no target there, the position is confirmed empty and the `LastKnown` contact is removed immediately without waiting for timeout. If the position is actively occupied by an observed target on that support surface, it is not empty.
+- Occlusion and multi-surface isolation: If the marker position remains occluded by terrain, buildings, or outside friendly sensor range, the marker is preserved. An observer under a bridge deck (`SupportSurface == 0`) looking up at a deck marker (`SupportSurface > 0`) cannot confirm the deck empty because the underside structure blocks line of sight.
+- Fallback expiry: Unverified markers expire after a configurable duration (`MemoryDurationTicks`, default 100 ticks / 5.0 s). Hidden destruction never removes markers early; empty position recheck or fallback expiry handles removal.
 
-The window, slack, and speed gate are tuned in data.
+The correlation window, same-position tolerance (3.0 m), and memory duration are tuned in data (`DetectionTuning`).
 
 ### 7.2 Known world state
 

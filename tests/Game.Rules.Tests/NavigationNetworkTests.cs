@@ -545,7 +545,7 @@ public sealed class NavigationNetworkTests
         UnitCatalog catalog = PrototypeScenario.LoadCatalog();
 
         DetectionTuning lifecycleTuning = new(
-            memoryDurationTicks: 30,
+            memoryDurationTicks: 100,
             correlationWindowTicks: 50,
             correlationDistanceGate: 30.0f,
             evaluationIntervalTicks: 2);
@@ -566,7 +566,8 @@ public sealed class NavigationNetworkTests
         ContactObservation seen = p1Knowledge.Contacts[0];
         Assert.Equal(ContactState.Current, seen.State);
 
-        // Move enemy behind the 6m building to (60, 45) and specify final facing
+        // Move observer out of range to (10, 100) so (60, 25) is in fog of war, and move enemy behind building to (60, 45) with final facing
+        world.SetPosition(world.GetUnitAt(0).Id, new Vector2(10f, 100f));
         sim.TryEnqueue(2, new MoveCommand(1, sim.Tick, enemy, new Vector2(60f, 45f), FinalFacing: 2.5f));
 
         // Advance simulation until enemy is behind building and turns

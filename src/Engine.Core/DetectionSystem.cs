@@ -21,6 +21,9 @@ public sealed class DetectionSystem : ISimulationSystem
     private readonly uint[] _observedBitmask;
     private readonly SideContactTracker.ObservedTarget[] _observedTargetsBuffer;
     private readonly int[] _observedCounts;
+    private readonly int[] _activeObserverIndices;
+    private readonly int[] _activeObserversCounts;
+    private readonly ContactId[] _emptyContactBuffer;
     private readonly Vector2[] _unitPositions;
     private readonly float[] _unitGroundHeights;
     private readonly int[] _unitOwners;
@@ -44,6 +47,7 @@ public sealed class DetectionSystem : ISimulationSystem
     public int CandidateQueriesCount { get; private set; }
     public int LosQueriesCount { get; private set; }
     public int ObservationsCount { get; private set; }
+    public int ConfirmedEmptyPositionsCount { get; private set; }
 
     public delegate void ObservationEstablishedDelegate(
         int tick,
@@ -85,6 +89,9 @@ public sealed class DetectionSystem : ISimulationSystem
         _observedBitmask = new uint[maxSides * _wordsPerSide];
         _observedTargetsBuffer = new SideContactTracker.ObservedTarget[maxSides * maxUnits];
         _observedCounts = new int[maxSides];
+        _activeObserverIndices = new int[maxSides * maxUnits];
+        _activeObserversCounts = new int[maxSides];
+        _emptyContactBuffer = new ContactId[maxUnits];
         _unitPositions = new Vector2[maxUnits];
         _unitGroundHeights = new float[maxUnits];
         _unitOwners = new int[maxUnits];
@@ -107,6 +114,7 @@ public sealed class DetectionSystem : ISimulationSystem
         CandidateQueriesCount = 0;
         LosQueriesCount = 0;
         ObservationsCount = 0;
+        ConfirmedEmptyPositionsCount = 0;
 
         int unitCount = world.Count;
 
@@ -165,6 +173,7 @@ public sealed class DetectionSystem : ISimulationSystem
         // 2. Prepare side trackers and clear per-step observation buffers
         Array.Clear(_observedBitmask);
         Array.Clear(_observedCounts);
+        Array.Clear(_activeObserversCounts);
         for (int s = 0; s < _trackers.Length; s++)
         {
             _trackers[s].BeginDetectionStep();
@@ -187,6 +196,13 @@ public sealed class DetectionSystem : ISimulationSystem
 
             if (!_unitHasSensor[i])
                 continue;
+
+            int actCount = _activeObserversCounts[sideIndex];
+            if (actCount < _maxUnits)
+            {
+                _activeObserverIndices[sideIndex * _maxUnits + actCount] = i;
+                _activeObserversCounts[sideIndex] = actCount + 1;
+            }
 
             Vector3 eyePos = _unitEyePos[i];
             float sensorRange = _unitSensorRange[i];
@@ -283,16 +299,146 @@ public sealed class DetectionSystem : ISimulationSystem
             }
         }
 
-        // 4. Batch-register observations and finalize side trackers
+        // 4. Verify line of sight to old positions of LastKnown entries, and batch-register observations
         for (int s = 0; s < _trackers.Length; s++)
         {
+            int activeObsCount = _activeObserversCounts[s];
+            SideContactTracker tracker = _trackers[s];
+            if (activeObsCount > 0)
+            {
+                ReadOnlySpan<SideContactTracker.Entry> internalEntries = tracker.InternalEntries;
+                for (int e = 0; e < internalEntries.Length; e++)
+                {
+                    ref readonly SideContactTracker.Entry entry = ref internalEntries[e];
+                    if (entry.State == ContactState.LastKnown &&
+                        IsPositionInLineOfSight(entry.Position, entry.SupportSurface, entry.Type, s))
+                    {
+                        tracker.MarkPositionObserved(e);
+                    }
+                }
+            }
+
             int count = _observedCounts[s];
             ReadOnlySpan<SideContactTracker.ObservedTarget> targets = count > 0
                 ? _observedTargetsBuffer.AsSpan(s * _maxUnits, count)
                 : [];
-            _trackers[s].RegisterObservations(targets, tick);
+            tracker.RegisterObservations(targets, tick);
+        }
+
+        // 5. Re-check LastKnown contacts for confirmed empty positions
+        for (int s = 0; s < _trackers.Length; s++)
+        {
+            SideContactTracker tracker = _trackers[s];
+            ReadOnlySpan<SideContactTracker.Entry> entries = tracker.InternalEntries;
+            int emptyCount = 0;
+            int obsCount = _observedCounts[s];
+            ReadOnlySpan<SideContactTracker.ObservedTarget> obsTargets = obsCount > 0
+                ? _observedTargetsBuffer.AsSpan(s * _maxUnits, obsCount)
+                : [];
+            float toleranceSq = _tuning.SamePositionTolerance * _tuning.SamePositionTolerance;
+
+            for (int e = 0; e < entries.Length; e++)
+            {
+                ref readonly SideContactTracker.Entry entry = ref entries[e];
+                if (entry.State != ContactState.LastKnown || entry.ObservedThisStep)
+                    continue;
+
+                // Only positions with confirmed line of sight can be confirmed empty
+                if (!entry.PositionObservedThisStep)
+                    continue;
+
+                // Check if position is occupied by any current observation of this side on the same support surface
+                bool isPositionOccupied = false;
+                for (int t = 0; t < obsTargets.Length; t++)
+                {
+                    ref readonly SideContactTracker.ObservedTarget target = ref obsTargets[t];
+                    if (target.SupportSurface == entry.SupportSurface &&
+                        Vector2.DistanceSquared(target.Position, entry.Position) <= toleranceSq)
+                    {
+                        isPositionOccupied = true;
+                        break;
+                    }
+                }
+
+                if (isPositionOccupied)
+                    continue;
+
+                if (emptyCount < _maxUnits)
+                {
+                    _emptyContactBuffer[emptyCount++] = entry.Id;
+                }
+            }
+
+            if (emptyCount > 0)
+            {
+                ConfirmedEmptyPositionsCount += emptyCount;
+                tracker.RemoveConfirmedEmpty(_emptyContactBuffer.AsSpan(0, emptyCount));
+            }
+        }
+
+        // 6. Finalize side trackers: transition unobserved current contacts and expire
+        for (int s = 0; s < _trackers.Length; s++)
+        {
             _trackers[s].EndDetectionStep(tick);
         }
+    }
+
+    private bool IsPositionInLineOfSight(Vector2 lkPos, uint supportSurface, ushort unitType, int sideIndex)
+    {
+        int activeObsCount = _activeObserversCounts[sideIndex];
+        if (activeObsCount == 0)
+            return false;
+
+        float groundY = _geometry.GetSurfaceHeight(lkPos, supportSurface);
+        bool hasProfile = _catalog.TryGetProfile(unitType, out UnitPerceptionProfile profile);
+        TargetObservationPoints? points = hasProfile ? profile.TargetPoints : null;
+
+        for (int o = 0; o < activeObsCount; o++)
+        {
+            int obsIndex = _activeObserverIndices[sideIndex * _maxUnits + o];
+            float range = _unitSensorRange[obsIndex];
+            float rangeSq = range * range;
+
+            if (Vector2.DistanceSquared(_unitPositions[obsIndex], lkPos) > rangeSq)
+                continue;
+
+            Vector3 eyePos = _unitEyePos[obsIndex];
+
+            if (points is not null && points.RelativeHeights.Length > 0)
+            {
+                Vector3 topPt = new(lkPos.X, groundY + points.RelativeHeights[^1], lkPos.Y);
+                LosQueriesCount++;
+                if (_geometry.IsLineOfSightClear(eyePos, topPt, _losContext, out bool blockedByTerrain))
+                {
+                    return true;
+                }
+
+                if (!blockedByTerrain && points.RelativeHeights.Length > 1)
+                {
+                    for (int p = points.RelativeHeights.Length - 2; p >= 0; p--)
+                    {
+                        Vector3 lowerPt = new(lkPos.X, groundY + points.RelativeHeights[p], lkPos.Y);
+                        LosQueriesCount++;
+                        if (_geometry.IsLineOfSightClear(eyePos, lowerPt, _losContext, out bool lowerBlocked))
+                        {
+                            return true;
+                        }
+                        if (lowerBlocked) break;
+                    }
+                }
+            }
+            else
+            {
+                Vector3 defaultPt = new(lkPos.X, groundY + 1.8f, lkPos.Y);
+                LosQueriesCount++;
+                if (_geometry.IsLineOfSightClear(eyePos, defaultPt, _losContext, out _))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

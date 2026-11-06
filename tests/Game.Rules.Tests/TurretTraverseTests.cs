@@ -262,8 +262,9 @@ public sealed class TurretTraverseTests
         UnitCatalog catalog = ColdWarContent.LoadCatalog();
         const int size = 65;
         HeightMap map = new(size, size, 10f, 0.01f, new ushort[size * size]);
-        OpaqueStructure wall = new(new StructureId(1), minX: 30f, minY: 0f, minZ: 0f, maxX: 32f, maxY: 10f, maxZ: 50f, isGrounded: true);
-        StaticGeometry geo = new(map, [wall]);
+        OpaqueStructure wall1 = new(new StructureId(1), minX: 30f, minY: 0f, minZ: 0f, maxX: 32f, maxY: 10f, maxZ: 50f, isGrounded: true);
+        OpaqueStructure wall2 = new(new StructureId(2), minX: 22f, minY: 0f, minZ: 30f, maxX: 24f, maxY: 10f, maxZ: 80f, isGrounded: true);
+        StaticGeometry geo = new(map, [wall1, wall2]);
         OpsRules rules = new(geo, catalog, null);
         WorldState world = new(map);
         using Simulation sim = new(world, rules);
@@ -298,7 +299,8 @@ public sealed class TurretTraverseTests
 
         ContactId contactId = currentContact.Id;
 
-        // Move target behind the wall to (40, 20) so line of sight is obstructed
+        // Move observer behind wall2 to (20, 40) and target behind wall1 to (40, 20) so both are in fog of war
+        world.SetPosition(observer, new Vector2(20f, 40f));
         world.SetPosition(target, new Vector2(40f, 20f));
         // Detection runs every 4 ticks; step 5 times to transition to LastKnown
         for (int i = 0; i < 5; i++) sim.Step();

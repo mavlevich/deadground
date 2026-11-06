@@ -57,6 +57,7 @@ public sealed class DetectionTuning
     public const float DefaultMaxCorrelationSpeed = 10.0f;
     public const float DefaultSlack = 5.0f;
     public const float DefaultMaxGate = 35.0f;
+    public const float DefaultSamePositionTolerance = 3.0f;
 
     public int MemoryDurationTicks { get; }
     public int CorrelationWindowTicks { get; }
@@ -65,6 +66,7 @@ public sealed class DetectionTuning
     public float MaxCorrelationSpeed { get; }
     public float Slack { get; }
     public float MaxGate { get; }
+    public float SamePositionTolerance { get; }
 
     public DetectionTuning(
         int memoryDurationTicks = DefaultMemoryDurationTicks,
@@ -73,7 +75,8 @@ public sealed class DetectionTuning
         int evaluationIntervalTicks = DefaultEvaluationIntervalTicks,
         float maxCorrelationSpeed = DefaultMaxCorrelationSpeed,
         float slack = DefaultSlack,
-        float? maxGate = null)
+        float? maxGate = null,
+        float samePositionTolerance = DefaultSamePositionTolerance)
     {
         if (memoryDurationTicks <= 0)
             throw new ArgumentOutOfRangeException(nameof(memoryDurationTicks), "Memory duration must be positive.");
@@ -87,6 +90,8 @@ public sealed class DetectionTuning
             throw new ArgumentOutOfRangeException(nameof(maxCorrelationSpeed), "Max correlation speed must be positive and finite.");
         if (!float.IsFinite(slack) || slack < 0)
             throw new ArgumentOutOfRangeException(nameof(slack), "Slack must be non-negative and finite.");
+        if (!float.IsFinite(samePositionTolerance) || samePositionTolerance <= 0)
+            throw new ArgumentOutOfRangeException(nameof(samePositionTolerance), "Same position tolerance must be positive and finite.");
 
         float resolvedMaxGate = maxGate ?? MathF.Max(correlationDistanceGate, DefaultMaxGate);
         if (!float.IsFinite(resolvedMaxGate) || resolvedMaxGate <= 0)
@@ -99,5 +104,6 @@ public sealed class DetectionTuning
         MaxCorrelationSpeed = maxCorrelationSpeed;
         Slack = slack;
         MaxGate = resolvedMaxGate;
+        SamePositionTolerance = samePositionTolerance;
     }
 }
