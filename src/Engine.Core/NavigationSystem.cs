@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
@@ -60,6 +61,15 @@ public sealed class NavigationSystem : ISimulationSystem
     private readonly float[] _localClearance;
     private int _areaPrepCurrentRow;
     private int _areaPrepCurrentCol;
+
+    // Cached prepared window for static clearance reuse
+    private float _preparedWinMinX;
+    private float _preparedWinMinZ;
+    private int _preparedWinCols;
+    private int _preparedWinRows;
+    private TraversabilityCapabilities _preparedCapabilities;
+    private uint _preparedGeometryVersion;
+    private bool _preparedValid;
 
     // Local A* preallocated search buffers
     private readonly int _virtualGoalCell;
@@ -163,6 +173,7 @@ public sealed class NavigationSystem : ISimulationSystem
     }
     private readonly GlobalPlanKey[] _cachedPlanKeys;
     private readonly int[] _cachedPlanCounts;
+    private readonly uint[] _cachedPlanVersions;
     private readonly Vector2[] _cachedPlanPortals;
     private int _nextCachedPlan;
     private GlobalPlanKey _activePlanKey;
@@ -175,6 +186,23 @@ public sealed class NavigationSystem : ISimulationSystem
     public NavigationTuning Tuning => _tuning;
     public int PendingRequests => _queueCount + (_hasActiveSearch ? 1 : 0);
     public NavigationSearchStage ActiveStage => _activeStage;
+    internal bool IsWindowCacheValid => _preparedValid;
+
+    internal bool TryGetCachedLocalClearanceAt(Vector2 point, out float clearance)
+    {
+        if (_preparedValid &&
+            _preparedGeometryVersion == _grid.GeometryVersion &&
+            point.X >= _preparedWinMinX && point.X < _preparedWinMinX + _preparedWinCols * _grid.CellSize &&
+            point.Y >= _preparedWinMinZ && point.Y < _preparedWinMinZ + _preparedWinRows * _grid.CellSize)
+        {
+            int col = (int)((point.X - _preparedWinMinX) / _grid.CellSize);
+            int row = (int)((point.Y - _preparedWinMinZ) / _grid.CellSize);
+            clearance = _localClearance[row * _preparedWinCols + col];
+            return true;
+        }
+        clearance = 0f;
+        return false;
+    }
 
     // Metrics and counters
     public int NodesExpandedThisTick => GlobalExpansionsThisTick + LocalExpansionsThisTick;
@@ -198,6 +226,32 @@ public sealed class NavigationSystem : ISimulationSystem
 
     public int ChunkRequestsCompleted { get; private set; }
     public int ChunkWaitTicks { get; private set; }
+
+    /// <summary>Diagnostic timing only, non-deterministic. Must not be used in gameplay logic.</summary>
+    public double LastTickGlobalPlanMs { get; private set; }
+    /// <summary>Diagnostic timing only, non-deterministic. Must not be used in gameplay logic.</summary>
+    public double LastTickAreaPrepMs { get; private set; }
+    /// <summary>Diagnostic timing only, non-deterministic. Must not be used in gameplay logic.</summary>
+    public double LastTickLocalPlanMs { get; private set; }
+    /// <summary>Diagnostic timing only, non-deterministic. Must not be used in gameplay logic.</summary>
+    public double LastTickSmoothingMs { get; private set; }
+    /// <summary>Diagnostic timing only, non-deterministic. Must not be used in gameplay logic.</summary>
+    public double LastTickMovementMs { get; private set; }
+    /// <summary>Diagnostic timing only, non-deterministic. Must not be used in gameplay logic.</summary>
+    public double LastTickSeparationMs { get; private set; }
+
+    /// <summary>Diagnostic timing only, non-deterministic. Must not be used in gameplay logic.</summary>
+    public double TotalGlobalPlanMs { get; private set; }
+    /// <summary>Diagnostic timing only, non-deterministic. Must not be used in gameplay logic.</summary>
+    public double TotalAreaPrepMs { get; private set; }
+    /// <summary>Diagnostic timing only, non-deterministic. Must not be used in gameplay logic.</summary>
+    public double TotalLocalPlanMs { get; private set; }
+    /// <summary>Diagnostic timing only, non-deterministic. Must not be used in gameplay logic.</summary>
+    public double TotalSmoothingMs { get; private set; }
+    /// <summary>Diagnostic timing only, non-deterministic. Must not be used in gameplay logic.</summary>
+    public double TotalMovementMs { get; private set; }
+    /// <summary>Diagnostic timing only, non-deterministic. Must not be used in gameplay logic.</summary>
+    public double TotalSeparationMs { get; private set; }
 
     public VehicleSeparationSystem Separation => _separation;
     public int SeparationCandidatesChecked => _separation.CandidatesChecked;
@@ -257,6 +311,7 @@ public sealed class NavigationSystem : ISimulationSystem
             throw new ArgumentOutOfRangeException(nameof(tuning), "Global plan cache entries cannot be negative.");
         _cachedPlanKeys = new GlobalPlanKey[_tuning.GlobalPlanCacheEntries];
         _cachedPlanCounts = new int[_tuning.GlobalPlanCacheEntries];
+        _cachedPlanVersions = new uint[_tuning.GlobalPlanCacheEntries];
         _cachedPlanPortals = new Vector2[checked(_tuning.GlobalPlanCacheEntries * MaxGlobalPlanPortals)];
 
         _requestQueue = new PathRequest[_tuning.MaxPendingRequests];
@@ -573,6 +628,10 @@ public sealed class NavigationSystem : ISimulationSystem
 
     private void CancelActiveSearch()
     {
+        if (_activeStage == NavigationSearchStage.AreaPreparation)
+        {
+            _preparedValid = false;
+        }
         _hasActiveSearch = false;
         _activeStage = NavigationSearchStage.None;
         _activeSurface = 0;
@@ -995,12 +1054,29 @@ public sealed class NavigationSystem : ISimulationSystem
         LocalExpansionsThisTick = 0;
         SmoothingRaycastsThisTick = 0;
         AreaPrepCellsThisTick = 0;
+        LastTickGlobalPlanMs = 0;
+        LastTickAreaPrepMs = 0;
+        LastTickLocalPlanMs = 0;
+        LastTickSmoothingMs = 0;
+        LastTickMovementMs = 0;
+        LastTickSeparationMs = 0;
 
         // 1. Process pathfinding requests across hierarchical stages
         ProcessPlanning(world);
 
         // 2. Follow established routes and advance unit positions
-        ProcessMovement(world);
+        if (_tuning.CollectStageTimings)
+        {
+            long moveStart = Stopwatch.GetTimestamp();
+            ProcessMovement(world);
+            double totalMoveMs = Stopwatch.GetElapsedTime(moveStart).TotalMilliseconds;
+            LastTickMovementMs = Math.Max(0.0, totalMoveMs - LastTickSeparationMs);
+            TotalMovementMs += LastTickMovementMs;
+        }
+        else
+        {
+            ProcessMovement(world);
+        }
     }
 
     private void ProcessPlanning(WorldState world)
@@ -1486,16 +1562,60 @@ public sealed class NavigationSystem : ISimulationSystem
         switch (_activeStage)
         {
             case NavigationSearchStage.GlobalPlanning:
-                return AdvanceGlobalPlanning(world, slot, unit);
+                {
+                    if (_tuning.CollectStageTimings)
+                    {
+                        long start = Stopwatch.GetTimestamp();
+                        bool res = AdvanceGlobalPlanning(world, slot, unit);
+                        double ms = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+                        LastTickGlobalPlanMs += ms;
+                        TotalGlobalPlanMs += ms;
+                        return res;
+                    }
+                    return AdvanceGlobalPlanning(world, slot, unit);
+                }
 
             case NavigationSearchStage.AreaPreparation:
-                return AdvanceAreaPreparation(world, slot, unit);
+                {
+                    if (_tuning.CollectStageTimings)
+                    {
+                        long start = Stopwatch.GetTimestamp();
+                        bool res = AdvanceAreaPreparation(world, slot, unit);
+                        double ms = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+                        LastTickAreaPrepMs += ms;
+                        TotalAreaPrepMs += ms;
+                        return res;
+                    }
+                    return AdvanceAreaPreparation(world, slot, unit);
+                }
 
             case NavigationSearchStage.LocalPlanning:
-                return AdvanceLocalPlanning(world, slot, unit);
+                {
+                    if (_tuning.CollectStageTimings)
+                    {
+                        long start = Stopwatch.GetTimestamp();
+                        bool res = AdvanceLocalPlanning(world, slot, unit);
+                        double ms = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+                        LastTickLocalPlanMs += ms;
+                        TotalLocalPlanMs += ms;
+                        return res;
+                    }
+                    return AdvanceLocalPlanning(world, slot, unit);
+                }
 
             case NavigationSearchStage.PathSmoothing:
-                return AdvancePathSmoothing(world, slot, unit);
+                {
+                    if (_tuning.CollectStageTimings)
+                    {
+                        long start = Stopwatch.GetTimestamp();
+                        bool res = AdvancePathSmoothing(world, slot, unit);
+                        double ms = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+                        LastTickSmoothingMs += ms;
+                        TotalSmoothingMs += ms;
+                        return res;
+                    }
+                    return AdvancePathSmoothing(world, slot, unit);
+                }
 
             default:
                 CancelActiveSearch();
@@ -1559,7 +1679,7 @@ public sealed class NavigationSystem : ISimulationSystem
         for (int i = 0; i < _cachedPlanCounts.Length; i++)
         {
             int count = _cachedPlanCounts[i];
-            if (count == 0 || !_cachedPlanKeys[i].Matches(_activePlanKey)) continue;
+            if (count == 0 || _cachedPlanVersions[i] != _grid.GeometryVersion || !_cachedPlanKeys[i].Matches(_activePlanKey)) continue;
             _cachedPlanPortals.AsSpan(i * MaxGlobalPlanPortals, count).CopyTo(_activeGlobalPortals);
             _activeGlobalPortalCount = count;
             GlobalPlanCacheHits++;
@@ -1576,6 +1696,7 @@ public sealed class NavigationSystem : ISimulationSystem
         _nextCachedPlan = (index + 1) % _cachedPlanCounts.Length;
         _cachedPlanKeys[index] = _activePlanKey;
         _cachedPlanCounts[index] = _activeGlobalPortalCount;
+        _cachedPlanVersions[index] = _grid.GeometryVersion;
         _activeGlobalPortals.AsSpan(0, _activeGlobalPortalCount).CopyTo(_cachedPlanPortals.AsSpan(index * MaxGlobalPlanPortals));
     }
 
@@ -1625,6 +1746,27 @@ public sealed class NavigationSystem : ISimulationSystem
             }
         }
 
+        // Check if previously prepared static window fully covers the required bounds
+        if (_preparedValid &&
+            _preparedGeometryVersion == _grid.GeometryVersion &&
+            _preparedCapabilities == _activeRequest.Capabilities &&
+            minX >= _preparedWinMinX &&
+            maxX <= _preparedWinMinX + _preparedWinCols * _grid.CellSize &&
+            minZ >= _preparedWinMinZ &&
+            maxZ <= _preparedWinMinZ + _preparedWinRows * _grid.CellSize)
+        {
+            _localWinMinX = _preparedWinMinX;
+            _localWinMinZ = _preparedWinMinZ;
+            _localWinCols = _preparedWinCols;
+            _localWinRows = _preparedWinRows;
+            _localWinTotalCells = _localWinCols * _localWinRows;
+            _areaPrepCurrentRow = _localWinRows;
+            _areaPrepCurrentCol = 0;
+            return;
+        }
+
+        _preparedValid = false;
+
         _localWinMinX = minX;
         _localWinMinZ = minZ;
         _localWinCols = Math.Clamp((int)MathF.Ceiling((maxX - _localWinMinX) / _grid.CellSize), 1, maxDimCells);
@@ -1659,7 +1801,7 @@ public sealed class NavigationSystem : ISimulationSystem
             while (_areaPrepCurrentCol < _localWinCols && AreaPrepCellsThisTick < _tuning.MaxAreaPrepCellsPerTick)
             {
                 float cx = _localWinMinX + (_areaPrepCurrentCol + 0.5f) * _grid.CellSize;
-                _localClearance[baseIdx + _areaPrepCurrentCol] = _grid.ComputePointClearance(new Vector2(cx, cz), _activeRequest.Capabilities);
+                _localClearance[baseIdx + _areaPrepCurrentCol] = _grid.ComputePointClearance(new Vector2(cx, cz), _activeRequest.Capabilities, supportSurface: 0, maxClearance: 50.0f);
                 _areaPrepCurrentCol++;
                 AreaPrepCellsThisTick++;
                 TotalAreaPrepCells++;
@@ -1674,9 +1816,18 @@ public sealed class NavigationSystem : ISimulationSystem
 
         if (_areaPrepCurrentRow >= _localWinRows)
         {
+            _preparedWinMinX = _localWinMinX;
+            _preparedWinMinZ = _localWinMinZ;
+            _preparedWinCols = _localWinCols;
+            _preparedWinRows = _localWinRows;
+            _preparedCapabilities = _activeRequest.Capabilities;
+            _preparedGeometryVersion = _grid.GeometryVersion;
+            _preparedValid = true;
+
             InitLocalSearch();
             _activeStage = NavigationSearchStage.LocalPlanning;
-            return false;
+            bool spentMostOfBudget = AreaPrepCellsThisTick >= _tuning.MaxAreaPrepCellsPerTick / 2;
+            return spentMostOfBudget;
         }
 
         return true;
@@ -2440,7 +2591,18 @@ public sealed class NavigationSystem : ISimulationSystem
         float dt = Simulation.TickSeconds;
         int unitCount = world.Count;
 
-        _separation.BeginTick(world, _catalog);
+        if (_tuning.CollectStageTimings)
+        {
+            long sepBeginStart = Stopwatch.GetTimestamp();
+            _separation.BeginTick(world, _catalog);
+            double sepBeginMs = Stopwatch.GetElapsedTime(sepBeginStart).TotalMilliseconds;
+            LastTickSeparationMs += sepBeginMs;
+            TotalSeparationMs += sepBeginMs;
+        }
+        else
+        {
+            _separation.BeginTick(world, _catalog);
+        }
         EnsureCandidateArraysCapacity(unitCount);
         Array.Clear(_candidateDisplacements, 0, unitCount);
         Array.Clear(_candidateSpeeds, 0, unitCount);
@@ -2701,7 +2863,23 @@ public sealed class NavigationSystem : ISimulationSystem
                             {
                                 Vector2 kStep = stepEnd - stepStart;
                                 float kSpeed = kStep.Length() / dt;
-                                if (effectiveColRadius > 0f && _separation.CheckAndResolveSweptStep(world, _catalog, i, stepStart, ref kStep, ref kSpeed, currentSurface, effectiveColRadius, vehicleHeight, _candidateDisplacements, dt))
+                                bool hasSeparation = false;
+                                if (effectiveColRadius > 0f)
+                                {
+                                    if (_tuning.CollectStageTimings)
+                                    {
+                                        long sepStepStart = Stopwatch.GetTimestamp();
+                                        hasSeparation = _separation.CheckAndResolveSweptStep(world, _catalog, i, stepStart, ref kStep, ref kSpeed, currentSurface, effectiveColRadius, vehicleHeight, _candidateDisplacements, dt);
+                                        double sepStepMs = Stopwatch.GetElapsedTime(sepStepStart).TotalMilliseconds;
+                                        LastTickSeparationMs += sepStepMs;
+                                        TotalSeparationMs += sepStepMs;
+                                    }
+                                    else
+                                    {
+                                        hasSeparation = _separation.CheckAndResolveSweptStep(world, _catalog, i, stepStart, ref kStep, ref kSpeed, currentSurface, effectiveColRadius, vehicleHeight, _candidateDisplacements, dt);
+                                    }
+                                }
+                                if (hasSeparation)
                                 {
                                     stepEnd = stepStart + kStep;
                                     remainingDistance = 0f;

@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 
 namespace DeadGround.Engine;
 
@@ -71,7 +72,6 @@ public sealed class DestinationEvaluator
 
     private readonly NavigationGrid.GroundedObstacle[] _obstacles;
     private readonly BridgeStructure[] _bridges;
-    private readonly TerrainObstacle[] _terrainObstacles;
     private readonly HeightMap? _heightMap;
 
     private readonly int _bucketCols;
@@ -80,13 +80,16 @@ public sealed class DestinationEvaluator
     private readonly int[] _bucketCounts;
     private readonly int[] _bucketObstacleIndices;
 
+    private readonly TerrainSpatialIndex _terrainIndex;
+    public TerrainSpatialIndex TerrainIndex => _terrainIndex;
+
     private readonly int[] _obstacleQueryStamp;
     private int _currentQueryStamp;
 
     public int GroundedObstacleCount => _obstacles.Length;
     public ReadOnlySpan<NavigationGrid.GroundedObstacle> GroundedObstacles => _obstacles;
     public ReadOnlySpan<BridgeStructure> Bridges => _bridges;
-    public ReadOnlySpan<TerrainObstacle> TerrainObstacles => _terrainObstacles;
+    public ReadOnlySpan<TerrainObstacle> TerrainObstacles => _terrainIndex.Obstacles;
     public HeightMap? HeightMap => _heightMap;
 
     public DestinationEvaluator(StaticGeometry geometry, float cellSize = NavigationTuning.DefaultCellSize)
@@ -95,7 +98,7 @@ public sealed class DestinationEvaluator
             geometry.HeightMap.Depth,
             FilterGroundedStructures(geometry.Structures),
             geometry.Bridges is { Count: > 0 } ? geometry.Bridges.ToArray() : [],
-            geometry.TerrainObstacles is { Count: > 0 } ? geometry.TerrainObstacles.ToArray() : [],
+            new TerrainSpatialIndex(geometry.HeightMap.Width, geometry.HeightMap.Depth, geometry.TerrainObstacles is { Count: > 0 } ? geometry.TerrainObstacles.ToArray() : []),
             cellSize,
             geometry.HeightMap)
     {
@@ -114,7 +117,7 @@ public sealed class DestinationEvaluator
             mapDepth,
             FilterGroundedStructures(structures),
             bridges.ToArray(),
-            terrainObstacles.ToArray(),
+            new TerrainSpatialIndex(mapWidth, mapDepth, terrainObstacles),
             cellSize,
             heightMap)
     {
@@ -126,6 +129,25 @@ public sealed class DestinationEvaluator
         NavigationGrid.GroundedObstacle[] obstacles,
         BridgeStructure[] bridges,
         TerrainObstacle[] terrainObstacles,
+        float cellSize = NavigationTuning.DefaultCellSize,
+        HeightMap? heightMap = null)
+        : this(
+            mapWidth,
+            mapDepth,
+            obstacles,
+            bridges,
+            new TerrainSpatialIndex(mapWidth, mapDepth, terrainObstacles),
+            cellSize,
+            heightMap)
+    {
+    }
+
+    public DestinationEvaluator(
+        float mapWidth,
+        float mapDepth,
+        NavigationGrid.GroundedObstacle[] obstacles,
+        BridgeStructure[] bridges,
+        TerrainSpatialIndex terrainIndex,
         float cellSize = NavigationTuning.DefaultCellSize,
         HeightMap? heightMap = null)
     {
@@ -144,7 +166,7 @@ public sealed class DestinationEvaluator
 
         _obstacles = obstacles ?? [];
         _bridges = bridges ?? [];
-        _terrainObstacles = terrainObstacles ?? [];
+        _terrainIndex = terrainIndex ?? new TerrainSpatialIndex(mapWidth, mapDepth, ReadOnlySpan<TerrainObstacle>.Empty);
         _heightMap = heightMap;
 
         _bucketCols = Math.Max(1, (int)MathF.Ceiling(MapWidth / DefaultSpatialBucketSize));
@@ -422,40 +444,13 @@ public sealed class DestinationEvaluator
         }
 
         // Check terrain obstacles (water, forest)
-        if (!bridgeCovered)
+        if (!bridgeCovered && _terrainIndex.TryFindBlockingObstacle(point, radius, capabilities, out TerrainObstacle? blockingObs))
         {
-            for (int t = 0; t < _terrainObstacles.Length; t++)
-            {
-                TerrainObstacle obs = _terrainObstacles[t];
-                if (obs.Blocks(capabilities))
-                {
-                    if (obs.Contains(point))
-                    {
-                        if ((obs.RequiredCapability & TraversabilityCapabilities.Water) != 0)
-                            return DestinationBlockReason.Water;
-                        if ((obs.RequiredCapability & TraversabilityCapabilities.DenseForest) != 0)
-                            return DestinationBlockReason.DenseForest;
-                        return DestinationBlockReason.InsufficientClearance;
-                    }
-                }
-            }
-
-            // Check if within effective radius of terrain obstacles
-            for (int t = 0; t < _terrainObstacles.Length; t++)
-            {
-                TerrainObstacle obs = _terrainObstacles[t];
-                if (obs.Blocks(capabilities))
-                {
-                    if (obs.DistanceTo(point) < effectiveRadius)
-                    {
-                        if ((obs.RequiredCapability & TraversabilityCapabilities.Water) != 0)
-                            return DestinationBlockReason.Water;
-                        if ((obs.RequiredCapability & TraversabilityCapabilities.DenseForest) != 0)
-                            return DestinationBlockReason.DenseForest;
-                        return DestinationBlockReason.InsufficientClearance;
-                    }
-                }
-            }
+            if ((blockingObs.RequiredCapability & TraversabilityCapabilities.Water) != 0)
+                return DestinationBlockReason.Water;
+            if ((blockingObs.RequiredCapability & TraversabilityCapabilities.DenseForest) != 0)
+                return DestinationBlockReason.DenseForest;
+            return DestinationBlockReason.InsufficientClearance;
         }
 
         // Check clearance to buildings
@@ -559,17 +554,10 @@ public sealed class DestinationEvaluator
         }
 
         // Terrain obstacles
-        if (!bridgeCovered)
+        if (!bridgeCovered && _terrainIndex.Count > 0)
         {
-            for (int t = 0; t < _terrainObstacles.Length; t++)
-            {
-                TerrainObstacle obs = _terrainObstacles[t];
-                if (obs.Blocks(capabilities))
-                {
-                    if (obs.DistanceTo(point) < effectiveRadius)
-                        return false;
-                }
-            }
+            if (!_terrainIndex.IsPointClear(point, radius, capabilities))
+                return false;
         }
 
         return true;
@@ -772,17 +760,10 @@ public sealed class DestinationEvaluator
         }
 
         // Terrain obstacles
-        if (!bridgeCovered && _terrainObstacles.Length > 0)
+        if (!bridgeCovered && _terrainIndex.Count > 0)
         {
-            for (int t = 0; t < _terrainObstacles.Length; t++)
-            {
-                TerrainObstacle obs = _terrainObstacles[t];
-                if (obs.Blocks(capabilities))
-                {
-                    if (SegmentIntersectsExpandedBox(start, end, obs.MinX, obs.MinZ, obs.MaxX, obs.MaxZ, effectiveRadius))
-                        return false;
-                }
-            }
+            if (!_terrainIndex.IsSegmentClear(start, end, radius, capabilities))
+                return false;
         }
 
         return true;
@@ -791,43 +772,76 @@ public sealed class DestinationEvaluator
     public float ComputePointClearance(
         Vector2 point,
         TraversabilityCapabilities capabilities = TraversabilityCapabilities.DefaultVehicle,
-        uint supportSurface = 0)
+        uint supportSurface = 0,
+        float maxClearance = float.PositiveInfinity)
     {
         float edgeDist = MathF.Min(MathF.Min(point.X, MapWidth - point.X), MathF.Min(point.Y, MapDepth - point.Y));
         if (edgeDist <= 0f) return 0f;
 
-        float clearance = edgeDist;
+        float clearance = MathF.Min(edgeDist, maxClearance);
 
         if (_obstacles.Length > 0)
         {
-            float searchRadius = MathF.Min(edgeDist, 50.0f);
-            int minBx = Math.Clamp((int)((point.X - searchRadius) / DefaultSpatialBucketSize), 0, _bucketCols - 1);
-            int maxBx = Math.Clamp((int)((point.X + searchRadius) / DefaultSpatialBucketSize), 0, _bucketCols - 1);
-            int minBz = Math.Clamp((int)((point.Y - searchRadius) / DefaultSpatialBucketSize), 0, _bucketRows - 1);
-            int maxBz = Math.Clamp((int)((point.Y + searchRadius) / DefaultSpatialBucketSize), 0, _bucketRows - 1);
+            int centerBx = Math.Clamp((int)(point.X / DefaultSpatialBucketSize), 0, _bucketCols - 1);
+            int centerBz = Math.Clamp((int)(point.Y / DefaultSpatialBucketSize), 0, _bucketRows - 1);
 
-            for (int bz = minBz; bz <= maxBz; bz++)
+            int centerBucket = centerBz * _bucketCols + centerBx;
+            int centerStart = _bucketOffsets[centerBucket];
+            int centerCount = _bucketCounts[centerBucket];
+            for (int i = 0; i < centerCount; i++)
             {
-                int row = bz * _bucketCols;
+                int obsIdx = _bucketObstacleIndices[centerStart + i];
+                ref readonly NavigationGrid.GroundedObstacle obs = ref _obstacles[obsIdx];
+                if (point.X >= obs.MinX && point.X <= obs.MaxX && point.Y >= obs.MinZ && point.Y <= obs.MaxZ)
+                    return 0f;
+
+                float dx = MathF.Max(0f, MathF.Max(obs.MinX - point.X, point.X - obs.MaxX));
+                float dz = MathF.Max(0f, MathF.Max(obs.MinZ - point.Y, point.Y - obs.MaxZ));
+                float dist = MathF.Sqrt(dx * dx + dz * dz);
+                if (dist < clearance) clearance = dist;
+            }
+
+            int maxRing = Math.Max(Math.Max(centerBx, _bucketCols - 1 - centerBx), Math.Max(centerBz, _bucketRows - 1 - centerBz));
+            for (int k = 1; k <= maxRing; k++)
+            {
+                float xMin = (centerBx - k + 1) * DefaultSpatialBucketSize;
+                float xMax = (centerBx + k) * DefaultSpatialBucketSize;
+                float zMin = (centerBz - k + 1) * DefaultSpatialBucketSize;
+                float zMax = (centerBz + k) * DefaultSpatialBucketSize;
+
+                float minDistToRing = MathF.Min(MathF.Min(point.X - xMin, xMax - point.X), MathF.Min(point.Y - zMin, zMax - point.Y));
+                if (minDistToRing >= clearance) break;
+
+                int minBx = centerBx - k;
+                int maxBx = centerBx + k;
+                int minBz = centerBz - k;
+                int maxBz = centerBz + k;
+
                 for (int bx = minBx; bx <= maxBx; bx++)
                 {
-                    int b = row + bx;
-                    int startIdx = _bucketOffsets[b];
-                    int count = _bucketCounts[b];
-                    for (int i = 0; i < count; i++)
+                    if (bx >= 0 && bx < _bucketCols)
                     {
-                        int obsIdx = _bucketObstacleIndices[startIdx + i];
-                        ref readonly NavigationGrid.GroundedObstacle obs = ref _obstacles[obsIdx];
-                        if (point.X >= obs.MinX && point.X <= obs.MaxX && point.Y >= obs.MinZ && point.Y <= obs.MaxZ)
-                            return 0f;
+                        if (minBz >= 0 && minBz < _bucketRows)
+                            CheckObstacleBucket(minBz * _bucketCols + bx, point, ref clearance);
+                        if (clearance <= 0f) return 0f;
 
-                        float dx = MathF.Max(0f, MathF.Max(obs.MinX - point.X, point.X - obs.MaxX));
-                        float dz = MathF.Max(0f, MathF.Max(obs.MinZ - point.Y, point.Y - obs.MaxZ));
-                        float dist = MathF.Sqrt(dx * dx + dz * dz);
-                        if (dist < clearance)
-                        {
-                            clearance = dist;
-                        }
+                        if (maxBz >= 0 && maxBz < _bucketRows)
+                            CheckObstacleBucket(maxBz * _bucketCols + bx, point, ref clearance);
+                        if (clearance <= 0f) return 0f;
+                    }
+                }
+
+                for (int bz = minBz + 1; bz <= maxBz - 1; bz++)
+                {
+                    if (bz >= 0 && bz < _bucketRows)
+                    {
+                        if (minBx >= 0 && minBx < _bucketCols)
+                            CheckObstacleBucket(bz * _bucketCols + minBx, point, ref clearance);
+                        if (clearance <= 0f) return 0f;
+
+                        if (maxBx >= 0 && maxBx < _bucketCols)
+                            CheckObstacleBucket(bz * _bucketCols + maxBx, point, ref clearance);
+                        if (clearance <= 0f) return 0f;
                     }
                 }
             }
@@ -845,22 +859,35 @@ public sealed class DestinationEvaluator
             }
         }
 
-        // Terrain obstacles
-        if (!bridgeCovered)
+        // Terrain obstacles via unified TerrainSpatialIndex
+        if (!bridgeCovered && _terrainIndex.Count > 0)
         {
-            for (int t = 0; t < _terrainObstacles.Length; t++)
-            {
-                TerrainObstacle obs = _terrainObstacles[t];
-                if (obs.Blocks(capabilities))
-                {
-                    if (obs.Contains(point)) return 0f;
-                    float dist = obs.DistanceTo(point);
-                    if (dist < clearance) clearance = dist;
-                }
-            }
+            clearance = _terrainIndex.ComputePointClearance(point, capabilities, clearance);
         }
 
         return MathF.Max(0f, clearance);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void CheckObstacleBucket(int b, Vector2 point, ref float clearance)
+    {
+        int start = _bucketOffsets[b];
+        int count = _bucketCounts[b];
+        for (int i = 0; i < count; i++)
+        {
+            int obsIdx = _bucketObstacleIndices[start + i];
+            ref readonly NavigationGrid.GroundedObstacle obs = ref _obstacles[obsIdx];
+            if (point.X >= obs.MinX && point.X <= obs.MaxX && point.Y >= obs.MinZ && point.Y <= obs.MaxZ)
+            {
+                clearance = 0f;
+                return;
+            }
+
+            float dx = MathF.Max(0f, MathF.Max(obs.MinX - point.X, point.X - obs.MaxX));
+            float dz = MathF.Max(0f, MathF.Max(obs.MinZ - point.Y, point.Y - obs.MaxZ));
+            float dist = MathF.Sqrt(dx * dx + dz * dz);
+            if (dist < clearance) clearance = dist;
+        }
     }
 
     public bool HasObstaclesInBox(float minX, float minZ, float maxX, float maxZ)
@@ -895,17 +922,7 @@ public sealed class DestinationEvaluator
 
     public bool HasTerrainObstaclesInBox(float minX, float minZ, float maxX, float maxZ, TraversabilityCapabilities capabilities)
     {
-        for (int i = 0; i < _terrainObstacles.Length; i++)
-        {
-            TerrainObstacle obs = _terrainObstacles[i];
-            if (obs.Blocks(capabilities) &&
-                obs.MaxX >= minX && obs.MinX <= maxX &&
-                obs.MaxZ >= minZ && obs.MinZ <= maxZ)
-            {
-                return true;
-            }
-        }
-        return false;
+        return _terrainIndex.HasObstaclesInBox(minX, minZ, maxX, maxZ, capabilities);
     }
 
     public bool HasBridgesInBox(float minX, float minZ, float maxX, float maxZ)
