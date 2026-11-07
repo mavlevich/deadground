@@ -24,14 +24,16 @@ public static class WireProtocol
     public const int SetFireStanceSize = 15;
     public const int CommandResultSize = 11;
     public const int MissionSize = 32;
-    public const int SnapshotHeaderSize = 16 + MissionSize;
+    public const int SnapshotHeaderSize = 18 + MissionSize;
     public const int UnitSize = 39;
     public const int MaxUnits = 1024;
     public const int ContactSize = 28;
     public const int MaxContacts = 256;
+    public const int WreckSize = 22;
+    public const int MaxWrecks = 128;
     public const int EventSize = 40;
     public const int MaxEvents = 64;
-    public const int MaxMessageSize = SnapshotHeaderSize + MaxUnits * UnitSize + MaxContacts * ContactSize + MaxEvents * EventSize;
+    public const int MaxMessageSize = SnapshotHeaderSize + MaxUnits * UnitSize + MaxContacts * ContactSize + MaxWrecks * WreckSize + MaxEvents * EventSize;
     public const int HandshakeResponseSize = 5;
     public const int FragmentHeaderSize = 22;
     public const int MaxFragmentPayloadSize = 960;
@@ -432,10 +434,11 @@ public static class WireProtocol
         ReadOnlySpan<OwnUnitObservation> units,
         ReadOnlySpan<ContactObservation> contacts = default,
         ReadOnlySpan<CombatEventObservation> events = default,
-        MissionObservation mission = default)
+        MissionObservation mission = default,
+        ReadOnlySpan<WreckObservation> wrecks = default)
     {
-        int length = checked(SnapshotHeaderSize + units.Length * UnitSize + contacts.Length * ContactSize + events.Length * EventSize);
-        if (units.Length > MaxUnits || contacts.Length > MaxContacts || events.Length > MaxEvents || bytes.Length < length)
+        int length = checked(SnapshotHeaderSize + units.Length * UnitSize + contacts.Length * ContactSize + wrecks.Length * WreckSize + events.Length * EventSize);
+        if (units.Length > MaxUnits || contacts.Length > MaxContacts || wrecks.Length > MaxWrecks || events.Length > MaxEvents || bytes.Length < length)
             throw new ArgumentException("Snapshot buffer is too small or capacity exceeded.");
 
         bytes[0] = Version; bytes[1] = SnapshotKind;
@@ -444,8 +447,9 @@ public static class WireProtocol
         BinaryPrimitives.WriteUInt16LittleEndian(bytes[10..], (ushort)units.Length);
         BinaryPrimitives.WriteUInt16LittleEndian(bytes[12..], (ushort)contacts.Length);
         BinaryPrimitives.WriteUInt16LittleEndian(bytes[14..], (ushort)events.Length);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes[16..], (ushort)wrecks.Length);
 
-        Span<byte> missionRecord = bytes.Slice(16, MissionSize);
+        Span<byte> missionRecord = bytes.Slice(18, MissionSize);
         BinaryPrimitives.WriteUInt16LittleEndian(missionRecord, mission.MissionId);
         missionRecord[2] = (byte)mission.Status;
         missionRecord[3] = (byte)mission.EndReason;
@@ -498,7 +502,21 @@ public static class WireProtocol
             BinaryPrimitives.WriteUInt32LittleEndian(record[24..], contact.SupportSurface);
         }
 
-        int eventsOffset = SnapshotHeaderSize + units.Length * UnitSize + contacts.Length * ContactSize;
+        int wrecksOffset = SnapshotHeaderSize + units.Length * UnitSize + contacts.Length * ContactSize;
+        for (int i = 0; i < wrecks.Length; i++)
+        {
+            WreckObservation wreck = wrecks[i];
+            Span<byte> record = bytes.Slice(wrecksOffset + i * WreckSize, WreckSize);
+            BinaryPrimitives.WriteUInt32LittleEndian(record, wreck.Id.Value);
+            BinaryPrimitives.WriteUInt16LittleEndian(record[4..], wreck.Definition);
+            BinaryPrimitives.WriteSingleLittleEndian(record[6..], wreck.Position.X);
+            BinaryPrimitives.WriteSingleLittleEndian(record[10..], wreck.Position.Y);
+            BinaryPrimitives.WriteUInt32LittleEndian(record[14..], wreck.SupportSurface);
+            BinaryPrimitives.WriteUInt16LittleEndian(record[18..], QuantizeYaw(wreck.HullHeading));
+            BinaryPrimitives.WriteUInt16LittleEndian(record[20..], QuantizeYaw(wreck.TurretYaw));
+        }
+
+        int eventsOffset = SnapshotHeaderSize + units.Length * UnitSize + contacts.Length * ContactSize + wrecks.Length * WreckSize;
         for (int i = 0; i < events.Length; i++)
         {
             CombatEventObservation ev = events[i];
@@ -582,14 +600,15 @@ public static class WireProtocol
         int unitCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes[10..]);
         int contactCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes[12..]);
         int eventCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes[14..]);
+        int wreckCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes[16..]);
 
-        if (sequence == 0 || tick < 0 || unitCount > frame.Units.Length || contactCount > frame.Contacts.Length || eventCount > frame.Events.Length)
+        if (sequence == 0 || tick < 0 || unitCount > frame.Units.Length || contactCount > frame.Contacts.Length || eventCount > frame.Events.Length || wreckCount > frame.Wrecks.Length)
             return false;
 
-        int expectedLength = checked(SnapshotHeaderSize + unitCount * UnitSize + contactCount * ContactSize + eventCount * EventSize);
+        int expectedLength = checked(SnapshotHeaderSize + unitCount * UnitSize + contactCount * ContactSize + wreckCount * WreckSize + eventCount * EventSize);
         if (bytes.Length != expectedLength) return false;
 
-        ReadOnlySpan<byte> missionRecord = bytes.Slice(16, MissionSize);
+        ReadOnlySpan<byte> missionRecord = bytes.Slice(18, MissionSize);
         ushort missionId = BinaryPrimitives.ReadUInt16LittleEndian(missionRecord);
         byte statusByte = missionRecord[2];
         byte endReasonByte = missionRecord[3];
@@ -704,7 +723,37 @@ public static class WireProtocol
                 supportSurface);
         }
 
-        int eventsOffset = SnapshotHeaderSize + unitCount * UnitSize + contactCount * ContactSize;
+        int wrecksOffset = SnapshotHeaderSize + unitCount * UnitSize + contactCount * ContactSize;
+        frame.WreckIndices.Clear();
+        for (int i = 0; i < wreckCount; i++)
+        {
+            ReadOnlySpan<byte> record = bytes.Slice(wrecksOffset + i * WreckSize, WreckSize);
+            WreckId wreckId = new(BinaryPrimitives.ReadUInt32LittleEndian(record));
+            ushort definition = BinaryPrimitives.ReadUInt16LittleEndian(record[4..]);
+            Vector2 position = new(
+                BinaryPrimitives.ReadSingleLittleEndian(record[6..]),
+                BinaryPrimitives.ReadSingleLittleEndian(record[10..]));
+            uint supportSurface = BinaryPrimitives.ReadUInt32LittleEndian(record[14..]);
+            float hullHeading = DequantizeYaw(BinaryPrimitives.ReadUInt16LittleEndian(record[18..]));
+            float turretYaw = DequantizeYaw(BinaryPrimitives.ReadUInt16LittleEndian(record[20..]));
+
+            if (wreckId.Value == 0 ||
+                !float.IsFinite(position.X) || !float.IsFinite(position.Y) ||
+                !frame.WreckIndices.TryAdd(wreckId, i))
+            {
+                return false;
+            }
+
+            frame.Wrecks[i] = new WreckObservation(
+                wreckId,
+                definition,
+                position,
+                supportSurface,
+                hullHeading,
+                turretYaw);
+        }
+
+        int eventsOffset = SnapshotHeaderSize + unitCount * UnitSize + contactCount * ContactSize + wreckCount * WreckSize;
         for (int i = 0; i < eventCount; i++)
         {
             ReadOnlySpan<byte> record = bytes.Slice(eventsOffset + i * EventSize, EventSize);
@@ -751,6 +800,7 @@ public static class WireProtocol
         frame.Count = unitCount;
         frame.ContactCount = contactCount;
         frame.EventCount = eventCount;
+        frame.WreckCount = wreckCount;
         return true;
     }
 }
@@ -813,21 +863,26 @@ internal sealed class SnapshotFrame
     public readonly OwnUnitObservation[] Units;
     public readonly ContactObservation[] Contacts;
     public readonly CombatEventObservation[] Events;
+    public readonly WreckObservation[] Wrecks;
     public readonly Dictionary<EntityId, int> Indices;
     public readonly Dictionary<ContactId, int> ContactIndices;
-    public int Count, ContactCount, EventCount, Tick;
+    public readonly Dictionary<WreckId, int> WreckIndices;
+    public int Count, ContactCount, EventCount, WreckCount, Tick;
     public uint Sequence;
     public MissionObservation Mission;
 
     public SnapshotFrame(
         int capacity,
         int contactCapacity = WireProtocol.MaxContacts,
-        int eventCapacity = WireProtocol.MaxEvents)
+        int eventCapacity = WireProtocol.MaxEvents,
+        int wreckCapacity = WireProtocol.MaxWrecks)
     {
         Units = new OwnUnitObservation[capacity];
         Contacts = new ContactObservation[contactCapacity];
         Events = new CombatEventObservation[eventCapacity];
+        Wrecks = new WreckObservation[wreckCapacity];
         Indices = new Dictionary<EntityId, int>(capacity);
         ContactIndices = new Dictionary<ContactId, int>(contactCapacity);
+        WreckIndices = new Dictionary<WreckId, int>(wreckCapacity);
     }
 }

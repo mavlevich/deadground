@@ -1154,6 +1154,17 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                     targetUnit.Position,
                     targetUnit.SupportSurface);
 
+                WreckState wreck = world.AddWreck(
+                    targetUnit.Definition,
+                    targetUnit.Position,
+                    targetUnit.SupportSurface,
+                    victimCs.HullHeading,
+                    victimCs.TurretYaw,
+                    tick,
+                    targetUnit.Owner);
+
+                _detection.NotifyWreckCreated(wreck, targetUnit.Owner, targetUnit.Id);
+
                 if (_destroyedCount < _destroyedBuffer.Length)
                 {
                     _destroyedBuffer[_destroyedCount++] = targetUnit.Id;

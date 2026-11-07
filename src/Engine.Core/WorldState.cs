@@ -19,6 +19,55 @@ public sealed class WorldState : IDisposable
     public int Capacity => _entities.Length;
     internal EcsWorld Storage => _storage;
 
+    public const int MaxWrecks = 128;
+    private readonly WreckState[] _wrecks = new WreckState[MaxWrecks];
+    private int _wreckCount;
+    private uint _nextWreckId = 1;
+
+    public int WreckCount => _wreckCount;
+    public ReadOnlySpan<WreckState> Wrecks => _wrecks.AsSpan(0, _wreckCount);
+
+    public WreckState AddWreck(
+        ushort definition,
+        Vector2 position,
+        uint supportSurface,
+        float hullHeading,
+        float turretYaw,
+        int destroyedTick,
+        int originalOwner)
+    {
+        uint idVal = _nextWreckId++;
+        if (_nextWreckId == 0) _nextWreckId = 1;
+        WreckId id = new(idVal);
+        WreckState wreck = new(
+            id,
+            definition,
+            position,
+            supportSurface,
+            hullHeading,
+            turretYaw,
+            destroyedTick,
+            originalOwner);
+
+        if (_wreckCount < _wrecks.Length)
+        {
+            _wrecks[_wreckCount++] = wreck;
+        }
+        else
+        {
+            Array.Copy(_wrecks, 1, _wrecks, 0, _wrecks.Length - 1);
+            _wrecks[^1] = wreck;
+        }
+
+        return wreck;
+    }
+
+    public void ClearWrecks()
+    {
+        _wreckCount = 0;
+        _nextWreckId = 1;
+    }
+
     private record struct Identity(EntityId Id, int Owner, ushort Definition);
 
     public WorldState(HeightMap map, int capacity = 1024, ReadOnlySpan<int> playerTeams = default)
