@@ -22,6 +22,7 @@ public partial class Main : Node3D
     private Label _stats = null!, _status = null!, _subtitle = null!, _title = null!;
     private UnitViewSet _unitViews = null!;
     private ContactViewSet _contactViews = null!;
+    private WreckViewSet _wreckViews = null!;
     private OrderDestinationView _destination = null!;
     private OrderCursorOverlay _orderCursorOverlay = null!;
     private OrderPreviewController _previewController = null!;
@@ -89,6 +90,7 @@ public partial class Main : Node3D
     internal ReadOnlySpan<Rect2> BadgeOccludingPanels => _badgeOccludingPanels;
     internal UnitViewSet UnitViews => _unitViews;
     internal ContactViewSet ContactViews => _contactViews;
+    internal WreckViewSet WreckViews => _wreckViews;
     internal IGameSession Session { get => _session; set => _session = value; }
     internal UnitCatalog Catalog => _catalog;
     internal CombatEffects CombatEffects => _combatEffects;
@@ -558,6 +560,7 @@ public partial class Main : Node3D
         MatchSetup matchSetup = setup;
         _unitViews = new UnitViewSet(this, _map, _catalog, () => matchSetup.GetPlayerFaction(_session.AssignedPlayerId), _scenarioGeometry);
         _contactViews = new ContactViewSet(this, _map, _catalog, () => matchSetup.GetHostileFaction(_session.AssignedPlayerId), _scenarioGeometry);
+        _wreckViews = new WreckViewSet(this, _map, _catalog, () => matchSetup.GetPlayerFaction(_session.AssignedPlayerId), _scenarioGeometry);
         _combatEffects = new CombatEffects(_map, _scenarioGeometry);
         AddChild(_combatEffects);
 
@@ -776,6 +779,7 @@ public partial class Main : Node3D
         UpdateViews();
         _unitViews.FaceHealthBars(_camera.GlobalTransform.Basis);
         _unitViews.UpdateLod(_cameraRig.Size);
+        _wreckViews.UpdateLod(_cameraRig.Size);
         _unitViews.UpdateRecoil(delta);
         _unitViews.UpdateEffects(delta);
         _combatEffects.Update(delta);
@@ -1617,6 +1621,7 @@ public partial class Main : Node3D
         int selectedContacts = _contactViews.Selected.Count;
         _unitViews.Sync(_session.Replica, _session.RenderTick);
         _contactViews.Sync(_session.Replica, _session.RenderTick);
+        _wreckViews.Sync(_session.Replica);
         if (selectedUnits != _unitViews.Selected.Count || selectedContacts != _contactViews.Selected.Count)
         {
             if (_unitViews.Selected.Count > 0)
@@ -1903,6 +1908,7 @@ public partial class Main : Node3D
         _selectionController.Reset();
         _unitViews.Clear();
         _contactViews.Clear();
+        _wreckViews.Clear();
         _roleBadgeOverlay?.Clear();
         _selectionCard?.UpdateEmpty();
         _orderNotification?.Clear();

@@ -295,6 +295,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
 
         _navigation?.ResetPlayer(player);
         _combat?.ResetPlayer(player);
+        _detection?.ResetPlayer(player);
 
         // Remove unexecuted queued commands for this player slot
         int writeIdx = 0;
@@ -319,10 +320,13 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         ReadOnlySpan<CombatEventObservation> events = _combat is not null
             ? _combat.GetEvents(knowledge.Player)
             : [];
+        ReadOnlySpan<WreckObservation> wrecks = _detection is not null
+            ? _detection.GetKnownWrecks(knowledge.Player)
+            : [];
         MissionObservation mission = _mission is not null
             ? _mission.GetObservation(knowledge.Player)
             : default;
-        knowledge.Refresh(_world, contacts, _navigation, events, mission);
+        knowledge.Refresh(_world, contacts, _navigation, events, mission, wrecks);
     }
 
     private readonly bool[] _admittedPlayers = new bool[MaxPlayers];

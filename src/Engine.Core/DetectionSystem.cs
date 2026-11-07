@@ -15,6 +15,7 @@ public sealed class DetectionSystem : ISimulationSystem
     private readonly IUnitPerceptionCatalog _catalog;
     private readonly DetectionTuning _tuning;
     private readonly SideContactTracker[] _trackers;
+    private readonly SideWreckTracker[] _wreckTrackers;
     private readonly UnitSpatialGrid _spatialGrid;
     private readonly LineOfSightContext _losContext;
     private readonly int[] _candidateBuffer;
@@ -75,10 +76,12 @@ public sealed class DetectionSystem : ISimulationSystem
         _catalog = catalog;
         _tuning = tuning ?? new DetectionTuning();
         _trackers = new SideContactTracker[maxSides];
+        _wreckTrackers = new SideWreckTracker[maxSides];
 
         for (int i = 0; i < maxSides; i++)
         {
             _trackers[i] = new SideContactTracker(i + 1, _tuning);
+            _wreckTrackers[i] = new SideWreckTracker();
         }
 
         _maxUnits = maxUnits;
@@ -381,6 +384,30 @@ public sealed class DetectionSystem : ISimulationSystem
         {
             _trackers[s].EndDetectionStep(tick);
         }
+
+        // 7. Check line of sight to unobserved wrecks
+        ReadOnlySpan<WreckState> wrecks = world.Wrecks;
+        if (wrecks.Length > 0)
+        {
+            for (int s = 0; s < _wreckTrackers.Length; s++)
+            {
+                if (_activeObserversCounts[s] == 0)
+                    continue;
+
+                SideWreckTracker tracker = _wreckTrackers[s];
+                for (int w = 0; w < wrecks.Length; w++)
+                {
+                    ref readonly WreckState wreck = ref wrecks[w];
+                    if (tracker.Contains(wreck.Id))
+                        continue;
+
+                    if (IsPositionInLineOfSight(wreck.Position, wreck.SupportSurface, wreck.Definition, s))
+                    {
+                        tracker.TryAdd(wreck.ToObservation());
+                    }
+                }
+            }
+        }
     }
 
     private bool IsPositionInLineOfSight(Vector2 lkPos, uint supportSurface, ushort unitType, int sideIndex)
@@ -496,6 +523,43 @@ public sealed class DetectionSystem : ISimulationSystem
         for (int i = 0; i < _trackers.Length; i++)
         {
             _trackers[i].NotifyEntityDestroyed(victimId);
+        }
+    }
+
+    public ReadOnlySpan<WreckObservation> GetKnownWrecks(int player)
+    {
+        int index = player - 1;
+        if (index < 0 || index >= _wreckTrackers.Length)
+            return [];
+
+        return _wreckTrackers[index].ExportWrecks();
+    }
+
+    public void NotifyWreckCreated(WreckState wreck, int victimOwner, EntityId victimId)
+    {
+        WreckObservation obs = wreck.ToObservation();
+        int victimIndex = victimOwner - 1;
+        if (victimIndex >= 0 && victimIndex < _wreckTrackers.Length)
+        {
+            _wreckTrackers[victimIndex].TryAdd(obs);
+        }
+
+        for (int p = 1; p <= _wreckTrackers.Length; p++)
+        {
+            if (p == victimOwner) continue;
+            if (IsEntityObservedBy(p, victimId))
+            {
+                _wreckTrackers[p - 1].TryAdd(obs);
+            }
+        }
+    }
+
+    public void ResetPlayer(int player)
+    {
+        int index = player - 1;
+        if (index >= 0 && index < _wreckTrackers.Length)
+        {
+            _wreckTrackers[index].Clear();
         }
     }
 }

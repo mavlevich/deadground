@@ -249,6 +249,7 @@ The correlation window, same-position tolerance (3.0 m), and memory duration are
 - Known states of bridges, buildings and other map objects, keyed by stable `MapObjectId` from the map package. This is not an enemy `EntityId`.
 - Objective ownership, progress and other fields that the rule set allows the side to know.
 - Observed area effects such as smoke, with the allowed position, extent and lifetime.
+- Persistent vehicle wrecks (section 13): destroyed vehicles remain on the battlefield as motionless wrecks with a stable `WreckId`, position, support surface, vehicle definition, hull heading, and turret yaw. The owner immediately knows of their wreck; opponents discover wrecks when observing destruction or upon scouting the wreck location with line of sight. Once discovered, wrecks remain persistently known in `PlayerKnowledge` even if LOS is lost. Wrecks are capped at `MaxWrecks = 128` per side without leaking enemy EntityIds.
 
 Initial knowledge comes from the map and rule set. Later observations update known fields and their observation tick. A known bridge state stays in knowledge when the bridge leaves view; an unseen change does not update it. Hidden world state is never copied into knowledge just to make a snapshot complete.
 
@@ -912,9 +913,9 @@ Status: planned for M2. M1 units keep one weapon each, so the M1 exit does not d
 
 ## 13. State and events
 
-- Anything that must survive reconnect, save or late join is state. Example: `Bridge.State = Destroyed`, unit health, ammunition, reload timers.
+- Anything that must survive reconnect, save or late join is state. Example: `Bridge.State = Destroyed`, unit health, ammunition, reload timers, and persistent vehicle wrecks (`WreckObservation`).
 - Events are hints for presentation. Example: `BridgeDestroyed` triggers the explosion effect; `ShotFired` triggers muzzle flash and tracer; `TookFire` triggers target impact effect; `UnitDestroyed` triggers explosion and debris.
-- Presentation events are optional hints: dropped events never alter authoritative combat outcomes.
+- Presentation events are optional hints: dropped events never alter authoritative combat outcomes. Persistent wrecks are reconstructed by clients from snapshot state even when a `UnitDestroyed` event was dropped or missed during reconnect, without replaying the explosion effect.
 - Duplicate events are ignored by clients using a ring buffer of processed event IDs.
 - Events have stable sequential identifiers and a server tick.
 - Every event sent to a client passes the recipient knowledge filter:
@@ -947,6 +948,7 @@ Status: planned for M2. M1 units keep one weapon each, so the M1 exit does not d
 - Clients apply a full snapshot only after the complete message is received. On reconnect the same state blocks restore the allowed view without needing earlier presentation events.
 - Protocol version 15: own unit records are 35 bytes (`ushort TurretYaw` (2) at offset 31, `ushort HullHeading` (2) at offset 33). Contact records are 24 bytes (`ushort TurretYaw` (2) at offset 20, `ushort HullHeading` (2) at offset 22). Both angles are quantized to 65536 steps per turn. Contacts carry the turret yaw and hull heading observed at the moment of sighting; `LastKnown` contacts freeze the last observed values. Combat event records are 40 bytes (`byte Result` (1) at offset 39: 0 None, 1 Penetrated, 2 Deflected, 3 Miss).
 - Protocol version 20: bumps wire protocol to version 20 (`MatchSetup.CurrentProtocolVersion = 20`), serializing `PathRequestStatus.WaitingForClearance = 7` in snapshot unit records to observe dynamic vehicle separation states across network clients.
+- Protocol version 22: bumps wire protocol to version 22 (`MatchSetup.CurrentProtocolVersion = 22`), adding persistent vehicle wrecks to snapshots. `SnapshotHeaderSize` is 50 bytes (`18 + MissionSize`, bytes 16..17 encode `ushort WreckCount`). Each wreck record is 22 bytes (`uint WreckId` (4), `byte SupportSurface` (1), `ushort Definition` (2), `float X` (4), `float Y` (4), `ushort TurretYaw` (2), `ushort HullHeading` (2), `byte Reserved` (1) for 2-byte alignment). Bounded up to `MaxWrecks = 128` wrecks per snapshot (`MaxMessageSize = 52,530` bytes).
 - Delta compression (acknowledged baselines, dirty fields) is added only if measurements exceed the budget.
 - Quantization: ground units send X, Z and support surface. Height is computed on the client (section 8.3). 10 cm precision on a 16 km map is 18 bits per axis.
 - Clients render about 100 to 150 ms behind the server and interpolate.
@@ -1428,6 +1430,18 @@ avoidance, a network spectator protocol, unlimited ammunition, artillery or airc
     - Contact transitions: when an enemy breaks line-of-sight and reappears in a new position, both markers remain visible until correlation or observation updates occur, with tooltips and counts updating synchronously.
   - Performance and allocations:
     - The headless regression measures managed allocations for marker updates, contact hover and coordinate math with 100 markers over 100 frames. Contact age labels are cached at map load.
+
+### 18.13 Persistent vehicle wrecks
+
+- Motionless vehicle wrecks on the battlefield:
+  - When destroyed, vehicles play the existing explosion visual and audio effects, leaving behind a motionless wreck with a recognizable silhouette.
+  - Distinct models for T-62 and M60A1 are reused from existing vehicle catalog assets across LOD0, LOD1, and LOD2.
+  - A charred dark matte material is recursively applied to hull and turret meshes, oriented in their final destroyed poses (`HullHeading` and `TurretYaw`).
+  - Wrecks have no health bars, role badges, selection rings, or order acceptance.
+  - On bridges, wrecks remain supported at bridge deck elevation matching their authoritative `SupportSurface`.
+  - Client presentation lifecycle is managed through `WreckViewSet` and `WreckView`, synchronizing against `ClientReplica.Wrecks`.
+  - Reconstructed from snapshot state on reconnect or when presentation destruction events are lost, without replaying destruction explosions.
+  - Scenario reset clears all visual wreck instances.
 
 ## 19. Rule sets and modularity
 

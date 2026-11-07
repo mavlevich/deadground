@@ -49,6 +49,12 @@ if (args.Length > 0 && (args[0] == "--ustye-contacts" || args[0] == "--ustye-con
     return;
 }
 
+if (args.Length > 0 && (args[0] == "--tank-battle" || args[0] == "--tank-battle-wrecks" || args[0] == "--wrecks"))
+{
+    RunTankBattleWreckBenchmark();
+    return;
+}
+
 if (args.Length > 0 && args[0] == "--probe")
 {
     RunProbe();
@@ -1553,6 +1559,102 @@ static void RunUstyeContactReproduction()
     }
 
     Console.WriteLine("[PASS] Ustye-Raid contact memory & presentation reproduction complete.");
+}
+
+static void RunTankBattleWreckBenchmark()
+{
+    Console.WriteLine("=== TANK BATTLE WRECKS AND SNAPSHOT BENCHMARK ===");
+    StaticGeometry geometry = TankBattleScenario.CreateStaticGeometry();
+    UnitCatalog catalog = ColdWarContent.LoadCatalog();
+    using Simulation sim = TankBattleScenario.CreateSimulation(geometry, catalog);
+    MatchSetup setup = TankBattleScenario.CreateMatchSetup(geometry, catalog);
+    InMemoryServerTransport transport = new(2);
+    using SimulationHost host = new(sim, transport, setup);
+    using ClientSession soviet = new(transport.CreateClientTransport(1), setup);
+    using ClientSession us = new(transport.CreateClientTransport(2), setup);
+
+    host.Advance(0);
+    soviet.Advance(0);
+    us.Advance(0);
+
+    const int totalTicks = 3600;
+    double[] tickDurations = new double[totalTicks];
+    long[] tickAllocations = new long[totalTicks];
+    int[] worldWrecks = new int[totalTicks];
+    int[] sovietWrecks = new int[totalTicks];
+    int[] usWrecks = new int[totalTicks];
+    int[] sovietSnapshotBytes = new int[totalTicks];
+    int[] usSnapshotBytes = new int[totalTicks];
+
+    byte[] snapshotBuffer = new byte[WireProtocol.MaxMessageSize];
+    PlayerKnowledge sovietKnowledge = new(1, TankBattleScenario.WorldCapacity);
+    PlayerKnowledge usKnowledge = new(2, TankBattleScenario.WorldCapacity);
+
+    for (int t = 0; t < totalTicks; t++)
+    {
+        long allocBefore = GC.GetAllocatedBytesForCurrentThread();
+        long start = Stopwatch.GetTimestamp();
+
+        host.Advance(1d / Simulation.TickRate);
+        soviet.Advance(1d / Simulation.TickRate);
+        us.Advance(1d / Simulation.TickRate);
+
+        double elapsedMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        long allocAfter = GC.GetAllocatedBytesForCurrentThread();
+
+        tickDurations[t] = elapsedMs;
+        tickAllocations[t] = allocAfter - allocBefore;
+
+        worldWrecks[t] = sim.World.WreckCount;
+        sovietWrecks[t] = soviet.Replica.WreckCount;
+        usWrecks[t] = us.Replica.WreckCount;
+
+        sim.UpdateKnowledge(sovietKnowledge);
+        sovietSnapshotBytes[t] = WireProtocol.WriteSnapshot(
+            snapshotBuffer, 1, sim.Tick,
+            sovietKnowledge.OwnUnits, sovietKnowledge.Contacts, sovietKnowledge.Events,
+            sovietKnowledge.Mission, sovietKnowledge.Wrecks);
+
+        sim.UpdateKnowledge(usKnowledge);
+        usSnapshotBytes[t] = WireProtocol.WriteSnapshot(
+            snapshotBuffer, 1, sim.Tick,
+            usKnowledge.OwnUnits, usKnowledge.Contacts, usKnowledge.Events,
+            usKnowledge.Mission, usKnowledge.Wrecks);
+    }
+
+    void PrintStageStats(string name, int startTick, int endTick)
+    {
+        int count = endTick - startTick;
+        double[] slice = new double[count];
+        Array.Copy(tickDurations, startTick, slice, 0, count);
+        Array.Sort(slice);
+        double p50 = slice[(int)(count * 0.50)];
+        double p90 = slice[(int)(count * 0.90)];
+        double p99 = slice[(int)(count * 0.99)];
+        double mean = slice.Average();
+        long meanAlloc = (long)tickAllocations.AsSpan(startTick, count).ToArray().Average();
+        int mid = (startTick + endTick) / 2;
+
+        Console.WriteLine($"--- {name} (Ticks {startTick}..{endTick}) ---");
+        Console.WriteLine($"  Wrecks: World={worldWrecks[mid]}, Soviet={sovietWrecks[mid]}, US={usWrecks[mid]}");
+        Console.WriteLine($"  Snapshot size: Soviet={sovietSnapshotBytes[mid]} B, US={usSnapshotBytes[mid]} B");
+        Console.WriteLine($"  Tick Time (host+clients): mean={mean:F3} ms, p50={p50:F3} ms, p90={p90:F3} ms, p99={p99:F3} ms");
+        Console.WriteLine($"  Allocations/tick: mean={meanAlloc} bytes");
+    }
+
+    PrintStageStats("Opening Phase (No Wrecks)", 10, 300);
+    PrintStageStats("Mid-Battle Phase (~50 Wrecks)", 2000, 2500);
+    PrintStageStats("Late-Battle Phase (100+ Wrecks / Max Bound)", 3200, 3590);
+
+    Console.WriteLine("--- Timeline Sample Points ---");
+    for (int t = 0; t <= totalTicks - 1; t += 600)
+    {
+        Console.WriteLine($"  Tick {t,4}: Wrecks={worldWrecks[t],3} (Soviet={sovietWrecks[t],3}, US={usWrecks[t],3}), Snapshots: Soviet={sovietSnapshotBytes[t],5} B, US={usSnapshotBytes[t],5} B, Tick p50={tickDurations[t]:F3} ms");
+    }
+
+    Console.WriteLine($"Total Wrecks Created: {sim.World.WreckCount} (bounded by MaxWrecks={WorldState.MaxWrecks})");
+    Console.WriteLine($"Final Snapshot Size: Soviet={sovietSnapshotBytes[3599]} B, US={usSnapshotBytes[3599]} B (Wreck payload: {sovietWrecks[3599] * WireProtocol.WreckSize} B)");
+    Console.WriteLine("TANK_BATTLE_WRECKS_BENCHMARK_OK");
 }
 
 internal static class GroupBenchmarkHelpers

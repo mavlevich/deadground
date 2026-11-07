@@ -4,31 +4,37 @@ public sealed class PlayerKnowledge
 {
     public const int DefaultContactCapacity = 256;
     public const int DefaultEventCapacity = 64;
+    public const int DefaultWreckCapacity = 128;
     private readonly OwnUnitObservation[] _ownUnits;
     private readonly ContactObservation[] _contacts;
     private readonly CombatEventObservation[] _events;
+    private readonly WreckObservation[] _wrecks;
 
     public int Player { get; }
     public int Count { get; private set; }
     public int ContactCount { get; private set; }
     public int EventCount { get; private set; }
+    public int WreckCount { get; private set; }
     public MissionObservation Mission { get; set; }
 
     public ReadOnlySpan<OwnUnitObservation> OwnUnits => _ownUnits.AsSpan(0, Count);
     public ReadOnlySpan<ContactObservation> Contacts => _contacts.AsSpan(0, ContactCount);
     public ReadOnlySpan<CombatEventObservation> Events => _events.AsSpan(0, EventCount);
+    public ReadOnlySpan<WreckObservation> Wrecks => _wrecks.AsSpan(0, WreckCount);
 
     public PlayerKnowledge(
         int player,
         int capacity = 1024,
         int contactCapacity = DefaultContactCapacity,
-        int eventCapacity = DefaultEventCapacity)
+        int eventCapacity = DefaultEventCapacity,
+        int wreckCapacity = DefaultWreckCapacity)
     {
         if (player < 1) throw new ArgumentOutOfRangeException(nameof(player));
         Player = player;
         _ownUnits = new OwnUnitObservation[capacity];
         _contacts = new ContactObservation[contactCapacity];
         _events = new CombatEventObservation[eventCapacity];
+        _wrecks = new WreckObservation[wreckCapacity];
     }
 
     internal void Refresh(WorldState world) => Refresh(world, [], null, []);
@@ -43,7 +49,8 @@ public sealed class PlayerKnowledge
         ReadOnlySpan<ContactObservation> contacts,
         NavigationSystem? navigation,
         ReadOnlySpan<CombatEventObservation> events,
-        MissionObservation mission = default)
+        MissionObservation mission = default,
+        ReadOnlySpan<WreckObservation> wrecks = default)
     {
         int count = 0;
         for (int i = 0; i < world.Count; i++)
@@ -89,6 +96,12 @@ public sealed class PlayerKnowledge
 
         events.CopyTo(_events.AsSpan(0, events.Length));
         EventCount = events.Length;
+
+        if (wrecks.Length > _wrecks.Length)
+            throw new InvalidOperationException("Wreck knowledge capacity exceeded.");
+
+        wrecks.CopyTo(_wrecks.AsSpan(0, wrecks.Length));
+        WreckCount = wrecks.Length;
 
         Mission = mission;
     }

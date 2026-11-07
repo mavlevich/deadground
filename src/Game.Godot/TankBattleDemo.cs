@@ -13,6 +13,8 @@ public partial class TankBattleDemo : Node3D
     private UnitCatalog _catalog = null!;
     private UnitViewSet _sovietViews = null!;
     private UnitViewSet _usViews = null!;
+    private WreckViewSet _sovietWreckViews = null!;
+    private WreckViewSet _usWreckViews = null!;
     private CombatEffects _effects = null!;
     private FogOfWarView? _sovietFog;
     private FogOfWarView? _usFog;
@@ -103,6 +105,8 @@ public partial class TankBattleDemo : Node3D
         if (startPerspective) _camera.SetPerspective(true);
         _sovietViews = new UnitViewSet(this, _geometry.HeightMap, _catalog, () => "soviet", _geometry);
         _usViews = new UnitViewSet(this, _geometry.HeightMap, _catalog, () => "us", _geometry);
+        _sovietWreckViews = new WreckViewSet(this, _geometry.HeightMap, _catalog, () => "soviet", _geometry);
+        _usWreckViews = new WreckViewSet(this, _geometry.HeightMap, _catalog, () => "us", _geometry);
         _effects = new CombatEffects(_geometry.HeightMap, _geometry);
         AddChild(_effects);
         CanvasLayer canvas = new();
@@ -139,6 +143,8 @@ public partial class TankBattleDemo : Node3D
         _session?.Dispose();
         _sovietViews.Clear();
         _usViews.Clear();
+        _sovietWreckViews?.Clear();
+        _usWreckViews?.Clear();
         _effects.Clear();
         Array.Clear(_litEvents);
         Array.Clear(_lightRemaining);
@@ -316,11 +322,15 @@ public partial class TankBattleDemo : Node3D
     {
         _sovietViews.Sync(_session.Soviet.Replica, _session.Soviet.RenderTick);
         _usViews.Sync(_session.Us.Replica, _session.Us.RenderTick);
+        _sovietWreckViews.Sync(_session.Soviet.Replica);
+        _usWreckViews.Sync(_session.Us.Replica);
         Basis healthBarBasis = GetViewport().GetCamera3D().GlobalTransform.Basis;
         _sovietViews.FaceHealthBars(healthBarBasis);
         _usViews.FaceHealthBars(healthBarBasis);
         _sovietViews.UpdateLod(_camera.Size);
         _usViews.UpdateLod(_camera.Size);
+        _sovietWreckViews.UpdateLod(_camera.Size);
+        _usWreckViews.UpdateLod(_camera.Size);
         _sovietViews.UpdateRecoil(delta);
         _usViews.UpdateRecoil(delta);
         _sovietViews.UpdateEffects(delta);
@@ -357,7 +367,8 @@ public partial class TankBattleDemo : Node3D
         string result = director.IsFinished
             ? director.SovietRemaining == 0 ? "US WINS" : director.UsRemaining == 0 ? "SOVIET WINS" : "TIME LIMIT"
             : _paused ? "PAUSED" : "AUTOBATTLE";
-        _summary.Text = $"DEAD GROUND  /  100 vs 100  /  {result}\nT-62: {director.SovietRemaining}     M60A1: {director.UsRemaining}     Shots: {_session.Shots}     Time: {_lastHudSecond}s\nCurrent contacts: Soviet {CountCurrent(_session.Soviet.Replica.Contacts)} / US {CountCurrent(_session.Us.Replica.Contacts)}   |   3.2 x 3.2 km / two rows per side";
+        int totalWrecks = _sovietWreckViews.Views.Count + _usWreckViews.Views.Count;
+        _summary.Text = $"DEAD GROUND  /  100 vs 100  /  {result}\nT-62: {director.SovietRemaining}     M60A1: {director.UsRemaining}     Wrecks: {totalWrecks}     Shots: {_session.Shots}     Time: {_lastHudSecond}s\nCurrent contacts: Soviet {CountCurrent(_session.Soviet.Replica.Contacts)} / US {CountCurrent(_session.Us.Replica.Contacts)}   |   3.2 x 3.2 km / two rows per side";
         string fog = _fogMode == 0 ? "BOTH" : _fogMode == 1 ? "SOVIET" : _fogMode == 2 ? "US" : "OFF";
         string light = _lighting == 0 ? "DAY" : _lighting == 1 ? "DUSK" : "NIGHT";
         _help.Text = $"WASD / arrows: camera   Wheel/pinch: zoom   MMB / Alt+mouse or Q/E: orbit   T/G: tilt   V: perspective/RTS\n1 / 2: inspect army   3: overview   Space: pause   R: restart   Tab: {(_fast ? "2x" : "1x")} speed   L: {light}   Esc: quit\nF: visibility ({fog}, Soviet amber / US cyan)   Observer sees all units. Terrain shading shows ground visibility. Seed: {_seed}";

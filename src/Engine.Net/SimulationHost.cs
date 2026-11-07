@@ -367,7 +367,8 @@ public sealed class SimulationHost : IDisposable
             knowledge.OwnUnits,
             knowledge.Contacts,
             knowledge.Events,
-            knowledge.Mission);
+            knowledge.Mission,
+            knowledge.Wrecks);
 
         bool sentSuccessfully = false;
         if (_transport is SinglePlayerServerTransport || length <= WireProtocol.MaxFragmentPayloadSize)
