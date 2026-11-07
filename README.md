@@ -104,8 +104,9 @@ Smooth lookahead path following steers along polyline waypoints without stopping
 `Ctrl+1..9` or `Cmd+1..9` (on every platform) stores a control group, `Shift+1..9` adds to it, `1..9` selects it,
 and pressing the same group number twice within 0.35 s centers the camera on the group. WASD or arrow keys
 smoothly pan the camera with normalized diagonal speed scaled by zoom. The mouse wheel smoothly zooms,
-Space restores the overview, and Escape closes open dialogs or clears unit selection. F10, O, or the
-HUD SETTINGS button opens display settings (VSync toggle and FPS cap). F9 or V toggles fog of war on the map.
+Space restores the overview, and Escape closes open dialogs or clears unit selection. Left-clicking or dragging
+on the tactical minimap (bottom-right) centers the camera on the target position while preserving pitch, yaw, zoom,
+and active selections. F10, O, or the HUD SETTINGS button opens display settings (VSync toggle and FPS cap). F9 or V toggles fog of war on the map.
 Keys Z (Fire at will), X (Return fire), and C (Hold fire) set the fire stance of selected units. The HUD shows
 connection state, tick time, allocations and traffic.
 The host reports whether a valid command was queued or rejected. Rejections give
@@ -885,11 +886,13 @@ Follow this checklist to verify an exported client interactively:
    - Pan using WASD or arrow keys. Confirm diagonal movement speed matches axial speed and stops instantly on key release.
    - Zoom using the mouse scroll wheel. Confirm smooth exponential zooming.
    - Press Space to return the camera to the default overview position.
+   - Click or drag on the tactical minimap in the bottom-right corner: verify the camera centers on the clicked location while maintaining current zoom, pitch, yaw, and active unit selections. Confirm that clicking the letterbox/pillarbox margins does not reposition the camera, and clicking inside the minimap never issues ground move orders.
 7. Display settings and frame pacing:
    - Press F10, O, or click SETTINGS in the HUD to open the settings panel.
    - Toggle VSync and select frame rate limits (Unlimited, 30, 60, 120, 144 FPS).
    - Press Escape to close the settings panel before clearing unit selections.
 8. Unit and contact readability:
+   - Tactical minimap: displays Cold War military topographic map styling (olive-gray terrain, cool blue-gray rivers, dark settlement blocks, high-contrast roads and crossings). Friendly units appear as filled dots with yellow rings when selected; active contacts appear as solid diamonds; last-known contacts appear as hollow squares. Hovering over a last-known contact displays a tooltip with observation age ("LAST SEEN: X.Xs AGO").
    - Floating role badges: confirm role badges appear above units (`TANK`, `RECON`, `CMD`) and contacts (`[ ? ]`, `TANK`, `RECON`, `CMD`). Left-clicking a badge selects the unit or contact; right-clicking an enemy badge issues an attack order. Badges smoothly fade when zooming in close and hide when occluded by HUD cards or off-screen.
    - Contact representation: a seen enemy is drawn at once with the model of its vehicle type and a hostile ground bracket, and its badge shows the type (for example "T-62"); last-known contacts hide live models and display frozen ghost markers with the last seen type and observation age.
    - Tactical selection card: bottom-left card displays unit health, armament status (distinguishing unarmed recon from empty tanks), reload countdown, and server attack execution status. Inspecting contacts shows state, classification, and age in seconds without leaking health or ammo.

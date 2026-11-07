@@ -44,8 +44,9 @@ public partial class Main : Node3D
     private SelectionBoxOverlay _selectionBoxOverlay = null!;
     private readonly SelectionController _selectionController = new();
     private PanelContainer _topHud = null!, _bottomHud = null!;
-    private readonly Rect2[] _badgeOccludingPanels = new Rect2[6];
-    private readonly Rect2[] _inputOccludingPanels = new Rect2[5];
+    private TacticalMinimap _minimap = null!;
+    private readonly Rect2[] _badgeOccludingPanels = new Rect2[7];
+    private readonly Rect2[] _inputOccludingPanels = new Rect2[6];
     private FogOfWarView? _fogOfWar;
     private string? _screenshotPath;
     private double _screenshotTimer = 0.5;
@@ -83,6 +84,7 @@ public partial class Main : Node3D
     internal RoleBadgeOverlay RoleBadgeOverlay => _roleBadgeOverlay;
     internal SelectionBoxOverlay SelectionBoxOverlay => _selectionBoxOverlay;
     internal SelectionController SelectionController => _selectionController;
+    internal TacticalMinimap Minimap => _minimap;
     internal ReadOnlySpan<Rect2> InputOccludingPanels => _inputOccludingPanels;
     internal ReadOnlySpan<Rect2> BadgeOccludingPanels => _badgeOccludingPanels;
     internal UnitViewSet UnitViews => _unitViews;
@@ -237,6 +239,7 @@ public partial class Main : Node3D
         bool enemyHoldFire = false;
         bool noPrewarm = false;
         bool suspendFogCalc = false;
+        bool minimapDemo = false;
 
         void ParseArgs(string[] args)
         {
@@ -318,6 +321,10 @@ public partial class Main : Node3D
                 {
                     captureDir = args[i + 1];
                     i++;
+                }
+                else if (args[i] == "--minimap-demo")
+                {
+                    minimapDemo = true;
                 }
             }
         }
@@ -625,6 +632,11 @@ public partial class Main : Node3D
             _orderNotification);
         UpdateViews();
 
+        if (minimapDemo && _scenario == "ustye-raid" && _session is LocalSession && _screenshotPath is not null)
+        {
+            SetupMinimapDemo();
+        }
+
         if (_smokeTest && !ClientRegressionTests.Run(this))
         {
             SetProcess(false);
@@ -814,6 +826,8 @@ public partial class Main : Node3D
             RefreshOccludingPanels();
             _roleBadgeOverlay.UpdateBadges(_camera, _camera.Size, _unitViews, _contactViews, _session.Replica, _session.Tick, _badgeOccludingPanels);
         }
+
+        _minimap?.UpdateMinimap(delta);
 
         long frameEndTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
         float cpuWorkMs = (float)((frameEndTimestamp - frameStartTimestamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
@@ -1395,6 +1409,7 @@ public partial class Main : Node3D
         _selectionController.CancelDrag();
         _selectionBoxOverlay?.HideBox();
         _previewController?.CancelFacingGesture();
+        _minimap?.CancelDrag();
     }
 
     internal void RefreshOccludingPanels()
@@ -1407,12 +1422,14 @@ public partial class Main : Node3D
         Rect2 cardRect = _selectionCard.GetGlobalRect();
         Rect2 settingsRect = _settingsPanel.IsOpen ? _settingsPanel.GetContainerRect() : default;
         Rect2 missionRect = _missionPanel is not null ? (_missionPanel.IsMissionFinished ? _missionPanel.GetResultRect() : _missionPanel.GetBriefingRect()) : default;
+        Rect2 minimapRect = _minimap is not null ? _minimap.GetGlobalRect() : default;
 
         _inputOccludingPanels[0] = topRect;
         _inputOccludingPanels[1] = bottomRect;
         _inputOccludingPanels[2] = cardRect;
         _inputOccludingPanels[3] = settingsRect;
         _inputOccludingPanels[4] = missionRect;
+        _inputOccludingPanels[5] = minimapRect;
 
         _badgeOccludingPanels[0] = topRect;
         _badgeOccludingPanels[1] = bottomRect;
@@ -1420,6 +1437,7 @@ public partial class Main : Node3D
         _badgeOccludingPanels[3] = _orderNotification is { Visible: true } ? _orderNotification.GetGlobalRect() : default;
         _badgeOccludingPanels[4] = settingsRect;
         _badgeOccludingPanels[5] = missionRect;
+        _badgeOccludingPanels[6] = minimapRect;
     }
 
     internal static bool TryGetNavigationLargeDebugTarget(
@@ -1747,7 +1765,7 @@ public partial class Main : Node3D
         }
         else if (what == (int)NotificationWMMouseEnter)
         {
-            if (_selectionController.IsPointerDown && !Input.IsMouseButtonPressed(MouseButton.Left))
+            if ((_selectionController.IsPointerDown || _minimap?.IsDraggingCamera == true) && !Input.IsMouseButtonPressed(MouseButton.Left))
             {
                 CancelActiveDrag();
             }
@@ -1843,6 +1861,17 @@ public partial class Main : Node3D
         _orderCursorOverlay = new OrderCursorOverlay();
         canvas.AddChild(_orderCursorOverlay);
 
+        _minimap = new TacticalMinimap();
+        _minimap.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.BottomRight);
+        _minimap.OffsetRight = -24;
+        _minimap.OffsetLeft = -24 - TacticalMinimap.DefaultWidgetSize;
+        _minimap.OffsetBottom = -96;
+        _minimap.OffsetTop = -96 - TacticalMinimap.DefaultWidgetSize;
+        canvas.AddChild(_minimap);
+
+        UstyePlanData? plan = (_scenario == "ustye-ground" || _scenario == "ustye-raid") ? UstyePlanData.Load() : null;
+        _minimap.Initialize(_scenarioGeometry!, _cameraRig, _camera, _session, _unitViews, _contactViews, _catalog, plan);
+
         if (_scenario == "recon-raid" || _scenario == "ustye-raid")
         {
             _missionPanel = new MissionPanel(this, _map);
@@ -1909,6 +1938,9 @@ public partial class Main : Node3D
 
         _cameraRig.ResetToDefault();
         _missionPanel?.ResetUi();
+        UstyePlanData? plan = (_scenario == "ustye-ground" || _scenario == "ustye-raid") ? UstyePlanData.Load() : null;
+        _minimap?.Initialize(_scenarioGeometry, _cameraRig, _camera, _session, _unitViews, _contactViews, _catalog, plan);
+        _minimap?.Reset();
         UpdateViews();
 
         if (_session.Replica.OwnUnits.Length > 0)
@@ -2013,6 +2045,42 @@ public partial class Main : Node3D
         isMacOs
             ? "  LMB click/box  /  2xLMB type  /  Cmd/Ctrl+1-9 set  /  Shift+1-9 add  /  1-9 select (twice: center)  /  Z/X/C stance  /  RMB order  /  WASD pan"
             : "  LMB click/box  /  2xLMB type  /  Ctrl/Cmd+1-9 set  /  Shift+1-9 add  /  1-9 select (twice: center)  /  Z/X/C stance  /  RMB order  /  WASD pan";
+
+    private void SetupMinimapDemo()
+    {
+        ReadOnlySpan<OwnUnitObservation> ownUnits = _session.Replica.OwnUnits;
+        Span<ContactObservation> demoContacts = stackalloc ContactObservation[2]
+        {
+            new(new ContactId(1), ContactState.LastKnown, ContactClassification.Tank, 0, new NumericsVector2(3100f, 2550f), LastSeenTick: 10),
+            new(new ContactId(2), ContactState.Current, ContactClassification.Recon, 1, new NumericsVector2(2860f, 2220f), LastSeenTick: 30)
+        };
+
+        byte[] buf = new byte[8192];
+        int len = WireProtocol.WriteSnapshot(
+            buf,
+            sequence: 30,
+            tick: 30,
+            units: ownUnits,
+            contacts: demoContacts,
+            events: [],
+            mission: default);
+
+        _session.Replica.TryApply(buf.AsSpan(0, len));
+
+        if (ownUnits.Length > 0)
+        {
+            for (int i = 0; i < Math.Min(3, ownUnits.Length); i++)
+            {
+                _unitViews.Selected.Add(ownUnits[i].Id);
+            }
+        }
+
+        _cameraRig.Model.CurrentSize = 520f;
+        _cameraRig.Model.SetZoom(520f);
+        _cameraRig.CenterOn(new Vector3(2650f, 4.5f, 2450f));
+        UpdateViews();
+        _minimap?.UpdateMinimap(0.016);
+    }
 
     public string TitleText => _title?.Text ?? string.Empty;
 
