@@ -1399,6 +1399,36 @@ avoidance, a network spectator protocol, unlimited ammunition, artillery or airc
     - Ghost preview ring: renders an amber preview circle at the snapped position when destination adjustment is suggested.
     - Auto-dismiss: smoothly fades out upon path resolution or timeout.
 
+### 18.12 Tactical minimap
+
+- Tactical minimap presentation (`TacticalMinimap`):
+  - 240 x 240 px interactive HUD control anchored at the bottom-right corner of the screen.
+  - Visual styling derived from Cold War era military topographic staff maps:
+    - Land: muted olive-gray palette.
+    - Water: cool gray-blue tint for rivers and lakes.
+    - Contours: subtle elevation isolines rendered across varying relief.
+    - Urban features: dark rectangular settlement blocks.
+    - Infrastructure: light main roads with dark casings and reinforced river crossings / bridge spans.
+    - Outer presentation: dark military bezel, subtle margin grid ticks, and letterbox / pillarbox margins preserving the world map aspect ratio.
+  - Background rasterization:
+    - Pre-rendered into an `ImageTexture` at map load time (`GenerateBackground`) from scenario geometry (`ScenarioGeometry`, `HeightMap`, `TerrainObstacles`, `Bridges`, and Ustye civil plan data).
+    - Preserves aspect ratio with letterbox/pillarbox fields when maps are non-square.
+  - Coordinate transformations and viewport:
+    - Bidirectional world-to-minimap and minimap-to-world mapping with boundary clamping and epsilon edge tolerance.
+    - The finite camera frustum intersects the plane at the camera focus height and is clipped against map bounds using Sutherland-Hodgman convex polygon clipping (`ClipConvexPolygonToRect`).
+    - Left-click or left-drag navigation centers the camera view (`CenterOn`), preserving pitch, yaw, zoom distance, and current unit selections.
+    - Clicks on letterbox/pillarbox margins do not reposition the camera.
+    - Occlusion: the minimap absorbs mouse input to prevent accidental terrain move orders or selection clearing underneath.
+  - Tactical scouting markers and contact lifecycle:
+    - Friendly units: filled circular dots with selection highlight rings for selected units.
+    - Hostile contacts: distinguished purely by geometric shape:
+      - `Current` (actively spotted): solid filled diamond.
+      - `LastKnown` (memory ghost): hollow square.
+    - Interactive contact tooltips: hovering over `LastKnown` contacts displays an age readout ("LAST SEEN: X.Xs AGO") matching tactical HUD conventions.
+    - Contact transitions: when an enemy breaks line-of-sight and reappears in a new position, both markers remain visible until correlation or observation updates occur, with tooltips and counts updating synchronously.
+  - Performance and allocations:
+    - The headless regression measures managed allocations for marker updates, contact hover and coordinate math with 100 markers over 100 frames. Contact age labels are cached at map load.
+
 ## 19. Rule sets and modularity
 
 A rule set is a list of systems plus data. Replaceable points:
