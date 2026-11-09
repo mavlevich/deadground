@@ -12,14 +12,24 @@ internal sealed class WreckView
         Metallic = 0.15f
     };
 
+    public WreckId Id { get; set; }
     public Node3D Root { get; } = new();
     internal Node3D Model { get; }
     internal string? UnitId { get; }
     internal bool HasVehicleModel { get; }
     internal int ActiveLod => _activeLod;
+    public int DestructionTick { get; set; }
+    public bool IsSmoking => _smokeEmitter is not null && _smokeEmitter.Emitting;
+    public bool IsBurning => _fireEmitter is not null && _fireEmitter.Emitting;
+    public int ActiveEmitterCount => (IsSmoking ? 1 : 0) + (IsBurning ? 1 : 0);
+
+    public const float FireDurationSeconds = 8.0f;
+    public const float SmokeDurationSeconds = 45.0f;
 
     private readonly VehicleVisual? _visual;
     private readonly Node3D?[]? _turretNodes;
+    private GpuParticles3D? _fireEmitter;
+    private GpuParticles3D? _smokeEmitter;
     private int _activeLod;
     private float _hullHeading;
     private float _turretYaw;
@@ -101,6 +111,85 @@ internal sealed class WreckView
         if (turret is not null)
         {
             turret.Rotation = new Vector3(0, Mathf.Wrap(_turretYaw - _hullHeading, -Mathf.Pi, Mathf.Pi), 0);
+        }
+    }
+
+    internal void UpdateEffects(float ageSeconds, bool allowEffects)
+    {
+        bool allowFire = allowEffects && ageSeconds < FireDurationSeconds;
+        bool allowSmoke = allowEffects && ageSeconds < SmokeDurationSeconds;
+        UpdateEffects(ageSeconds, allowFire, allowSmoke);
+    }
+
+    internal void UpdateEffects(float ageSeconds, bool allowFire, bool allowSmoke)
+    {
+        if (ageSeconds >= SmokeDurationSeconds || ageSeconds < 0f)
+        {
+            if (_fireEmitter is not null && _fireEmitter.Emitting) _fireEmitter.Emitting = false;
+            if (_smokeEmitter is not null && _smokeEmitter.Emitting) _smokeEmitter.Emitting = false;
+            if (ageSeconds >= SmokeDurationSeconds)
+            {
+                if (_fireEmitter is not null)
+                {
+                    Root.RemoveChild(_fireEmitter);
+                    _fireEmitter.QueueFree();
+                    _fireEmitter = null;
+                }
+                if (_smokeEmitter is not null)
+                {
+                    Root.RemoveChild(_smokeEmitter);
+                    _smokeEmitter.QueueFree();
+                    _smokeEmitter = null;
+                }
+            }
+            return;
+        }
+
+        if (allowFire)
+        {
+            if (_fireEmitter is null)
+            {
+                _fireEmitter = ParticleEffects.CreateWreckFire();
+                _fireEmitter.Position = new Vector3(0f, 1.15f, -0.2f);
+                Root.AddChild(_fireEmitter);
+            }
+            if (!_fireEmitter.Emitting) _fireEmitter.Emitting = true;
+        }
+        else if (_fireEmitter is not null && _fireEmitter.Emitting)
+        {
+            _fireEmitter.Emitting = false;
+        }
+
+        if (allowSmoke)
+        {
+            if (_smokeEmitter is null)
+            {
+                _smokeEmitter = ParticleEffects.CreateWreckSmoke();
+                _smokeEmitter.Position = new Vector3(0f, 1.25f, -0.2f);
+                Root.AddChild(_smokeEmitter);
+            }
+            if (!_smokeEmitter.Emitting) _smokeEmitter.Emitting = true;
+        }
+        else if (_smokeEmitter is not null && _smokeEmitter.Emitting)
+        {
+            _smokeEmitter.Emitting = false;
+        }
+    }
+
+    internal void ClearEffects()
+    {
+        DestructionTick = 0;
+        if (_fireEmitter is not null)
+        {
+            Root.RemoveChild(_fireEmitter);
+            _fireEmitter.QueueFree();
+            _fireEmitter = null;
+        }
+        if (_smokeEmitter is not null)
+        {
+            Root.RemoveChild(_smokeEmitter);
+            _smokeEmitter.QueueFree();
+            _smokeEmitter = null;
         }
     }
 

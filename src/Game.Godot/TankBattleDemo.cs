@@ -33,6 +33,7 @@ public partial class TankBattleDemo : Node3D
     private readonly CombatEventObservation[] _events = new CombatEventObservation[256];
     private bool _paused;
     private bool _fast;
+    private double _simSpeed;
     private bool _smoke;
     private int _lighting = 1;
     private int _lastHudSecond = -1;
@@ -48,6 +49,15 @@ public partial class TankBattleDemo : Node3D
     private int _maxFrame;
     private int _frames;
     private double _maxFrameMs;
+    private double _maxIntervalMs;
+    private long _lastFrameTimestamp;
+    private int _peakActiveEmitters;
+    private bool _disableWreckEffects;
+    private float? _cameraSizeOverride;
+    private Vector3? _cameraFocusOverride;
+    private int _quitTick;
+    private readonly double[] _frameIntervals = new double[16384];
+    private readonly double[] _cpuTimes = new double[16384];
     private int _closingFrames = -1;
     private int _exitCode;
     private float _initialPitch = OrbitCameraPose.DefaultPitch;
@@ -70,6 +80,15 @@ public partial class TankBattleDemo : Node3D
             else if (args[i] == "--capture" && i + 1 < args.Length) _capturePath = args[++i];
             else if (args[i] == "--capture-tick" && i + 1 < args.Length && int.TryParse(args[++i], out int tick)) _captureTick = Math.Max(1, tick);
             else if (args[i] == "--quit-after-frames" && i + 1 < args.Length && int.TryParse(args[++i], out int frames)) _maxFrame = Math.Max(1, frames);
+            else if (args[i] == "--quit-after-tick" && i + 1 < args.Length && int.TryParse(args[++i], out int qTick)) _quitTick = Math.Max(1, qTick);
+            else if (args[i] == "--sim-speed" && i + 1 < args.Length && double.TryParse(args[++i], System.Globalization.CultureInfo.InvariantCulture, out double spd)) _simSpeed = Math.Max(0.1, spd);
+            else if (args[i] == "--disable-wreck-effects") _disableWreckEffects = true;
+            else if (args[i] == "--camera-size" && i + 1 < args.Length && float.TryParse(args[++i], out float cSize)) _cameraSizeOverride = cSize;
+            else if (args[i] == "--clash-camera")
+            {
+                _cameraFocusOverride = new Vector3(TankBattleScenario.Center.X, 10f, TankBattleScenario.Center.Y);
+                _cameraSizeOverride = 80f;
+            }
         }
         _geometry = TankBattleScenario.CreateStaticGeometry();
         if (_smoke) _smokeControlsPassed &= CheckBackdropSeams(_geometry.HeightMap);
@@ -102,6 +121,13 @@ public partial class TankBattleDemo : Node3D
         _camera.Model.SetSizeLimits(35f, 3200f);
         _camera.FarClipMargin = 16000f;
         _camera.GroundHeight = (x, z) => TankBattleBackdrop.SampleHeight(_geometry.HeightMap, x, z);
+        if (_cameraFocusOverride.HasValue || _cameraSizeOverride.HasValue)
+        {
+            Vector3 focus = _cameraFocusOverride ?? new Vector3(TankBattleScenario.Center.X, 4, TankBattleScenario.Center.Y);
+            float size = _cameraSizeOverride ?? 1900f;
+            _camera.SetDefaultView(focus, size);
+            _camera.ResetToDefault();
+        }
         if (startPerspective) _camera.SetPerspective(true);
         _sovietViews = new UnitViewSet(this, _geometry.HeightMap, _catalog, () => "soviet", _geometry);
         _usViews = new UnitViewSet(this, _geometry.HeightMap, _catalog, () => "us", _geometry);
@@ -185,6 +211,18 @@ public partial class TankBattleDemo : Node3D
             if (++_closingFrames >= 12) GetTree().Quit(_exitCode);
             return;
         }
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (_lastFrameTimestamp != 0)
+        {
+            double intervalMs = System.Diagnostics.Stopwatch.GetElapsedTime(_lastFrameTimestamp, now).TotalMilliseconds;
+            _maxIntervalMs = Math.Max(_maxIntervalMs, intervalMs);
+            if (_frames < _frameIntervals.Length)
+            {
+                _frameIntervals[_frames] = intervalMs;
+            }
+        }
+        _lastFrameTimestamp = now;
+
         long started = System.Diagnostics.Stopwatch.GetTimestamp();
         if (_smoke && _smokePhase == 0) SendSmokeKey(Key.Space);
         float rotationTime = (float)Math.Clamp(delta, 0, 0.1);
@@ -193,7 +231,7 @@ public partial class TankBattleDemo : Node3D
         if (yaw != 0 || pitch != 0) _camera.Orbit(yaw * rotationTime, pitch * rotationTime * 0.6f);
         _camera.Update(delta);
         // This viewing sandbox drops suspension time instead of fast-forwarding through the battle.
-        double elapsed = _paused ? 0 : _smoke ? Simulation.TickSeconds : Math.Min(delta, 0.1) * (_fast ? 2 : 1);
+        double elapsed = _paused ? 0 : _smoke ? Simulation.TickSeconds : Math.Min(delta, 0.1) * (_simSpeed > 0 ? _simSpeed : (_fast ? 2 : 1));
         if (!_paused) _session.Advance(elapsed);
         SyncViews(elapsed);
         if (_motionDiagnostics is not null && !_paused)
@@ -226,12 +264,19 @@ public partial class TankBattleDemo : Node3D
             _lightRemaining[i] = Math.Max(0f, _lightRemaining[i] - (float)elapsed);
             _shotLights[i].LightEnergy = _lightRemaining[i] * 70f;
         }
-        ProcessSideEvents(_session.Soviet.Replica.Events, _sovietViews);
-        ProcessSideEvents(_session.Us.Replica.Events, _usViews);
+        ProcessSideEvents(_session.Soviet.Replica.Events, _sovietViews, _sovietWreckViews);
+        ProcessSideEvents(_session.Us.Replica.Events, _usViews, _usWreckViews);
         _effects.UpdateListener(_camera.Focus);
         if (_lastHudSecond != _session.Tick / Simulation.TickRate) UpdateHud();
+        double cpuMs = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        _maxFrameMs = Math.Max(_maxFrameMs, cpuMs);
+        if (_frames < _cpuTimes.Length)
+        {
+            _cpuTimes[_frames] = cpuMs;
+        }
         _frames++;
-        _maxFrameMs = Math.Max(_maxFrameMs, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        int currentActiveEmitters = (_sovietWreckViews?.ActiveEmitterCount ?? 0) + (_usWreckViews?.ActiveEmitterCount ?? 0);
+        _peakActiveEmitters = Math.Max(_peakActiveEmitters, currentActiveEmitters);
         if (_capturePath is not null && !_captured && _session.Tick >= _captureTick)
         {
             _captured = true;
@@ -293,6 +338,11 @@ public partial class TankBattleDemo : Node3D
             GD.Print($"TANK_BATTLE_SMOKE_{(ok ? "OK" : "FAIL")} tick={_session.Tick} initial={_initialViews} models={_initialModels} controls={_smokeControlsPassed} fog={_smokeFogPassed} shots={_session.Shots} soviet={_session.Director.SovietRemaining} us={_session.Director.UsRemaining} rejected={_session.Director.RejectedOrders}");
             BeginQuit(ok ? 0 : 1);
         }
+        else if (_quitTick > 0 && _session.Tick >= _quitTick)
+        {
+            GD.Print($"TANK_BATTLE_TICK_QUIT tick={_session.Tick} frames={_frames} shots={_session.Shots}");
+            BeginQuit(0);
+        }
         else if (_maxFrame > 0 && _frames >= _maxFrame)
         {
             GD.Print($"TANK_BATTLE_PREVIEW frames={_frames} tick={_session.Tick} shots={_session.Shots} max_cpu_frame_ms={_maxFrameMs:F2}");
@@ -306,6 +356,28 @@ public partial class TankBattleDemo : Node3D
         {
             MotionDiagnostics.Analysis analysis = _motionDiagnostics.Analyze(warmupFrames: 30);
             GD.Print($"MOTION_DIAGNOSTICS samples={analysis.SampleCount} clock_stalls={analysis.ClockStallFrames} clock_jumps={analysis.ClockJumpFrames} pos_stalls={analysis.PositionStallFrames} pos_jumps={analysis.PositionJumpFrames} max_disp={analysis.MaxDisplacement:F4} min_disp={analysis.MinDisplacement:F4} mean_disp={analysis.MeanDisplacement:F4}");
+        }
+        int totalWrecks = (_sovietWreckViews?.Views.Count ?? 0) + (_usWreckViews?.Views.Count ?? 0);
+        int totalSmoking = (_sovietWreckViews?.ActiveSmokeCount ?? 0) + (_usWreckViews?.ActiveSmokeCount ?? 0);
+        int totalEmitters = (_sovietWreckViews?.ActiveEmitterCount ?? 0) + (_usWreckViews?.ActiveEmitterCount ?? 0);
+        const int warmup = 10;
+        int valid = Math.Max(0, Math.Min(_frames, _frameIntervals.Length) - warmup);
+        if (valid > 0)
+        {
+            double[] sortedIntervals = new double[valid];
+            Array.Copy(_frameIntervals, warmup, sortedIntervals, 0, valid);
+            Array.Sort(sortedIntervals);
+            double p50 = sortedIntervals[(int)(valid * 0.50)];
+            double p95 = sortedIntervals[(int)(valid * 0.95)];
+            double p99 = sortedIntervals[(int)(valid * 0.99)];
+
+            double[] sortedCpu = new double[valid];
+            Array.Copy(_cpuTimes, warmup, sortedCpu, 0, valid);
+            Array.Sort(sortedCpu);
+            double cpuP50 = sortedCpu[(int)(valid * 0.50)];
+            double cpuP95 = sortedCpu[(int)(valid * 0.95)];
+
+            GD.Print($"TANK_BATTLE_PERF frames={valid} tick={_session.Tick} wrecks={totalWrecks} smoking={totalSmoking} active_emitters={totalEmitters} peak_emitters={_peakActiveEmitters} p50_interval_ms={p50:F2} p95_interval_ms={p95:F2} p99_interval_ms={p99:F2} max_interval_ms={_maxIntervalMs:F2} cpu_p50_ms={cpuP50:F2} cpu_p95_ms={cpuP95:F2}");
         }
         _effects.Clear();
         _closingFrames = 0;
@@ -331,13 +403,20 @@ public partial class TankBattleDemo : Node3D
         _usViews.UpdateLod(_camera.Size);
         _sovietWreckViews.UpdateLod(_camera.Size);
         _usWreckViews.UpdateLod(_camera.Size);
+        WreckViewSet.UpdateSceneEffects(
+            [_sovietWreckViews, _usWreckViews],
+            delta,
+            _camera.Focus,
+            _camera.Size,
+            _session.Tick,
+            _disableWreckEffects ? 0 : WreckViewSet.MaxActiveEmitters);
         _sovietViews.UpdateRecoil(delta);
         _usViews.UpdateRecoil(delta);
         _sovietViews.UpdateEffects(delta);
         _usViews.UpdateEffects(delta);
     }
 
-    private void ProcessSideEvents(ReadOnlySpan<CombatEventObservation> events, UnitViewSet views)
+    private void ProcessSideEvents(ReadOnlySpan<CombatEventObservation> events, UnitViewSet views, WreckViewSet wreckViews)
     {
         int count = 0;
         foreach (CombatEventObservation ev in events)
@@ -358,6 +437,7 @@ public partial class TankBattleDemo : Node3D
             }
         }
         _effects.ProcessEvents(_events.AsSpan(0, count), views, _session.Tick);
+        wreckViews.ProcessEvents(events, _session.Tick);
     }
 
     private void UpdateHud()
@@ -368,7 +448,8 @@ public partial class TankBattleDemo : Node3D
             ? director.SovietRemaining == 0 ? "US WINS" : director.UsRemaining == 0 ? "SOVIET WINS" : "TIME LIMIT"
             : _paused ? "PAUSED" : "AUTOBATTLE";
         int totalWrecks = _sovietWreckViews.Views.Count + _usWreckViews.Views.Count;
-        _summary.Text = $"DEAD GROUND  /  100 vs 100  /  {result}\nT-62: {director.SovietRemaining}     M60A1: {director.UsRemaining}     Wrecks: {totalWrecks}     Shots: {_session.Shots}     Time: {_lastHudSecond}s\nCurrent contacts: Soviet {CountCurrent(_session.Soviet.Replica.Contacts)} / US {CountCurrent(_session.Us.Replica.Contacts)}   |   3.2 x 3.2 km / two rows per side";
+        int totalSmoking = _sovietWreckViews.ActiveSmokeCount + _usWreckViews.ActiveSmokeCount;
+        _summary.Text = $"DEAD GROUND  /  100 vs 100  /  {result}\nT-62: {director.SovietRemaining}     M60A1: {director.UsRemaining}     Wrecks: {totalWrecks} (Smoking: {totalSmoking})     Shots: {_session.Shots}     Time: {_lastHudSecond}s\nCurrent contacts: Soviet {CountCurrent(_session.Soviet.Replica.Contacts)} / US {CountCurrent(_session.Us.Replica.Contacts)}   |   3.2 x 3.2 km / two rows per side";
         string fog = _fogMode == 0 ? "BOTH" : _fogMode == 1 ? "SOVIET" : _fogMode == 2 ? "US" : "OFF";
         string light = _lighting == 0 ? "DAY" : _lighting == 1 ? "DUSK" : "NIGHT";
         _help.Text = $"WASD / arrows: camera   Wheel/pinch: zoom   MMB / Alt+mouse or Q/E: orbit   T/G: tilt   V: perspective/RTS\n1 / 2: inspect army   3: overview   Space: pause   R: restart   Tab: {(_fast ? "2x" : "1x")} speed   L: {light}   Esc: quit\nF: visibility ({fog}, Soviet amber / US cyan)   Observer sees all units. Terrain shading shows ground visibility. Seed: {_seed}";

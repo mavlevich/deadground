@@ -92,7 +92,22 @@ public readonly record struct CombatEventObservation(
     Vector3 Origin,
     Vector3 Target,
     EntityId ShooterUnitId = default,
-    HitResult Result = HitResult.None);
+    HitResult Result = HitResult.None)
+{
+    public WreckId WreckId => new(ShooterUnitId.Value);
+
+    public CombatEventObservation(
+        uint eventId,
+        int serverTick,
+        CombatEventKind kind,
+        ushort presentationId,
+        Vector3 origin,
+        Vector3 target,
+        WreckId wreckId)
+        : this(eventId, serverTick, kind, presentationId, origin, target, new EntityId(wreckId.Value), HitResult.None)
+    {
+    }
+}
 
 public readonly record struct UnitState(
     EntityId Id,

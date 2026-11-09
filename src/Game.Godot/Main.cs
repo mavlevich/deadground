@@ -780,10 +780,12 @@ public partial class Main : Node3D
         _unitViews.FaceHealthBars(_camera.GlobalTransform.Basis);
         _unitViews.UpdateLod(_cameraRig.Size);
         _wreckViews.UpdateLod(_cameraRig.Size);
+        _wreckViews.UpdateEffects(delta, _cameraRig.Focus, _cameraRig.Size, _session.Tick);
         _unitViews.UpdateRecoil(delta);
         _unitViews.UpdateEffects(delta);
         _combatEffects.Update(delta);
         _combatEffects.ProcessEvents(_session.Replica.Events, _unitViews, _session.Tick, _contactViews);
+        _wreckViews.ProcessEvents(_session.Replica.Events, _session.Tick);
         _combatEffects.UpdateListener(_cameraRig.Focus);
         _missionPanel?.UpdateMission(_session.Mission, _session.Tick);
 
