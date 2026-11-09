@@ -19,6 +19,9 @@ internal sealed class CameraRig
     public CameraModel Model => _model;
     public Vector3 Focus => new(_model.Focus.X, _model.Focus.Y, _model.Focus.Z);
     public float Size => _model.CurrentSize;
+    public float TargetSize => _model.TargetSize;
+    public Vector3 DefaultFocus => _defaultFocus;
+    public float DefaultSize => _defaultSize;
     public float ViewYaw => _orbit.Yaw;
     public float ViewPitch => _orbit.Pitch;
     public bool IsPerspective => _camera.Projection == Camera3D.ProjectionType.Perspective;

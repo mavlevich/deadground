@@ -1,5 +1,6 @@
 using DeadGround.Engine;
 using DeadGround.Engine.Net;
+using DeadGround.Rules.Ops;
 using DeadGround.Sandbox;
 using Godot;
 using NumericsVector2 = System.Numerics.Vector2;
@@ -512,6 +513,7 @@ internal static class ClientRegressionTests
             CameraRig rig = new(camera, initialFocus: new Vector3(64, 0, 64), initialSize: 112, mapWidth: 128, mapDepth: 128);
             Require(rig.Focus == new Vector3(64, 0, 64), "Initial focus mismatch.");
             Require(rig.Size == 112f, "Initial size mismatch.");
+            Require(rig.TargetSize == 112f, "Initial target size mismatch.");
             Require(camera.Size == 112f, "Camera projection size mismatch.");
             Require(camera.Position.Y > 64f, "Camera Y offset missing.");
             CheckWholeViewInFrontOfCamera(scene);
@@ -519,6 +521,10 @@ internal static class ClientRegressionTests
             // Test zoom in
             rig.ZoomIn();
             Require(rig.Model.TargetSize < 112f, "ZoomIn did not reduce target size.");
+            Require(rig.TargetSize < 112f, "TargetSize property did not reduce.");
+            Require(rig.Size == 112f, "Size must smoothly interpolate and not jump immediately.");
+            Require(!Main.ShouldCenterOnHomeView(rig.Focus, rig.Size, rig.TargetSize, rig.ViewYaw, rig.ViewPitch, new Vector3(64, 0, 64), 112f),
+                "Pending wheel zoom in TargetSize must prevent home camera snap in the same frame.");
             rig.Update(0.1, allowInput: false);
             Require(rig.Size < 112f, "Camera size did not decrease after zoom in update.");
 
@@ -544,6 +550,43 @@ internal static class ClientRegressionTests
             rig.Model.SetInput(100f, 100f);
             rig.Update(1.0, allowInput: true);
             Require(rig.Focus.X <= 128f && rig.Focus.Z <= 128f, "Focus exceeded map bounds.");
+
+            // Verify default view getters and custom default view configuration
+            Require(rig.DefaultFocus == new Vector3(64, 0, 64), "DefaultFocus did not match initial focus.");
+            Require(rig.DefaultSize == 112f, "DefaultSize did not match initial size.");
+            rig.SetDefaultView(new Vector3(100, 0, 100), 160f);
+            Require(rig.DefaultFocus == new Vector3(100, 0, 100), "SetDefaultView did not update DefaultFocus.");
+            Require(rig.DefaultSize == 160f, "SetDefaultView did not update DefaultSize.");
+            rig.ResetToDefault();
+            Require(rig.Focus == new Vector3(100, 0, 100), "ResetToDefault did not restore new default focus.");
+            Require(rig.Size == 160f, "ResetToDefault did not restore new default size.");
+
+            // Faction home focus mapping
+            Vector3 fallback = new(64, 0, 64);
+            Vector3 sovietHome = Main.GetDefaultHomeFocus("battle", 1, fallback, hasExplicitFocus: false);
+            Require(sovietHome == new Vector3(BattleScenario.SovietStart.X, 0f, BattleScenario.SovietStart.Y),
+                "Battle side 1 default home focus must be SovietStart.");
+            Vector3 usHome = Main.GetDefaultHomeFocus("battle", 2, fallback, hasExplicitFocus: false);
+            Require(usHome == new Vector3(BattleScenario.UsStart.X, 0f, BattleScenario.UsStart.Y),
+                "Battle side 2 default home focus must be UsStart.");
+            Vector3 explicitHome = Main.GetDefaultHomeFocus("battle", 2, fallback, hasExplicitFocus: true);
+            Require(explicitHome == fallback, "Explicit camera focus must override side home focus.");
+            Vector3 protoHome = Main.GetDefaultHomeFocus("prototype", 2, fallback, hasExplicitFocus: false);
+            Require(protoHome == fallback, "Non-battle scenario must use fallback focus.");
+
+            // Unmoved vs moved camera home view recentering
+            Require(Main.ShouldCenterOnHomeView(fallback, 112f, 112f, 0f, OrbitCameraPose.DefaultPitch, fallback, 112f),
+                "Camera at initial focus and size must trigger home recentering.");
+            Require(!Main.ShouldCenterOnHomeView(fallback + new Vector3(5f, 0f, 0f), 112f, 112f, 0f, OrbitCameraPose.DefaultPitch, fallback, 112f),
+                "Panned camera must preserve user view and not recenter.");
+            Require(!Main.ShouldCenterOnHomeView(fallback, 130f, 130f, 0f, OrbitCameraPose.DefaultPitch, fallback, 112f),
+                "Zoomed camera must preserve user view and not recenter.");
+            Require(!Main.ShouldCenterOnHomeView(fallback, 112f, 130f, 0f, OrbitCameraPose.DefaultPitch, fallback, 112f),
+                "Camera with unapplied wheel zoom in TargetSize must preserve user view and not recenter.");
+            Require(!Main.ShouldCenterOnHomeView(fallback, 112f, 112f, 0.1f, OrbitCameraPose.DefaultPitch, fallback, 112f),
+                "Yaw rotated camera must preserve user view and not recenter.");
+            Require(!Main.ShouldCenterOnHomeView(fallback, 112f, 112f, 0f, OrbitCameraPose.DefaultPitch + 0.1f, fallback, 112f),
+                "Pitch rotated camera must preserve user view and not recenter.");
         }
         finally
         {
