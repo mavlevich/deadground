@@ -1431,7 +1431,7 @@ avoidance, a network spectator protocol, unlimited ammunition, artillery or airc
   - Performance and allocations:
     - The headless regression measures managed allocations for marker updates, contact hover and coordinate math with 100 markers over 100 frames. Contact age labels are cached at map load.
 
-### 18.13 Persistent vehicle wrecks
+### 18.13 Persistent vehicle wrecks and smoldering smoke
 
 - Motionless vehicle wrecks on the battlefield:
   - When destroyed, vehicles play the existing explosion visual and audio effects, leaving behind a motionless wreck with a recognizable silhouette.
@@ -1442,6 +1442,16 @@ avoidance, a network spectator protocol, unlimited ammunition, artillery or airc
   - Client presentation lifecycle is managed through `WreckViewSet` and `WreckView`, synchronizing against `ClientReplica.Wrecks`.
   - Reconstructed from snapshot state on reconnect or when presentation destruction events are lost, without replaying destruction explosions.
   - Scenario reset clears all visual wreck instances.
+- Wreck fire and smoldering smoke effects:
+  - Following the initial destruction explosion, an observed destroyed vehicle burns briefly (`FireDuration = 8.0s`), transitions into smoldering drifting light gray smoke (`SmokeDuration = 45.0s`), and gradually cools completely, leaving the charred hull on the field.
+  - The vehicle silhouette and adjacent combat units remain clearly recognizable and readable from standard RTS camera perspectives.
+  - Smoke and flame particles (`CreateWreckFire`, `CreateWreckSmoke`) attach directly to the vehicle hull (including elevated bridge decks matching `SupportSurface`).
+  - Destruction event binding: `UnitDestroyed` events carry authoritative `WreckId` (`ShooterUnitId` slot in wire protocol), binding effects directly to the matching wreck view without leaking internal enemy `EntityId`s. Wrecks at identical 2D coordinates on different vertical elevations (bridge deck vs ground) resolve unambiguously.
+  - Scene-wide unified emitter limit: active emitters are capped globally across all sets in the scene at `MaxActiveEmitters = 16`, counting active fire and smoke emitters together (burning wrecks consume 2 emitter slots, smoldering wrecks consume 1 slot).
+  - Multi-view deduplication: when a wreck is observed by multiple factions (e.g. Soviet and US in `TankBattleDemo`), effects are instantiated on only one view per `WreckId`, eliminating duplicate particles and double emitter consumption.
+  - Zoom hysteresis: all smoke emitters suppress when camera size exceeds 105 m (LOD2 threshold 95 m + 10 m margin) and re-enable only when zooming in below 85 m, preventing rapid toggling during camera maneuvers.
+  - Distance hysteresis: currently active smoking wrecks receive a 15 m virtual distance advantage when sorting nearest candidates, eliminating emitter thrashing and flickering between equidistant wrecks.
+  - Timing and fog of war: effect age is tied directly to the authoritative server tick of observed destruction (`ServerTick`). Panning the camera away and returning resumes smoke at its exact current age or displays a cold hull if over 45 s have elapsed. Duplicate snapshots or events never restart fire or smoke. Wrecks destroyed unobserved in the fog of war or restored after reconnect appear cold and charred without triggering explosions, fire, or smoke. Hidden wrecks never reveal their positions through smoke, illumination, or audio.
 
 ## 19. Rule sets and modularity
 

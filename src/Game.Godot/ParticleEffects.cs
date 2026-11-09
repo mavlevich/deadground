@@ -14,8 +14,14 @@ internal static class ParticleEffects
     private static QuadMesh? _drawPass;
     private static ParticleProcessMaterial? _blastDustProcess;
     private static ParticleProcessMaterial? _barrelSmokeProcess;
+    private static ParticleProcessMaterial? _wreckFireProcess;
+    private static ParticleProcessMaterial? _wreckSmokeProcess;
     private static CurveTexture? _movementDustSize;
+    private static CurveTexture? _wreckFireSize;
+    private static CurveTexture? _wreckSmokeSize;
     private static GradientTexture1D? _movementDustColor;
+    private static GradientTexture1D? _wreckFireColor;
+    private static GradientTexture1D? _wreckSmokeColor;
 
     internal static Texture2D SoftDot => _softDot ??= CreateSoftDot();
 
@@ -95,6 +101,54 @@ internal static class ParticleEffects
             EmissionBoxExtents = boxExtents,
         });
 
+    // Short lingering flame rising from engine deck or turret ring after vehicle destruction.
+    internal static GpuParticles3D CreateWreckFire() => CreateEmitter(
+        "WreckFire",
+        oneShot: false,
+        amount: 18,
+        lifetime: 0.55f,
+        explosiveness: 0.0f,
+        _wreckFireProcess ??= new ParticleProcessMaterial
+        {
+            Direction = new Vector3(0f, 1f, 0f),
+            Spread = 22f,
+            InitialVelocityMin = 0.8f,
+            InitialVelocityMax = 1.6f,
+            DampingMin = 0.5f,
+            DampingMax = 1.0f,
+            Gravity = new Vector3(0f, 0.5f, 0f),
+            ScaleMin = 0.5f,
+            ScaleMax = 1.0f,
+            ScaleCurve = _wreckFireSize ??= Shrink(0.7f),
+            ColorRamp = _wreckFireColor ??= CreateFireRamp(),
+            EmissionShape = ParticleProcessMaterial.EmissionShapeEnum.Box,
+            EmissionBoxExtents = new Vector3(0.5f, 0.15f, 0.7f),
+        });
+
+    // Smoldering smoke plume drifting from destroyed vehicle.
+    internal static GpuParticles3D CreateWreckSmoke() => CreateEmitter(
+        "WreckSmoke",
+        oneShot: false,
+        amount: 26,
+        lifetime: 2.2f,
+        explosiveness: 0.0f,
+        _wreckSmokeProcess ??= new ParticleProcessMaterial
+        {
+            Direction = new Vector3(0.06f, 1f, 0.04f),
+            Spread = 20f,
+            InitialVelocityMin = 0.5f,
+            InitialVelocityMax = 1.3f,
+            DampingMin = 0.3f,
+            DampingMax = 0.6f,
+            Gravity = new Vector3(0.08f, 0.35f, 0.05f),
+            ScaleMin = 0.8f,
+            ScaleMax = 1.9f,
+            ScaleCurve = _wreckSmokeSize ??= Grow(0.35f),
+            ColorRamp = _wreckSmokeColor ??= CreateSmokeRamp(),
+            EmissionShape = ParticleProcessMaterial.EmissionShapeEnum.Box,
+            EmissionBoxExtents = new Vector3(0.6f, 0.15f, 0.8f),
+        });
+
     private static GpuParticles3D CreateEmitter(string name, bool oneShot, int amount, float lifetime, float explosiveness, ParticleProcessMaterial process)
     {
         return new GpuParticles3D
@@ -167,6 +221,47 @@ internal static class ParticleEffects
         {
             Offsets = [0f, 0.25f, 1f],
             Colors = [color, color, new Color(color.R, color.G, color.B, 0f)],
+        };
+        return new GradientTexture1D { Gradient = gradient };
+    }
+
+    // Size over lifetime: starts at full size and shrinks toward end scale.
+    private static CurveTexture Shrink(float endScale)
+    {
+        Curve curve = new();
+        curve.AddPoint(new Vector2(0f, 1f));
+        curve.AddPoint(new Vector2(1f, endScale * 0.3f));
+        return new CurveTexture { Curve = curve };
+    }
+
+    private static GradientTexture1D CreateFireRamp()
+    {
+        Gradient gradient = new()
+        {
+            Offsets = [0f, 0.25f, 0.65f, 1f],
+            Colors =
+            [
+                new Color(1f, 0.88f, 0.30f, 0.90f),
+                new Color(0.95f, 0.42f, 0.08f, 0.75f),
+                new Color(0.65f, 0.15f, 0.04f, 0.40f),
+                new Color(0.18f, 0.05f, 0.02f, 0f),
+            ],
+        };
+        return new GradientTexture1D { Gradient = gradient };
+    }
+
+    private static GradientTexture1D CreateSmokeRamp()
+    {
+        Gradient gradient = new()
+        {
+            Offsets = [0f, 0.25f, 0.70f, 1f],
+            Colors =
+            [
+                new Color(0.20f, 0.20f, 0.20f, 0.65f),
+                new Color(0.30f, 0.30f, 0.30f, 0.50f),
+                new Color(0.42f, 0.42f, 0.42f, 0.25f),
+                new Color(0.50f, 0.50f, 0.50f, 0f),
+            ],
         };
         return new GradientTexture1D { Gradient = gradient };
     }

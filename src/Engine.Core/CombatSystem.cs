@@ -1146,14 +1146,6 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
             if (!alreadyDestroyed)
             {
                 TotalUnitsDestroyed++;
-                RecordDestroyedEvent(
-                    tick,
-                    targetUnit.Definition,
-                    targetUnit.Id,
-                    targetUnit.Owner,
-                    targetUnit.Position,
-                    targetUnit.SupportSurface);
-
                 WreckState wreck = world.AddWreck(
                     targetUnit.Definition,
                     targetUnit.Position,
@@ -1162,6 +1154,15 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                     victimCs.TurretYaw,
                     tick,
                     targetUnit.Owner);
+
+                RecordDestroyedEvent(
+                    tick,
+                    targetUnit.Definition,
+                    targetUnit.Id,
+                    targetUnit.Owner,
+                    targetUnit.Position,
+                    targetUnit.SupportSurface,
+                    wreck.Id);
 
                 _detection.NotifyWreckCreated(wreck, targetUnit.Owner, targetUnit.Id);
 
@@ -1286,7 +1287,8 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         EntityId targetId,
         int targetOwner,
         Vector2 targetPos,
-        uint targetSupportSurface = 0)
+        uint targetSupportSurface = 0,
+        WreckId wreckId = default)
     {
         uint eventId = _nextEventId++;
         if (_nextEventId == 0) _nextEventId = 1;
@@ -1306,7 +1308,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                     definition,
                     Vector3.Zero,
                     targetPos3D,
-                    default);
+                    wreckId);
                 AppendEvent(p, ev);
             }
             else
@@ -1328,7 +1330,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                         oppPresId,
                         Vector3.Zero,
                         targetPos3D,
-                        default);
+                        wreckId);
                     AppendEvent(p, ev);
                 }
             }
