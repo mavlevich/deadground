@@ -75,6 +75,10 @@ public partial class Main : Node3D
     private bool _trafficLeaderCleared;
     private int _ustyeSetupIndex;
     private UstyeMapView? _ustyeMapView;
+    private bool _hasExplicitCameraFocus;
+    private Vector3 _initialSpawnFocus;
+    private float _initialSpawnSize;
+    private int _homeViewAssignedPlayerId;
 
     internal FogOfWarView? FogOfWar => _fogOfWar;
     internal CameraRig CameraRig => _cameraRig;
@@ -307,6 +311,13 @@ public partial class Main : Node3D
                     {
                         overrideCameraFocus = new Vector3(fx, 0, fz);
                     }
+                    else if (parts.Length == 3 &&
+                        float.TryParse(parts[0], System.Globalization.CultureInfo.InvariantCulture, out float fx3) &&
+                        float.TryParse(parts[1], System.Globalization.CultureInfo.InvariantCulture, out float fy3) &&
+                        float.TryParse(parts[2], System.Globalization.CultureInfo.InvariantCulture, out float fz3))
+                    {
+                        overrideCameraFocus = new Vector3(fx3, fy3, fz3);
+                    }
                     i++;
                 }
                 else if (args[i] == "--vehicle-effects-capture" && i + 1 < args.Length)
@@ -533,6 +544,9 @@ public partial class Main : Node3D
             "ustye-raid" => new Vector3(2160f, 10f, 2325f),
             _ => new Vector3(64, 0, 64)
         };
+        _hasExplicitCameraFocus = overrideCameraFocus.HasValue;
+        _initialSpawnFocus = initialFocus;
+        _initialSpawnSize = initialCameraSize;
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
         if (_scenario == "ustye-ground" || _scenario == "ustye-raid")
         {
@@ -798,6 +812,16 @@ public partial class Main : Node3D
             _lastTitlePlayerId = _session.AssignedPlayerId;
             _lastTitleScenario = _scenario;
             _title.Text = FormatTitle(_session.AssignedPlayerId, _scenario);
+        }
+
+        if (_session.AssignedPlayerId == 0)
+        {
+            _homeViewAssignedPlayerId = 0;
+        }
+        else if (_session.AssignedPlayerId != _homeViewAssignedPlayerId)
+        {
+            _homeViewAssignedPlayerId = _session.AssignedPlayerId;
+            ApplyPlayerHomeView(_session.AssignedPlayerId);
         }
 
         _orderNotification?.Update(delta);
@@ -2047,6 +2071,53 @@ public partial class Main : Node3D
             _ => "M0 NETWORK TEST"
         };
         return $"DEAD GROUND   /   SIDE {assignedSide}   /   {name}";
+    }
+
+    internal void ApplyPlayerHomeView(int assignedPlayerId)
+    {
+        Vector3 homeFocus = GetDefaultHomeFocus(_scenario, assignedPlayerId, _initialSpawnFocus, _hasExplicitCameraFocus);
+        _cameraRig.SetDefaultView(homeFocus, _initialSpawnSize);
+
+        bool shouldCenter = ShouldCenterOnHomeView(
+            _cameraRig.Focus, _cameraRig.Size, _cameraRig.TargetSize, _cameraRig.ViewYaw, _cameraRig.ViewPitch, _initialSpawnFocus, _initialSpawnSize);
+        if (shouldCenter)
+        {
+            _cameraRig.CenterOn(homeFocus);
+            _initialSpawnFocus = homeFocus;
+        }
+
+        GD.Print($"CAMERA_HOME side={assignedPlayerId} focus={_cameraRig.Focus} default_focus={homeFocus} centered={shouldCenter}");
+    }
+
+    internal static bool ShouldCenterOnHomeView(Vector3 currentFocus, float currentSize, float targetSize, float viewYaw, float viewPitch, Vector3 spawnFocus, float spawnSize)
+    {
+        Vector3 focusDelta = currentFocus - spawnFocus;
+        bool cameraMoved = (focusDelta.X * focusDelta.X + focusDelta.Z * focusDelta.Z) > 1.0f
+            || MathF.Abs(currentSize - spawnSize) > 0.5f
+            || MathF.Abs(targetSize - spawnSize) > 0.5f
+            || MathF.Abs(viewYaw) > 0.01f
+            || MathF.Abs(viewPitch - OrbitCameraPose.DefaultPitch) > 0.01f;
+        return !cameraMoved;
+    }
+
+    internal static Vector3 GetDefaultHomeFocus(string scenario, int assignedPlayerId, Vector3 fallbackFocus, bool hasExplicitFocus)
+    {
+        if (hasExplicitFocus)
+        {
+            return fallbackFocus;
+        }
+
+        if (scenario == "battle")
+        {
+            return assignedPlayerId switch
+            {
+                1 => new Vector3(BattleScenario.SovietStart.X, 0f, BattleScenario.SovietStart.Y),
+                2 => new Vector3(BattleScenario.UsStart.X, 0f, BattleScenario.UsStart.Y),
+                _ => fallbackFocus
+            };
+        }
+
+        return fallbackFocus;
     }
 
     internal static string FormatControlsHelpText(bool isMacOs) =>
