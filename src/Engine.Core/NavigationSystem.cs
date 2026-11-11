@@ -3181,19 +3181,93 @@ public sealed class NavigationSystem : ISimulationSystem
             }
             _routeIndices[slot] = idx;
 
-            if ((idx >= count || (idx == count - 1 && Vector2.Distance(currentPos, _routeWaypoints[offset + count - 1]) <= MathF.Max(0.5f, v * dt * 2f))) && _slotNextChunkCounts[slot] > 0)
+            if (_slotNextChunkCounts[slot] > 0)
             {
-                int nextCount = _slotNextChunkCounts[slot];
-                for (int w = 0; w < nextCount; w++)
+                bool canHandoff = false;
+                if (idx >= count)
                 {
-                    _routeWaypoints[offset + w] = _slotNextChunkWaypoints[offset + w];
+                    canHandoff = true;
                 }
-                _routeCounts[slot] = nextCount;
-                _routeIndices[slot] = 0;
-                _slotNextChunkCounts[slot] = 0;
-                _unitChunkPending[slot] = false;
-                idx = 0;
-                count = nextCount;
+                else if (idx == count - 1)
+                {
+                    Vector2 chunkEnd = _routeWaypoints[offset + count - 1];
+                    float distToChunkEnd = Vector2.Distance(currentPos, chunkEnd);
+
+                    if (distToChunkEnd <= MathF.Max(0.5f, v * dt * 2f))
+                    {
+                        canHandoff = true;
+                    }
+                    else
+                    {
+                        float maxAdvanceDist = canPivot
+                            ? MathF.Max(1.0f, v * dt * 2f)
+                            : MathF.Max(MathF.Max(1.0f, minTurnRadius * 1.2f), v * dt * 2f);
+
+                        if (distToChunkEnd <= maxAdvanceDist)
+                        {
+                            int nextChunkCount = _slotNextChunkCounts[slot];
+                            Vector2 nextWp = _slotNextChunkWaypoints[offset];
+                            if (Vector2.DistanceSquared(chunkEnd, nextWp) < 0.01f && nextChunkCount > 1)
+                            {
+                                nextWp = _slotNextChunkWaypoints[offset + 1];
+                            }
+
+                            bool bridgeCheckPassed = true;
+                            if (_unitTargetSurfaces[slot] != supportSurface && _grid.Bridges.Count > 0)
+                            {
+                                bool curWpBridge = false;
+                                bool nextWpBridge = false;
+                                for (int b = 0; b < _grid.Bridges.Count; b++)
+                                {
+                                    var br = _grid.Bridges[b];
+                                    if (br.Contains(chunkEnd)) curWpBridge = true;
+                                    if (br.Contains(nextWp)) nextWpBridge = true;
+                                }
+                                if (curWpBridge != nextWpBridge)
+                                {
+                                    bridgeCheckPassed = false;
+                                }
+                            }
+
+                            if (bridgeCheckPassed && _grid.IsSegmentClear(currentPos, nextWp, radius, capabilities, supportSurface))
+                            {
+                                Vector2 seg = nextWp - chunkEnd;
+                                float segLenSq = seg.LengthSquared();
+                                if (segLenSq > 1e-4f)
+                                {
+                                    Vector2 toPos = currentPos - chunkEnd;
+                                    if (Vector2.Dot(toPos, seg) > 0f)
+                                    {
+                                        canHandoff = true;
+                                    }
+                                    else if (count >= 2)
+                                    {
+                                        Vector2 inSeg = chunkEnd - _routeWaypoints[offset + count - 2];
+                                        if (inSeg.LengthSquared() > 1e-4f && Vector2.Dot(toPos, inSeg) > 0f)
+                                        {
+                                            canHandoff = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (canHandoff)
+                {
+                    int nextCount = _slotNextChunkCounts[slot];
+                    for (int w = 0; w < nextCount; w++)
+                    {
+                        _routeWaypoints[offset + w] = _slotNextChunkWaypoints[offset + w];
+                    }
+                    _routeCounts[slot] = nextCount;
+                    _routeIndices[slot] = 0;
+                    _slotNextChunkCounts[slot] = 0;
+                    _unitChunkPending[slot] = false;
+                    idx = 0;
+                    count = nextCount;
+                }
             }
 
             float sRem = 0f;
@@ -3318,6 +3392,47 @@ public sealed class NavigationSystem : ISimulationSystem
                             break;
                         }
                         remDist -= segLen;
+                    }
+                    if (!pointFound && _slotNextChunkCounts[slot] > 0)
+                    {
+                        int nextCount = _slotNextChunkCounts[slot];
+                        Vector2 prevWp = _routeWaypoints[offset + count - 1];
+                        for (int k = 0; k < nextCount; k++)
+                        {
+                            Vector2 segStart = prevWp;
+                            Vector2 segEnd = _slotNextChunkWaypoints[offset + k];
+                            prevWp = segEnd;
+
+                            if (_unitTargetSurfaces[slot] != supportSurface && _grid.Bridges.Count > 0)
+                            {
+                                bool startOnBr = false;
+                                bool endOnBr = false;
+                                for (int b = 0; b < _grid.Bridges.Count; b++)
+                                {
+                                    var br = _grid.Bridges[b];
+                                    if (br.Contains(segStart)) startOnBr = true;
+                                    if (br.Contains(segEnd)) endOnBr = true;
+                                }
+                                if (startOnBr != endOnBr)
+                                {
+                                    lookaheadPoint = segStart;
+                                    pointFound = true;
+                                    break;
+                                }
+                            }
+
+                            float segLen = Vector2.Distance(segStart, segEnd);
+                            if (segLen > 1e-4f)
+                            {
+                                if (remDist <= segLen)
+                                {
+                                    lookaheadPoint = segStart + (remDist / segLen) * (segEnd - segStart);
+                                    pointFound = true;
+                                    break;
+                                }
+                                remDist -= segLen;
+                            }
+                        }
                     }
                     if (!pointFound)
                     {
