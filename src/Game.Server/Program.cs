@@ -8,6 +8,7 @@ int maxClients = 2;
 bool smokeTest = false;
 bool battleReport = false;
 bool diagnose = false;
+bool clash = false;
 int battleRuns = 50;
 string scenario = "prototype";
 ulong? customSeed = null;
@@ -33,6 +34,10 @@ for (int i = 0; i < args.Length; i++)
     else if (args[i] == "--smoke-test")
     {
         smokeTest = true;
+    }
+    else if (args[i] == "--clash")
+    {
+        clash = true;
     }
     else if (args[i] == "--battle-report")
     {
@@ -138,7 +143,7 @@ Simulation CreateSimulation(ulong seed = 0)
         "navigation-large" => LargeNavigationScenario.CreateSimulation(scenarioGeometry!),
         "combat" => CombatScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "recon-raid" => ReconRaidScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
-        "battle" => BattleScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
+        "battle" => BattleScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed, clash: clash),
         "bridge-crossing" => BridgeCrossingScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "vehicle-traffic" => VehicleTrafficScenario.CreateSimulation(scenarioGeometry!),
         "group-move" => GroupMoveScenario.CreateSimulation(scenarioGeometry!),
@@ -219,6 +224,8 @@ if (smokeTest)
         for (int i = 0; i < 20; i++) session.Advance(1d / Simulation.TickRate);
         if (session.Replica.OwnUnits.Length != BattleScenario.UnitsPerSide || session.Replica.ContactCount != 0)
             throw new InvalidOperationException("Battle smoke test: the sides must start out of sight.");
+        if (session.Mission.Status != MissionStatus.InProgress)
+            throw new InvalidOperationException("Battle smoke test: initial mission status mismatch.");
 
         EntityId mover = session.Replica.OwnUnits[0].Id;
         Vector2 from = session.Replica.OwnUnits[0].Position;

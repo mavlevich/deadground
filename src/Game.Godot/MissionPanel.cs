@@ -17,6 +17,7 @@ internal sealed partial class MissionPanel : Control
     private readonly Label _resultReason;
     private readonly Label _resultDuration;
     private readonly Button _retryButton;
+    private readonly Label _instructionLabel;
 
     private readonly HeightMap _map;
     private readonly MeshInstance3D _searchAreaRing;
@@ -25,6 +26,8 @@ internal sealed partial class MissionPanel : Control
 
     private bool _isLocal;
     private bool _hasFinished;
+    private string _scenario = "recon-raid";
+    private bool _showBriefing = true;
 
     public event System.Action? RetryRequested;
     public bool IsMissionFinished => _hasFinished;
@@ -157,6 +160,17 @@ internal sealed partial class MissionPanel : Control
         _retryButton.Pressed += () => RetryRequested?.Invoke();
         resultStack.AddChild(_retryButton);
 
+        _instructionLabel = new Label
+        {
+            Text = "",
+            HorizontalAlignment = HorizontalAlignment.Center,
+            MouseFilter = MouseFilterEnum.Ignore,
+            Visible = false
+        };
+        _instructionLabel.AddThemeFontSizeOverride("font_size", 13);
+        _instructionLabel.AddThemeColorOverride("font_color", new Color("a8b8a0"));
+        resultStack.AddChild(_instructionLabel);
+
         resultMargin.AddChild(resultStack);
         _resultCard.AddChild(resultMargin);
         AddChild(_resultCard);
@@ -177,10 +191,35 @@ internal sealed partial class MissionPanel : Control
         parent3D.AddChild(_searchAreaRing);
     }
 
+    public void SetScenario(string scenario)
+    {
+        _scenario = scenario;
+        if (_scenario == "battle")
+        {
+            _retryButton.Text = "RETRY BATTLE [R]";
+            _instructionLabel.Text = "To start the next battle, restart the dedicated server, then restart both clients:\nServer: dotnet run --project src/Game.Server --configuration Release -- --scenario battle --port 7777 --max-clients 2\nClients: ./tools/run-client.sh -- --scenario battle --connect 127.0.0.1:7777";
+        }
+        else
+        {
+            _retryButton.Text = "RETRY MISSION [R]";
+            _instructionLabel.Text = $"To start the next match, restart the dedicated server, then restart client:\nServer: dotnet run --project src/Game.Server --configuration Release -- --scenario {_scenario} --port 7777\nClient: ./tools/run-client.sh -- --scenario {_scenario} --connect 127.0.0.1:7777";
+        }
+    }
+
+    public void SetShowBriefing(bool showBriefing)
+    {
+        _showBriefing = showBriefing;
+        if (!showBriefing)
+        {
+            _briefingCard.Visible = false;
+        }
+    }
+
     public void SetLocalMode(bool isLocal)
     {
         _isLocal = isLocal;
         _retryButton.Visible = isLocal;
+        _instructionLabel.Visible = !isLocal;
     }
 
     public void UpdateMission(in MissionObservation mission, int currentTick)
@@ -193,10 +232,10 @@ internal sealed partial class MissionPanel : Control
             return;
         }
 
-        _briefingCard.Visible = true;
+        _briefingCard.Visible = _showBriefing;
 
         // Position & generate terrain-following search ring
-        if (mission.SearchAreaRadius > 0f)
+        if (_showBriefing && mission.SearchAreaRadius > 0f)
         {
             UpdateSearchAreaMesh(mission.SearchAreaCenter, mission.SearchAreaRadius);
             _searchAreaRing.Visible = true;
@@ -206,39 +245,44 @@ internal sealed partial class MissionPanel : Control
             _searchAreaRing.Visible = false;
         }
 
-        int effectiveTick = (mission.Status is MissionStatus.Victory or MissionStatus.Defeat && mission.FinishedTick > 0)
+        int effectiveTick = (mission.Status is MissionStatus.Victory or MissionStatus.Defeat or MissionStatus.Draw && mission.FinishedTick > 0)
             ? mission.FinishedTick
             : currentTick;
 
-        // Timer
-        int remainingTicks = Math.Max(0, mission.TimeLimitTicks - effectiveTick);
-        int remainingSeconds = remainingTicks / Simulation.TickRate;
-        int remMins = remainingSeconds / 60;
-        int remSecs = remainingSeconds % 60;
-        _timerLabel.Text = $"Time Remaining: {remMins:D2}:{remSecs:D2}";
+        if (_showBriefing)
+        {
+            // Timer
+            int remainingTicks = Math.Max(0, mission.TimeLimitTicks - effectiveTick);
+            int remainingSeconds = remainingTicks / Simulation.TickRate;
+            int remMins = remainingSeconds / 60;
+            int remSecs = remainingSeconds % 60;
+            _timerLabel.Text = $"Time Remaining: {remMins:D2}:{remSecs:D2}";
 
-        // Target status
-        if (mission.IsTargetDestroyed)
-        {
-            _targetStatusLabel.Text = "Target: DESTROYED (Objective complete)";
-            _targetStatusLabel.AddThemeColorOverride("font_color", new Color("77dd77"));
-        }
-        else if (mission.IsTargetSpotted && mission.TargetContactId.Value != 0)
-        {
-            _targetStatusLabel.Text = $"Target: SPOTTED (Enemy Contact #{mission.TargetContactId.Value})";
-            _targetStatusLabel.AddThemeColorOverride("font_color", new Color("ff7777"));
-        }
-        else
-        {
-            _targetStatusLabel.Text = $"Target Area: ~[{mission.SearchAreaCenter.X:F0}, {mission.SearchAreaCenter.Y:F0}] (Radius {mission.SearchAreaRadius:F0}m) / Unlocated";
-            _targetStatusLabel.AddThemeColorOverride("font_color", new Color("a8b8a0"));
+            // Target status
+            if (mission.IsTargetDestroyed)
+            {
+                _targetStatusLabel.Text = "Target: DESTROYED (Objective complete)";
+                _targetStatusLabel.AddThemeColorOverride("font_color", new Color("77dd77"));
+            }
+            else if (mission.IsTargetSpotted && mission.TargetContactId.Value != 0)
+            {
+                _targetStatusLabel.Text = $"Target: SPOTTED (Enemy Contact #{mission.TargetContactId.Value})";
+                _targetStatusLabel.AddThemeColorOverride("font_color", new Color("ff7777"));
+            }
+            else
+            {
+                _targetStatusLabel.Text = $"Target Area: ~[{mission.SearchAreaCenter.X:F0}, {mission.SearchAreaCenter.Y:F0}] (Radius {mission.SearchAreaRadius:F0}m) / Unlocated";
+                _targetStatusLabel.AddThemeColorOverride("font_color", new Color("a8b8a0"));
+            }
         }
 
         // Result presentation
-        if (mission.Status is MissionStatus.Victory or MissionStatus.Defeat)
+        if (mission.Status is MissionStatus.Victory or MissionStatus.Defeat or MissionStatus.Draw)
         {
             _hasFinished = true;
             _resultCard.Visible = true;
+            _retryButton.Visible = _isLocal;
+            _instructionLabel.Visible = !_isLocal;
 
             // Center result card
             Vector2 viewportSize = GetViewportRect().Size;
@@ -250,25 +294,42 @@ internal sealed partial class MissionPanel : Control
             int elapsedSeconds = effectiveTick / Simulation.TickRate;
             int elMins = elapsedSeconds / 60;
             int elSecs = elapsedSeconds % 60;
-            _resultDuration.Text = $"Attempt Duration: {elMins:D2}:{elSecs:D2}";
+            _resultDuration.Text = _scenario == "battle"
+                ? $"Battle Duration: {elMins:D2}:{elSecs:D2}"
+                : $"Attempt Duration: {elMins:D2}:{elSecs:D2}";
 
             if (mission.Status == MissionStatus.Victory)
             {
                 _resultTitle.Text = "VICTORY";
                 _resultTitle.AddThemeColorOverride("font_color", new Color("77dd77"));
-                _resultReason.Text = "Enemy command vehicle was located and destroyed.";
+                _resultReason.Text = _scenario == "battle"
+                    ? "All enemy units destroyed."
+                    : "Enemy command vehicle was located and destroyed.";
+            }
+            else if (mission.Status == MissionStatus.Draw)
+            {
+                _resultTitle.Text = "DRAW";
+                _resultTitle.AddThemeColorOverride("font_color", new Color("edc76b"));
+                _resultReason.Text = "Mutual destruction: all units on both sides destroyed.";
             }
             else
             {
                 _resultTitle.Text = "DEFEAT";
                 _resultTitle.AddThemeColorOverride("font_color", new Color("ee6666"));
-                _resultReason.Text = mission.EndReason switch
+                if (_scenario == "battle")
                 {
-                    MissionEndReason.ReconVehicleDestroyed => "Your reconnaissance vehicle was destroyed.",
-                    MissionEndReason.AllArmedUnitsDestroyed => "All combat tanks in your unit were destroyed.",
-                    MissionEndReason.TimeLimitExpired => "Mission time limit expired (12:00).",
-                    _ => "Mission objective failed."
-                };
+                    _resultReason.Text = "All friendly units destroyed.";
+                }
+                else
+                {
+                    _resultReason.Text = mission.EndReason switch
+                    {
+                        MissionEndReason.ReconVehicleDestroyed => "Your reconnaissance vehicle was destroyed.",
+                        MissionEndReason.AllArmedUnitsDestroyed => "All combat tanks in your unit were destroyed.",
+                        MissionEndReason.TimeLimitExpired => "Mission time limit expired (12:00).",
+                        _ => "Mission objective failed."
+                    };
+                }
             }
         }
         else

@@ -26,7 +26,7 @@ public sealed class ReconRaidMissionSystem : IMissionSystem
     public MissionStatus Status { get; private set; } = MissionStatus.InProgress;
     public MissionEndReason EndReason { get; private set; } = MissionEndReason.None;
     public int FinishedTick { get; private set; }
-    public bool IsFinished => Status is MissionStatus.Victory or MissionStatus.Defeat;
+    public bool IsFinished => Status is MissionStatus.Victory or MissionStatus.Defeat or MissionStatus.Draw;
 
     public ReconRaidMissionSystem(
         EntityId playerReconId,

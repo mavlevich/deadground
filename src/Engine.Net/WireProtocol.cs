@@ -621,7 +621,7 @@ public static class WireProtocol
         float searchAreaRadius = BinaryPrimitives.ReadSingleLittleEndian(missionRecord[24..]);
         byte flags = missionRecord[28];
 
-        if (statusByte > (byte)MissionStatus.Defeat ||
+        if (statusByte > (byte)MissionStatus.Draw ||
             endReasonByte > (byte)MissionEndReason.TimeLimitExpired ||
             timeLimitTicks < 0 ||
             finishedTick < 0 ||
