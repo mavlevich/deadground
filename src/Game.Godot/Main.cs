@@ -81,11 +81,24 @@ public partial class Main : Node3D
     private Vector3 _initialSpawnFocus;
     private float _initialSpawnSize;
     private int _homeViewAssignedPlayerId;
+    private SessionMenu _sessionMenu = null!;
+    private PauseMenu _pauseMenu = null!;
+    private ClientLifecycleController _lifecycleController = null!;
+    private bool _isMenuMode;
+    private CanvasLayer _hudCanvas = null!;
+    private MatchSetup _matchSetup = null!;
+    private readonly Node3D _environmentRoot = new() { Name = "EnvironmentRoot" };
 
     internal FogOfWarView? FogOfWar => _fogOfWar;
     internal CameraRig CameraRig => _cameraRig;
     internal Camera3D Camera => _camera;
     internal SettingsPanel SettingsPanel => _settingsPanel;
+    internal SessionMenu SessionMenu => _sessionMenu;
+    internal PauseMenu PauseMenu => _pauseMenu;
+    internal ClientLifecycleController LifecycleController => _lifecycleController;
+    internal bool IsMenuMode => _isMenuMode;
+    internal CanvasLayer HudCanvas => _hudCanvas;
+    internal MissionPanel? MissionPanel => _missionPanel;
     internal SelectionCard SelectionCard => _selectionCard;
     internal OrderNotification OrderNotification => _orderNotification;
     internal RoleBadgeOverlay RoleBadgeOverlay => _roleBadgeOverlay;
@@ -101,10 +114,11 @@ public partial class Main : Node3D
     internal UnitCatalog Catalog => _catalog;
     internal CombatEffects CombatEffects => _combatEffects;
     internal OrderDestinationView DestinationMarker => _destination;
+    internal HeightMap Map => _map;
+    internal string Scenario => _scenario;
     internal OrderCursorOverlay OrderCursorOverlay => _orderCursorOverlay;
     internal OrderPreviewController PreviewController => _previewController;
     internal DestinationEvaluator DestinationEvaluator => _destinationEvaluator;
-    internal string Scenario => _scenario;
 
     public override void _Ready()
     {
@@ -248,6 +262,9 @@ public partial class Main : Node3D
         bool noPrewarm = false;
         bool suspendFogCalc = false;
         bool minimapDemo = false;
+        bool showMultiplayerMenu = false;
+        string? menuErrorMessage = null;
+        string? menuConnectionLostReason = null;
 
         void ParseArgs(string[] args)
         {
@@ -346,147 +363,162 @@ public partial class Main : Node3D
                 {
                     minimapDemo = true;
                 }
+                else if (args[i] == "--menu-multiplayer")
+                {
+                    showMultiplayerMenu = true;
+                }
+                else if (args[i] == "--menu-error" && i + 1 < args.Length)
+                {
+                    showMultiplayerMenu = true;
+                    menuErrorMessage = args[i + 1];
+                    i++;
+                }
+                else if (args[i] == "--menu-connection-lost" && i + 1 < args.Length)
+                {
+                    menuConnectionLostReason = args[i + 1];
+                    i++;
+                }
             }
         }
 
         ParseArgs(allArgs);
         ParseArgs(userArgs);
 
+        _isMenuMode = !ClientLifecycleController.HasExplicitCliMode(userArgs, allArgs);
+
         StaticGeometry? scenarioGeometry = null;
         MatchSetup setup;
 
-        if (_scenario == "visibility")
+        if (_isMenuMode)
         {
-            scenarioGeometry = VisibilityScenario.CreateStaticGeometry();
-            _map = scenarioGeometry.HeightMap;
-            setup = VisibilityScenario.CreateMatchSetup(scenarioGeometry);
-        }
-        else if (_scenario == "navigation")
-        {
-            scenarioGeometry = NavigationScenario.CreateStaticGeometry();
-            _map = scenarioGeometry.HeightMap;
-            setup = NavigationScenario.CreateMatchSetup(scenarioGeometry);
-        }
-        else if (_scenario == "navigation-large")
-        {
-            scenarioGeometry = LargeNavigationScenario.CreateStaticGeometry();
-            _map = scenarioGeometry.HeightMap;
-            setup = LargeNavigationScenario.CreateMatchSetup(scenarioGeometry);
-        }
-        else if (_scenario == "combat")
-        {
-            scenarioGeometry = CombatScenario.CreateStaticGeometry();
-            _map = scenarioGeometry.HeightMap;
-            setup = CombatScenario.CreateMatchSetup(scenarioGeometry);
-        }
-        else if (_scenario == "battle")
-        {
+            _scenario = "battle";
             scenarioGeometry = BattleScenario.CreateStaticGeometry();
             _map = scenarioGeometry.HeightMap;
             setup = BattleScenario.CreateMatchSetup(scenarioGeometry);
-        }
-        else if (_scenario == "recon-raid")
-        {
-            scenarioGeometry = ReconRaidScenario.CreateStaticGeometry();
-            _map = scenarioGeometry.HeightMap;
-            setup = ReconRaidScenario.CreateMatchSetup(scenarioGeometry);
-        }
-        else if (_scenario == "bridge-crossing")
-        {
-            scenarioGeometry = BridgeCrossingScenario.CreateStaticGeometry();
-            _map = scenarioGeometry.HeightMap;
-            setup = BridgeCrossingScenario.CreateMatchSetup(scenarioGeometry);
-        }
-        else if (_scenario == "vehicle-traffic")
-        {
-            scenarioGeometry = VehicleTrafficScenario.CreateStaticGeometry();
-            _map = scenarioGeometry.HeightMap;
-            setup = VehicleTrafficScenario.CreateMatchSetup(scenarioGeometry);
-        }
-        else if (_scenario == "group-move")
-        {
-            scenarioGeometry = GroupMoveScenario.CreateStaticGeometry();
-            _map = scenarioGeometry.HeightMap;
-            setup = GroupMoveScenario.CreateMatchSetup(scenarioGeometry);
-        }
-        else if (_scenario == "ustye-ground")
-        {
-            scenarioGeometry = UstyeGroundScenario.CreateStaticGeometry();
-            _map = scenarioGeometry.HeightMap;
-            setup = UstyeGroundScenario.CreateMatchSetup(scenarioGeometry);
-        }
-        else if (_scenario == "ustye-raid")
-        {
-            scenarioGeometry = UstyeRaidScenario.CreateStaticGeometry();
-            _map = scenarioGeometry.HeightMap;
-            setup = UstyeRaidScenario.CreateMatchSetup(scenarioGeometry);
+            _matchSetup = setup;
+            _scenarioGeometry = scenarioGeometry;
+            _destinationEvaluator = new DestinationEvaluator(_scenarioGeometry);
+            _session = new NullSession();
         }
         else
         {
-            _map = HeightMap.CreatePrototype();
-            setup = PrototypeScenario.CreateMatchSetup(_map);
-        }
-        if (scenarioGeometry is null)
-        {
-            scenarioGeometry = new StaticGeometry(_map, ReadOnlySpan<OpaqueStructure>.Empty);
-        }
-        _scenarioGeometry = scenarioGeometry;
-        _destinationEvaluator = new DestinationEvaluator(_scenarioGeometry);
-
-        if (connectTarget is not null)
-        {
-            string host = connectTarget;
-            if (connectTarget.Contains(':'))
+            if (_scenario == "visibility")
             {
-                string[] parts = connectTarget.Split(':');
-                host = parts[0];
-                if (int.TryParse(parts[1], out int p)) port = p;
+                scenarioGeometry = VisibilityScenario.CreateStaticGeometry();
+                _map = scenarioGeometry.HeightMap;
+                setup = VisibilityScenario.CreateMatchSetup(scenarioGeometry);
             }
-            _session = ClientSession.Connect(host, port, setup);
-        }
-        else
-        {
-            Simulation localSimulation = _scenario switch
+            else if (_scenario == "navigation")
             {
-                "visibility" => VisibilityScenario.CreateSimulation(scenarioGeometry!),
-                "navigation" => NavigationScenario.CreateSimulation(scenarioGeometry!),
-                "navigation-large" => LargeNavigationScenario.CreateSimulation(scenarioGeometry!),
-                "combat" => CombatScenario.CreateSimulation(scenarioGeometry!),
-                "recon-raid" => ReconRaidScenario.CreateSimulation(scenarioGeometry!),
-                "battle" => BattleScenario.CreateSimulation(scenarioGeometry!),
-                "bridge-crossing" => BridgeCrossingScenario.CreateSimulation(scenarioGeometry!),
-                "vehicle-traffic" => VehicleTrafficScenario.CreateSimulation(scenarioGeometry!),
-                "group-move" => GroupMoveScenario.CreateSimulation(scenarioGeometry!),
-                "ustye-ground" => UstyeGroundScenario.CreateSimulation(scenarioGeometry!, setupIndex: _ustyeSetupIndex),
-                "ustye-raid" => UstyeRaidScenario.CreateSimulation(scenarioGeometry!),
-                _ => PrototypeScenario.Create(_map)
-            };
-            // Test switch: the enemy holds fire, so own units can be tried out without losing them.
-            if (enemyHoldFire) TestOptions.HoldFireForOthers(localSimulation, 1);
-            _session = new LocalSession(localSimulation);
+                scenarioGeometry = NavigationScenario.CreateStaticGeometry();
+                _map = scenarioGeometry.HeightMap;
+                setup = NavigationScenario.CreateMatchSetup(scenarioGeometry);
+            }
+            else if (_scenario == "navigation-large")
+            {
+                scenarioGeometry = LargeNavigationScenario.CreateStaticGeometry();
+                _map = scenarioGeometry.HeightMap;
+                setup = LargeNavigationScenario.CreateMatchSetup(scenarioGeometry);
+            }
+            else if (_scenario == "combat")
+            {
+                scenarioGeometry = CombatScenario.CreateStaticGeometry();
+                _map = scenarioGeometry.HeightMap;
+                setup = CombatScenario.CreateMatchSetup(scenarioGeometry);
+            }
+            else if (_scenario == "battle")
+            {
+                scenarioGeometry = BattleScenario.CreateStaticGeometry();
+                _map = scenarioGeometry.HeightMap;
+                setup = BattleScenario.CreateMatchSetup(scenarioGeometry);
+            }
+            else if (_scenario == "recon-raid")
+            {
+                scenarioGeometry = ReconRaidScenario.CreateStaticGeometry();
+                _map = scenarioGeometry.HeightMap;
+                setup = ReconRaidScenario.CreateMatchSetup(scenarioGeometry);
+            }
+            else if (_scenario == "bridge-crossing")
+            {
+                scenarioGeometry = BridgeCrossingScenario.CreateStaticGeometry();
+                _map = scenarioGeometry.HeightMap;
+                setup = BridgeCrossingScenario.CreateMatchSetup(scenarioGeometry);
+            }
+            else if (_scenario == "vehicle-traffic")
+            {
+                scenarioGeometry = VehicleTrafficScenario.CreateStaticGeometry();
+                _map = scenarioGeometry.HeightMap;
+                setup = VehicleTrafficScenario.CreateMatchSetup(scenarioGeometry);
+            }
+            else if (_scenario == "group-move")
+            {
+                scenarioGeometry = GroupMoveScenario.CreateStaticGeometry();
+                _map = scenarioGeometry.HeightMap;
+                setup = GroupMoveScenario.CreateMatchSetup(scenarioGeometry);
+            }
+            else if (_scenario == "ustye-ground")
+            {
+                scenarioGeometry = UstyeGroundScenario.CreateStaticGeometry();
+                _map = scenarioGeometry.HeightMap;
+                setup = UstyeGroundScenario.CreateMatchSetup(scenarioGeometry);
+            }
+            else if (_scenario == "ustye-raid")
+            {
+                scenarioGeometry = UstyeRaidScenario.CreateStaticGeometry();
+                _map = scenarioGeometry.HeightMap;
+                setup = UstyeRaidScenario.CreateMatchSetup(scenarioGeometry);
+            }
+            else
+            {
+                _map = HeightMap.CreatePrototype();
+                setup = PrototypeScenario.CreateMatchSetup(_map);
+            }
+            if (scenarioGeometry is null)
+            {
+                scenarioGeometry = new StaticGeometry(_map, ReadOnlySpan<OpaqueStructure>.Empty);
+            }
+            _matchSetup = setup;
+            _scenarioGeometry = scenarioGeometry;
+            _destinationEvaluator = new DestinationEvaluator(_scenarioGeometry);
+
+            if (connectTarget is not null)
+            {
+                string host = connectTarget;
+                if (connectTarget.Contains(':'))
+                {
+                    string[] parts = connectTarget.Split(':');
+                    host = parts[0];
+                    if (int.TryParse(parts[1], out int p)) port = p;
+                }
+                _session = ClientSession.Connect(host, port, setup);
+            }
+            else
+            {
+                Simulation localSimulation = _scenario switch
+                {
+                    "visibility" => VisibilityScenario.CreateSimulation(scenarioGeometry!),
+                    "navigation" => NavigationScenario.CreateSimulation(scenarioGeometry!),
+                    "navigation-large" => LargeNavigationScenario.CreateSimulation(scenarioGeometry!),
+                    "combat" => CombatScenario.CreateSimulation(scenarioGeometry!),
+                    "recon-raid" => ReconRaidScenario.CreateSimulation(scenarioGeometry!),
+                    "battle" => BattleScenario.CreateSimulation(scenarioGeometry!),
+                    "bridge-crossing" => BridgeCrossingScenario.CreateSimulation(scenarioGeometry!),
+                    "vehicle-traffic" => VehicleTrafficScenario.CreateSimulation(scenarioGeometry!),
+                    "group-move" => GroupMoveScenario.CreateSimulation(scenarioGeometry!),
+                    "ustye-ground" => UstyeGroundScenario.CreateSimulation(scenarioGeometry!, setupIndex: _ustyeSetupIndex),
+                    "ustye-raid" => UstyeRaidScenario.CreateSimulation(scenarioGeometry!),
+                    _ => PrototypeScenario.Create(_map)
+                };
+                // Test switch: the enemy holds fire, so own units can be tried out without losing them.
+                if (enemyHoldFire) TestOptions.HoldFireForOthers(localSimulation, 1);
+                _session = new LocalSession(localSimulation);
+            }
         }
 
 
+        AddChild(_environmentRoot);
         _fogOfWar = new FogOfWarView(_map, scenarioGeometry);
-        if (_scenario == "ustye-ground" || _scenario == "ustye-raid")
-        {
-            UstyePlanData plan = UstyePlanData.Load();
-            _ustyeMapView = new(plan, includeScaleVehicles: false, fogOverlay: _fogOfWar);
-            AddChild(_ustyeMapView);
-            _terrainWindingValid = !_smokeTest || _ustyeMapView.HasUpwardFrontFaces();
-        }
-        else
-        {
-            MeshInstance3D terrain = TerrainView.Create(_map, _fogOfWar);
-            AddChild(terrain);
-            _terrainWindingValid = !_smokeTest || TerrainView.HasUpwardFrontFaces(terrain);
-            AddChild(TerrainView.CreateGrid(_map));
-
-            if (scenarioGeometry is not null)
-            {
-                SetupStructures(scenarioGeometry);
-            }
-        }
+        BuildEnvironment(scenarioGeometry);
 
         AddChild(new DirectionalLight3D
         {
@@ -578,68 +610,70 @@ public partial class Main : Node3D
             _fogOfWar?.UpdateAllNow(_session.Replica, _catalog);
         }
         // Factions are part of the public match setup; the side is known once the session assigns it.
-        MatchSetup matchSetup = setup;
+        MatchSetup matchSetup = _matchSetup;
         _unitViews = new UnitViewSet(this, _map, _catalog, () => matchSetup.GetPlayerFaction(_session.AssignedPlayerId), _scenarioGeometry);
         _contactViews = new ContactViewSet(this, _map, _catalog, () => matchSetup.GetHostileFaction(_session.AssignedPlayerId), _scenarioGeometry);
         _wreckViews = new WreckViewSet(this, _map, _catalog, () => matchSetup.GetPlayerFaction(_session.AssignedPlayerId), _scenarioGeometry);
         _combatEffects = new CombatEffects(_map, _scenarioGeometry);
         AddChild(_combatEffects);
 
-        if (_session is LocalSession && _scenario != "visibility" && _scenario != "combat" && _scenario != "navigation-large" && _scenario != "recon-raid" && _scenario != "bridge-crossing" && _scenario != "vehicle-traffic" && _scenario != "group-move" && _scenario != "ustye-ground" && _scenario != "ustye-raid")
+        if (!_isMenuMode)
         {
-            foreach (OwnUnitObservation unit in _session.Replica.OwnUnits)
+            if (_session is LocalSession && _scenario != "visibility" && _scenario != "combat" && _scenario != "navigation-large" && _scenario != "recon-raid" && _scenario != "bridge-crossing" && _scenario != "vehicle-traffic" && _scenario != "group-move" && _scenario != "ustye-ground" && _scenario != "ustye-raid")
             {
-                // Demo movement is sent as normal client commands through the byte transport.
-                _session.Move(unit.Id, unit.Position + new NumericsVector2(0, 60));
+                foreach (OwnUnitObservation unit in _session.Replica.OwnUnits)
+                {
+                    // Demo movement is sent as normal client commands through the byte transport.
+                    _session.Move(unit.Id, unit.Position + new NumericsVector2(0, 60));
+                }
+                if (_session.Replica.OwnUnits.Length > 0) _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
             }
-            if (_session.Replica.OwnUnits.Length > 0) _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
-        }
-        else if (_scenario == "combat" && _session.Replica.OwnUnits.Length > 1)
-        {
-            // Auto-select first tank for immediate playability
-            _unitViews.Selected.Add(_session.Replica.OwnUnits[1].Id);
-        }
-        else if (_scenario == "navigation-large" && _session.Replica.OwnUnits.Length > 0)
-        {
-            // Auto-select first recon unit for immediate playability
-            _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
-        }
-        else if (_scenario == "recon-raid" && _session.Replica.OwnUnits.Length > 0)
-        {
-            // Auto-select player recon unit for immediate playability
-            _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
-        }
-        else if (_scenario == "bridge-crossing" && _session.Replica.OwnUnits.Length > 0)
-        {
-            // Auto-select player tank for immediate playability
-            _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
-        }
-        else if (_scenario == "vehicle-traffic" && _session.Replica.OwnUnits.Length > 1)
-        {
-            _unitViews.Selected.Add(_session.Replica.OwnUnits[1].Id);
-        }
-        else if (_scenario == "group-move" && _session.Replica.OwnUnits.Length >= 10)
-        {
-            for (int i = 0; i < 10; i++)
+            else if (_scenario == "combat" && _session.Replica.OwnUnits.Length > 1)
             {
-                _unitViews.Selected.Add(_session.Replica.OwnUnits[i].Id);
+                // Auto-select first tank for immediate playability
+                _unitViews.Selected.Add(_session.Replica.OwnUnits[1].Id);
             }
-        }
-        else if (_scenario == "ustye-ground" && _session.Replica.OwnUnits.Length >= 6)
-        {
-            for (int i = 0; i < 6; i++)
+            else if (_scenario == "navigation-large" && _session.Replica.OwnUnits.Length > 0)
             {
-                _unitViews.Selected.Add(_session.Replica.OwnUnits[i].Id);
+                // Auto-select first recon unit for immediate playability
+                _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
             }
-        }
-        else if (_scenario == "ustye-raid" && _session.Replica.OwnUnits.Length >= 3)
-        {
-            for (int i = 0; i < 3; i++)
+            else if (_scenario == "recon-raid" && _session.Replica.OwnUnits.Length > 0)
             {
-                _unitViews.Selected.Add(_session.Replica.OwnUnits[i].Id);
+                // Auto-select player recon unit for immediate playability
+                _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
+            }
+            else if (_scenario == "bridge-crossing" && _session.Replica.OwnUnits.Length > 0)
+            {
+                // Auto-select player tank for immediate playability
+                _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
+            }
+            else if (_scenario == "vehicle-traffic" && _session.Replica.OwnUnits.Length > 1)
+            {
+                _unitViews.Selected.Add(_session.Replica.OwnUnits[1].Id);
+            }
+            else if (_scenario == "group-move" && _session.Replica.OwnUnits.Length >= 10)
+            {
+                for (int i = 0; i < 10; i++)
+                {
+                    _unitViews.Selected.Add(_session.Replica.OwnUnits[i].Id);
+                }
+            }
+            else if (_scenario == "ustye-ground" && _session.Replica.OwnUnits.Length >= 6)
+            {
+                for (int i = 0; i < 6; i++)
+                {
+                    _unitViews.Selected.Add(_session.Replica.OwnUnits[i].Id);
+                }
+            }
+            else if (_scenario == "ustye-raid" && _session.Replica.OwnUnits.Length >= 3)
+            {
+                for (int i = 0; i < 3; i++)
+                {
+                    _unitViews.Selected.Add(_session.Replica.OwnUnits[i].Id);
+                }
             }
         }
-
 
         _destination = new OrderDestinationView();
         AddChild(_destination);
@@ -655,6 +689,52 @@ public partial class Main : Node3D
             _destination,
             _orderNotification);
         UpdateViews();
+
+        _lifecycleController = new ClientLifecycleController();
+        _lifecycleController.OnSessionReady += session => EnterGameSession(session);
+        _lifecycleController.OnConnectionFailed += err => _sessionMenu.SetStatus(err, ClientLifecycleState.Failed);
+        _lifecycleController.OnConnectionLost += err => OnNetworkSessionDisconnected(err);
+
+        _sessionMenu = new SessionMenu();
+        AddChild(_sessionMenu);
+        _sessionMenu.LocalBattleRequested += StartLocalBattle;
+        _sessionMenu.ConnectRequested += StartMultiplayerConnect;
+        _sessionMenu.CancelRequested += CancelMultiplayerConnect;
+        _sessionMenu.SettingsRequested += () => _settingsPanel.Toggle();
+        _sessionMenu.ExitRequested += () => GetTree().Quit();
+
+        _pauseMenu = new PauseMenu();
+        AddChild(_pauseMenu);
+        _pauseMenu.ResumeRequested += () => { };
+        _pauseMenu.SettingsRequested += () => _settingsPanel.Toggle();
+        _pauseMenu.LeaveRequested += LeaveCurrentMatch;
+        _pauseMenu.ExitRequested += () => GetTree().Quit();
+
+        if (_isMenuMode)
+        {
+            _hudCanvas.Visible = false;
+            if (showMultiplayerMenu)
+            {
+                _sessionMenu.ShowMultiplayerView();
+                if (menuErrorMessage is not null)
+                {
+                    _sessionMenu.SetStatus(menuErrorMessage, ClientLifecycleState.Failed);
+                }
+            }
+            else if (menuConnectionLostReason is not null)
+            {
+                _sessionMenu.ShowConnectionLostModal(menuConnectionLostReason);
+            }
+            else
+            {
+                _sessionMenu.ShowMainMenuView();
+            }
+        }
+        else
+        {
+            _hudCanvas.Visible = true;
+            _sessionMenu.HideMenu();
+        }
 
         if (minimapDemo && _scenario == "ustye-raid" && _session is LocalSession && _screenshotPath is not null)
         {
@@ -722,6 +802,41 @@ public partial class Main : Node3D
         }
     }
 
+    private void BuildEnvironment(StaticGeometry? scenarioGeometry)
+    {
+        ClearEnvironment();
+
+        if (_scenario == "ustye-ground" || _scenario == "ustye-raid")
+        {
+            UstyePlanData plan = UstyePlanData.Load();
+            _ustyeMapView = new(plan, includeScaleVehicles: false, fogOverlay: _fogOfWar);
+            _environmentRoot.AddChild(_ustyeMapView);
+            _terrainWindingValid = !_smokeTest || _ustyeMapView.HasUpwardFrontFaces();
+        }
+        else
+        {
+            MeshInstance3D terrain = TerrainView.Create(_map, _fogOfWar);
+            _environmentRoot.AddChild(terrain);
+            _terrainWindingValid = !_smokeTest || TerrainView.HasUpwardFrontFaces(terrain);
+            _environmentRoot.AddChild(TerrainView.CreateGrid(_map));
+
+            if (scenarioGeometry is not null)
+            {
+                SetupStructures(scenarioGeometry);
+            }
+        }
+    }
+
+    private void ClearEnvironment()
+    {
+        foreach (Node child in _environmentRoot.GetChildren())
+        {
+            _environmentRoot.RemoveChild(child);
+            child.QueueFree();
+        }
+        _ustyeMapView = null;
+    }
+
     private void SetupStructures(StaticGeometry geometry)
     {
         StandardMaterial3D buildingMat = new() { AlbedoColor = new Color("5c5346"), Roughness = 0.85f };
@@ -736,7 +851,7 @@ public partial class Main : Node3D
             float posY = (structure.Min.Y + structure.Max.Y) * 0.5f;
             float posZ = (structure.Min.Z + structure.Max.Z) * 0.5f;
 
-            AddChild(new MeshInstance3D
+            _environmentRoot.AddChild(new MeshInstance3D
             {
                 Mesh = new BoxMesh { Size = new Vector3(sizeX, sizeY, sizeZ) },
                 Position = new Vector3(posX, posY, posZ),
@@ -753,7 +868,7 @@ public partial class Main : Node3D
             float midHeight = (bridge.StartHeight + bridge.EndHeight) * 0.5f - bridge.Thickness * 0.5f;
             float yaw = MathF.Atan2(delta.X, delta.Y);
 
-            AddChild(new MeshInstance3D
+            _environmentRoot.AddChild(new MeshInstance3D
             {
                 Mesh = new BoxMesh { Size = new Vector3(bridge.Width, bridge.Thickness, length) },
                 Position = new Vector3(mid.X, midHeight, mid.Y),
@@ -773,7 +888,7 @@ public partial class Main : Node3D
                 float posZ = (obs.MinZ + obs.MaxZ) * 0.5f;
                 float height = 4.0f;
                 float groundY = geometry.HeightMap.GetHeight(posX, posZ);
-                AddChild(new MeshInstance3D
+                _environmentRoot.AddChild(new MeshInstance3D
                 {
                     Mesh = new BoxMesh { Size = new Vector3(sizeX, height, sizeZ) },
                     Position = new Vector3(posX, groundY + height * 0.5f, posZ),
@@ -785,6 +900,18 @@ public partial class Main : Node3D
 
     public override void _Process(double delta)
     {
+        if (_sessionMenu?.IsOpen == true)
+        {
+            if (_lifecycleController.IsConnecting)
+            {
+                _lifecycleController.Advance(delta);
+                _sessionMenu.SetStatus(_lifecycleController.StatusDescription, _lifecycleController.State);
+            }
+            _cameraRig.Update(delta, allowInput: false);
+            ProcessScreenshot(delta);
+            return;
+        }
+
         if (_session is null) return;
 
         long frameStartTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -795,7 +922,18 @@ public partial class Main : Node3D
         }
         _lastFrameTimestamp = frameStartTimestamp;
 
-        _session.Advance(delta);
+        if (_lifecycleController.NetworkSession is not null && ReferenceEquals(_lifecycleController.NetworkSession, _session))
+        {
+            _lifecycleController.Advance(delta);
+            if (_lifecycleController.State == ClientLifecycleState.Disconnected)
+            {
+                return;
+            }
+        }
+        else
+        {
+            _session.Advance(delta);
+        }
         _fogOfWar?.Update((float)delta, _session.Replica, _catalog);
         UpdateViews();
         _unitViews.FaceHealthBars(_camera.GlobalTransform.Basis);
@@ -835,7 +973,7 @@ public partial class Main : Node3D
         UpdateSelectionPresentation();
         _previewController?.UpdateOrders(_session, delta);
 
-        if (!_settingsPanel.IsOpen)
+        if (!_settingsPanel.IsOpen && !_pauseMenu.IsOpen)
         {
             Vector2 mousePos = GetViewport().GetMousePosition();
             Vector2 viewportSize = GetViewport().GetVisibleRect().Size;
@@ -856,7 +994,7 @@ public partial class Main : Node3D
             _orderCursorOverlay?.HideTooltip();
         }
 
-        _cameraRig.Update(delta, allowInput: !_settingsPanel.IsOpen);
+        _cameraRig.Update(delta, allowInput: !_settingsPanel.IsOpen && !_pauseMenu.IsOpen);
 
         if (_roleBadgeOverlay is not null && _topHud is not null && _bottomHud is not null && _selectionCard is not null)
         {
@@ -903,24 +1041,7 @@ public partial class Main : Node3D
             _hudTimer = 0;
         }
 
-        if (_screenshotPath is not null)
-        {
-            _screenshotTimer -= delta;
-            if (_screenshotTimer <= 0)
-            {
-                Image? img = GetViewport().GetTexture().GetImage();
-                if (img is not null)
-                {
-                    img.SavePng(_screenshotPath);
-                    GD.Print($"SCREENSHOT_SAVED {_screenshotPath}");
-                }
-                _screenshotPath = null;
-                if (_screenshotQuit)
-                {
-                    GetTree().Quit(0);
-                }
-            }
-        }
+        ProcessScreenshot(delta);
 
         if (_screenshotOnFinishPath is not null && _missionPanel?.IsMissionFinished == true)
         {
@@ -1027,11 +1148,39 @@ public partial class Main : Node3D
         }
     }
 
+    private void ProcessScreenshot(double delta)
+    {
+        if (_screenshotPath is not null)
+        {
+            _screenshotTimer -= delta;
+            if (_screenshotTimer <= 0)
+            {
+                Image? img = GetViewport().GetTexture().GetImage();
+                if (img is not null)
+                {
+                    img.SavePng(_screenshotPath);
+                    GD.Print($"SCREENSHOT_SAVED {_screenshotPath}");
+                }
+                _screenshotPath = null;
+                if (_screenshotQuit)
+                {
+                    GetTree().Quit(0);
+                }
+            }
+        }
+    }
+
     public override void _Input(InputEvent @event)
     {
+        if (_settingsPanel?.IsOpen == true || _sessionMenu?.IsOpen == true || _pauseMenu?.IsOpen == true)
+        {
+            CancelActiveDrag();
+            return;
+        }
+
         if (_selectionController.IsPointerDown)
         {
-            if (_settingsPanel.IsOpen)
+            if (_settingsPanel?.IsOpen == true)
             {
                 CancelActiveDrag();
                 return;
@@ -1049,7 +1198,7 @@ public partial class Main : Node3D
         }
         else if (_previewController?.IsFacingGestureActive == true)
         {
-            if (_settingsPanel.IsOpen)
+            if (_settingsPanel?.IsOpen == true)
             {
                 CancelActiveDrag();
                 return;
@@ -1069,27 +1218,74 @@ public partial class Main : Node3D
 
     public override void _UnhandledInput(InputEvent @event)
     {
-        if (_settingsPanel.IsOpen)
+        if (_settingsPanel?.IsOpen == true)
         {
             CancelActiveDrag();
-            if (@event is InputEventKey { Pressed: true, Echo: false } openKey)
+            if (@event is InputEventKey { Pressed: true, Echo: false } settingsKey)
             {
-                if (openKey.Keycode == Key.Escape)
+                if (settingsKey.Keycode == Key.Escape)
                 {
-                    _settingsPanel.Close();
+                    _settingsPanel?.Close();
                     GetViewport().SetInputAsHandled();
                     return;
                 }
 
-                if (openKey.Keycode is Key.F10 or Key.O)
+                if (settingsKey.Keycode is Key.F10 or Key.O)
                 {
-                    _settingsPanel.Toggle();
+                    _settingsPanel?.Toggle();
                     GetViewport().SetInputAsHandled();
                     return;
                 }
             }
 
             // Centrally block all gameplay input while settings overlay is open
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
+        if (_pauseMenu?.IsOpen == true)
+        {
+            CancelActiveDrag();
+            if (@event is InputEventKey { Pressed: true, Echo: false } pauseKey)
+            {
+                if (pauseKey.Keycode == Key.Escape)
+                {
+                    _pauseMenu.Close();
+                    GetViewport().SetInputAsHandled();
+                    return;
+                }
+
+                if (pauseKey.Keycode is Key.F10 or Key.O)
+                {
+                    _settingsPanel?.Toggle();
+                    GetViewport().SetInputAsHandled();
+                    return;
+                }
+            }
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
+        if (_sessionMenu?.IsOpen == true)
+        {
+            if (@event is InputEventKey { Pressed: true, Echo: false } menuKey)
+            {
+                if (menuKey.Keycode is Key.F10 or Key.O)
+                {
+                    _settingsPanel?.Toggle();
+                    GetViewport().SetInputAsHandled();
+                    return;
+                }
+
+                if (menuKey.Keycode == Key.Escape)
+                {
+                    if (_sessionMenu.HandleEscape())
+                    {
+                        GetViewport().SetInputAsHandled();
+                        return;
+                    }
+                }
+            }
             GetViewport().SetInputAsHandled();
             return;
         }
@@ -1144,7 +1340,7 @@ public partial class Main : Node3D
             if (key.Keycode is Key.F10 or Key.O)
             {
                 CancelActiveDrag();
-                _settingsPanel.Toggle();
+                _settingsPanel?.Toggle();
                 GetViewport().SetInputAsHandled();
                 return;
             }
@@ -1191,11 +1387,20 @@ public partial class Main : Node3D
                     return;
                 }
 
+                if (_unitViews.Selected.Count > 0 || _contactViews.Selected.Count > 0)
+                {
+                    CancelActiveDrag();
+                    _unitViews.Selected.Clear();
+                    _contactViews.Selected.Clear();
+                    _unitViews.UpdateSelectionVisuals();
+                    _status.Text = "No units selected";
+                    GetViewport().SetInputAsHandled();
+                    return;
+                }
+
                 CancelActiveDrag();
-                _unitViews.Selected.Clear();
-                _contactViews.Selected.Clear();
-                _unitViews.UpdateSelectionVisuals();
-                _status.Text = "No units selected";
+                _pauseMenu?.Open();
+                GetViewport().SetInputAsHandled();
                 return;
             }
 
@@ -1839,6 +2044,7 @@ public partial class Main : Node3D
     {
         CanvasLayer canvas = new();
         AddChild(canvas);
+        _hudCanvas = canvas;
 
         _roleBadgeOverlay = new RoleBadgeOverlay(_catalog);
         canvas.AddChild(_roleBadgeOverlay);
@@ -1885,6 +2091,12 @@ public partial class Main : Node3D
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
         };
         controls.AddThemeFontSizeOverride("font_size", 14);
+        Button menuBtn = new()
+        {
+            Text = "MENU [ESC]",
+            MouseFilter = Control.MouseFilterEnum.Stop
+        };
+        menuBtn.Pressed += OnMenuButtonPressed;
         Button settingsBtn = new()
         {
             Text = "SETTINGS [F10]",
@@ -1892,6 +2104,7 @@ public partial class Main : Node3D
         };
         settingsBtn.Pressed += OnSettingsButtonPressed;
         footer.AddChild(controls);
+        footer.AddChild(menuBtn);
         footer.AddChild(settingsBtn);
 
         _status = new Label { Text = "  Select a unit to issue orders", MouseFilter = Control.MouseFilterEnum.Ignore };
@@ -1947,6 +2160,7 @@ public partial class Main : Node3D
             canvas.AddChild(_missionPanel);
             _missionPanel.SetLocalMode(_session is LocalSession);
             _missionPanel.RetryRequested += OnRetryMission;
+            _missionPanel.LeaveRequested += LeaveCurrentMatch;
         }
     }
 
@@ -2044,6 +2258,290 @@ public partial class Main : Node3D
                 _unitViews.Selected.Add(_session.Replica.OwnUnits[selectIdx].Id);
             }
         }
+    }
+
+    internal void ResetGameplayState()
+    {
+        CancelActiveDrag();
+        _previewController?.CancelFacingGesture();
+        _previewController?.Reset();
+        _selectionController.Reset();
+        _unitViews?.Clear();
+        _contactViews?.Clear();
+        _wreckViews?.Clear();
+        _roleBadgeOverlay?.Clear();
+        _selectionCard?.UpdateEmpty();
+        _orderNotification?.Clear();
+        _destination?.Clear();
+        _combatEffects?.Clear();
+        _fogOfWar?.Clear();
+        _minimap?.Reset();
+        _missionPanel?.ResetUi();
+
+        _presentedKind = SelectionPresentationKind.None;
+        _presentedActiveGroup = -1;
+        _presentedSingleUnitId = default;
+        _presentedMultiCount = -1;
+        _presentedMultiHash = 0;
+        _presentedContactId = default;
+        _homeViewAssignedPlayerId = 0;
+    }
+
+    private void OnMenuButtonPressed()
+    {
+        CancelActiveDrag();
+        _pauseMenu.Toggle();
+    }
+
+    internal void EnsureBattleScenarioContext()
+    {
+        if (_scenario == "battle" && _scenarioGeometry is not null && _map == _scenarioGeometry.HeightMap && MathF.Abs(_map.Width - BattleScenario.MapSize) < 0.1f)
+        {
+            return;
+        }
+
+        ResetGameplayState();
+
+        _scenario = "battle";
+        _scenarioGeometry = BattleScenario.CreateStaticGeometry();
+        _map = _scenarioGeometry.HeightMap;
+        _matchSetup = BattleScenario.CreateMatchSetup(_scenarioGeometry);
+        _catalog = ScenarioContent.LoadCatalog("battle");
+
+        _fogOfWar?.Dispose();
+        _fogOfWar = new FogOfWarView(_map, _scenarioGeometry);
+        BuildEnvironment(_scenarioGeometry);
+
+        Vector3 initialFocus = new(BattleScenario.SovietStart.X, 0, BattleScenario.SovietStart.Y);
+        float initialCameraSize = 160f;
+        _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
+        _cameraRig.SetDefaultView(initialFocus, initialCameraSize);
+        _cameraRig.ResetToDefault();
+
+        _unitViews?.Clear();
+        _unitViews = new UnitViewSet(this, _map, _catalog, () => _matchSetup.GetPlayerFaction(_session.AssignedPlayerId), _scenarioGeometry);
+
+        _contactViews?.Clear();
+        _contactViews = new ContactViewSet(this, _map, _catalog, () => _matchSetup.GetHostileFaction(_session.AssignedPlayerId), _scenarioGeometry);
+
+        _wreckViews?.Clear();
+        _wreckViews = new WreckViewSet(this, _map, _catalog, () => _matchSetup.GetPlayerFaction(_session.AssignedPlayerId), _scenarioGeometry);
+
+        _combatEffects?.Clear();
+        _combatEffects?.QueueFree();
+        _combatEffects = new CombatEffects(_map, _scenarioGeometry);
+        AddChild(_combatEffects);
+
+        _destinationEvaluator = new DestinationEvaluator(_scenarioGeometry);
+        _previewController = new OrderPreviewController(
+            _destinationEvaluator,
+            _scenarioGeometry,
+            _map,
+            _catalog,
+            _orderCursorOverlay,
+            _destination,
+            _orderNotification);
+
+        if (_missionPanel is not null)
+        {
+            _missionPanel.SetScenario("battle");
+            _missionPanel.ResetUi();
+        }
+
+        if (_minimap is not null)
+        {
+            _minimap.Reset();
+            _minimap.Initialize(_scenarioGeometry, _cameraRig, _camera, _session, _unitViews, _contactViews, _catalog, null);
+        }
+    }
+
+    internal void SetScenarioForTest(string scenarioName)
+    {
+        ResetGameplayState();
+        _scenario = scenarioName;
+        StaticGeometry? scenarioGeometry = null;
+        MatchSetup setup;
+
+        if (scenarioName == "prototype")
+        {
+            _map = HeightMap.CreatePrototype();
+            setup = PrototypeScenario.CreateMatchSetup(_map);
+            scenarioGeometry = new StaticGeometry(_map, ReadOnlySpan<OpaqueStructure>.Empty);
+            _matchSetup = setup;
+            _scenarioGeometry = scenarioGeometry;
+            _catalog = PrototypeScenario.LoadCatalog();
+            Simulation localSimulation = PrototypeScenario.Create(_map);
+            _session = new LocalSession(localSimulation, player: 1);
+        }
+        else if (scenarioName == "recon-raid")
+        {
+            scenarioGeometry = ReconRaidScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = ReconRaidScenario.CreateMatchSetup(scenarioGeometry);
+            _matchSetup = setup;
+            _scenarioGeometry = scenarioGeometry;
+            _catalog = ScenarioContent.LoadCatalog("recon-raid");
+            Simulation localSimulation = ReconRaidScenario.CreateSimulation(scenarioGeometry);
+            _session = new LocalSession(localSimulation, player: 1);
+        }
+        else if (scenarioName == "battle")
+        {
+            scenarioGeometry = BattleScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = BattleScenario.CreateMatchSetup(scenarioGeometry);
+            _matchSetup = setup;
+            _scenarioGeometry = scenarioGeometry;
+            _catalog = ScenarioContent.LoadCatalog("battle");
+            Simulation localSimulation = BattleScenario.CreateSimulation(scenarioGeometry);
+            _session = new LocalSession(localSimulation, player: 1);
+        }
+        else
+        {
+            throw new ArgumentException($"Unsupported test scenario: {scenarioName}");
+        }
+
+        _fogOfWar?.Dispose();
+        _fogOfWar = new FogOfWarView(_map, scenarioGeometry);
+        BuildEnvironment(scenarioGeometry);
+
+        Vector3 initialFocus = scenarioName switch
+        {
+            "battle" => new Vector3(BattleScenario.SovietStart.X, 0, BattleScenario.SovietStart.Y),
+            "recon-raid" => new Vector3(100, 0, 100),
+            _ => new Vector3(64, 0, 64)
+        };
+        float initialCameraSize = scenarioName switch
+        {
+            "battle" => 160f,
+            "recon-raid" => 160f,
+            _ => 112f
+        };
+        _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
+        _cameraRig.SetDefaultView(initialFocus, initialCameraSize);
+        _cameraRig.ResetToDefault();
+
+        _unitViews?.Clear();
+        _unitViews = new UnitViewSet(this, _map, _catalog, () => _matchSetup.GetPlayerFaction(_session.AssignedPlayerId), _scenarioGeometry);
+
+        _contactViews?.Clear();
+        _contactViews = new ContactViewSet(this, _map, _catalog, () => _matchSetup.GetHostileFaction(_session.AssignedPlayerId), _scenarioGeometry);
+
+        _wreckViews?.Clear();
+        _wreckViews = new WreckViewSet(this, _map, _catalog, () => _matchSetup.GetPlayerFaction(_session.AssignedPlayerId), _scenarioGeometry);
+
+        _combatEffects?.Clear();
+        _combatEffects?.QueueFree();
+        _combatEffects = new CombatEffects(_map, _scenarioGeometry);
+        AddChild(_combatEffects);
+
+        _destinationEvaluator = new DestinationEvaluator(_scenarioGeometry);
+        _previewController = new OrderPreviewController(
+            _destinationEvaluator,
+            _scenarioGeometry,
+            _map,
+            _catalog,
+            _orderCursorOverlay,
+            _destination,
+            _orderNotification);
+
+        EnterGameSession(_session);
+
+        if (scenarioName == "prototype")
+        {
+            foreach (OwnUnitObservation unit in _session.Replica.OwnUnits)
+            {
+                _session.Move(unit.Id, unit.Position + new NumericsVector2(0, 60));
+            }
+            if (_session.Replica.OwnUnits.Length > 0) _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
+        }
+    }
+
+    internal void StartLocalBattle()
+    {
+        EnsureBattleScenarioContext();
+        Simulation localSimulation = BattleScenario.CreateSimulation(_scenarioGeometry!);
+        _session = new LocalSession(localSimulation, player: 1);
+        EnterGameSession(_session);
+    }
+
+    internal void StartMultiplayerConnect(string address)
+    {
+        EnsureBattleScenarioContext();
+        bool ok = _lifecycleController.TryConnect(address, _matchSetup, out string? error);
+        if (!ok)
+        {
+            _sessionMenu.SetStatus(error ?? "Connection failed.", ClientLifecycleState.Failed);
+        }
+        else
+        {
+            _sessionMenu.SetStatus(_lifecycleController.StatusDescription, _lifecycleController.State);
+        }
+    }
+
+    internal void CancelMultiplayerConnect()
+    {
+        _lifecycleController.Cancel();
+        _sessionMenu.SetStatus("Connection cancelled.", ClientLifecycleState.Inactive);
+    }
+
+    internal void EnterGameSession(IGameSession session)
+    {
+        _session = session;
+        _isMenuMode = false;
+        _sessionMenu.HideMenu();
+        _pauseMenu.Close();
+        ResetGameplayState();
+
+        _hudCanvas.Visible = true;
+        _lastTitlePlayerId = -1;
+        _lastTitleScenario = string.Empty;
+        _title.Text = FormatTitle(_session.AssignedPlayerId, _scenario);
+        _subtitle.Text = _session.StatusDescription;
+
+        if (_missionPanel is not null)
+        {
+            _missionPanel.SetScenario(_scenario);
+            _missionPanel.SetLocalMode(_session is LocalSession);
+            _missionPanel.SetShowBriefing(false);
+            _missionPanel.ResetUi();
+        }
+
+        if (_minimap is not null)
+        {
+            _minimap.Reset();
+            _minimap.Initialize(_scenarioGeometry!, _cameraRig, _camera, _session, _unitViews, _contactViews, _catalog, null);
+        }
+
+        ApplyPlayerHomeView(_session.AssignedPlayerId);
+    }
+
+    internal void LeaveCurrentMatch()
+    {
+        _pauseMenu.Close();
+        _lifecycleController.Disconnect();
+        if (_session is not null)
+        {
+            _session.Dispose();
+            _session = new NullSession();
+        }
+        ResetGameplayState();
+        _isMenuMode = true;
+        _hudCanvas.Visible = false;
+        _sessionMenu.ShowMainMenuView();
+    }
+
+    private void OnNetworkSessionDisconnected(string reason)
+    {
+        _pauseMenu.Close();
+        if (_session is not null)
+        {
+            _session.Dispose();
+            _session = new NullSession();
+        }
+        ResetGameplayState();
+        _isMenuMode = true;
+        _hudCanvas.Visible = false;
+        _sessionMenu.ShowConnectionLostModal(reason);
     }
 
     private void SwitchUstyeSetup(int index)

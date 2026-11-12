@@ -39,7 +39,7 @@ run C# projects. Package versions are pinned in the project files.
 
 ### Local play
 
-To run a self-contained local session with an in-memory simulation:
+To launch the client:
 
 On macOS:
 
@@ -52,6 +52,16 @@ On Windows:
 ```powershell
 ./tools/run-client.ps1 -GodotBin 'C:\Tools\Godot\Godot.exe'
 ```
+
+Launching without arguments opens the Start Menu:
+- **Local Battle**: starts a self-contained local session on the 2000 x 2000 m (2 x 2 km) battle terrain with an in-memory simulation.
+- **Multiplayer**: opens the connection card to enter server host/IP and port (defaults to `127.0.0.1:7777`) and join an active server.
+- **Settings**: opens display and graphics settings (shortcut: F10 or O).
+- **Exit**: closes the application.
+
+Direct CLI arguments bypass the start menu: pass `--scenario <name>` to launch directly into a scenario (e.g. `--scenario battle`), or `--connect <host:port>` to connect immediately.
+
+During gameplay, press Escape to open the Pause Menu and select **Leave Battle** to return to the Start Menu. When a match ends, the outcome screen also provides a **Leave Battle** button. If the server restarts between matches, players can return to the Multiplayer menu and connect again without restarting the game client.
 
 ### Dedicated server and two clients
 
@@ -81,9 +91,11 @@ On Windows with PowerShell:
 ./tools/run-client.ps1 -GodotArgs @("--", "--connect", "127.0.0.1:7777")
 ```
 
+Alternatively, launch both clients with `./tools/run-client.sh`, click **Multiplayer**, and click **Connect**.
+
 The server assigns player slots automatically. Client 1 controls friendly units,
 while Client 2 controls its own units. Each client renders only units allowed by
-its fog of war filter.
+its fog of war filter. When a match finishes, players can click **Leave Battle** to return to the Start Menu, and connect to a newly started server without restarting their client application.
 
 Alternatively, build `src/Game.Godot/Game.Godot.csproj`, then import
 `src/Game.Godot/project.godot` in the Godot .NET editor and run the main scene.

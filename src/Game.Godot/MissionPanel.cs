@@ -17,6 +17,7 @@ internal sealed partial class MissionPanel : Control
     private readonly Label _resultReason;
     private readonly Label _resultDuration;
     private readonly Button _retryButton;
+    private readonly Button _leaveButton;
     private readonly Label _instructionLabel;
 
     private readonly HeightMap _map;
@@ -30,9 +31,11 @@ internal sealed partial class MissionPanel : Control
     private bool _showBriefing = true;
 
     public event System.Action? RetryRequested;
+    public event System.Action? LeaveRequested;
     public bool IsMissionFinished => _hasFinished;
     public Rect2 GetBriefingRect() => _briefingCard.Visible ? _briefingCard.GetGlobalRect() : default;
     public Rect2 GetResultRect() => _resultCard.Visible ? _resultCard.GetGlobalRect() : default;
+    public Rect2 GetLeaveButtonRect() => _leaveButton.Visible ? _leaveButton.GetGlobalRect() : default;
 
     public MissionPanel(Node3D parent3D, HeightMap map)
     {
@@ -160,6 +163,14 @@ internal sealed partial class MissionPanel : Control
         _retryButton.Pressed += () => RetryRequested?.Invoke();
         resultStack.AddChild(_retryButton);
 
+        _leaveButton = new Button
+        {
+            Text = "RETURN TO MENU",
+            MouseFilter = MouseFilterEnum.Stop
+        };
+        _leaveButton.Pressed += () => LeaveRequested?.Invoke();
+        resultStack.AddChild(_leaveButton);
+
         _instructionLabel = new Label
         {
             Text = "",
@@ -197,12 +208,12 @@ internal sealed partial class MissionPanel : Control
         if (_scenario == "battle")
         {
             _retryButton.Text = "RETRY BATTLE [R]";
-            _instructionLabel.Text = "To start the next battle, restart the dedicated server, then restart both clients:\nServer: dotnet run --project src/Game.Server --configuration Release -- --scenario battle --port 7777 --max-clients 2\nClients: ./tools/run-client.sh -- --scenario battle --connect 127.0.0.1:7777";
+            _instructionLabel.Text = "To start the next battle, restart the dedicated server, then return to the menu to reconnect:\nServer: dotnet run --project src/Game.Server --configuration Release -- --scenario battle --port 7777 --max-clients 2";
         }
         else
         {
             _retryButton.Text = "RETRY MISSION [R]";
-            _instructionLabel.Text = $"To start the next match, restart the dedicated server, then restart client:\nServer: dotnet run --project src/Game.Server --configuration Release -- --scenario {_scenario} --port 7777\nClient: ./tools/run-client.sh -- --scenario {_scenario} --connect 127.0.0.1:7777";
+            _instructionLabel.Text = $"To start the next match, restart the dedicated server, then return to the menu to reconnect:\nServer: dotnet run --project src/Game.Server --configuration Release -- --scenario {_scenario} --port 7777";
         }
     }
 
@@ -220,6 +231,7 @@ internal sealed partial class MissionPanel : Control
         _isLocal = isLocal;
         _retryButton.Visible = isLocal;
         _instructionLabel.Visible = !isLocal;
+        _leaveButton.Visible = true;
     }
 
     public void UpdateMission(in MissionObservation mission, int currentTick)

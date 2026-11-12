@@ -561,6 +561,24 @@ void fragment() {
         _texture.Update(_image);
     }
 
+    public void Clear()
+    {
+        Array.Clear(_activeVisibility);
+        Array.Clear(_scratchVisibility);
+        Array.Clear(_seenCount);
+        _viewsheds.Clear();
+        _removedUnits.Clear();
+        _sweepTarget = null;
+        _timeSinceCycleStart = 0f;
+        _unitIndexInCycle = 0;
+        _cycleInProgress = false;
+
+        Array.Clear(_blurBuffer);
+        Array.Clear(_textureBuffer);
+        _image.SetData(Columns, Rows, false, Image.Format.R8, _textureBuffer);
+        _texture.Update(_image);
+    }
+
     public void Dispose()
     {
         if (_isDisposed) return;
