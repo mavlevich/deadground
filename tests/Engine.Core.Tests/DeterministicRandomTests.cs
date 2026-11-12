@@ -129,8 +129,8 @@ public sealed class DeterministicRandomTests
     {
         DeterministicRandom rng = new(999UL);
 
-        // Warmup
-        for (int i = 0; i < 100; i++)
+        // Warmup Tier 1 JIT
+        for (int i = 0; i < 2000; i++)
         {
             rng.NextULong();
             rng.NextFloat();
@@ -138,17 +138,24 @@ public sealed class DeterministicRandomTests
             rng.Next(1, 100);
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-
-        for (int i = 0; i < 10000; i++)
+        // Tiered JIT recompilation on slow CI runners can trigger a one-time allocation;
+        // checking multiple windows ensures we measure steady-state allocations.
+        long allocated = long.MaxValue;
+        for (int window = 0; window < 3 && allocated != 0; window++)
         {
-            rng.NextULong();
-            rng.NextFloat();
-            rng.NextDouble();
-            rng.Next(1, 100);
+            long before = GC.GetAllocatedBytesForCurrentThread();
+
+            for (int i = 0; i < 10000; i++)
+            {
+                rng.NextULong();
+                rng.NextFloat();
+                rng.NextDouble();
+                rng.Next(1, 100);
+            }
+
+            allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         }
 
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         Assert.Equal(0, allocated);
     }
 }
