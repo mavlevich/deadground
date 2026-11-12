@@ -991,6 +991,26 @@ Bounded native event polling: LiteNetLib 1.3.5 is vendored in a dedicated projec
 - Diagnostic counters:
   - Transports expose diagnostic counters for queued packets, queued payload bytes, peak watermarks, dropped unreliable packets and bytes, and reliable overflow events.
 
+### 14.4 Client session lifecycle and user interface
+
+- Application entry modes:
+  - Standard client launch defaults to the Start Menu (`SessionMenu`) without joining a match or running simulation ticks.
+  - Command-line flags preserve direct entry without showing the start menu: `--scenario <name>`, `--connect <host:port>`, `--smoke-test`, `--map-preview`, `--los-sandbox`, `--vehicle-preview`, `--perf-microbench`, `--combat-feedback-probe`, `--combat-feedback-capture`, `--vehicle-effects-capture`, `--order-preview-capture`, and `--minimap-demo`.
+- Start Menu features:
+  - `Local Battle`: Launches a local single-player match on the 2000 x 2000 m (2 x 2 km) battle terrain against an in-memory simulation host.
+  - `Multiplayer`: Opens the connection card with Host/IP and Port inputs (defaults to `127.0.0.1:7777`). Validates host and port bounds before initiating network handshakes. Displays real-time connection state (`Connecting`, `Connected`, `Failed`, `Timed out`).
+  - `Settings`: Opens the graphical settings panel (also toggled via F10 or O).
+  - `Exit`: Quits the application.
+- Session lifecycle and reconnection:
+  - `ClientLifecycleController` governs state transitions (`Inactive`, `Connecting`, `Connected`, `Disconnecting`, `Failed`).
+  - In-match players can open the pause menu via Escape and select `Leave Battle` to disconnect cleanly, tear down match state, and return to the Start Menu without restarting the client process.
+  - When a match finishes (Victory, Defeat, or Draw), the end-game summary screen displays a `Leave Battle` button that returns players to the Start Menu.
+  - If a connection drops, a connection lost modal notifies the player and provides a button to return to the Start Menu.
+  - Players can connect to a freshly restarted server or re-enter local matches immediately without application restart.
+  - Transitioning between different scenarios (such as `prototype`, `recon-raid`, or `battle`) cleans up visual environment nodes and rebuilds map geometry, heightmaps, unit catalogs, views, fog of war, and camera bounds.
+- Modal input precedence:
+  - Input events process the topmost active layer first: `SettingsPanel` (layer 10) takes precedence (Escape closes settings, F10 toggles settings), followed by `PauseMenu` (layer 9) (Escape toggles pause), `SessionMenu` (layer 8) (Escape returns from subcards or modals to main menu), and finally gameplay selection and camera controls.
+
 ## 15. Saves, replays, debug logs
 
 Three different goals with three formats:

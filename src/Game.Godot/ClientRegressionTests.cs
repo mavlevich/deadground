@@ -43,7 +43,8 @@ internal static class ClientRegressionTests
             VisualPrewarmRegressionTests.Run(scene);
             TacticalMinimapRegressionTests.Run(scene);
             VehicleWreckRegressionTests.Run(scene);
-            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability combat_feedback vehicle_preview faction_vehicles rts_selection vehicle_effects cannon_sound historical_units seen_means_known fog_of_war relief contact_turrets infantry_assets order_preview visual_prewarm tactical_minimap vehicle_wrecks");
+            CheckNetworkSessionUi(scene);
+            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability combat_feedback vehicle_preview faction_vehicles rts_selection vehicle_effects cannon_sound historical_units seen_means_known fog_of_war relief contact_turrets infantry_assets order_preview visual_prewarm tactical_minimap vehicle_wrecks network_session_ui");
             return true;
         }
         catch (Exception exception)
@@ -1268,6 +1269,201 @@ internal static class ClientRegressionTests
             card.UpdateContact(outsideContact, 62);
             Require(card.Line2Text.Contains("Tank"),
                 $"SelectionCard for outside contact must show fallback classification name 'Tank', got '{card.Line2Text}'.");
+        }
+        finally
+        {
+            parent.QueueFree();
+        }
+    }
+
+    private static void CheckNetworkSessionUi(Node3D scene)
+    {
+        Node3D parent = new();
+        scene.AddChild(parent);
+        try
+        {
+            // 1. SessionMenu component tests
+            SessionMenu menu = new();
+            parent.AddChild(menu);
+
+            Require(menu.IsOpen, "SessionMenu should be open initially.");
+            Require(menu.GetActiveCardRect().Size != Vector2.Zero, "Main menu card should have valid bounds.");
+
+            menu.ShowMultiplayerView();
+            Require(menu.IsOpen, "SessionMenu should remain open in multiplayer view.");
+            Require(menu.AddressText == "127.0.0.1:7777", "Default address should be 127.0.0.1:7777.");
+
+            menu.SetStatus("Connecting to server...", ClientLifecycleState.Connecting);
+            Require(menu.StatusText == "Connecting to server...", "Status text should update.");
+
+            menu.ShowConnectionLostModal("Connection timed out.");
+            Require(menu.IsOpen, "Connection lost modal should keep menu open.");
+
+            menu.HideMenu();
+            Require(!menu.IsOpen, "HideMenu should close all cards.");
+            menu.QueueFree();
+
+            // 2. PauseMenu component tests
+            PauseMenu pause = new();
+            parent.AddChild(pause);
+
+            Require(!pause.IsOpen, "PauseMenu should be closed initially.");
+            pause.Open();
+            Require(pause.IsOpen, "PauseMenu should be open after Open().");
+            Require(pause.GetCardRect().Size != Vector2.Zero, "Pause card should have valid bounds.");
+
+            pause.Close();
+            Require(!pause.IsOpen, "PauseMenu should be closed after Close().");
+
+            pause.Toggle();
+            Require(pause.IsOpen, "PauseMenu Toggle should open menu.");
+            pause.Toggle();
+            Require(!pause.IsOpen, "PauseMenu Toggle should close menu.");
+            pause.QueueFree();
+
+            // 3. MissionPanel Leave button
+            HeightMap map = HeightMap.CreatePrototype();
+            MissionPanel panel = new(parent, map);
+            parent.AddChild(panel);
+            panel.SetScenario("battle");
+            panel.SetLocalMode(false);
+
+            MissionObservation victory = new(
+                MissionId: 1,
+                Status: MissionStatus.Victory,
+                EndReason: MissionEndReason.AllArmedUnitsDestroyed,
+                TimeLimitTicks: 0,
+                FinishedTick: 100,
+                TargetContactId: default,
+                SearchAreaCenter: System.Numerics.Vector2.Zero,
+                SearchAreaRadius: 0f,
+                Flags: 0);
+
+            panel.UpdateMission(victory, 100);
+            Require(panel.IsMissionFinished, "Mission should be finished.");
+            Require(panel.GetLeaveButtonRect().Size != Vector2.Zero, "Leave button should be visible on result screen.");
+            panel.Cleanup();
+            panel.QueueFree();
+
+            // 4. Main session integration when running inside Main scene
+            if (scene is Main main)
+            {
+                Require(main.SessionMenu is not null, "Main must instantiate SessionMenu.");
+                Require(main.PauseMenu is not null, "Main must instantiate PauseMenu.");
+                Require(main.LifecycleController is not null, "Main must instantiate ClientLifecycleController.");
+
+                // Test state reset
+                main.ResetGameplayState();
+                Require(main.UnitViews.Views.Count == 0, "ResetGameplayState must clear unit views.");
+                Require(main.ContactViews.Views.Count == 0, "ResetGameplayState must clear contact views.");
+                Require(main.WreckViews.Views.Count == 0, "ResetGameplayState must clear wreck views.");
+
+                // Regression 1: Direct launch -> Leave Battle -> Multiplayer -> Connect advances in _Process
+                main.LeaveCurrentMatch();
+                Require(main.IsMenuMode, "LeaveCurrentMatch must set IsMenuMode to true.");
+                Require(main.SessionMenu!.IsOpen, "LeaveCurrentMatch must open SessionMenu.");
+                main.StartMultiplayerConnect("127.0.0.1:7777");
+                Require(main.LifecycleController!.IsConnecting, "StartMultiplayerConnect must enter Connecting state.");
+                main._Process(0.05);
+                Require(main.SessionMenu!.StatusText.Length > 0, "Process must update session menu status during connection.");
+                main.CancelMultiplayerConnect();
+                Require(!main.LifecycleController!.IsConnecting, "CancelMultiplayerConnect must exit Connecting state.");
+
+                // Regression 2: Scenario transitions to Local Battle and Multiplayer Battle
+                // Prototype -> Leave Battle -> Local Battle
+                main.SetScenarioForTest("prototype");
+                Require(main.Scenario == "prototype", "SetScenarioForTest failed to switch to prototype.");
+                Require(main.Map.Width == 128, "Prototype map width must be 128.");
+                main.LeaveCurrentMatch();
+                main.StartLocalBattle();
+                Require(main.Scenario == "battle", "Local Battle must switch scenario to battle.");
+                Require(MathF.Abs(main.Map.Width - BattleScenario.MapSize) < 0.1f, "Local Battle must rebuild map to 2000x2000.");
+                main._Process(0.05);
+
+                // Recon-raid -> Leave Battle -> Local Battle
+                main.SetScenarioForTest("recon-raid");
+                Require(main.Scenario == "recon-raid", "SetScenarioForTest failed to switch to recon-raid.");
+                Require(main.Map.Width == 512f, "Recon-raid map width must be 512.");
+                main.LeaveCurrentMatch();
+                main.StartLocalBattle();
+                Require(main.Scenario == "battle", "Local Battle must switch scenario to battle.");
+                Require(MathF.Abs(main.Map.Width - BattleScenario.MapSize) < 0.1f, "Local Battle must rebuild map to 2000x2000.");
+                main._Process(0.05);
+
+                // Prototype -> Leave Battle -> Multiplayer Battle
+                main.SetScenarioForTest("prototype");
+                main.LeaveCurrentMatch();
+                main.StartMultiplayerConnect("127.0.0.1:7777");
+                Require(main.Scenario == "battle", "Multiplayer connect must switch scenario to battle.");
+                Require(MathF.Abs(main.Map.Width - BattleScenario.MapSize) < 0.1f, "Multiplayer connect must rebuild map to 2000x2000.");
+                main.CancelMultiplayerConnect();
+
+                // Regression 3: Modal Escape and F10 priority
+                // 3a. Start Menu: F10 opens SettingsPanel, Escape closes SettingsPanel first, leaving Start Menu open
+                main.LeaveCurrentMatch();
+                Require(main.SessionMenu!.IsOpen, "SessionMenu must be open after LeaveCurrentMatch.");
+                if (main.SettingsPanel!.IsOpen) main.SettingsPanel.Close();
+                using (InputEventKey f10 = new() { Keycode = Key.F10, Pressed = true })
+                {
+                    main._UnhandledInput(f10);
+                }
+                Require(main.SettingsPanel!.IsOpen, "F10 must open SettingsPanel from Start Menu.");
+                Require(main.SessionMenu!.IsOpen, "SessionMenu must remain open underneath SettingsPanel.");
+                using (InputEventKey escape = new() { Keycode = Key.Escape, Pressed = true })
+                {
+                    main._UnhandledInput(escape);
+                }
+                Require(!main.SettingsPanel!.IsOpen, "Escape must close SettingsPanel when opened from Start Menu.");
+                Require(main.SessionMenu!.IsOpen, "SessionMenu must remain open after SettingsPanel closes.");
+                using (InputEventKey f10 = new() { Keycode = Key.F10, Pressed = true })
+                {
+                    main._UnhandledInput(f10);
+                }
+                Require(main.SettingsPanel!.IsOpen, "F10 must toggle SettingsPanel open.");
+                using (InputEventKey f10 = new() { Keycode = Key.F10, Pressed = true })
+                {
+                    main._UnhandledInput(f10);
+                }
+                Require(!main.SettingsPanel!.IsOpen, "F10 must toggle SettingsPanel closed.");
+
+                // Start Menu: Escape from multiplayer view returns to main card
+                main.SessionMenu!.ShowMultiplayerView();
+                Require(main.SessionMenu!.IsMultiplayerView, "SessionMenu should be in multiplayer view.");
+                using (InputEventKey escape = new() { Keycode = Key.Escape, Pressed = true })
+                {
+                    main._UnhandledInput(escape);
+                }
+                Require(main.SessionMenu!.IsMainMenuView, "Escape in multiplayer view must return to main menu card.");
+
+                // 3b. Pause Menu: Escape opens PauseMenu, F10 opens SettingsPanel, Escape closes SettingsPanel first
+                main.StartLocalBattle();
+                Require(!main.PauseMenu!.IsOpen, "PauseMenu should be closed initially in battle.");
+                using (InputEventKey escape = new() { Keycode = Key.Escape, Pressed = true })
+                {
+                    main._UnhandledInput(escape);
+                }
+                Require(main.PauseMenu!.IsOpen, "Escape in gameplay must open PauseMenu.");
+                using (InputEventKey f10 = new() { Keycode = Key.F10, Pressed = true })
+                {
+                    main._UnhandledInput(f10);
+                }
+                Require(main.SettingsPanel!.IsOpen, "F10 must open SettingsPanel over PauseMenu.");
+                Require(main.PauseMenu!.IsOpen, "PauseMenu must remain open underneath SettingsPanel.");
+                using (InputEventKey escape = new() { Keycode = Key.Escape, Pressed = true })
+                {
+                    main._UnhandledInput(escape);
+                }
+                Require(!main.SettingsPanel!.IsOpen, "Escape must close SettingsPanel first, leaving PauseMenu open.");
+                Require(main.PauseMenu!.IsOpen, "PauseMenu must still be open after closing SettingsPanel.");
+                using (InputEventKey escape = new() { Keycode = Key.Escape, Pressed = true })
+                {
+                    main._UnhandledInput(escape);
+                }
+                Require(!main.PauseMenu!.IsOpen, "Second Escape must close PauseMenu.");
+
+                // Return to clean state
+                main.LeaveCurrentMatch();
+            }
         }
         finally
         {
