@@ -2445,6 +2445,15 @@ public partial class Main : Node3D
             _orderNotification);
 
         EnterGameSession(_session);
+
+        if (scenarioName == "prototype")
+        {
+            foreach (OwnUnitObservation unit in _session.Replica.OwnUnits)
+            {
+                _session.Move(unit.Id, unit.Position + new NumericsVector2(0, 60));
+            }
+            if (_session.Replica.OwnUnits.Length > 0) _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
+        }
     }
 
     internal void StartLocalBattle()
