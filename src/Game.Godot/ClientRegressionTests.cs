@@ -1348,6 +1348,9 @@ internal static class ClientRegressionTests
             // 4. Main session integration when running inside Main scene
             if (scene is Main main)
             {
+                string initialScenario = main.Scenario;
+                bool initialMenuMode = main.IsMenuMode;
+
                 Require(main.SessionMenu is not null, "Main must instantiate SessionMenu.");
                 Require(main.PauseMenu is not null, "Main must instantiate PauseMenu.");
                 Require(main.LifecycleController is not null, "Main must instantiate ClientLifecycleController.");
@@ -1461,8 +1464,15 @@ internal static class ClientRegressionTests
                 }
                 Require(!main.PauseMenu!.IsOpen, "Second Escape must close PauseMenu.");
 
-                // Return to clean state
-                main.LeaveCurrentMatch();
+                // Restore initial state so the client can continue its intended mode (e.g. smoke test)
+                if (initialMenuMode)
+                {
+                    main.LeaveCurrentMatch();
+                }
+                else
+                {
+                    main.SetScenarioForTest(initialScenario);
+                }
             }
         }
         finally

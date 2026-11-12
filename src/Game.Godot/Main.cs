@@ -2384,6 +2384,17 @@ public partial class Main : Node3D
             Simulation localSimulation = ReconRaidScenario.CreateSimulation(scenarioGeometry);
             _session = new LocalSession(localSimulation, player: 1);
         }
+        else if (scenarioName == "battle")
+        {
+            scenarioGeometry = BattleScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = BattleScenario.CreateMatchSetup(scenarioGeometry);
+            _matchSetup = setup;
+            _scenarioGeometry = scenarioGeometry;
+            _catalog = ScenarioContent.LoadCatalog("battle");
+            Simulation localSimulation = BattleScenario.CreateSimulation(scenarioGeometry);
+            _session = new LocalSession(localSimulation, player: 1);
+        }
         else
         {
             throw new ArgumentException($"Unsupported test scenario: {scenarioName}");
@@ -2393,8 +2404,18 @@ public partial class Main : Node3D
         _fogOfWar = new FogOfWarView(_map, scenarioGeometry);
         BuildEnvironment(scenarioGeometry);
 
-        Vector3 initialFocus = new(64, 0, 64);
-        float initialCameraSize = 112f;
+        Vector3 initialFocus = scenarioName switch
+        {
+            "battle" => new Vector3(BattleScenario.SovietStart.X, 0, BattleScenario.SovietStart.Y),
+            "recon-raid" => new Vector3(100, 0, 100),
+            _ => new Vector3(64, 0, 64)
+        };
+        float initialCameraSize = scenarioName switch
+        {
+            "battle" => 160f,
+            "recon-raid" => 160f,
+            _ => 112f
+        };
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
         _cameraRig.SetDefaultView(initialFocus, initialCameraSize);
         _cameraRig.ResetToDefault();
