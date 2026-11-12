@@ -12,7 +12,7 @@ public sealed class WheeledRouteChunkHandoffTests
     {
         StaticGeometry geometry = BattleScenario.CreateStaticGeometry();
         UnitCatalog catalog = ScenarioContent.LoadCatalog("battle");
-        using Simulation sim = BattleScenario.CreateSimulation(geometry, catalog, matchSeed: 1337UL);
+        using Simulation sim = BattleScenario.CreateSimulation(geometry, catalog, matchSeed: 1337UL, enableMission: false);
 
         OpsRules rules = (OpsRules)sim.Rules;
         NavigationSystem nav = rules.FindSystem<NavigationSystem>()!;
@@ -128,7 +128,7 @@ public sealed class WheeledRouteChunkHandoffTests
     {
         StaticGeometry geometry = BattleScenario.CreateStaticGeometry();
         UnitCatalog catalog = ScenarioContent.LoadCatalog("battle");
-        using Simulation sim = BattleScenario.CreateSimulation(geometry, catalog, matchSeed: 1337UL);
+        using Simulation sim = BattleScenario.CreateSimulation(geometry, catalog, matchSeed: 1337UL, enableMission: false);
 
         OpsRules rules = (OpsRules)sim.Rules;
         NavigationSystem nav = rules.FindSystem<NavigationSystem>()!;
@@ -202,7 +202,7 @@ public sealed class WheeledRouteChunkHandoffTests
     {
         StaticGeometry geometry = BattleScenario.CreateStaticGeometry();
         UnitCatalog catalog = ScenarioContent.LoadCatalog("battle");
-        using Simulation sim = BattleScenario.CreateSimulation(geometry, catalog, matchSeed: 1337UL);
+        using Simulation sim = BattleScenario.CreateSimulation(geometry, catalog, matchSeed: 1337UL, enableMission: false);
 
         OpsRules rules = (OpsRules)sim.Rules;
         NavigationSystem nav = rules.FindSystem<NavigationSystem>()!;
@@ -285,7 +285,7 @@ public sealed class WheeledRouteChunkHandoffTests
         // then terminates with NoPath without entering an endless circle.
         StaticGeometry geometry = BattleScenario.CreateStaticGeometry();
         UnitCatalog catalog = ScenarioContent.LoadCatalog("battle");
-        using Simulation sim = BattleScenario.CreateSimulation(geometry, catalog, matchSeed: 1337UL);
+        using Simulation sim = BattleScenario.CreateSimulation(geometry, catalog, matchSeed: 1337UL, enableMission: false);
 
         OpsRules rules = (OpsRules)sim.Rules;
         NavigationSystem nav = rules.FindSystem<NavigationSystem>()!;

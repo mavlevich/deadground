@@ -609,6 +609,38 @@ M113A1 and M151A2. Speeds, gun ranges and sensor ranges come from period sources
 
 The M113A1 and M151A2 use a placeholder model until their own models exist.
 
+To play a 2-player network match on a dedicated server:
+
+```sh
+# Terminal 1 - dedicated server
+dotnet run --project src/Game.Server --configuration Release -- --scenario battle --port 7777 --max-clients 2
+
+# Terminal 2 - Player 1 (Soviet)
+./tools/run-client.sh -- --scenario battle --connect 127.0.0.1:7777
+
+# Terminal 3 - Player 2 (US)
+./tools/run-client.sh --no-build --no-import -- --scenario battle --connect 127.0.0.1:7777
+```
+
+The match ends authoritatively when all combat units of a faction are eliminated:
+- If one side loses all units, it receives Defeat and the opponent receives Victory.
+- If both sides lose their last units on the same tick, the result is Draw.
+- Upon finish, units stop and cease fire, and new orders are rejected while camera and minimap remain open to inspect the field.
+- The result screen shows each player their outcome, battle duration, and instructions to restart the dedicated server and both clients for the next match.
+
+To start the next match, close both clients, restart the dedicated server in Terminal 1, then restart both clients in Terminals 2 and 3:
+
+```sh
+# Terminal 1 - restart dedicated server
+dotnet run --project src/Game.Server --configuration Release -- --scenario battle --port 7777 --max-clients 2
+
+# Terminal 2 - restart Player 1
+./tools/run-client.sh -- --scenario battle --connect 127.0.0.1:7777
+
+# Terminal 3 - restart Player 2
+./tools/run-client.sh --no-build --no-import -- --scenario battle --connect 127.0.0.1:7777
+```
+
 To try out your own units without losing them, for example to watch turret traverse, start any
 local scenario with the enemy holding fire:
 

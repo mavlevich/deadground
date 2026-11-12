@@ -49,6 +49,29 @@ public sealed class OpsRules : RuleSet
             buildLimits)
     { }
 
+    public static OpsRules CreateWithMission(
+        StaticGeometry geometry,
+        UnitCatalog catalog,
+        IMissionSystem mission,
+        DeterministicRandom? combatRandom = null)
+    {
+        OpsPerceptionCatalog perceptionCatalog = new(catalog);
+        OpsMovementCatalog movementCatalog = new(catalog);
+        OpsCombatCatalog combatCatalog = new(catalog);
+        DetectionTuning detTuning = PrototypeScenario.CreateDetectionTuning(catalog);
+        ISimulationSystem[] systems = CreateSystems(
+            geometry,
+            perceptionCatalog,
+            movementCatalog,
+            combatCatalog,
+            navTuning: null,
+            detTuning: detTuning,
+            combatRandom: combatRandom,
+            buildLimits: null,
+            mission: mission);
+        return new OpsRules(systems);
+    }
+
     private static ISimulationSystem[] CreateSystems(
         StaticGeometry geometry,
         IUnitPerceptionCatalog perceptionCatalog,
@@ -57,16 +80,17 @@ public sealed class OpsRules : RuleSet
         NavigationTuning? navTuning,
         DetectionTuning? detTuning,
         DeterministicRandom? combatRandom = null,
-        NavigationBuildLimits? buildLimits = null)
+        NavigationBuildLimits? buildLimits = null,
+        IMissionSystem? mission = null)
     {
         NavigationSystem nav = new(new NavigationGrid(geometry, navTuning?.CellSize ?? NavigationTuning.DefaultCellSize, enableHierarchical: true, buildLimits: buildLimits, sectorSize: navTuning?.SectorSize ?? NavigationTuning.DefaultSectorSize), movementCatalog, navTuning);
         DetectionSystem det = new(geometry, perceptionCatalog, detTuning);
         if (combatCatalog is not null)
         {
             CombatSystem combat = new(geometry, combatCatalog, perceptionCatalog, det, nav, combatRandom: combatRandom);
-            return [nav, det, combat];
+            return mission is not null ? [nav, det, combat, mission] : [nav, det, combat];
         }
-        return [nav, det];
+        return mission is not null ? [nav, det, mission] : [nav, det];
     }
 }
 

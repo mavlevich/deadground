@@ -736,11 +736,42 @@ internal static class ClientRegressionTests
             panel.UpdateMission(victory, 300);
             Require(panel.IsMissionFinished, "Mission should be marked finished on victory.");
 
-            // 4. Reset UI
+            // 4. Draw
+            MissionObservation draw = victory with
+            {
+                Status = MissionStatus.Draw,
+                EndReason = MissionEndReason.AllArmedUnitsDestroyed
+            };
+            panel.UpdateMission(draw, 350);
+            Require(panel.IsMissionFinished, "Mission should be marked finished on draw.");
+
+            // 5. Battle scenario configuration and network mode
+            panel.ResetUi();
+            Require(!panel.IsMissionFinished, "ResetUi should clear finished state.");
+            panel.SetScenario("battle");
+            panel.SetShowBriefing(false);
+            panel.SetLocalMode(false);
+
+            MissionObservation battleVictory = new(
+                MissionId: 3,
+                Status: MissionStatus.Victory,
+                EndReason: MissionEndReason.AllArmedUnitsDestroyed,
+                TimeLimitTicks: 0,
+                FinishedTick: 400,
+                TargetContactId: default,
+                SearchAreaCenter: System.Numerics.Vector2.Zero,
+                SearchAreaRadius: 0f,
+                Flags: 0);
+
+            panel.UpdateMission(battleVictory, 400);
+            Require(panel.IsMissionFinished, "Battle should be marked finished on victory.");
+            Require(panel.GetBriefingRect().Size == Vector2.Zero, "Briefing card should be hidden for battle scenario.");
+
+            // 6. Reset UI
             panel.ResetUi();
             Require(!panel.IsMissionFinished, "ResetUi should clear finished state.");
 
-            // 5. Cleanup
+            // 7. Cleanup
             panel.Cleanup();
         }
         finally

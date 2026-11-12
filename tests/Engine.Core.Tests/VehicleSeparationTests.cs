@@ -486,8 +486,8 @@ public sealed class VehicleSeparationTests
     [Fact]
     public void Scenario12_NetworkReplication_WaitingForClearance_WireProtocol()
     {
-        Assert.Equal(22, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(22, WireProtocol.Version);
+        Assert.Equal(23, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(23, WireProtocol.Version);
 
         OwnUnitObservation unit = new(
             Id: new EntityId(42),

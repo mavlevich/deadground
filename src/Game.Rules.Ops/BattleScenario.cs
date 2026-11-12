@@ -115,16 +115,25 @@ public static class BattleScenario
         UnitCatalog? catalog = null,
         ulong matchSeed = 1337UL,
         bool swapSides = false,
-        bool excludeRecon = false)
+        bool excludeRecon = false,
+        BattleMissionSystem? mission = null,
+        bool enableMission = true,
+        bool clash = false)
     {
         geometry ??= CreateStaticGeometry();
         catalog ??= ScenarioContent.LoadCatalog("battle");
-        OpsRules rules = new(geometry, catalog);
+        if (enableMission)
+        {
+            mission ??= new BattleMissionSystem();
+        }
+        OpsRules rules = mission is not null
+            ? OpsRules.CreateWithMission(geometry, catalog, mission)
+            : new OpsRules(geometry, catalog);
         WorldState world = new(geometry.HeightMap);
-        Vector2 p1Start = swapSides ? UsStart : SovietStart;
-        Vector2 p2Start = swapSides ? SovietStart : UsStart;
-        Vector2 p1Enemy = swapSides ? SovietStart : UsStart;
-        Vector2 p2Enemy = swapSides ? UsStart : SovietStart;
+        Vector2 p1Start = clash ? new Vector2(580f, 720f) : (swapSides ? UsStart : SovietStart);
+        Vector2 p2Start = clash ? new Vector2(720f, 580f) : (swapSides ? SovietStart : UsStart);
+        Vector2 p1Enemy = clash ? p2Start : (swapSides ? SovietStart : UsStart);
+        Vector2 p2Enemy = clash ? p1Start : (swapSides ? UsStart : SovietStart);
 
         ReadOnlySpan<(string Soviet, string Us, Vector2 Offset)> spawnOrder =
             excludeRecon ? Order.AsSpan(0, 5) : Order.AsSpan();
@@ -157,5 +166,77 @@ public static class BattleScenario
             MatchSetup.ComputeMapHash(geometry),
             ruleSetId,
             PlayerFactions: PrototypeScenario.CreatePlayerFactions(catalog));
+    }
+}
+
+public sealed class BattleMissionSystem : IMissionSystem
+{
+    public const ushort MissionIdentifier = 3;
+
+    private MissionStatus _p1Status = MissionStatus.InProgress;
+    private MissionStatus _p2Status = MissionStatus.InProgress;
+
+    public bool IsFinished { get; private set; }
+    public int FinishedTick { get; private set; }
+    public MissionEndReason EndReason { get; private set; } = MissionEndReason.None;
+
+    public void Update(WorldState world, int tick)
+    {
+        if (IsFinished) return;
+
+        int p1Alive = 0;
+        int p2Alive = 0;
+        for (int i = 0; i < world.Count; i++)
+        {
+            UnitState unit = world.GetUnitAt(i);
+            if (unit.Owner == 1) p1Alive++;
+            else if (unit.Owner == 2) p2Alive++;
+        }
+
+        if (p1Alive == 0 && p2Alive == 0)
+        {
+            _p1Status = MissionStatus.Draw;
+            _p2Status = MissionStatus.Draw;
+            EndReason = MissionEndReason.AllArmedUnitsDestroyed;
+            FinishedTick = tick;
+            IsFinished = true;
+        }
+        else if (p1Alive == 0)
+        {
+            _p1Status = MissionStatus.Defeat;
+            _p2Status = MissionStatus.Victory;
+            EndReason = MissionEndReason.AllArmedUnitsDestroyed;
+            FinishedTick = tick;
+            IsFinished = true;
+        }
+        else if (p2Alive == 0)
+        {
+            _p1Status = MissionStatus.Victory;
+            _p2Status = MissionStatus.Defeat;
+            EndReason = MissionEndReason.AllArmedUnitsDestroyed;
+            FinishedTick = tick;
+            IsFinished = true;
+        }
+    }
+
+    public MissionObservation GetObservation(int player)
+    {
+        MissionStatus status = player switch
+        {
+            1 => _p1Status,
+            2 => _p2Status,
+            _ => IsFinished ? MissionStatus.None : MissionStatus.InProgress
+        };
+
+        return new MissionObservation(
+            MissionIdentifier,
+            status,
+            EndReason,
+            0,
+            FinishedTick,
+            default,
+            Vector2.Zero,
+            0f,
+            0);
     }
 }

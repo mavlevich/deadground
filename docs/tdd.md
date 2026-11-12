@@ -949,6 +949,7 @@ Status: planned for M2. M1 units keep one weapon each, so the M1 exit does not d
 - Protocol version 15: own unit records are 35 bytes (`ushort TurretYaw` (2) at offset 31, `ushort HullHeading` (2) at offset 33). Contact records are 24 bytes (`ushort TurretYaw` (2) at offset 20, `ushort HullHeading` (2) at offset 22). Both angles are quantized to 65536 steps per turn. Contacts carry the turret yaw and hull heading observed at the moment of sighting; `LastKnown` contacts freeze the last observed values. Combat event records are 40 bytes (`byte Result` (1) at offset 39: 0 None, 1 Penetrated, 2 Deflected, 3 Miss).
 - Protocol version 20: bumps wire protocol to version 20 (`MatchSetup.CurrentProtocolVersion = 20`), serializing `PathRequestStatus.WaitingForClearance = 7` in snapshot unit records to observe dynamic vehicle separation states across network clients.
 - Protocol version 22: bumps wire protocol to version 22 (`MatchSetup.CurrentProtocolVersion = 22`), adding persistent vehicle wrecks to snapshots. `SnapshotHeaderSize` is 50 bytes (`18 + MissionSize`, bytes 16..17 encode `ushort WreckCount`). Each wreck record is 22 bytes (`uint WreckId` (4), `byte SupportSurface` (1), `ushort Definition` (2), `float X` (4), `float Y` (4), `ushort TurretYaw` (2), `ushort HullHeading` (2), `byte Reserved` (1) for 2-byte alignment). Bounded up to `MaxWrecks = 128` wrecks per snapshot (`MaxMessageSize = 52,530` bytes).
+- Protocol version 23: bumps wire protocol to version 23 (`MatchSetup.CurrentProtocolVersion = 23`), adding `MissionStatus.Draw = 4` to snapshot mission observations. Handshake rejects legacy version 22 clients with `HandshakeReason.ProtocolVersionMismatch` before snapshot delivery, preventing clients with older mission status parsers from failing on unhandled draw snapshots.
 - Delta compression (acknowledged baselines, dirty fields) is added only if measurements exceed the budget.
 - Quantization: ground units send X, Z and support surface. Height is computed on the client (section 8.3). 10 cm precision on a 16 km map is 18 bits per axis.
 - Clients render about 100 to 150 ms behind the server and interpolate.
@@ -1469,6 +1470,26 @@ We do not write five versions of each system up front. Two cheap experiments che
 
 - Sandbox rule set (milestone 1): logistics off, infinite ammo. Proves a system can be removed.
 - A test unit with different movement and weapon logic (after milestone 2), for example a walker with an energy weapon. Proves behavior can be replaced. If this needs changes in networking, UI and entity code at the same time, the seams are wrong.
+
+### 19.1 Battle scenario victory and match result lifecycle
+
+The 2-player `battle` scenario implements authoritative match conclusion via `BattleMissionSystem : IMissionSystem`:
+
+- **Victory rules**: Evaluated after each tick's combat actions.
+  - If a player loses all units, they receive `MissionStatus.Defeat` and the opponent receives `MissionStatus.Victory` (`MissionEndReason.AllArmedUnitsDestroyed`).
+  - If both players lose their last remaining units on the exact same tick, the result is `MissionStatus.Draw = 4`.
+  - Peaceful matches or matches with surviving combatants remain `MissionStatus.InProgress`.
+  - Client disconnection alone does not terminate the match.
+- **State immutability**: Once termination conditions trigger, `FinishedTick` and side statuses are fixed. Subsequent ticks do not overwrite the recorded result.
+- **Simulation cessation**: Upon completion, `Simulation.Step` halts active unit movement, clears target assignments, stops firing, and rejects any new client movement or combat orders.
+- **Wire delivery**: Delivered via the 32-byte `MissionObservation` header in regular snapshots (wire protocol validated up to `MissionStatus.Draw`). Newly connected or late-joining clients receive the finished result on their first snapshot without requiring prior combat event history.
+- **Result presentation (`MissionPanel`)**:
+  - Modal card centered on screen displaying side-specific `VICTORY` (green), `DEFEAT` (red), or `DRAW` (amber).
+  - Displays reason ("All enemy units destroyed." / "All friendly units destroyed." / "Mutual destruction: all units on both sides destroyed.") and duration ("Battle Duration: MM:SS").
+  - In network multiplayer, displays verified next-match instructions: restart the dedicated server, then restart both clients (`dotnet run --project src/Game.Server --configuration Release -- --scenario battle --port 7777 --max-clients 2`, `./tools/run-client.sh -- --scenario battle --connect 127.0.0.1:7777`).
+  - In local single-player mode, displays the retry button ("RETRY BATTLE [R]").
+  - Briefing card and 3D objective indicators are hidden for `battle`.
+  - Camera navigation, selection inspection, and minimap remain fully interactive after match conclusion.
 
 ## 20. Platforms and tooling
 

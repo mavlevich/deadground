@@ -51,6 +51,8 @@ public partial class Main : Node3D
     private FogOfWarView? _fogOfWar;
     private string? _screenshotPath;
     private double _screenshotTimer = 0.5;
+    private string? _screenshotOnFinishPath;
+    private double _screenshotOnFinishTimer = 1.0;
     private bool _screenshotQuit;
     private bool _showVehicleCollisionBounds;
     private readonly MeshInstance3D _collisionDebugMeshInstance = new();
@@ -282,6 +284,11 @@ public partial class Main : Node3D
                 else if (args[i] == "--screenshot" && i + 1 < args.Length)
                 {
                     _screenshotPath = args[i + 1];
+                    i++;
+                }
+                else if (args[i] == "--screenshot-on-finish" && i + 1 < args.Length)
+                {
+                    _screenshotOnFinishPath = args[i + 1];
                     i++;
                 }
                 else if (args[i] == "--screenshot-delay" && i + 1 < args.Length && double.TryParse(args[i + 1], System.Globalization.CultureInfo.InvariantCulture, out double delay))
@@ -915,6 +922,25 @@ public partial class Main : Node3D
             }
         }
 
+        if (_screenshotOnFinishPath is not null && _missionPanel?.IsMissionFinished == true)
+        {
+            _screenshotOnFinishTimer -= delta;
+            if (_screenshotOnFinishTimer <= 0)
+            {
+                Image? img = GetViewport().GetTexture().GetImage();
+                if (img is not null)
+                {
+                    img.SavePng(_screenshotOnFinishPath);
+                    GD.Print($"SCREENSHOT_SAVED {_screenshotOnFinishPath}");
+                }
+                _screenshotOnFinishPath = null;
+                if (_screenshotQuit)
+                {
+                    GetTree().Quit(0);
+                }
+            }
+        }
+
         if (_smokeTest)
         {
             // In headless smoke tests with the Dummy audio driver, active playbacks stopped during Clear()
@@ -1079,14 +1105,14 @@ public partial class Main : Node3D
 
             if (@event is InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Right })
             {
-                _status.Text = "Mission ended. Orders are disabled.";
+                _status.Text = _scenario == "battle" ? "Battle ended. Orders are disabled." : "Mission ended. Orders are disabled.";
                 GetViewport().SetInputAsHandled();
                 return;
             }
 
             if (@event is InputEventKey { Pressed: true, Echo: false, Keycode: Key.F })
             {
-                _status.Text = "Mission ended. Orders are disabled.";
+                _status.Text = _scenario == "battle" ? "Battle ended. Orders are disabled." : "Mission ended. Orders are disabled.";
                 GetViewport().SetInputAsHandled();
                 return;
             }
@@ -1903,15 +1929,20 @@ public partial class Main : Node3D
         UstyePlanData? plan = (_scenario == "ustye-ground" || _scenario == "ustye-raid") ? UstyePlanData.Load() : null;
         _minimap.Initialize(_scenarioGeometry!, _cameraRig, _camera, _session, _unitViews, _contactViews, _catalog, plan);
 
-        if (_scenario == "recon-raid" || _scenario == "ustye-raid")
+        if (_scenario == "recon-raid" || _scenario == "ustye-raid" || _scenario == "battle")
         {
             _missionPanel = new MissionPanel(this, _map);
+            _missionPanel.SetScenario(_scenario);
             if (_scenario == "ustye-raid")
             {
                 _missionPanel.SetBriefing(
                     "OPERATION: USTYE RAID",
                     "Primary: Destroy enemy command vehicle. Preserve recon vehicle.",
                     "Roster: 1x BRDM-2 (3000m sensor), 2x T-62 (115mm gun)");
+            }
+            else if (_scenario == "battle")
+            {
+                _missionPanel.SetShowBriefing(false);
             }
             canvas.AddChild(_missionPanel);
             _missionPanel.SetLocalMode(_session is LocalSession);
@@ -1922,8 +1953,16 @@ public partial class Main : Node3D
     private void OnRetryMission()
     {
         ResetLocalScenario();
-        _status.Text = "Mission restarted. Objective: Destroy enemy command vehicle. Preserve recon vehicle.";
-        _orderNotification?.ShowNotification("Mission restarted. Destroy enemy command vehicle.");
+        if (_scenario == "battle")
+        {
+            _status.Text = "Battle restarted.";
+            _orderNotification?.ShowNotification("Battle restarted.");
+        }
+        else
+        {
+            _status.Text = "Mission restarted. Objective: Destroy enemy command vehicle. Preserve recon vehicle.";
+            _orderNotification?.ShowNotification("Mission restarted. Destroy enemy command vehicle.");
+        }
     }
 
     internal void ResetLocalScenario()

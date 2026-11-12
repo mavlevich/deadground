@@ -7,7 +7,8 @@ public enum MissionStatus : byte
     None = 0,
     InProgress = 1,
     Victory = 2,
-    Defeat = 3
+    Defeat = 3,
+    Draw = 4
 }
 
 public enum MissionEndReason : byte
