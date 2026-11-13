@@ -249,7 +249,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         float groundY = _geometry.GetSurfaceHeight(miss2D, surfaceAtMiss);
         Vector3 miss3D = new(miss2D.X, groundY, miss2D.Y);
 
-        LineOfSightResult los = _geometry.CheckLineOfSight(muzzlePos, miss3D, _losContext);
+        LineOfSightResult los = _geometry.CheckLineOfFire(muzzlePos, miss3D, _losContext);
         return !los.IsClear ? los.HitPoint : miss3D;
     }
 

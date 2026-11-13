@@ -13,6 +13,7 @@ internal static class FogOfWarRegressionTests
     {
         CheckFlatMapRange();
         CheckStructureOcclusion();
+        CheckVegetationOcclusionWithDetection();
         CheckBattleScenarioSovietStart();
         CheckLineOfSightContextAgreement();
         CheckSteadyStateZeroAllocations();
@@ -20,7 +21,7 @@ internal static class FogOfWarRegressionTests
         CheckTimeBudgetWith40Units();
         CheckCachedViewsheds();
         CheckToggle();
-        GD.Print("FOG_OF_WAR_REGRESSIONS_OK 9/9 passed: flat_range structure_occlusion battle_soviet_start los_agreement zero_allocations relief_shading budget_40_units cached_viewsheds toggle");
+        GD.Print("FOG_OF_WAR_REGRESSIONS_OK 10/10 passed: flat_range structure_occlusion vegetation_detection battle_soviet_start los_agreement zero_allocations relief_shading budget_40_units cached_viewsheds toggle");
     }
 
     private static void CheckFlatMapRange()
@@ -73,6 +74,56 @@ internal static class FogOfWarRegressionTests
         // Cell to the side of the wall at (20, 40) is unobstructed and seen
         bool unobstructedSeen = fog.IsWorldPointSeen(20f, 40f);
         Require(unobstructedSeen, "Unobstructed ground within sensor range must be seen.");
+    }
+
+    private static void CheckVegetationOcclusionWithDetection()
+    {
+        StaticGeometry geo = ForestVisibilityScenario.CreateStaticGeometry();
+        HeightMap map = geo.HeightMap;
+        using FogOfWarView fog = new(map, geo, customCellSize: 4.0f);
+
+        float eyeHeight = 1.5f;
+        float sensorRange = 200.0f;
+
+        // Lane 1: Ground observer at (60, 110)
+        fog.UpdateUnitNow(ForestVisibilityScenario.ObserverGroundStart, eyeHeight, sensorRange);
+
+        // Target 1 (edge at 88, 75): 8m into dense forest -> Seen in Fog of War
+        bool edgeSeen = fog.IsWorldPointSeen(ForestVisibilityScenario.TargetEdgePos.X, ForestVisibilityScenario.TargetEdgePos.Y);
+        Require(edgeSeen, "Forest edge target within penetration limit must be seen in FogOfWar.");
+
+        // Target 2 (clearing at 130, 110): surrounded by dense forest -> Unseen in Fog of War
+        bool clearingSeen = fog.IsWorldPointSeen(ForestVisibilityScenario.TargetClearingPos.X, ForestVisibilityScenario.TargetClearingPos.Y);
+        Require(!clearingSeen, "Clearing surrounded by dense forest must be hidden in FogOfWar.");
+
+        // Lane 2: Belts observer at (60, 205)
+        fog.UpdateUnitNow(ForestVisibilityScenario.ObserverBeltsStart, eyeHeight, sensorRange);
+        bool beltsSeen = fog.IsWorldPointSeen(ForestVisibilityScenario.TargetBehindBeltsPos.X, ForestVisibilityScenario.TargetBehindBeltsPos.Y);
+        Require(!beltsSeen, "Target behind multiple shelter belts must be hidden in FogOfWar.");
+
+        // Lane 3: Sparse forest observer at (60, 35)
+        fog.UpdateUnitNow(ForestVisibilityScenario.ObserverSparseStart, eyeHeight, sensorRange);
+        bool sparseSeen = fog.IsWorldPointSeen(ForestVisibilityScenario.TargetSparsePos.X, ForestVisibilityScenario.TargetSparsePos.Y);
+        Require(sparseSeen, "Sparse forest target within penetration limit must be seen in FogOfWar.");
+
+        // Lane 4: Open terrain observer at (60, 160)
+        fog.UpdateUnitNow(ForestVisibilityScenario.ObserverOpenStart, eyeHeight, sensorRange);
+        bool openSeen = fog.IsWorldPointSeen(ForestVisibilityScenario.TargetOpenPos.X, ForestVisibilityScenario.TargetOpenPos.Y);
+        Require(openSeen, "Open terrain target must be seen in FogOfWar.");
+
+        // Agreement checks with geometry LOS
+        System.Numerics.Vector3 eyeGround = new(ForestVisibilityScenario.ObserverGroundStart.X, map.GetHeight(ForestVisibilityScenario.ObserverGroundStart.X, ForestVisibilityScenario.ObserverGroundStart.Y) + eyeHeight, ForestVisibilityScenario.ObserverGroundStart.Y);
+        Require(edgeSeen == geo.IsLineOfSightClear(eyeGround, new System.Numerics.Vector3(ForestVisibilityScenario.TargetEdgePos.X, 1.5f, ForestVisibilityScenario.TargetEdgePos.Y)), "FogOfWar and LOS must agree on edge target.");
+        Require(!clearingSeen && !geo.IsLineOfSightClear(eyeGround, new System.Numerics.Vector3(ForestVisibilityScenario.TargetClearingPos.X, 1.5f, ForestVisibilityScenario.TargetClearingPos.Y)), "FogOfWar and LOS must agree on clearing target.");
+
+        System.Numerics.Vector3 eyeBelts = new(ForestVisibilityScenario.ObserverBeltsStart.X, map.GetHeight(ForestVisibilityScenario.ObserverBeltsStart.X, ForestVisibilityScenario.ObserverBeltsStart.Y) + eyeHeight, ForestVisibilityScenario.ObserverBeltsStart.Y);
+        Require(!beltsSeen && !geo.IsLineOfSightClear(eyeBelts, new System.Numerics.Vector3(ForestVisibilityScenario.TargetBehindBeltsPos.X, 1.5f, ForestVisibilityScenario.TargetBehindBeltsPos.Y)), "FogOfWar and LOS must agree on shelter belts target.");
+
+        System.Numerics.Vector3 eyeSparse = new(ForestVisibilityScenario.ObserverSparseStart.X, map.GetHeight(ForestVisibilityScenario.ObserverSparseStart.X, ForestVisibilityScenario.ObserverSparseStart.Y) + eyeHeight, ForestVisibilityScenario.ObserverSparseStart.Y);
+        Require(sparseSeen == geo.IsLineOfSightClear(eyeSparse, new System.Numerics.Vector3(ForestVisibilityScenario.TargetSparsePos.X, 1.5f, ForestVisibilityScenario.TargetSparsePos.Y)), "FogOfWar and LOS must agree on sparse target.");
+
+        System.Numerics.Vector3 eyeOpen = new(ForestVisibilityScenario.ObserverOpenStart.X, map.GetHeight(ForestVisibilityScenario.ObserverOpenStart.X, ForestVisibilityScenario.ObserverOpenStart.Y) + eyeHeight, ForestVisibilityScenario.ObserverOpenStart.Y);
+        Require(openSeen == geo.IsLineOfSightClear(eyeOpen, new System.Numerics.Vector3(ForestVisibilityScenario.TargetOpenPos.X, 1.5f, ForestVisibilityScenario.TargetOpenPos.Y)), "FogOfWar and LOS must agree on open target.");
     }
 
     private static void CheckBattleScenarioSovietStart()
@@ -202,6 +253,31 @@ internal static class FogOfWarRegressionTests
         }
 
         Require(allocated == 0L, $"Steady-state FogOfWarView.Update must produce 0 managed allocations, got {allocated} bytes.");
+
+        // Check steady-state zero allocations with dense forest and clearings
+        StaticGeometry forestGeo = ForestVisibilityScenario.CreateStaticGeometry();
+        using FogOfWarView forestFog = new(forestGeo.HeightMap, forestGeo);
+        UnitCatalog forestCatalog = ScenarioContent.LoadCatalog("forest-visibility");
+        ClientReplica forestReplica = new();
+        ushort brdmDef = forestCatalog.RequireDefinitionIndex("brdm2");
+        OwnUnitObservation f1 = new(new EntityId(101), brdmDef, ForestVisibilityScenario.ObserverGroundStart, 0);
+        OwnUnitObservation f2 = new(new EntityId(102), brdmDef, ForestVisibilityScenario.ObserverRidgeStart, 0);
+        Apply(forestReplica, bytes, 3, 30, [f1, f2]);
+        for (int i = 0; i < 50; i++)
+        {
+            forestFog.Update(0.016f, forestReplica, forestCatalog);
+        }
+        long forestAlloc = long.MaxValue;
+        for (int window = 0; window < 3 && forestAlloc != 0; window++)
+        {
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 100; i++)
+            {
+                forestFog.Update(0.016f, forestReplica, forestCatalog);
+            }
+            forestAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        Require(forestAlloc == 0L, $"Steady-state FogOfWarView.Update with forest must produce 0 managed allocations, got {forestAlloc} bytes.");
 
         // Measure update time with 6 units on battle map
         OwnUnitObservation[] sixUnits = new OwnUnitObservation[6];

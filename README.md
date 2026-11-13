@@ -767,6 +767,34 @@ To run the automated headless regression test for all sandbox scenarios:
 ./tools/run-client.sh --headless -- --los-sandbox --smoke-test
 ```
 
+### Vegetation visibility scenario
+
+To launch the dedicated vegetation visibility test scenario with dense forest walls, interior clearing, dual shelter belts, sparse forest, elevated ridge vantage, and open terrain comparison:
+
+```sh
+./tools/run-client.sh -- --scenario forest-visibility
+```
+
+- **F6 key**: toggles the 3D vegetation debug overlay. Wireframe boundaries delineate dense forest (green) and sparse forest (yellow) with vertical corner posts. Observation rays are drawn in green when clear and in red with a yellow hit marker when obstructed by vegetation.
+- **Visual test sequence**:
+  1. The ground scout starts outside the western 30 m forest wall at (60, 110); the target in the interior clearing at (130, 110) is hidden by vegetation attenuation (optical depth tau >= 1.0).
+  2. Order the scout forward to (115, 110) to enter the clearing; line of sight opens up and the target is detected as a live `Current` contact.
+  3. Order the scout to retreat back to (60, 110); line of sight breaks and the contact transitions to a `LastKnown` track retained behind the forest.
+- **Shelter belt attenuation**: dual 15 m shelter belts (30 m total dense forest) accumulate optical depth to block lines of sight across both belts, while a single 15 m belt remains penetrable.
+- **Elevated vantage**: an elevated observer on the western ridge (height 18 m) can look over lower forest canopies to spot ground targets when the ray stays above the canopy top.
+
+To run the automated headless smoke test for vegetation visibility:
+
+```sh
+./tools/run-client.sh --headless -- --scenario forest-visibility --smoke-test
+```
+
+To run the Ustye 5km vegetation performance benchmark:
+
+```sh
+dotnet run --project tests/Benchmarks --configuration Release -- --ustye-vegetation
+```
+
 Forward+ is the default renderer. It has been run on Apple Silicon using Metal.
 For a Compatibility comparison, pass `--rendering-method gl_compatibility` to the
 launcher. Renderer and driver must be recorded with graphics performance results.
@@ -789,12 +817,14 @@ dotnet run --project src/Game.Server --configuration Release --no-build -- --smo
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario vehicle-traffic
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario group-move
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario ustye-ground
+dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario forest-visibility
 ./tools/run-client.sh --headless -- --smoke-test
 ./tools/run-client.sh --headless -- --smoke-test --scenario recon-raid
 ./tools/run-client.sh --headless -- --smoke-test --scenario bridge-crossing
 ./tools/run-client.sh --headless -- --smoke-test --scenario vehicle-traffic
 ./tools/run-client.sh --headless -- --smoke-test --scenario group-move
 ./tools/run-client.sh --headless -- --smoke-test --scenario ustye-ground
+./tools/run-client.sh --headless -- --smoke-test --scenario forest-visibility
 ./tools/run-client.sh --headless -- --map-preview ustye --smoke-test
 ```
 

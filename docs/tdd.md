@@ -647,7 +647,23 @@ Architecture and kinematics:
 - Grounded structures: Structures marked `IsGrounded` (the default) verify at construction that their base height does not exceed the lowest terrain point under their horizontal footprint, evaluating footprint corners, interior grid vertices, and edge intersections with terrain grid lines. Elevated structures such as bridge decks declare `IsGrounded = false`.
 - Spatial index: flat uniform grid with compressed sparse row (CSR) indexing caches structure bounding boxes.
 - Zero allocation query hot paths: returns readonly struct `LineOfSightResult`.
-- Current geometric limitations: structures are modeled as axis-aligned bounding boxes (AABBs). Rotated bounding boxes (OBBs), triangle meshes, vegetation density attenuation, and dynamic entity obstacles will be integrated in later milestones.
+- Vegetation visibility attenuation:
+  - Data-driven regions (`VegetationZone`) define 2D boundary polygons, canopy height above terrain, and optical attenuation density per meter.
+  - Optical depth formula: tau = integral mu(s) ds <= 1.0. If accumulated optical depth exceeds 1.0 along the 3D ray segment, line of sight is obstructed (`ObstructionKind.Vegetation`).
+  - Default presets:
+    - Dense forest: canopy height 12.0 m, maximum penetration 25.0 m (mu = 0.04 m^-1).
+    - Sparse forest: canopy height 8.0 m, maximum penetration 75.0 m (mu ~ 0.013333 m^-1).
+  - Multi-belt accumulation: multiple shelter belts and forest fragments along the ray path accumulate optical depth sequentially.
+  - Canopy clearance: ray path segments above the local canopy elevation (ray Y > ground Y + canopy height) suffer zero attenuation (mu = 0). Elevated observers on ridges or hills can look over canopy tops to detect lower targets behind forest zones if the geometric ray stays strictly above the canopy.
+  - Separation of line of sight and line of fire: `CheckLineOfSight` and `IsLineOfSightClear` evaluate visual observation including vegetation attenuation. `CheckLineOfFire` and `IsLineOfFireClear` evaluate physical ballistic trajectories against terrain, structures, and bridges; vegetation obscures targets visually, but does not act as a physical collision obstacle for fire.
+  - Clearings and road corridors (`VegetationClearing`): roads (14 m radius), structure clearances (12 m margin), and non-forest polygons (sawmill yard, depot, towns) zero out optical attenuation so paths and open yards remain clear.
+  - Spatial indexing and vertical pruning: zones are indexed with 2D AABB bounding boxes (`MinX`, `MaxX`, `MinZ`, `MaxZ`) and a precalculated vertical upper bound cached inside `StaticGeometry`. Zone definitions remain strictly immutable and reusable across geometries.
+  - Symmetrical midpoint interval clipping: robust subsegment classification ensures bidirectional symmetry and eliminates false intervals from tangent vertex touches.
+  - Dynamic capacity context: `LineOfSightContext` provisions interval buffers dynamically based on geometry zone counts, preventing interval truncation and ensuring zone order independence.
+  - Zero managed heap allocations: 2D ray-polygon segment clipping, interval sorting, and numerical step sampling (delta s = 2.0 m) execute on stack memory or reusable context buffers without heap allocations in the query hot path.
+  - Unified line-of-sight rule: integrated into `DetectionSystem`, LastKnown confirmation rechecks, `SideWreckTracker`, and client `FogOfWarView`.
+  - Map hash canonicalization: `MatchSetup.ComputeMapHash` sorts and hashes all vegetation zones (Kind, CanopyHeight, Density, Polygon vertices) to guarantee simulation and client parity.
+- Current geometric limitations: structures are modeled as axis-aligned bounding boxes (AABBs). Rotated bounding boxes (OBBs), triangle meshes, and dynamic entity obstacles will be integrated in later milestones.
 - Scheduled server-side detection: visual sensors evaluate at 10 Hz (every 2 ticks on the 20 Hz simulation clock), distributing observers across ticks using `EntityId.Value % EvaluationIntervalTicks == tick % EvaluationIntervalTicks`. This avoids CPU spikes on any single tick while maintaining timely detection updates.
 - Spatial candidate lookup: candidate targets come from an allocation-free uniform 2D grid (`UnitSpatialGrid`), never from iterating all entities in the world. Observers query hostile candidates within their maximum sensor range using team mapping (`AreHostile` between players of different teams; friendly units on the same team are never tracked as enemy contacts).
 - Target observation points: each unit definition specifies vertical target observation points (such as lower hull and upper turret/roof). A target is considered detected if any point has an unobstructed line of sight to the observer.

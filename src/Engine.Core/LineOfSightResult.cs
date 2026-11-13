@@ -40,6 +40,9 @@ public readonly struct LineOfSightResult : IEquatable<LineOfSightResult>
     public static LineOfSightResult BlockedByStructure(StructureId structureId, Vector3 hitPoint, float distance, float rayFraction) =>
         new(false, ObstructionKind.Structure, structureId, hitPoint, distance, rayFraction);
 
+    public static LineOfSightResult BlockedByVegetation(Vector3 hitPoint, float distance, float rayFraction) =>
+        new(false, ObstructionKind.Vegetation, default, hitPoint, distance, rayFraction);
+
     public bool Equals(LineOfSightResult other) =>
         IsClear == other.IsClear &&
         ObstructionKind == other.ObstructionKind &&
@@ -68,5 +71,7 @@ public readonly struct LineOfSightResult : IEquatable<LineOfSightResult>
         ? $"Clear (Distance: {Distance:F2}m)"
         : ObstructionKind == ObstructionKind.Structure
             ? $"Blocked by {ObstructingStructureId} at {Distance:F2}m (Hit: {HitPoint})"
-            : $"Blocked by Terrain at {Distance:F2}m (Hit: {HitPoint})";
+            : ObstructionKind == ObstructionKind.Vegetation
+                ? $"Blocked by Vegetation at {Distance:F2}m (Hit: {HitPoint})"
+                : $"Blocked by Terrain at {Distance:F2}m (Hit: {HitPoint})";
 }

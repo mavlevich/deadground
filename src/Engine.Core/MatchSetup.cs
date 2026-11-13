@@ -82,14 +82,18 @@ public sealed record MatchSetup(
         OpaqueStructure[] array = geometry.Structures.ToArray();
         BridgeStructure[] bridges = geometry.Bridges.ToArray();
         TerrainObstacle[] obstacles = geometry.TerrainObstacles.ToArray();
-        return ComputeMapHash(geometry.HeightMap, array.AsSpan(), bridges.AsSpan(), obstacles.AsSpan());
+        VegetationZone[] vegetation = geometry.VegetationZones.ToArray();
+        VegetationClearing[] clearings = geometry.VegetationClearings.ToArray();
+        return ComputeMapHash(geometry.HeightMap, array.AsSpan(), bridges.AsSpan(), obstacles.AsSpan(), vegetation.AsSpan(), clearings.AsSpan());
     }
 
     public static ulong ComputeMapHash(
         HeightMap map,
         ReadOnlySpan<OpaqueStructure> structures,
         ReadOnlySpan<BridgeStructure> bridges = default,
-        ReadOnlySpan<TerrainObstacle> obstacles = default)
+        ReadOnlySpan<TerrainObstacle> obstacles = default,
+        ReadOnlySpan<VegetationZone> vegetation = default,
+        ReadOnlySpan<VegetationClearing> clearings = default)
     {
         ArgumentNullException.ThrowIfNull(map);
         ulong hash = 14695981039346656037UL;
@@ -162,6 +166,62 @@ public sealed record MatchSetup(
                 hash = HashFloat(hash, o.MaxX);
                 hash = HashFloat(hash, o.MaxZ);
                 hash = HashInt(hash, (int)o.RequiredCapability);
+            }
+        }
+
+        if (vegetation.Length > 0)
+        {
+            VegetationZone[] sortedVeg = vegetation.ToArray();
+            Array.Sort(sortedVeg, static (a, b) => string.CompareOrdinal(a.Id, b.Id));
+
+            hash = HashInt(hash, sortedVeg.Length);
+            for (int i = 0; i < sortedVeg.Length; i++)
+            {
+                VegetationZone v = sortedVeg[i];
+                hash = HashInt(hash, (int)v.Kind);
+                hash = HashFloat(hash, v.CanopyHeight);
+                hash = HashFloat(hash, v.Density);
+                hash = HashInt(hash, v.Polygon.Length);
+                for (int p = 0; p < v.Polygon.Length; p++)
+                {
+                    hash = HashFloat(hash, v.Polygon[p].X);
+                    hash = HashFloat(hash, v.Polygon[p].Y);
+                }
+            }
+        }
+
+        if (clearings.Length > 0)
+        {
+            VegetationClearing[] sortedClearings = clearings.ToArray();
+            Array.Sort(sortedClearings, static (a, b) => string.CompareOrdinal(a.Id, b.Id));
+
+            hash = HashInt(hash, sortedClearings.Length);
+            for (int i = 0; i < sortedClearings.Length; i++)
+            {
+                VegetationClearing c = sortedClearings[i];
+                hash = HashInt(hash, (int)c.Kind);
+                hash = HashFloat(hash, c.MinX);
+                hash = HashFloat(hash, c.MinZ);
+                hash = HashFloat(hash, c.MaxX);
+                hash = HashFloat(hash, c.MaxZ);
+
+                if (c.Kind == VegetationClearingKind.Polygon && c.Polygon is not null)
+                {
+                    hash = HashInt(hash, c.Polygon.Length);
+                    for (int p = 0; p < c.Polygon.Length; p++)
+                    {
+                        hash = HashFloat(hash, c.Polygon[p].X);
+                        hash = HashFloat(hash, c.Polygon[p].Y);
+                    }
+                }
+                else if (c.Kind == VegetationClearingKind.Corridor)
+                {
+                    hash = HashFloat(hash, c.SegmentA.X);
+                    hash = HashFloat(hash, c.SegmentA.Y);
+                    hash = HashFloat(hash, c.SegmentB.X);
+                    hash = HashFloat(hash, c.SegmentB.Y);
+                    hash = HashFloat(hash, c.Radius);
+                }
             }
         }
 

@@ -5,6 +5,7 @@ using DeadGround.Engine.Net;
 using DeadGround.Rules.Ops;
 using Godot;
 using NumericsVector2 = System.Numerics.Vector2;
+using NumericsVector3 = System.Numerics.Vector3;
 using Vector2 = Godot.Vector2;
 
 namespace DeadGround.Client;
@@ -85,6 +86,7 @@ void fragment() {
     private readonly ImageTexture _texture;
     private readonly Shader _shader;
     private readonly ShaderMaterial _material;
+    private readonly LineOfSightContext _losContext = new();
 
     private float _timeSinceCycleStart;
     private int _unitIndexInCycle;
@@ -508,7 +510,11 @@ void fragment() {
         float tVisible = Math.Max(tGround, tBlock);
         if (tVisible >= hInterp - 1e-4f)
         {
-            MarkSeen(cellIdx);
+            if (_geometry is null || _geometry.VegetationZones.Count == 0 ||
+                _geometry.IsVegetationClear(new NumericsVector3(x0, y0, z0), new NumericsVector3(_cellCenterX[cx], yGround, _cellCenterZ[cz]), _losContext))
+            {
+                MarkSeen(cellIdx);
+            }
         }
 
         _horizonBuffer[cellIdx] = Math.Max(hInterp, tBlock);
