@@ -43,6 +43,8 @@ public sealed class StaticGeometry
     private readonly ReadOnlyCollection<BridgeStructure> _readOnlyBridges;
     private readonly TerrainObstacle[] _terrainObstacles;
     private readonly ReadOnlyCollection<TerrainObstacle> _readOnlyTerrainObstacles;
+    private readonly VegetationZone[] _vegetationZones;
+    private readonly ReadOnlyCollection<VegetationZone> _readOnlyVegetationZones;
     private readonly int[] _cellOffsets;
     private readonly int[] _structureIndices;
     private readonly int _gridColumns;
@@ -52,10 +54,25 @@ public sealed class StaticGeometry
     public IReadOnlyList<OpaqueStructure> Structures => _readOnlyStructures;
     public IReadOnlyList<BridgeStructure> Bridges => _readOnlyBridges;
     public IReadOnlyList<TerrainObstacle> TerrainObstacles => _readOnlyTerrainObstacles;
+    public IReadOnlyList<VegetationZone> VegetationZones => _readOnlyVegetationZones;
+    public IReadOnlyList<VegetationClearing> VegetationClearings => _readOnlyVegetationClearings;
     public float StructureCellSize { get; }
 
+    private readonly VegetationClearing[] _vegetationClearings;
+    private readonly ReadOnlyCollection<VegetationClearing> _readOnlyVegetationClearings;
+    private readonly float[] _zoneMaxCanopyY;
+    private readonly int _maxVegetationIntervals;
+    private readonly int _maxZoneIntervals;
+    private readonly int _maxClearings;
+
+    [ThreadStatic]
+    private static LineOfSightContext? t_fallbackContext;
+
+    private static LineOfSightContext GetOrCreateFallbackContext() =>
+        t_fallbackContext ??= new LineOfSightContext(128);
+
     public StaticGeometry(HeightMap heightMap, ReadOnlySpan<OpaqueStructure> structures, float structureCellSize = 16.0f)
-        : this(heightMap, structures, ReadOnlySpan<BridgeStructure>.Empty, ReadOnlySpan<TerrainObstacle>.Empty, structureCellSize)
+        : this(heightMap, structures, ReadOnlySpan<BridgeStructure>.Empty, ReadOnlySpan<TerrainObstacle>.Empty, ReadOnlySpan<VegetationZone>.Empty, ReadOnlySpan<VegetationClearing>.Empty, structureCellSize)
     {
     }
 
@@ -64,6 +81,29 @@ public sealed class StaticGeometry
         ReadOnlySpan<OpaqueStructure> structures,
         ReadOnlySpan<BridgeStructure> bridges,
         ReadOnlySpan<TerrainObstacle> terrainObstacles = default,
+        float structureCellSize = 16.0f)
+        : this(heightMap, structures, bridges, terrainObstacles, ReadOnlySpan<VegetationZone>.Empty, ReadOnlySpan<VegetationClearing>.Empty, structureCellSize)
+    {
+    }
+
+    public StaticGeometry(
+        HeightMap heightMap,
+        ReadOnlySpan<OpaqueStructure> structures,
+        ReadOnlySpan<BridgeStructure> bridges,
+        ReadOnlySpan<TerrainObstacle> terrainObstacles,
+        ReadOnlySpan<VegetationZone> vegetationZones,
+        float structureCellSize = 16.0f)
+        : this(heightMap, structures, bridges, terrainObstacles, vegetationZones, ReadOnlySpan<VegetationClearing>.Empty, structureCellSize)
+    {
+    }
+
+    public StaticGeometry(
+        HeightMap heightMap,
+        ReadOnlySpan<OpaqueStructure> structures,
+        ReadOnlySpan<BridgeStructure> bridges,
+        ReadOnlySpan<TerrainObstacle> terrainObstacles,
+        ReadOnlySpan<VegetationZone> vegetationZones,
+        ReadOnlySpan<VegetationClearing> vegetationClearings,
         float structureCellSize = 16.0f)
     {
         ArgumentNullException.ThrowIfNull(heightMap);
@@ -78,6 +118,9 @@ public sealed class StaticGeometry
 
         _terrainObstacles = terrainObstacles.ToArray();
         _readOnlyTerrainObstacles = Array.AsReadOnly(_terrainObstacles);
+
+        _vegetationClearings = vegetationClearings.ToArray();
+        _readOnlyVegetationClearings = Array.AsReadOnly(_vegetationClearings);
 
         HashSet<StructureId> seenBridgeIds = new();
         for (int b = 0; b < _bridges.Length; b++)
@@ -104,6 +147,54 @@ public sealed class StaticGeometry
                     $"Terrain obstacle at index {t} ({obs.MinX:F1},{obs.MinZ:F1} .. {obs.MaxX:F1},{obs.MaxZ:F1}) exceeds map horizontal bounds [0..{heightMap.Width}, 0..{heightMap.Depth}].");
             }
         }
+
+        _vegetationZones = vegetationZones.ToArray();
+        _readOnlyVegetationZones = Array.AsReadOnly(_vegetationZones);
+        _zoneMaxCanopyY = new float[_vegetationZones.Length];
+
+        int totalIntervalEst = 0;
+        int maxZoneIntervalEst = 8;
+
+        HashSet<string> seenVegIds = new(StringComparer.Ordinal);
+        for (int v = 0; v < _vegetationZones.Length; v++)
+        {
+            VegetationZone vz = _vegetationZones[v] ?? throw new ArgumentException($"Vegetation zone at index {v} is null.");
+            if (!seenVegIds.Add(vz.Id))
+                throw new ArgumentException($"Duplicate vegetation zone ID detected: '{vz.Id}'.");
+
+            if (vz.MinX < 0 || vz.MaxX > heightMap.Width ||
+                vz.MinZ < 0 || vz.MaxZ > heightMap.Depth)
+            {
+                throw new ArgumentOutOfRangeException(nameof(vegetationZones),
+                    $"Vegetation zone {vz.Id} ({vz.MinX:F1},{vz.MinZ:F1} .. {vz.MaxX:F1},{vz.MaxZ:F1}) exceeds map horizontal bounds [0..{heightMap.Width}, 0..{heightMap.Depth}].");
+            }
+
+            // Compute maximum ground height within zone bounding box
+            int minCol = Math.Clamp((int)MathF.Floor(vz.MinX / heightMap.CellSize), 0, heightMap.Columns - 1);
+            int maxCol = Math.Clamp((int)MathF.Ceiling(vz.MaxX / heightMap.CellSize), 0, heightMap.Columns - 1);
+            int minRow = Math.Clamp((int)MathF.Floor(vz.MinZ / heightMap.CellSize), 0, heightMap.Rows - 1);
+            int maxRow = Math.Clamp((int)MathF.Ceiling(vz.MaxZ / heightMap.CellSize), 0, heightMap.Rows - 1);
+
+            float maxH = float.NegativeInfinity;
+            for (int r = minRow; r <= maxRow; r++)
+            {
+                for (int c = minCol; c <= maxCol; c++)
+                {
+                    float h = heightMap.GetHeight(c * heightMap.CellSize, r * heightMap.CellSize);
+                    if (h > maxH) maxH = h;
+                }
+            }
+            _zoneMaxCanopyY[v] = maxH + vz.CanopyHeight;
+
+            int zoneEst = Math.Max(1, vz.Polygon.Length / 2);
+            totalIntervalEst += zoneEst;
+            if (zoneEst > maxZoneIntervalEst)
+                maxZoneIntervalEst = zoneEst;
+        }
+
+        _maxVegetationIntervals = Math.Max(totalIntervalEst, 32);
+        _maxZoneIntervals = Math.Max(maxZoneIntervalEst, 8);
+        _maxClearings = _vegetationClearings.Length;
 
         // Defensive copy to ensure immutability
         _structures = new OpaqueStructure[structures.Length];
@@ -332,6 +423,85 @@ public sealed class StaticGeometry
             }
         }
 
+        if (MathF.Min(start.Y, end.Y) < HeightMap.MaxHeight - GroundTolerance)
+        {
+            if (IsInsideTerrain(start))
+            {
+                blockedByTerrain = true;
+                return false;
+            }
+
+            if (TryTraceTerrainAny(start, delta, end, totalDistance))
+            {
+                blockedByTerrain = true;
+                return false;
+            }
+        }
+
+        if (_vegetationZones.Length > 0 && TryTraceVegetation(start, delta, totalDistance, context, out _))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Checks whether physical line of fire is clear between two 3D world coordinates.
+    /// Excludes vegetation from obstructing fire.
+    /// </summary>
+    public bool IsLineOfFireClear(Vector3 start, Vector3 end) =>
+        IsLineOfFireClear(start, end, null, out _);
+
+    /// <summary>
+    /// Checks whether physical line of fire is clear between two 3D world coordinates using a caller-provided context.
+    /// Excludes vegetation from obstructing fire.
+    /// </summary>
+    public bool IsLineOfFireClear(Vector3 start, Vector3 end, LineOfSightContext? context) =>
+        IsLineOfFireClear(start, end, context, out _);
+
+    /// <summary>
+    /// Checks whether physical line of fire is clear between two 3D world coordinates, indicating if the obstruction was terrain.
+    /// Excludes vegetation from obstructing fire.
+    /// </summary>
+    public bool IsLineOfFireClear(Vector3 start, Vector3 end, LineOfSightContext? context, out bool blockedByTerrain)
+    {
+        blockedByTerrain = false;
+        if (!float.IsFinite(start.X) || !float.IsFinite(start.Y) || !float.IsFinite(start.Z) ||
+            !float.IsFinite(end.X) || !float.IsFinite(end.Y) || !float.IsFinite(end.Z))
+        {
+            throw new ArgumentException("Start and end coordinates must be finite values.");
+        }
+
+        Vector3 delta = end - start;
+        float totalDistance = delta.Length();
+
+        if (totalDistance < 1e-7f)
+        {
+            bool insideTerrain = start.Y < HeightMap.MaxHeight - GroundTolerance && IsInsideTerrain(start);
+            if (insideTerrain)
+            {
+                blockedByTerrain = true;
+                return false;
+            }
+            return _structures.Length == 0 || !TryGetContainingStructure(start, out _);
+        }
+
+        if (TryGetContainingStructure(start, out _))
+            return false;
+
+        if (_structures.Length > 0 && TryTraceAnyStructure(start, delta, totalDistance, context))
+            return false;
+
+        if (_bridges.Length > 0)
+        {
+            for (int b = 0; b < _bridges.Length; b++)
+            {
+                if (_bridges[b].TryIntersect(start, delta, totalDistance, out _))
+                    return false;
+            }
+        }
+
         if (MathF.Min(start.Y, end.Y) >= HeightMap.MaxHeight - GroundTolerance)
             return true;
 
@@ -419,6 +589,15 @@ public sealed class StaticGeometry
             }
         }
 
+        if (_vegetationZones.Length > 0 && TryTraceVegetation(start, delta, totalDistance, context, out float vegHitT))
+        {
+            if (vegHitT <= closestT + VolumeEpsilon)
+            {
+                closestT = vegHitT;
+                closestKind = ObstructionKind.Vegetation;
+            }
+        }
+
         diagnostics = new LineOfSightDiagnostics(visitedTerrainCells, visitedStructureCells, testedStructures);
 
         if (closestKind == ObstructionKind.None)
@@ -429,9 +608,104 @@ public sealed class StaticGeometry
         Vector3 hitPoint = start + delta * closestT;
         float hitDistance = closestT * totalDistance;
 
-        return closestKind == ObstructionKind.Terrain
-            ? LineOfSightResult.BlockedByTerrain(hitPoint, hitDistance, closestT)
-            : LineOfSightResult.BlockedByStructure(closestStructureId, hitPoint, hitDistance, closestT);
+        return closestKind switch
+        {
+            ObstructionKind.Terrain => LineOfSightResult.BlockedByTerrain(hitPoint, hitDistance, closestT),
+            ObstructionKind.Structure => LineOfSightResult.BlockedByStructure(closestStructureId, hitPoint, hitDistance, closestT),
+            ObstructionKind.Vegetation => LineOfSightResult.BlockedByVegetation(hitPoint, hitDistance, closestT),
+            _ => LineOfSightResult.Clear(end, totalDistance)
+        };
+    }
+
+    /// <summary>
+    /// Checks ballistic line of fire between two 3D world coordinates.
+    /// Traces solid obstacles (terrain, structures, bridges) but excludes vegetation.
+    /// Allocation-free value-type query.
+    /// </summary>
+    public LineOfSightResult CheckLineOfFire(Vector3 start, Vector3 end) =>
+        CheckLineOfFire(start, end, null, out _);
+
+    /// <summary>
+    /// Checks ballistic line of fire between two 3D world coordinates using a caller-provided context.
+    /// Excludes vegetation from obstructing fire.
+    /// </summary>
+    public LineOfSightResult CheckLineOfFire(Vector3 start, Vector3 end, LineOfSightContext? context) =>
+        CheckLineOfFire(start, end, context, out _);
+
+    /// <summary>
+    /// Checks ballistic line of fire and outputs traversal diagnostic metrics.
+    /// Excludes vegetation from obstructing fire.
+    /// </summary>
+    public LineOfSightResult CheckLineOfFire(Vector3 start, Vector3 end, out LineOfSightDiagnostics diagnostics) =>
+        CheckLineOfFire(start, end, null, out diagnostics);
+
+    /// <summary>
+    /// Checks ballistic line of fire with diagnostic metrics using an optional caller-provided context.
+    /// Excludes vegetation from obstructing fire.
+    /// </summary>
+    public LineOfSightResult CheckLineOfFire(
+        Vector3 start,
+        Vector3 end,
+        LineOfSightContext? context,
+        out LineOfSightDiagnostics diagnostics)
+    {
+        int visitedTerrainCells = 0;
+        int visitedStructureCells = 0;
+        int testedStructures = 0;
+
+        if (TryQueryPrologue(start, end, out Vector3 delta, out float totalDistance,
+            out LineOfSightResult immediateResult, out float closestT, out ObstructionKind closestKind, ref visitedTerrainCells))
+        {
+            diagnostics = new LineOfSightDiagnostics(0, 0, 0);
+            return immediateResult;
+        }
+
+        StructureId closestStructureId = default;
+
+        if (TryTraceStructures(start, delta, totalDistance, closestT, context, out float structHitT, out StructureId hitStructId,
+            ref visitedStructureCells, ref testedStructures))
+        {
+            if (structHitT <= closestT + VolumeEpsilon)
+            {
+                closestT = structHitT;
+                closestKind = ObstructionKind.Structure;
+                closestStructureId = hitStructId;
+            }
+        }
+
+        if (_bridges.Length > 0)
+        {
+            for (int b = 0; b < _bridges.Length; b++)
+            {
+                testedStructures++;
+                if (_bridges[b].TryIntersect(start, delta, totalDistance, out float bridgeHitT))
+                {
+                    if (bridgeHitT <= closestT + VolumeEpsilon)
+                    {
+                        closestT = bridgeHitT;
+                        closestKind = ObstructionKind.Structure;
+                        closestStructureId = _bridges[b].Id;
+                    }
+                }
+            }
+        }
+
+        diagnostics = new LineOfSightDiagnostics(visitedTerrainCells, visitedStructureCells, testedStructures);
+
+        if (closestKind == ObstructionKind.None)
+        {
+            return LineOfSightResult.Clear(end, totalDistance);
+        }
+
+        Vector3 hitPoint = start + delta * closestT;
+        float hitDistance = closestT * totalDistance;
+
+        return closestKind switch
+        {
+            ObstructionKind.Terrain => LineOfSightResult.BlockedByTerrain(hitPoint, hitDistance, closestT),
+            ObstructionKind.Structure => LineOfSightResult.BlockedByStructure(closestStructureId, hitPoint, hitDistance, closestT),
+            _ => LineOfSightResult.Clear(end, totalDistance)
+        };
     }
 
     /// <summary>
@@ -486,15 +760,184 @@ public sealed class StaticGeometry
             closestStructureId = bestStructId;
         }
 
+        if (_vegetationZones.Length > 0 && TryTraceVegetation(start, delta, totalDistance, null, out float vegHitT))
+        {
+            if (vegHitT <= closestT + VolumeEpsilon)
+            {
+                closestT = vegHitT;
+                closestKind = ObstructionKind.Vegetation;
+            }
+        }
+
         if (closestKind == ObstructionKind.None)
             return LineOfSightResult.Clear(end, totalDistance);
 
         Vector3 hitPoint = start + delta * closestT;
         float hitDistance = closestT * totalDistance;
 
-        return closestKind == ObstructionKind.Terrain
-            ? LineOfSightResult.BlockedByTerrain(hitPoint, hitDistance, closestT)
-            : LineOfSightResult.BlockedByStructure(closestStructureId, hitPoint, hitDistance, closestT);
+        return closestKind switch
+        {
+            ObstructionKind.Terrain => LineOfSightResult.BlockedByTerrain(hitPoint, hitDistance, closestT),
+            ObstructionKind.Structure => LineOfSightResult.BlockedByStructure(closestStructureId, hitPoint, hitDistance, closestT),
+            ObstructionKind.Vegetation => LineOfSightResult.BlockedByVegetation(hitPoint, hitDistance, closestT),
+            _ => LineOfSightResult.Clear(end, totalDistance)
+        };
+    }
+
+    /// <summary>
+    /// Evaluates vegetation optical thickness between two 3D points.
+    /// Returns true if optical thickness tau <= 1.0 (line of sight not obscured by vegetation).
+    /// Allocation-free.
+    /// </summary>
+    public bool IsVegetationClear(Vector3 start, Vector3 end, LineOfSightContext? context = null)
+    {
+        Vector3 delta = end - start;
+        float totalDist = delta.Length();
+        if (totalDist < 1e-5f)
+            return true;
+        return !TryTraceVegetation(start, delta, totalDist, context, out _);
+    }
+
+    /// <summary>
+    /// Checks whether vegetation attenuates the line of sight beyond the threshold (tau > 1.0).
+    /// If tau > 1.0, outputs true and hitT (the ray parameter where tau reached 1.0).
+    /// Allocation-free.
+    /// </summary>
+    public bool TryTraceVegetation(Vector3 start, Vector3 delta, float totalDistance, LineOfSightContext? context, out float hitT)
+    {
+        hitT = 1.0f;
+        if (_vegetationZones.Length == 0 || totalDistance < 1e-5f)
+            return false;
+
+        float rayMinX = MathF.Min(start.X, start.X + delta.X);
+        float rayMaxX = MathF.Max(start.X, start.X + delta.X);
+        float rayMinZ = MathF.Min(start.Z, start.Z + delta.Z);
+        float rayMaxZ = MathF.Max(start.Z, start.Z + delta.Z);
+        float rayMinY = MathF.Min(start.Y, start.Y + delta.Y);
+
+        Vector2 start2D = new(start.X, start.Z);
+        Vector2 end2D = new(start.X + delta.X, start.Z + delta.Z);
+
+        context ??= GetOrCreateFallbackContext();
+        context.EnsureVegetationCapacity(_maxVegetationIntervals, _maxZoneIntervals, _maxClearings);
+
+        Span<VegetationInterval> sortedIntervals = context.VegetationIntervalsBuffer.AsSpan(0, _maxVegetationIntervals);
+        Span<Vector2> zoneIntervals = context.ZoneIntervalsBuffer.AsSpan(0, _maxZoneIntervals);
+        Span<int> activeClearings = _maxClearings > 0 ? context.ClearingsBuffer.AsSpan(0, _maxClearings) : default;
+
+        int totalIntervalCount = 0;
+
+        for (int v = 0; v < _vegetationZones.Length; v++)
+        {
+            VegetationZone zone = _vegetationZones[v];
+
+            // 2D and vertical AABB rejection
+            if (rayMinX > zone.MaxX || rayMaxX < zone.MinX ||
+                rayMinZ > zone.MaxZ || rayMaxZ < zone.MinZ ||
+                rayMinY >= _zoneMaxCanopyY[v])
+            {
+                continue;
+            }
+
+            int count = zone.ClipRaySegment(start2D, end2D, zoneIntervals);
+            for (int i = 0; i < count; i++)
+            {
+                if (totalIntervalCount < sortedIntervals.Length)
+                {
+                    sortedIntervals[totalIntervalCount++] = new VegetationInterval(
+                        zoneIntervals[i].X,
+                        zoneIntervals[i].Y,
+                        zone.Density,
+                        zone.CanopyHeight);
+                }
+            }
+        }
+
+        if (totalIntervalCount == 0)
+            return false;
+
+        // Sort intervals by StartT ascending with tie-breaker on EndT for deterministic order
+        for (int i = 1; i < totalIntervalCount; i++)
+        {
+            VegetationInterval key = sortedIntervals[i];
+            int j = i - 1;
+            while (j >= 0 && (sortedIntervals[j].StartT > key.StartT ||
+                   (MathF.Abs(sortedIntervals[j].StartT - key.StartT) < 1e-6f && sortedIntervals[j].EndT > key.EndT)))
+            {
+                sortedIntervals[j + 1] = sortedIntervals[j];
+                j--;
+            }
+            sortedIntervals[j + 1] = key;
+        }
+
+        // Active clearings filter against ray bounding box
+        int activeClearingCount = 0;
+        if (_vegetationClearings.Length > 0)
+        {
+            for (int c = 0; c < _vegetationClearings.Length; c++)
+            {
+                VegetationClearing clr = _vegetationClearings[c];
+                if (rayMinX <= clr.MaxX && rayMaxX >= clr.MinX &&
+                    rayMinZ <= clr.MaxZ && rayMaxZ >= clr.MinZ)
+                {
+                    activeClearings[activeClearingCount++] = c;
+                }
+            }
+        }
+
+        // Integrate optical thickness along intervals
+        float accumulatedTau = 0.0f;
+        const float StepSize = 2.0f; // 2 meters sample spacing
+
+        for (int i = 0; i < totalIntervalCount; i++)
+        {
+            VegetationInterval interval = sortedIntervals[i];
+            float segLen = (interval.EndT - interval.StartT) * totalDistance;
+            if (segLen <= 1e-4f)
+                continue;
+
+            int steps = Math.Max(1, (int)MathF.Ceiling(segLen / StepSize));
+            float dt = (interval.EndT - interval.StartT) / steps;
+            float ds = segLen / steps;
+
+            for (int s = 0; s < steps; s++)
+            {
+                float tMid = interval.StartT + (s + 0.5f) * dt;
+                float rx = start.X + tMid * delta.X;
+                float rz = start.Z + tMid * delta.Z;
+                float ry = start.Y + tMid * delta.Y;
+
+                float groundY = HeightMap.GetHeight(rx, rz);
+                float canopyTop = groundY + interval.CanopyHeight;
+
+                // Ray is inside vegetation canopy if at or below canopy top
+                if (ry <= canopyTop)
+                {
+                    // Check if sample point is inside an active clearing
+                    bool inClearing = false;
+                    for (int c = 0; c < activeClearingCount; c++)
+                    {
+                        if (_vegetationClearings[activeClearings[c]].ContainsPoint(rx, rz))
+                        {
+                            inClearing = true;
+                            break;
+                        }
+                    }
+
+                    if (inClearing)
+                        continue;
+
+                    accumulatedTau += interval.Density * ds;
+                    if (accumulatedTau >= 1.0f)
+                    {
+                        hitT = tMid;
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
     }
 
     private bool TryQueryPrologue(

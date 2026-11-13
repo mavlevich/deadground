@@ -44,7 +44,8 @@ internal static class ClientRegressionTests
             TacticalMinimapRegressionTests.Run(scene);
             VehicleWreckRegressionTests.Run(scene);
             CheckNetworkSessionUi(scene);
-            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability combat_feedback vehicle_preview faction_vehicles rts_selection vehicle_effects cannon_sound historical_units seen_means_known fog_of_war relief contact_turrets infantry_assets order_preview visual_prewarm tactical_minimap vehicle_wrecks network_session_ui");
+            CheckForestVisibilityCleanStartup(scene);
+            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability combat_feedback vehicle_preview faction_vehicles rts_selection vehicle_effects cannon_sound historical_units seen_means_known fog_of_war relief contact_turrets infantry_assets order_preview visual_prewarm tactical_minimap vehicle_wrecks network_session_ui forest_visibility_startup");
             return true;
         }
         catch (Exception exception)
@@ -1478,6 +1479,56 @@ internal static class ClientRegressionTests
         finally
         {
             parent.QueueFree();
+        }
+    }
+
+    private static void CheckForestVisibilityCleanStartup(Node3D scene)
+    {
+        if (scene is not Main main) return;
+
+        if (main.Scenario == "forest-visibility")
+        {
+            AssertForestVisibilityUnitsClean(main.Session.Replica.OwnUnits);
+            return;
+        }
+
+        string initialScenario = main.Scenario;
+        bool initialMenuMode = main.IsMenuMode;
+
+        main.SetScenarioForTest("forest-visibility");
+        AssertForestVisibilityUnitsClean(main.Session.Replica.OwnUnits);
+
+        main._Process(0.05);
+        AssertForestVisibilityUnitsClean(main.Session.Replica.OwnUnits);
+
+        if (initialMenuMode)
+        {
+            main.LeaveCurrentMatch();
+        }
+        else
+        {
+            main.SetScenarioForTest(initialScenario);
+        }
+    }
+
+    private static void AssertForestVisibilityUnitsClean(ReadOnlySpan<OwnUnitObservation> ownUnits)
+    {
+        Require(ownUnits.Length == 5, $"forest-visibility should have 5 own units, got {ownUnits.Length}.");
+        NumericsVector2[] expected =
+        [
+            ForestVisibilityScenario.ObserverGroundStart,
+            ForestVisibilityScenario.ObserverRidgeStart,
+            ForestVisibilityScenario.ObserverBeltsStart,
+            ForestVisibilityScenario.ObserverSparseStart,
+            ForestVisibilityScenario.ObserverOpenStart,
+        ];
+        for (int i = 0; i < ownUnits.Length; i++)
+        {
+            Require(ownUnits[i].NavStatus == PathRequestStatus.None,
+                $"forest-visibility unit {i} (id {ownUnits[i].Id}) must be None on startup, but was {ownUnits[i].NavStatus}.");
+            float distSq = (ownUnits[i].Position - expected[i]).LengthSquared();
+            Require(distSq < 0.01f,
+                $"forest-visibility unit {i} (id {ownUnits[i].Id}) must remain at {expected[i]}, but was {ownUnits[i].Position} (distSq={distSq}).");
         }
     }
 

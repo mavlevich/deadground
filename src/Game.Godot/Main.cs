@@ -54,9 +54,25 @@ public partial class Main : Node3D
     private string? _screenshotOnFinishPath;
     private double _screenshotOnFinishTimer = 1.0;
     private bool _screenshotQuit;
+    private string? _forestDemoCaptureDir;
+    private int _forestDemoStage = -1;
+    private double _forestDemoTimer = 0.5;
+    private bool _forestDemoTargetSpotted;
+    private bool _forestDemoContactLost;
     private bool _showVehicleCollisionBounds;
     private readonly MeshInstance3D _collisionDebugMeshInstance = new();
     private readonly ImmediateMesh _collisionDebugMesh = new();
+    private bool _showVegetationDebug;
+    private readonly MeshInstance3D _vegetationDebugMeshInstance = new();
+    private readonly ImmediateMesh _vegetationDebugMesh = new();
+    private static readonly StandardMaterial3D VegetationDebugMaterial = new()
+    {
+        ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+        VertexColorUseAsAlbedo = true,
+        AlbedoColor = Colors.White,
+        Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+        NoDepthTest = false
+    };
     private static readonly StandardMaterial3D CollisionBoundsMaterial = new()
     {
         ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
@@ -317,6 +333,11 @@ public partial class Main : Node3D
                 {
                     _screenshotQuit = true;
                 }
+                else if (args[i] == "--forest-demo-capture" && i + 1 < args.Length)
+                {
+                    _forestDemoCaptureDir = args[i + 1];
+                    i++;
+                }
                 else if (args[i] == "--enemy-hold-fire")
                 {
                     enemyHoldFire = true;
@@ -468,6 +489,12 @@ public partial class Main : Node3D
                 _map = scenarioGeometry.HeightMap;
                 setup = UstyeRaidScenario.CreateMatchSetup(scenarioGeometry);
             }
+            else if (_scenario == "forest-visibility")
+            {
+                scenarioGeometry = ForestVisibilityScenario.CreateStaticGeometry();
+                _map = scenarioGeometry.HeightMap;
+                setup = ForestVisibilityScenario.CreateMatchSetup(scenarioGeometry);
+            }
             else
             {
                 _map = HeightMap.CreatePrototype();
@@ -507,6 +534,7 @@ public partial class Main : Node3D
                     "group-move" => GroupMoveScenario.CreateSimulation(scenarioGeometry!),
                     "ustye-ground" => UstyeGroundScenario.CreateSimulation(scenarioGeometry!, setupIndex: _ustyeSetupIndex),
                     "ustye-raid" => UstyeRaidScenario.CreateSimulation(scenarioGeometry!),
+                    "forest-visibility" => ForestVisibilityScenario.CreateSimulation(scenarioGeometry!),
                     _ => PrototypeScenario.Create(_map)
                 };
                 // Test switch: the enemy holds fire, so own units can be tried out without losing them.
@@ -566,6 +594,7 @@ public partial class Main : Node3D
             "group-move" => 140,
             "ustye-ground" => 220,
             "ustye-raid" => 160,
+            "forest-visibility" => 150,
             _ => 112
         };
         _camera = new Camera3D { Projection = Camera3D.ProjectionType.Orthogonal, Size = initialCameraSize, Far = 3500, Current = true };
@@ -581,6 +610,7 @@ public partial class Main : Node3D
             "group-move" => new Vector3(60, 0, 50),
             "ustye-ground" => new Vector3(2550f, 4.5f, 2450f),
             "ustye-raid" => new Vector3(2160f, 10f, 2325f),
+            "forest-visibility" => new Vector3(100f, 0f, 110f),
             _ => new Vector3(64, 0, 64)
         };
         _hasExplicitCameraFocus = overrideCameraFocus.HasValue;
@@ -619,7 +649,7 @@ public partial class Main : Node3D
 
         if (!_isMenuMode)
         {
-            if (_session is LocalSession && _scenario != "visibility" && _scenario != "combat" && _scenario != "navigation-large" && _scenario != "recon-raid" && _scenario != "bridge-crossing" && _scenario != "vehicle-traffic" && _scenario != "group-move" && _scenario != "ustye-ground" && _scenario != "ustye-raid")
+            if (_session is LocalSession && _scenario == "prototype")
             {
                 foreach (OwnUnitObservation unit in _session.Replica.OwnUnits)
                 {
@@ -673,12 +703,18 @@ public partial class Main : Node3D
                     _unitViews.Selected.Add(_session.Replica.OwnUnits[i].Id);
                 }
             }
+            else if (_scenario == "forest-visibility" && _session.Replica.OwnUnits.Length >= 1)
+            {
+                _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
+            }
         }
 
         _destination = new OrderDestinationView();
         AddChild(_destination);
         _collisionDebugMeshInstance.Mesh = _collisionDebugMesh;
         AddChild(_collisionDebugMeshInstance);
+        _vegetationDebugMeshInstance.Mesh = _vegetationDebugMesh;
+        AddChild(_vegetationDebugMeshInstance);
         BuildHud();
         _previewController = new OrderPreviewController(
             _destinationEvaluator,
@@ -739,6 +775,17 @@ public partial class Main : Node3D
         if (minimapDemo && _scenario == "ustye-raid" && _session is LocalSession && _screenshotPath is not null)
         {
             SetupMinimapDemo();
+        }
+
+        if (_forestDemoCaptureDir is not null && _scenario == "forest-visibility")
+        {
+            _showVegetationDebug = true;
+            _cameraRig.Model.CurrentSize = 130f;
+            _cameraRig.Model.SetZoom(130f);
+            _cameraRig.CenterOn(new Vector3(95f, 0f, 110f));
+            UpdateVegetationDebugOverlay();
+            _forestDemoStage = 0;
+            _forestDemoTimer = 0.8;
         }
 
         if (_smokeTest && !ClientRegressionTests.Run(this))
@@ -909,6 +956,7 @@ public partial class Main : Node3D
             }
             _cameraRig.Update(delta, allowInput: false);
             ProcessScreenshot(delta);
+            ProcessForestDemoCapture(delta);
             return;
         }
 
@@ -1042,6 +1090,7 @@ public partial class Main : Node3D
         }
 
         ProcessScreenshot(delta);
+        ProcessForestDemoCapture(delta);
 
         if (_screenshotOnFinishPath is not null && _missionPanel?.IsMissionFinished == true)
         {
@@ -1123,6 +1172,7 @@ public partial class Main : Node3D
                     "group-move" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length >= 10,
                     "ustye-ground" => (_terrainWindingValid || (_ustyeMapView?.HasUpwardFrontFaces() ?? false)) && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 6,
                     "ustye-raid" => (_terrainWindingValid || (_ustyeMapView?.HasUpwardFrontFaces() ?? false)) && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
+                    "forest-visibility" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 5 && CheckForestVisibilityCleanPositions(_session.Replica.OwnUnits),
                     _ => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
                         _session.Replica.OwnUnits[0].Position.Y > 24
                 };
@@ -1137,6 +1187,7 @@ public partial class Main : Node3D
                     "group-move" => "M1_CLIENT_GROUP_MOVE_SMOKE",
                     "ustye-ground" => "USTYE_GROUND_SMOKE",
                     "ustye-raid" => "USTYE_RAID_SMOKE",
+                    "forest-visibility" => "FOREST_VISIBILITY_SMOKE",
                     _ => "M0_CLIENT_SMOKE"
                 };
                 string token = prefix + (ok ? "_OK" : "_FAILED");
@@ -1146,6 +1197,25 @@ public partial class Main : Node3D
                 _smokeExitCode = ok ? 0 : 1;
             }
         }
+    }
+
+    private static bool CheckForestVisibilityCleanPositions(ReadOnlySpan<OwnUnitObservation> ownUnits)
+    {
+        if (ownUnits.Length != 5) return false;
+        NumericsVector2[] expectedPositions =
+        [
+            ForestVisibilityScenario.ObserverGroundStart,
+            ForestVisibilityScenario.ObserverRidgeStart,
+            ForestVisibilityScenario.ObserverBeltsStart,
+            ForestVisibilityScenario.ObserverSparseStart,
+            ForestVisibilityScenario.ObserverOpenStart,
+        ];
+        for (int i = 0; i < ownUnits.Length; i++)
+        {
+            if (ownUnits[i].NavStatus != PathRequestStatus.None) return false;
+            if ((ownUnits[i].Position - expectedPositions[i]).LengthSquared() > 0.01f) return false;
+        }
+        return true;
     }
 
     private void ProcessScreenshot(double delta)
@@ -1164,6 +1234,108 @@ public partial class Main : Node3D
                 _screenshotPath = null;
                 if (_screenshotQuit)
                 {
+                    GetTree().Quit(0);
+                }
+            }
+        }
+    }
+
+    private void ProcessForestDemoCapture(double delta)
+    {
+        if (_forestDemoCaptureDir is null || _forestDemoStage < 0)
+            return;
+
+        _forestDemoTimer -= delta;
+
+        if (_forestDemoStage == 0)
+        {
+            if (_forestDemoTimer <= 0)
+            {
+                Image? img = GetViewport().GetTexture().GetImage();
+                if (img is not null)
+                {
+                    string path1 = System.IO.Path.Combine(_forestDemoCaptureDir, "forest_visibility_1_before_detection.png");
+                    img.SavePng(path1);
+                    GD.Print($"FOREST_DEMO_SCREENSHOT 1: {path1}");
+                }
+
+                if (_session is LocalSession local)
+                {
+                    local.Move(new EntityId(1), new NumericsVector2(115f, 110f));
+                }
+                _forestDemoStage = 1;
+                _forestDemoTimer = 0.0;
+            }
+        }
+        else if (_forestDemoStage == 1)
+        {
+            UpdateVegetationDebugOverlay();
+            bool spotted = false;
+            foreach (ContactObservation c in _session.Replica.Contacts)
+            {
+                if (c.State == ContactState.Current && NumericsVector2.Distance(c.Position, ForestVisibilityScenario.TargetClearingPos) < 5.0f)
+                {
+                    spotted = true;
+                    break;
+                }
+            }
+
+            if (spotted)
+            {
+                if (!_forestDemoTargetSpotted)
+                {
+                    _forestDemoTargetSpotted = true;
+                    _forestDemoTimer = 0.5;
+                }
+                else if (_forestDemoTimer <= 0)
+                {
+                    Image? img = GetViewport().GetTexture().GetImage();
+                    if (img is not null)
+                    {
+                        string path2 = System.IO.Path.Combine(_forestDemoCaptureDir, "forest_visibility_2_after_detection.png");
+                        img.SavePng(path2);
+                        GD.Print($"FOREST_DEMO_SCREENSHOT 2: {path2}");
+                    }
+
+                    if (_session is LocalSession local)
+                    {
+                        local.Move(new EntityId(1), new NumericsVector2(60f, 110f));
+                    }
+                    _forestDemoStage = 2;
+                    _forestDemoTimer = 0.0;
+                }
+            }
+        }
+        else if (_forestDemoStage == 2)
+        {
+            UpdateVegetationDebugOverlay();
+            bool transitioned = false;
+            foreach (ContactObservation c in _session.Replica.Contacts)
+            {
+                if (c.State == ContactState.LastKnown && NumericsVector2.Distance(c.Position, ForestVisibilityScenario.TargetClearingPos) < 5.0f)
+                {
+                    transitioned = true;
+                    break;
+                }
+            }
+
+            if (transitioned)
+            {
+                if (!_forestDemoContactLost)
+                {
+                    _forestDemoContactLost = true;
+                    _forestDemoTimer = 0.6;
+                }
+                else if (_forestDemoTimer <= 0)
+                {
+                    Image? img = GetViewport().GetTexture().GetImage();
+                    if (img is not null)
+                    {
+                        string path3 = System.IO.Path.Combine(_forestDemoCaptureDir, "forest_visibility_3_after_contact_loss.png");
+                        img.SavePng(path3);
+                        GD.Print($"FOREST_DEMO_SCREENSHOT 3: {path3}");
+                    }
+                    _forestDemoStage = -1;
                     GetTree().Quit(0);
                 }
             }
@@ -1341,6 +1513,15 @@ public partial class Main : Node3D
             {
                 CancelActiveDrag();
                 _settingsPanel?.Toggle();
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if (key.Keycode is Key.F6)
+            {
+                _showVegetationDebug = !_showVegetationDebug;
+                _status.Text = _showVegetationDebug ? "Vegetation overlay: ON" : "Vegetation overlay: OFF";
+                UpdateVegetationDebugOverlay();
                 GetViewport().SetInputAsHandled();
                 return;
             }
@@ -1893,6 +2074,7 @@ public partial class Main : Node3D
                 _status.Text = "No selection / unit or contact removed from view";
         }
         UpdateCollisionDebugOverlay();
+        UpdateVegetationDebugOverlay();
     }
 
     private void UpdateCollisionDebugOverlay()
@@ -2003,6 +2185,152 @@ public partial class Main : Node3D
             }
             _collisionDebugMesh.SurfaceEnd();
         }
+    }
+
+    private void UpdateVegetationDebugOverlay()
+    {
+        _vegetationDebugMesh.ClearSurfaces();
+        if (!_showVegetationDebug || _scenarioGeometry is null || _map is null)
+        {
+            return;
+        }
+
+        IReadOnlyList<VegetationZone> zones = _scenarioGeometry.VegetationZones;
+        if (zones.Count == 0)
+        {
+            return;
+        }
+
+        _vegetationDebugMesh.SurfaceBegin(Mesh.PrimitiveType.Lines, VegetationDebugMaterial);
+
+        // 1. Draw vegetation zone wireframes
+        for (int z = 0; z < zones.Count; z++)
+        {
+            VegetationZone zone = zones[z];
+            ReadOnlySpan<System.Numerics.Vector2> vertices = zone.Polygon;
+            if (vertices.Length < 3) continue;
+
+            Color zoneColor = zone.Kind switch
+            {
+                VegetationKind.DenseForest => new Color(0.2f, 0.85f, 0.3f, 0.75f),
+                VegetationKind.SparseForest => new Color(0.95f, 0.8f, 0.2f, 0.75f),
+                _ => new Color(0.2f, 0.8f, 0.95f, 0.75f)
+            };
+
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                System.Numerics.Vector2 p1 = vertices[i];
+                System.Numerics.Vector2 p2 = vertices[(i + 1) % vertices.Length];
+
+                float y1 = _map.GetHeight(p1.X, p1.Y);
+                float y2 = _map.GetHeight(p2.X, p2.Y);
+                float h = zone.CanopyHeight;
+
+                Vector3 b1 = new(p1.X, y1 + 0.2f, p1.Y);
+                Vector3 b2 = new(p2.X, y2 + 0.2f, p2.Y);
+                Vector3 t1 = new(p1.X, y1 + h, p1.Y);
+                Vector3 t2 = new(p2.X, y2 + h, p2.Y);
+
+                // Ground edge
+                _vegetationDebugMesh.SurfaceSetColor(zoneColor);
+                _vegetationDebugMesh.SurfaceAddVertex(b1);
+                _vegetationDebugMesh.SurfaceAddVertex(b2);
+
+                // Canopy edge
+                _vegetationDebugMesh.SurfaceSetColor(zoneColor);
+                _vegetationDebugMesh.SurfaceAddVertex(t1);
+                _vegetationDebugMesh.SurfaceAddVertex(t2);
+
+                // Vertical corner edge
+                _vegetationDebugMesh.SurfaceSetColor(zoneColor);
+                _vegetationDebugMesh.SurfaceAddVertex(b1);
+                _vegetationDebugMesh.SurfaceAddVertex(t1);
+            }
+        }
+
+        // 2. Draw observation rays
+        ReadOnlySpan<OwnUnitObservation> ownUnits = _session.Replica.OwnUnits;
+        if (ownUnits.Length > 0)
+        {
+            OwnUnitObservation observer = ownUnits[0];
+            for (int u = 0; u < ownUnits.Length; u++)
+            {
+                if (_unitViews.Selected.Contains(ownUnits[u].Id))
+                {
+                    observer = ownUnits[u];
+                    break;
+                }
+            }
+
+            float obsGround = _map.GetHeight(observer.Position.X, observer.Position.Y);
+            System.Numerics.Vector3 eye = new(observer.Position.X, obsGround + 2.0f, observer.Position.Y);
+
+            Span<System.Numerics.Vector2> targets = stackalloc System.Numerics.Vector2[5];
+            int targetCount = 0;
+
+            if (_scenario == "forest-visibility")
+            {
+                targets[0] = ForestVisibilityScenario.TargetEdgePos;
+                targets[1] = ForestVisibilityScenario.TargetClearingPos;
+                targets[2] = ForestVisibilityScenario.TargetBehindBeltsPos;
+                targets[3] = ForestVisibilityScenario.TargetSparsePos;
+                targets[4] = ForestVisibilityScenario.TargetOpenPos;
+                targetCount = 5;
+            }
+
+            for (int t = 0; t < targetCount; t++)
+            {
+                System.Numerics.Vector2 targetPos = targets[t];
+                float tgtGround = _map.GetHeight(targetPos.X, targetPos.Y);
+                System.Numerics.Vector3 targetEye = new(targetPos.X, tgtGround + 2.0f, targetPos.Y);
+
+                LineOfSightResult los = _scenarioGeometry.CheckLineOfSight(eye, targetEye);
+
+                Vector3 startGodot = new(eye.X, eye.Y, eye.Z);
+                Vector3 endGodot = new(targetEye.X, targetEye.Y, targetEye.Z);
+
+                if (los.IsClear)
+                {
+                    Color clearColor = new(0.2f, 0.95f, 0.3f, 0.9f);
+                    _vegetationDebugMesh.SurfaceSetColor(clearColor);
+                    _vegetationDebugMesh.SurfaceAddVertex(startGodot);
+                    _vegetationDebugMesh.SurfaceAddVertex(endGodot);
+                }
+                else
+                {
+                    Vector3 hitGodot = new(los.HitPoint.X, los.HitPoint.Y, los.HitPoint.Z);
+
+                    Color blockedColor = new(0.95f, 0.2f, 0.2f, 0.9f);
+                    _vegetationDebugMesh.SurfaceSetColor(blockedColor);
+                    _vegetationDebugMesh.SurfaceAddVertex(startGodot);
+                    _vegetationDebugMesh.SurfaceAddVertex(hitGodot);
+
+                    Color shadowColor = new(0.5f, 0.1f, 0.1f, 0.35f);
+                    _vegetationDebugMesh.SurfaceSetColor(shadowColor);
+                    _vegetationDebugMesh.SurfaceAddVertex(hitGodot);
+                    _vegetationDebugMesh.SurfaceAddVertex(endGodot);
+
+                    Color hitColor = los.ObstructionKind == ObstructionKind.Vegetation
+                        ? new Color(0.95f, 0.85f, 0.2f, 0.95f)
+                        : new Color(0.95f, 0.2f, 0.2f, 0.95f);
+
+                    float mSize = 0.5f;
+                    _vegetationDebugMesh.SurfaceSetColor(hitColor);
+                    _vegetationDebugMesh.SurfaceAddVertex(new Vector3(hitGodot.X - mSize, hitGodot.Y, hitGodot.Z));
+                    _vegetationDebugMesh.SurfaceAddVertex(new Vector3(hitGodot.X + mSize, hitGodot.Y, hitGodot.Z));
+
+                    _vegetationDebugMesh.SurfaceSetColor(hitColor);
+                    _vegetationDebugMesh.SurfaceAddVertex(new Vector3(hitGodot.X, hitGodot.Y - mSize, hitGodot.Z));
+                    _vegetationDebugMesh.SurfaceAddVertex(new Vector3(hitGodot.X, hitGodot.Y + mSize, hitGodot.Z));
+
+                    _vegetationDebugMesh.SurfaceSetColor(hitColor);
+                    _vegetationDebugMesh.SurfaceAddVertex(new Vector3(hitGodot.X, hitGodot.Y, hitGodot.Z - mSize));
+                    _vegetationDebugMesh.SurfaceAddVertex(new Vector3(hitGodot.X, hitGodot.Y, hitGodot.Z + mSize));
+                }
+            }
+        }
+
+        _vegetationDebugMesh.SurfaceEnd();
     }
 
     public override void _Notification(int what)
@@ -2395,6 +2723,28 @@ public partial class Main : Node3D
             Simulation localSimulation = BattleScenario.CreateSimulation(scenarioGeometry);
             _session = new LocalSession(localSimulation, player: 1);
         }
+        else if (scenarioName == "ustye-raid")
+        {
+            scenarioGeometry = UstyeRaidScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = UstyeRaidScenario.CreateMatchSetup(scenarioGeometry);
+            _matchSetup = setup;
+            _scenarioGeometry = scenarioGeometry;
+            _catalog = ScenarioContent.LoadCatalog("ustye-raid");
+            Simulation localSimulation = UstyeRaidScenario.CreateSimulation(scenarioGeometry);
+            _session = new LocalSession(localSimulation, player: 1);
+        }
+        else if (scenarioName == "forest-visibility")
+        {
+            scenarioGeometry = ForestVisibilityScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = ForestVisibilityScenario.CreateMatchSetup(scenarioGeometry);
+            _matchSetup = setup;
+            _scenarioGeometry = scenarioGeometry;
+            _catalog = ScenarioContent.LoadCatalog("forest-visibility");
+            Simulation localSimulation = ForestVisibilityScenario.CreateSimulation(scenarioGeometry);
+            _session = new LocalSession(localSimulation, player: 1);
+        }
         else
         {
             throw new ArgumentException($"Unsupported test scenario: {scenarioName}");
@@ -2408,12 +2758,16 @@ public partial class Main : Node3D
         {
             "battle" => new Vector3(BattleScenario.SovietStart.X, 0, BattleScenario.SovietStart.Y),
             "recon-raid" => new Vector3(100, 0, 100),
+            "ustye-raid" => new Vector3(2160f, 10f, 2325f),
+            "forest-visibility" => new Vector3(100f, 0f, 110f),
             _ => new Vector3(64, 0, 64)
         };
         float initialCameraSize = scenarioName switch
         {
             "battle" => 160f,
             "recon-raid" => 160f,
+            "ustye-raid" => 160f,
+            "forest-visibility" => 150f,
             _ => 112f
         };
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
@@ -2605,6 +2959,7 @@ public partial class Main : Node3D
             "group-move" => "GROUP MOVE PLAYGROUND",
             "ustye-ground" => "USTYE PLAYGROUND",
             "ustye-raid" => "USTYE RECON RAID",
+            "forest-visibility" => "FOREST VISIBILITY POLYGON",
             _ => "M0 NETWORK TEST"
         };
         return $"DEAD GROUND   /   SIDE {assignedSide}   /   {name}";
@@ -2652,6 +3007,11 @@ public partial class Main : Node3D
                 2 => new Vector3(BattleScenario.UsStart.X, 0f, BattleScenario.UsStart.Y),
                 _ => fallbackFocus
             };
+        }
+
+        if (scenario == "forest-visibility")
+        {
+            return new Vector3(100f, 0f, 110f);
         }
 
         return fallbackFocus;

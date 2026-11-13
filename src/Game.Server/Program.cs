@@ -99,6 +99,7 @@ StaticGeometry? scenarioGeometry = scenario switch
     "group-move" => GroupMoveScenario.CreateStaticGeometry(),
     "ustye-ground" => UstyeGroundScenario.CreateStaticGeometry(),
     "ustye-raid" => UstyeRaidScenario.CreateStaticGeometry(),
+    "forest-visibility" => ForestVisibilityScenario.CreateStaticGeometry(),
     _ => null
 };
 
@@ -118,6 +119,7 @@ MatchSetup setup = scenario switch
     "group-move" => GroupMoveScenario.CreateMatchSetup(scenarioGeometry!),
     "ustye-ground" => UstyeGroundScenario.CreateMatchSetup(scenarioGeometry!),
     "ustye-raid" => UstyeRaidScenario.CreateMatchSetup(scenarioGeometry!),
+    "forest-visibility" => ForestVisibilityScenario.CreateMatchSetup(scenarioGeometry!),
     _ => PrototypeScenario.CreateMatchSetup(map)
 };
 
@@ -149,6 +151,7 @@ Simulation CreateSimulation(ulong seed = 0)
         "group-move" => GroupMoveScenario.CreateSimulation(scenarioGeometry!),
         "ustye-ground" => UstyeGroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "ustye-raid" => UstyeRaidScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
+        "forest-visibility" => ForestVisibilityScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         _ => PrototypeScenario.Create(map)
     };
 }
@@ -260,6 +263,16 @@ if (smokeTest)
             throw new InvalidOperationException("Ustye-raid smoke test initial mission status mismatch.");
 
         Console.WriteLine($"USTYE_RAID_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} mission_status={session.Mission.Status}");
+        return;
+    }
+
+    if (scenario == "forest-visibility")
+    {
+        for (int i = 0; i < 20; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.Replica.OwnUnits.Length != 5)
+            throw new InvalidOperationException("Forest-visibility smoke test: expected 5 own units.");
+
+        Console.WriteLine($"FOREST_VISIBILITY_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length}");
         return;
     }
 

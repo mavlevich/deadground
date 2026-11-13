@@ -55,6 +55,12 @@ if (args.Length > 0 && (args[0] == "--tank-battle" || args[0] == "--tank-battle-
     return;
 }
 
+if (args.Length > 0 && (args[0] == "--ustye-vegetation" || args[0] == "--vegetation"))
+{
+    RunUstyeVegetationBenchmark();
+    return;
+}
+
 if (args.Length > 0 && args[0] == "--probe")
 {
     RunProbe();
@@ -1655,6 +1661,139 @@ static void RunTankBattleWreckBenchmark()
     Console.WriteLine($"Total Wrecks Created: {sim.World.WreckCount} (bounded by MaxWrecks={WorldState.MaxWrecks})");
     Console.WriteLine($"Final Snapshot Size: Soviet={sovietSnapshotBytes[3599]} B, US={usSnapshotBytes[3599]} B (Wreck payload: {sovietWrecks[3599] * WireProtocol.WreckSize} B)");
     Console.WriteLine("TANK_BATTLE_WRECKS_BENCHMARK_OK");
+}
+
+static void RunUstyeVegetationBenchmark()
+{
+    Console.WriteLine("=== USTYE VEGETATION VISIBILITY BENCHMARK ===");
+
+    // 1. StaticGeometry loading time and memory comparison
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    GC.Collect();
+
+    long memBeforeNoVeg = GC.GetTotalMemory(true);
+    Stopwatch swNoVeg = Stopwatch.StartNew();
+    StaticGeometry geoNoVeg = UstyeGroundScenario.CreateStaticGeometry(includeVegetation: false);
+    swNoVeg.Stop();
+    long memAfterNoVeg = GC.GetTotalMemory(true);
+    long memNoVegBytes = Math.Max(0, memAfterNoVeg - memBeforeNoVeg);
+
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    GC.Collect();
+
+    long memBeforeVeg = GC.GetTotalMemory(true);
+    Stopwatch swVeg = Stopwatch.StartNew();
+    StaticGeometry geoVeg = UstyeGroundScenario.CreateStaticGeometry(includeVegetation: true);
+    swVeg.Stop();
+    long memAfterVeg = GC.GetTotalMemory(true);
+    long memVegBytes = Math.Max(0, memAfterVeg - memBeforeVeg);
+
+    Console.WriteLine($"[1] StaticGeometry Ustye Loading:");
+    Console.WriteLine($"    Without vegetation: {swNoVeg.ElapsedMilliseconds} ms, ~{memNoVegBytes / 1024 / 1024} MB ({memNoVegBytes} B)");
+    Console.WriteLine($"    With vegetation ({geoVeg.VegetationZones.Count} zones): {swVeg.ElapsedMilliseconds} ms, ~{memVegBytes / 1024 / 1024} MB ({memVegBytes} B)");
+    Console.WriteLine($"    Vegetation delta: +{swVeg.ElapsedMilliseconds - swNoVeg.ElapsedMilliseconds} ms, +{(memVegBytes - memNoVegBytes) / 1024} KB");
+
+    // 2. Ray query throughput
+    const int RayQueries = 50_000;
+    Console.WriteLine($"\n[2] Ray Query Throughput ({RayQueries:N0} queries):");
+
+    // Open terrain
+    Vector3 openStart = new(2000f, 10f, 2000f);
+    Vector3 openEnd = new(2100f, 10f, 2100f);
+    long allocStart = GC.GetAllocatedBytesForCurrentThread();
+    Stopwatch swOpen = Stopwatch.StartNew();
+    int openHits = 0;
+    for (int i = 0; i < RayQueries; i++)
+    {
+        if (geoVeg.IsLineOfSightClear(openStart, openEnd)) openHits++;
+    }
+    swOpen.Stop();
+    long allocOpen = GC.GetAllocatedBytesForCurrentThread() - allocStart;
+    double openThroughput = RayQueries / swOpen.Elapsed.TotalSeconds;
+    Console.WriteLine($"    Open terrain: {openThroughput:N0} rays/s ({swOpen.ElapsedMilliseconds} ms), alloc={allocOpen} B");
+
+    // Forest edge (shallow penetration)
+    VegetationZone woodZone = geoVeg.VegetationZones[0];
+    Vector2 center = (new Vector2(woodZone.MinX, woodZone.MinZ) + new Vector2(woodZone.MaxX, woodZone.MaxZ)) * 0.5f;
+    Vector3 edgeStart = new(woodZone.MinX - 10f, geoVeg.HeightMap.GetHeight(woodZone.MinX - 10f, center.Y) + 1.5f, center.Y);
+    Vector3 edgeEnd = new(woodZone.MinX + 15f, geoVeg.HeightMap.GetHeight(woodZone.MinX + 15f, center.Y) + 1.5f, center.Y);
+    allocStart = GC.GetAllocatedBytesForCurrentThread();
+    Stopwatch swEdge = Stopwatch.StartNew();
+    int edgeHits = 0;
+    for (int i = 0; i < RayQueries; i++)
+    {
+        if (geoVeg.IsLineOfSightClear(edgeStart, edgeEnd)) edgeHits++;
+    }
+    swEdge.Stop();
+    long allocEdge = GC.GetAllocatedBytesForCurrentThread() - allocStart;
+    double edgeThroughput = RayQueries / swEdge.Elapsed.TotalSeconds;
+    Console.WriteLine($"    Forest edge (shallow): {edgeThroughput:N0} rays/s ({swEdge.ElapsedMilliseconds} ms), alloc={allocEdge} B");
+
+    // Deep in forest
+    Vector3 deepStart = new(woodZone.MinX - 10f, geoVeg.HeightMap.GetHeight(woodZone.MinX - 10f, center.Y) + 1.5f, center.Y);
+    Vector3 deepEnd = new(woodZone.MinX + 100f, geoVeg.HeightMap.GetHeight(woodZone.MinX + 100f, center.Y) + 1.5f, center.Y);
+    allocStart = GC.GetAllocatedBytesForCurrentThread();
+    Stopwatch swDeep = Stopwatch.StartNew();
+    int deepHits = 0;
+    for (int i = 0; i < RayQueries; i++)
+    {
+        if (geoVeg.IsLineOfSightClear(deepStart, deepEnd)) deepHits++;
+    }
+    swDeep.Stop();
+    long allocDeep = GC.GetAllocatedBytesForCurrentThread() - allocStart;
+    double deepThroughput = RayQueries / swDeep.Elapsed.TotalSeconds;
+    Console.WriteLine($"    Forest deep (attenuated): {deepThroughput:N0} rays/s ({swDeep.ElapsedMilliseconds} ms), alloc={allocDeep} B");
+
+    // 3. Simulation 300 ticks
+    Console.WriteLine($"\n[3] Simulation 300 Ticks on Ustye (Raid Scenario):");
+    RunSimulationTicksBenchmark("With Vegetation (current)", geoVeg);
+    RunSimulationTicksBenchmark("Without Vegetation (baseline/main)", geoNoVeg);
+}
+
+static void RunSimulationTicksBenchmark(string label, StaticGeometry geometry)
+{
+    UnitCatalog catalog = ColdWarContent.LoadCatalog();
+    using Simulation sim = UstyeRaidScenario.CreateSimulation(geometry, catalog);
+    sim.SetPlayerAdmitted(1, true);
+    sim.SetPlayerAdmitted(2, true);
+
+    const int totalTicks = 300;
+    double[] tickDurations = new double[totalTicks];
+    long[] tickAllocations = new long[totalTicks];
+
+    // Warmup 5 ticks
+    for (int w = 0; w < 5; w++)
+    {
+        sim.Step();
+    }
+
+    for (int t = 0; t < totalTicks; t++)
+    {
+        long allocBefore = GC.GetAllocatedBytesForCurrentThread();
+        long start = Stopwatch.GetTimestamp();
+
+        sim.Step();
+
+        long elapsedTicks = Stopwatch.GetTimestamp() - start;
+        long allocAfter = GC.GetAllocatedBytesForCurrentThread();
+
+        tickDurations[t] = elapsedTicks * 1000.0 / Stopwatch.Frequency;
+        tickAllocations[t] = allocAfter - allocBefore;
+    }
+
+    Array.Sort(tickDurations);
+    double p50 = tickDurations[(int)(totalTicks * 0.50)];
+    double p95 = tickDurations[(int)(totalTicks * 0.95)];
+    double p99 = tickDurations[(int)(totalTicks * 0.99)];
+    double max = tickDurations[^1];
+    long totalAlloc = 0;
+    for (int i = 0; i < totalTicks; i++) totalAlloc += tickAllocations[i];
+
+    Console.WriteLine($"    {label}:");
+    Console.WriteLine($"        Tick time: p50={p50:F3} ms, p95={p95:F3} ms, p99={p99:F3} ms, max={max:F3} ms");
+    Console.WriteLine($"        Allocations: {totalAlloc} B total over {totalTicks} ticks ({totalAlloc / (double)totalTicks:F1} B/tick)");
 }
 
 internal static class GroupBenchmarkHelpers

@@ -56,7 +56,7 @@ public static class UstyeGroundScenario
         return new HeightMap(HeightMapResolution, HeightMapResolution, HeightMapSpacing, 0.01f, heights);
     }
 
-    public static StaticGeometry CreateStaticGeometry(UstyePlanData? plan = null, HeightMap? map = null)
+    public static StaticGeometry CreateStaticGeometry(UstyePlanData? plan = null, HeightMap? map = null, bool includeVegetation = true)
     {
         plan ??= UstyePlanData.Load();
         map ??= CreateHeightMap(plan);
@@ -185,11 +185,73 @@ public static class UstyeGroundScenario
             }
         }
 
+        // 4. Vegetation zones (dense_forest, sparse_forest) from layout.json
+        List<VegetationZone> vegetation = [];
+        List<VegetationClearing> clearings = [];
+        if (includeVegetation)
+        {
+            foreach (UstyePlanData.Region reg in plan.Regions)
+            {
+                if (reg.Kind == "dense_forest")
+                {
+                    vegetation.Add(VegetationZone.CreateDenseForest(reg.Id, reg.Polygon));
+                }
+                else if (reg.Kind == "sparse_forest")
+                {
+                    vegetation.Add(VegetationZone.CreateSparseForest(reg.Id, reg.Polygon));
+                }
+                else
+                {
+                    // Non-forest regions (TIMBER-AREA, DEPOT-AREA, TOWN-WEST, TOWN-EAST, DG-W)
+                    clearings.Add(VegetationClearing.CreatePolygon(reg.Id, reg.Polygon));
+                }
+            }
+
+            // Structures: 12m clearance around each structure
+            foreach (UstyePlanData.Structure st in plan.Structures)
+            {
+                clearings.Add(VegetationClearing.CreateBox(
+                    $"{st.Id}-clearance",
+                    st.Min.X - 12f,
+                    st.Min.Y - 12f,
+                    st.Min.X + st.Size.X + 12f,
+                    st.Min.Y + st.Size.Y + 12f));
+            }
+
+            // Roads: 14m corridor around road polylines
+            foreach (UstyePlanData.Road road in plan.Roads)
+            {
+                for (int i = 0; i < road.Points.Length - 1; i++)
+                {
+                    clearings.Add(VegetationClearing.CreateCorridor(
+                        $"{road.Id}-{i}",
+                        road.Points[i],
+                        road.Points[i + 1],
+                        14f));
+                }
+            }
+
+            // Access roads: 14m corridor around access road polylines
+            foreach (UstyePlanData.Road access in plan.AccessRoads)
+            {
+                for (int i = 0; i < access.Points.Length - 1; i++)
+                {
+                    clearings.Add(VegetationClearing.CreateCorridor(
+                        $"{access.Id}-{i}",
+                        access.Points[i],
+                        access.Points[i + 1],
+                        14f));
+                }
+            }
+        }
+
         return new StaticGeometry(
             map,
             structures.ToArray(),
             bridges.ToArray(),
-            waterObstacles.ToArray());
+            waterObstacles.ToArray(),
+            vegetation.ToArray(),
+            clearings.ToArray());
     }
 
     private static float SampleSplineXAtZ(IReadOnlyList<Vector2> spline, float z)
