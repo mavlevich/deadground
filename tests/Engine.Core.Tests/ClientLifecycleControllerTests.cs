@@ -76,7 +76,7 @@ public sealed class ClientLifecycleControllerTests
 
     [Theory]
     [InlineData("Connection rejected: ServerFull", "Server is full (maximum 2 players).")]
-    [InlineData("Connection rejected: ProtocolVersionMismatch", "Protocol version mismatch with server. Server requires protocol v23.")]
+    [InlineData("Connection rejected: ProtocolVersionMismatch", "Protocol version mismatch with server. Server requires protocol v24.")]
     [InlineData("Connection rejected: ContentMismatch", "Game content mismatch with server.")]
     [InlineData("Connection rejected: MapMismatch", "Map mismatch with server.")]
     [InlineData("Connection rejected: RuleSetMismatch", "Rule set mismatch with server.")]

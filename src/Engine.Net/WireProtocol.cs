@@ -703,7 +703,7 @@ public static class WireProtocol
 
             if (contactId.Value == 0 ||
                 stateByte is not ((byte)ContactState.Current or (byte)ContactState.LastKnown) ||
-                classByte > (byte)ContactClassification.Apc ||
+                classByte > (byte)ContactClassification.Infantry ||
                 !float.IsFinite(position.X) || !float.IsFinite(position.Y) ||
                 lastSeenTick < 0 || lastSeenTick > tick ||
                 !frame.ContactIndices.TryAdd(contactId, i))

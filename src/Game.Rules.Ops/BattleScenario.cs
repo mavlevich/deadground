@@ -18,12 +18,12 @@ public static class ColdWarContent
 // cannot run on the server with one catalog and on the client with another.
 public static class ScenarioContent
 {
-    public static bool UsesColdWarContent(string scenario) => scenario == "battle" || scenario == "vehicle-traffic" || scenario == "group-move" || scenario == "ustye-ground" || scenario == "ustye-raid" || scenario == "forest-visibility";
+    public static bool UsesColdWarContent(string scenario) => scenario == "battle" || scenario == "vehicle-traffic" || scenario == "group-move" || scenario == "ustye-ground" || scenario == "ustye-raid" || scenario == "forest-visibility" || scenario == "infantry-playground";
 
     public static UnitCatalog LoadCatalog(string scenario) =>
         scenario switch
         {
-            "battle" or "vehicle-traffic" or "group-move" or "ustye-ground" or "ustye-raid" or "forest-visibility" => ColdWarContent.LoadCatalog(),
+            "battle" or "vehicle-traffic" or "group-move" or "ustye-ground" or "ustye-raid" or "forest-visibility" or "infantry-playground" => ColdWarContent.LoadCatalog(),
             "bridge-crossing" => BridgeCrossingScenario.LoadCatalog(),
             _ => PrototypeScenario.LoadCatalog()
         };

@@ -20,6 +20,7 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
     // Own faction from the match setup; read when a view is created, after the side is assigned.
     private readonly Func<string?>? _factionProvider = factionProvider;
     private readonly UnitCatalog? _catalog;
+    public UnitCatalog? Catalog => _catalog;
     private float _cameraSize;
     private Basis _healthBarBasis;
     private bool _hasHealthBarBasis;
@@ -90,6 +91,39 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
         return definition < catalog.Units.Length ? catalog.Units[definition].Id : null;
     }
 
+    internal static string? GetDefaultClassification(ushort definition)
+    {
+        UnitCatalog catalog = DefaultCatalog.Value;
+        if (definition < catalog.Units.Length)
+            return catalog.Units[definition].Classification;
+
+        UnitCatalog cw = ColdWarContent.LoadCatalog();
+        if (definition < cw.Units.Length)
+            return cw.Units[definition].Classification;
+
+        return null;
+    }
+
+    internal static string? GetDefaultClassification(string? unitId)
+    {
+        if (unitId is null) return null;
+        UnitCatalog catalog = DefaultCatalog.Value;
+        for (int i = 0; i < catalog.Units.Length; i++)
+        {
+            if (string.Equals(catalog.Units[i].Id, unitId, StringComparison.OrdinalIgnoreCase))
+                return catalog.Units[i].Classification;
+        }
+
+        UnitCatalog cw = ColdWarContent.LoadCatalog();
+        for (int i = 0; i < cw.Units.Length; i++)
+        {
+            if (string.Equals(cw.Units[i].Id, unitId, StringComparison.OrdinalIgnoreCase))
+                return cw.Units[i].Classification;
+        }
+
+        return null;
+    }
+
     internal static UnitCatalog GetDefaultCatalog() => DefaultCatalog.Value;
 
     internal static (float SensorRange, float WeaponRange) GetRanges(UnitCatalog catalog, ushort definition)
@@ -120,9 +154,11 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
             _present.Add(unit.Id);
             if (!Views.TryGetValue(unit.Id, out UnitView? view))
             {
+                UnitCatalog effectiveCatalog = _catalog ?? DefaultCatalog.Value;
                 string? unitId = _unitIdProvider is null ? GetDefaultUnitId(unit.Definition) : _unitIdProvider(unit.Definition);
-                view = new UnitView(unitId, _factionProvider?.Invoke());
-                var (sensorRange, weaponRange) = GetRanges(_catalog ?? DefaultCatalog.Value, unit.Definition);
+                string? classification = unit.Definition < effectiveCatalog.Units.Length ? effectiveCatalog.Units[unit.Definition].Classification : null;
+                view = new UnitView(unitId, _factionProvider?.Invoke(), classification);
+                var (sensorRange, weaponRange) = GetRanges(effectiveCatalog, unit.Definition);
                 view.ConfigureRanges(sensorRange, weaponRange, map);
                 view.UpdateLod(_cameraSize);
                 Views.Add(unit.Id, view);
@@ -137,6 +173,10 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
             replica.SampleYaws(unit.Id, renderTick, out float turretYaw, out float hullHeading);
             view.SetHullHeading(hullHeading);
             view.SetTurretYaw(turretYaw);
+            if (unit.AttackStatus == AttackExecutionStatus.Aiming || unit.ReloadTicksRemaining > 0 || unit.TargetContactId.Value != 0)
+            {
+                view.SetAiming(true);
+            }
             int maxHealth = _maxHealthProvider?.Invoke(unit.Definition) ?? GetDefaultMaxHealth(unit.Definition);
             view.UpdateHealth(unit.Health, maxHealth);
             view.SetSelected(Selected.Contains(unit.Id));

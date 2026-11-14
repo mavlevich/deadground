@@ -8,6 +8,11 @@ internal sealed class ContactView
     public Node3D Root { get; } = new();
     public ContactObservation Observation { get; private set; }
 
+    private static readonly StringName AnimIdle = "Idle";
+    private static readonly StringName AnimWalk = "Walk";
+    private static readonly StringName AnimRun = "Run";
+    private static readonly StringName AnimAimStanding = "AimStanding";
+
     private readonly MeshInstance3D _ghostBase;
     private readonly MeshInstance3D _selection;
 
@@ -15,6 +20,12 @@ internal sealed class ContactView
     // Found once per model: a tree search per frame and per shot would cost every visible contact.
     private Node3D? _turret;
     private Node3D? _muzzle;
+    private AnimationPlayer? _animPlayer;
+    private string _currentAnim = "";
+    private StringName? _currentAnimName;
+    private float _aimingTimer;
+    private Vector3 _prevPos;
+    private bool _hasPrevPos;
     private ushort _currentModelType = ushort.MaxValue;
     private ContactClassification _currentModelClassification = ContactClassification.Unknown;
 
@@ -23,6 +34,22 @@ internal sealed class ContactView
     internal MeshInstance3D GhostBase => _ghostBase;
     internal ushort CurrentModelType => _currentModelType;
     internal ContactClassification CurrentModelClassification => _currentModelClassification;
+    internal string CurrentAnimation => _currentAnim;
+    internal AnimationPlayer? AnimationPlayer => _animPlayer;
+
+    public void SetAiming(bool aiming)
+    {
+        if (aiming) _aimingTimer = 0.8f;
+    }
+
+    public void PlayAnimation(string clipName)
+    {
+        if (_animPlayer is not null && _animPlayer.HasAnimation(clipName))
+        {
+            _animPlayer.Play(clipName);
+            _currentAnim = clipName;
+        }
+    }
 
     private readonly Func<string?>? _hostileFaction;
     private readonly Func<ushort, string?>? _unitIdProvider;
@@ -73,7 +100,26 @@ internal sealed class ContactView
         float turretYaw, float hullHeading)
     {
         Observation = contact;
-        Root.Position = new Vector3(position.X, groundY, position.Y);
+        Vector3 newPos = new(position.X, groundY, position.Y);
+        float speed = 0f;
+        if (_hasPrevPos)
+        {
+            Vector3 deltaPos = newPos - _prevPos;
+            deltaPos.Y = 0;
+            speed = deltaPos.Length() / Simulation.TickSeconds;
+        }
+        _prevPos = newPos;
+        _hasPrevPos = true;
+        Root.Position = newPos;
+
+        if (_aimingTimer > 0f)
+        {
+            _aimingTimer = MathF.Max(0f, _aimingTimer - Simulation.TickSeconds);
+        }
+
+        bool isInfantry = contact.Classification == ContactClassification.Infantry;
+        _selection.Scale = isInfantry ? new Vector3(0.35f, 0.15f, 0.35f) : new Vector3(1, 0.15f, 1);
+        _ghostBase.Scale = isInfantry ? new Vector3(0.5f, 0.15f, 0.5f) : new Vector3(1, 0.15f, 1);
 
         if (contact.State == ContactState.Current)
         {
@@ -93,15 +139,48 @@ internal sealed class ContactView
                     Root.AddChild(_enemyModel);
                     _turret = _enemyModel.FindChild("TurretYaw", recursive: true, owned: false) as Node3D;
                     _muzzle = _enemyModel.FindChild("Muzzle", recursive: true, owned: false) as Node3D;
+                    _animPlayer = _enemyModel.FindChild("AnimationPlayer", recursive: true, owned: false) as AnimationPlayer;
+                    if (_muzzle is null && isInfantry)
+                    {
+                        Node3D mNode = new() { Name = "Muzzle", Position = new Vector3(0, 1.35f, -0.6f) };
+                        _enemyModel.AddChild(mNode);
+                        _muzzle = mNode;
+                    }
                 }
             }
 
             if (_enemyModel is not null)
             {
                 _enemyModel.Visible = true;
-                _enemyModel.Rotation = new Vector3(0, hullHeading, 0);
+                bool isAiming = _aimingTimer > 0f || MathF.Abs(Mathf.Wrap(turretYaw - hullHeading, -Mathf.Pi, Mathf.Pi)) > 0.05f;
+                float yaw = (isInfantry && isAiming && speed < 0.15f) ? turretYaw : hullHeading;
+                _enemyModel.Rotation = new Vector3(0, yaw, 0);
                 if (_turret is not null)
                     _turret.Rotation = new Vector3(0, Mathf.Wrap(turretYaw - hullHeading, -Mathf.Pi, Mathf.Pi), 0);
+
+                if (_animPlayer is not null)
+                {
+                    StringName targetAnimName = speed >= 2.2f ? AnimRun : (speed >= 0.15f ? AnimWalk : (isAiming ? AnimAimStanding : AnimIdle));
+                    if (_currentAnimName != targetAnimName && _animPlayer.HasAnimation(targetAnimName))
+                    {
+                        _animPlayer.Play(targetAnimName);
+                        _currentAnimName = targetAnimName;
+                        _currentAnim = targetAnimName.ToString();
+                    }
+
+                    if (targetAnimName == AnimWalk)
+                    {
+                        _animPlayer.SpeedScale = MathF.Max(0.1f, speed / 1.5f);
+                    }
+                    else if (targetAnimName == AnimRun)
+                    {
+                        _animPlayer.SpeedScale = MathF.Max(0.1f, speed / 3.5f);
+                    }
+                    else
+                    {
+                        _animPlayer.SpeedScale = 1.0f;
+                    }
+                }
             }
         }
         else
@@ -137,9 +216,14 @@ internal sealed class ContactView
             Root.RemoveChild(_enemyModel);
             _enemyModel.QueueFree();
             _enemyModel = null;
+            _turret = null;
+            _muzzle = null;
+            _animPlayer = null;
+            _currentAnim = "";
+            _currentAnimName = null;
+            _aimingTimer = 0f;
+            _hasPrevPos = false;
         }
-        _turret = null;
-        _muzzle = null;
         _currentModelType = ushort.MaxValue;
         _currentModelClassification = ContactClassification.Unknown;
     }

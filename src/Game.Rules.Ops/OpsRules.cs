@@ -255,6 +255,7 @@ public sealed class OpsPerceptionCatalog : IUnitPerceptionCatalog
                 "tank" => ContactClassification.Tank,
                 "recon" or "recon_vehicle" => ContactClassification.Recon,
                 "apc" => ContactClassification.Apc,
+                "infantry" => ContactClassification.Infantry,
                 "vehicle" => ContactClassification.Vehicle,
                 _ => ContactClassification.Vehicle
             };
@@ -295,8 +296,7 @@ public sealed class OpsMovementCatalog : IUnitMovementCatalog
             UnitDefinition unit = catalog.Units[i];
             TraversabilityCapabilities caps = unit.Capabilities;
             if (caps == TraversabilityCapabilities.DefaultVehicle &&
-                (string.Equals(unit.Classification, "infantry", StringComparison.OrdinalIgnoreCase) ||
-                 string.Equals(unit.Classification, "foot", StringComparison.OrdinalIgnoreCase)))
+                string.Equals(unit.Classification, "infantry", StringComparison.OrdinalIgnoreCase))
             {
                 caps = TraversabilityCapabilities.Foot;
             }
@@ -345,7 +345,9 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
                     ? WeaponPresentationKind.MachineGun
                     : string.Equals(w.PresentationKind, "cannon", StringComparison.OrdinalIgnoreCase)
                         ? WeaponPresentationKind.Cannon
-                        : throw new InvalidOperationException($"Unsupported presentation_kind '{w.PresentationKind}'.");
+                        : string.Equals(w.PresentationKind, "rifle", StringComparison.OrdinalIgnoreCase)
+                            ? WeaponPresentationKind.Rifle
+                            : throw new InvalidOperationException($"Unsupported presentation_kind '{w.PresentationKind}'.");
 
                 ushort presId = WeaponPresentation.MakeId(kind, presIdCounter++);
 
@@ -390,7 +392,8 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
                 unit.ArmorRear,
                 unit.FrontSectorAngle > 0f ? unit.FrontSectorAngle : 90f,
                 unit.RearSectorAngle > 0f ? unit.RearSectorAngle : 90f);
-            _profiles[i] = new UnitCombatProfile(unit.MaxHealth, weapon, unit.TurretTraverseRate, armor, unit.Radius > 0f ? unit.Radius : 1.0f);
+            bool leavesWreck = !string.Equals(unit.Classification, "infantry", StringComparison.OrdinalIgnoreCase);
+            _profiles[i] = new UnitCombatProfile(unit.MaxHealth, weapon, unit.TurretTraverseRate, armor, unit.Radius > 0f ? unit.Radius : 1.0f, leavesWreck);
         }
     }
 
@@ -483,7 +486,8 @@ public static class PrototypeScenario
                 if (string.IsNullOrWhiteSpace(weapon.PresentationKind))
                     throw new InvalidOperationException("Missing required weapon presentation_kind.");
                 if (!string.Equals(weapon.PresentationKind, "cannon", StringComparison.OrdinalIgnoreCase) &&
-                    !string.Equals(weapon.PresentationKind, "machine_gun", StringComparison.OrdinalIgnoreCase))
+                    !string.Equals(weapon.PresentationKind, "machine_gun", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(weapon.PresentationKind, "rifle", StringComparison.OrdinalIgnoreCase))
                 {
                     throw new InvalidOperationException($"Unknown weapon presentation_kind '{weapon.PresentationKind}'.");
                 }
@@ -645,10 +649,19 @@ public static class PrototypeScenario
         for (int i = 0; i < units.Length; i++)
         {
             UnitDefinition unit = units[i];
-            if (unit is null || unit.SpeedOffroad == 0f) continue;
-            if (unit.Speed != 0f)
-                throw new InvalidOperationException($"Unit '{unit.Id}' gives both speed and speed_offroad.");
-            units[i] = unit with { Speed = unit.SpeedOffroad };
+            if (unit is null) continue;
+            if (unit.SpeedOffroad != 0f)
+            {
+                if (unit.Speed != 0f)
+                    throw new InvalidOperationException($"Unit '{unit.Id}' gives both speed and speed_offroad.");
+                unit = unit with { Speed = unit.SpeedOffroad };
+            }
+            if (unit.Capabilities == TraversabilityCapabilities.DefaultVehicle &&
+                string.Equals(unit.Classification, "infantry", StringComparison.OrdinalIgnoreCase))
+            {
+                unit = unit with { Capabilities = TraversabilityCapabilities.Foot };
+            }
+            units[i] = unit;
         }
         return data with { Units = units };
     }

@@ -19,6 +19,7 @@ Gameplay tuning differences are marked "balance, revisit after play".
 | M113A1 | 2 + 11 [9] | 12.3 t [10] | 64 km/h, 17.8 m/s [9] | 35 km/h, 9.7 m/s, estimate | 15 km/h, 4.2 m/s, estimate | 5.8 km/h [10] | 36.0 deg/s, estimate | 22 / 15 / 15 mm RHA equiv, estimate [10] | 20 / 12 / 12 mm RHA equiv |
 | BRDM-2 | 4 [11] | 7.0 t [11] | 95 km/h, 26.4 m/s [11] | 40 km/h, 11.1 m/s, estimate | 15 km/h, 4.2 m/s, estimate | 10 km/h [11] | 45.0 deg/s, estimate | 14 / 7 / 5 mm [11] | 16 / 8 / 5 mm |
 | M151A2 | 1 + 3 | 1.1 t [14] | 106 km/h, 29.4 m/s, estimate | 50 km/h, 13.9 m/s, estimate | 15 km/h, 4.2 m/s, estimate | no | 60.0 deg/s, estimate | none (0 / 0 / 0 mm) [14] | none (0 / 0 / 0 mm) |
+| US Rifleman | 1 | 0.08 t, estimate | 14.4 km/h, 4.0 m/s, estimate | 11.5 km/h, 3.2 m/s, estimate | 5.4 km/h, 1.5 m/s, estimate | no | 360.0 deg/s, estimate | none (0 / 0 / 0 mm) | none (0 / 0 / 0 mm) |
 
 ## Weapons
 
@@ -30,6 +31,7 @@ Gameplay tuning differences are marked "balance, revisit after play".
 | 14.5 mm KPVT | BTR-70, BRDM-2 | 1,000 m, game value ([8] gives 2,000 m against ground targets) | 15.0 deg/s, estimate | 15.0 deg/s | 32 mm (500 m) / 20 mm (1,000 m), unverified, no checked source | 34 mm (0 m) / 18 mm (1,000 m) | 500 rounds [8], 5 rounds per burst, 1.5 s interval, estimate | 500 rounds, 5 rounds per burst, 1.5 s interval | BPU-1 turret manual handwheel traverse (estimate: 24.0 s for full 360 deg turn under combat conditions). B-32 API figures of 32 mm at 500 m and 20 mm at 1,000 m are widely quoted but were not found in a checked source. Penetration tuned for APC balance; balance, revisit after play. |
 | 12.7 mm M2HB | M113A1 | 1,000 m, estimate | 30.0 deg/s, estimate | 30.0 deg/s | 25.4 mm (200 m) / 13 mm (1,000 m), unverified, no checked source | 28 mm (0 m) / 14 mm (1,000 m) | 2,000 rounds [10], 5 rounds per burst, 1.5 s interval, estimate | 2,000 rounds, 5 rounds per burst, 1.5 s interval | M13 cupola manual traverse (estimate: 12.0 s for full 360 deg turn). .50 cal AP M2 / M8 API figures of 25.4 mm at 200 m and about 13 mm at 1,000 m were not found in a checked source. Penetration tuned for APC balance; balance, revisit after play. |
 | 7.62 mm M60 MG | M151A2 | 800 m, estimate | 60.0 deg/s, estimate | 60.0 deg/s | 9.0 mm (0-100 m) / 4.0 mm (800 m), estimate, no checked source | 9.0 mm (0 m) / 4.0 mm (800 m) | 1,000 rounds, 5 rounds per burst, 1.5 s interval, estimate | 1,000 rounds, 5 rounds per burst, 1.5 s interval | Pedestal pintle mount, manual traverse (mount type not verified; estimate: 6.0 s for full 360 deg turn). 7.62 mm NATO M80 Ball / M61 AP penetration is an estimate. Added for armed recon balance; balance, revisit after play. |
+| 5.56 mm M16A1 rifle | US Rifleman | 400 m [18] | 0.0 deg/s (instant body aim) | 0.0 deg/s | 3.0 mm (0 m) / 1.0 mm (400 m), estimate | 3.0 mm (0 m) / 1.0 mm (400 m) | 210 rounds [18], 3 rounds per burst, 1.0 s interval | 210 rounds, 3 rounds per burst, 1.0 s interval | Standard US service rifle firing 5.56x45mm M193 ball. Instant body aiming (0.0 deg/s traverse rate). Standard basic combat load: 7 x 30-round magazines (210 rounds). Penetration of mild steel helmet/plate estimated at 3 mm point blank falling to 1 mm at 400 m. Non-penetrating against armored fighting vehicles. |
 
 ## Fire accuracy and dispersion
 
@@ -44,11 +46,12 @@ Period gunnery data: FM 17-12 Tank Gunnery [12] gives stationary tank gun first-
 | 14.5 mm KPVT | BTR-70, BRDM-2 | 200: 0.88, 500: 0.68, 800: 0.48, 1000: 0.35 | 3.5 | 0.15 | 0.06 / 0.18 | Estimate for 5-round bursts against vehicle targets; manual turret mount. |
 | 12.7 mm M2HB | M113A1 | 200: 0.88, 500: 0.68, 800: 0.48, 1000: 0.35 | 3.8 | 0.15 | 0.06 / 0.18 | Estimate for 5-round bursts against vehicle targets; cupola mount. |
 | 7.62 mm M60 MG | M151A2 | 200: 0.82, 400: 0.60, 600: 0.42, 800: 0.28 | 4.0 | 0.15 | 0.05 / 0.15 | Estimate for 5-round bursts against vehicle targets; pintle mount. |
+| 5.56 mm M16A1 rifle | US Rifleman | 50: 0.95, 100: 0.85, 200: 0.65, 300: 0.45, 400: 0.25 | 1.5 | 0.15 | 0.05 / 0.15 | Estimate based on qualification standards in FM 23-9 (1974), Table 3-1 [18]; point target qualification marksmanship with iron sights. |
 
 ## Placement estimates
 
-These numbers place sensors and targets on the hull. They come from the vehicle heights and widths
-above and from our models, not from a period table.
+These numbers place sensors and targets on the hull or human body. They come from the vehicle heights and widths
+above, human anthropometric data, and from our models, not from a period table.
 
 | Type | Eye height | Target points (low, high) | Muzzle height | Radius (half width) |
 |---|---|---|---|---|
@@ -58,13 +61,14 @@ above and from our models, not from a period table.
 | M113A1 | 2.2 m | 0.8, 2.3 m | 2.1 m | 1.35 m |
 | BRDM-2 | 2.0 m | 0.8, 2.1 m | 1.9 m | 1.2 m |
 | M151A2 | 1.8 m | 0.6, 1.5 m | 1.4 m | 0.85 m |
+| US Rifleman | 1.6 m | 0.6, 1.4 m | 1.35 m | 0.4 m |
 
 Health and damage with armor rules (TDD section 12.3): tanks 100 health, APCs and BRDM-2 50 health,
-M151A2 30 health. Tank guns deal 50 damage on penetration. Heavy machine guns fire 5-round bursts
+M151A2 30 health, US Rifleman 15 health. Tank guns deal 50 damage on penetration. Heavy machine guns fire 5-round bursts
 dealing 10 damage per penetrating burst. Light machine guns fire 5-round bursts dealing 5 damage per
-penetrating burst. Partial bursts scale damage proportionally to rounds fired. Non-penetrating hits
-deal zero damage. Hull and turret share armor values in M1 as a documented simplification. Contact
-tracking in `units.json` (memory, correlation gate) is gameplay tuning for kilometer distances, not period data.
+penetrating burst. Service rifles fire 3-round bursts dealing 5 damage per penetrating burst. Partial bursts scale
+damage proportionally to rounds fired. Non-penetrating hits deal zero damage. Hull and turret share armor values in M1
+as a documented simplification. Contact tracking in `units.json` (memory, correlation gate) is gameplay tuning for kilometer distances, not period data.
 
 ## Detection starting values (estimates)
 
@@ -78,6 +82,7 @@ dust, smoke and weather reduce them later (section 10).
 | Reconnaissance vehicle, halted, with optics | 3,000 m |
 | Tank, buttoned up | 2,000 m |
 | APC | 1,500 m |
+| Foot soldier, unmagnified naked eye | 1,000 m |
 
 ## Duel ranges and balance (pinned in tests)
 
@@ -146,6 +151,7 @@ Balance, revisit after play.
   M113A1: 36.0 deg/s, pivot yes, min radius 0.0 m, accel 2.5 m/s^2 (estimate), decel 4.5 m/s^2 (estimate).
   BRDM-2: 45.0 deg/s, pivot no, min radius 7.5 m (estimate, turning circle ~15 m [11]), accel 3.5 m/s^2 (estimate), decel 5.5 m/s^2 (estimate).
   M151A2: 60.0 deg/s, pivot no, min radius 5.5 m (estimate, turning radius ~5.5 m [14]), accel 4.0 m/s^2 (estimate), decel 6.0 m/s^2 (estimate).
+  US Rifleman: 360.0 deg/s (human instant turn on foot), pivot yes, min radius 0.0 m, accel 12.0 m/s^2 (sprint burst), decel 16.0 m/s^2.
   Prototype units: prototype_vehicle (pivot yes, min radius 0.0 m, reverse 3.0 m/s, accel 3.0, decel 5.0), recon_vehicle (pivot no, min radius 5.0 m, reverse 3.5 m/s, accel 4.0, decel 6.0), prototype_tank (pivot yes, min radius 0.0 m, reverse 2.5 m/s, accel 2.0, decel 4.0), apc (pivot yes, min radius 0.0 m, reverse 3.2 m/s, accel 2.5, decel 4.5). All values without direct historical sources are gameplay estimates.
 
 ## Sources
@@ -170,3 +176,4 @@ Balance, revisit after play.
 15. US Army TRADOC bulletin on Soviet tanks (DTIC ADA392790): https://apps.dtic.mil/sti/pdfs/ADA392790.pdf (T-62 electric powered traverse full 360 deg in 20.0 s gives 18.0 deg/s)
 16. Wikipedia, U-5TS: https://en.wikipedia.org/wiki/U-5TS
 17. Warrior Maven, M60 Patton: https://warriormaven.com/land/m60-patton-tank (normal sustained firing rate 6 to 8 rounds per minute, giving 8.5 s reload)
+18. FM 23-9, M16A1 Rifle and Rifle Marksmanship (1974), Table 3-1 (qualification course standards and target exposures)

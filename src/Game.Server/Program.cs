@@ -81,6 +81,30 @@ if (diagnose)
     return;
 }
 
+string[] validScenarios =
+[
+    "prototype",
+    "visibility",
+    "navigation",
+    "navigation-large",
+    "combat",
+    "recon-raid",
+    "battle",
+    "bridge-crossing",
+    "vehicle-traffic",
+    "group-move",
+    "ustye-ground",
+    "ustye-raid",
+    "forest-visibility",
+    "infantry-playground"
+];
+
+if (!validScenarios.Contains(scenario))
+{
+    Console.Error.WriteLine($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}");
+    throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}");
+}
+
 if (scenario == "recon-raid" || scenario == "ustye-raid")
 {
     maxClients = 1;
@@ -100,7 +124,9 @@ StaticGeometry? scenarioGeometry = scenario switch
     "ustye-ground" => UstyeGroundScenario.CreateStaticGeometry(),
     "ustye-raid" => UstyeRaidScenario.CreateStaticGeometry(),
     "forest-visibility" => ForestVisibilityScenario.CreateStaticGeometry(),
-    _ => null
+    "infantry-playground" => InfantryPlaygroundScenario.CreateStaticGeometry(),
+    "prototype" => null,
+    _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
 };
 
 // Scenarios with geometry carry their own map; build it only once.
@@ -120,7 +146,9 @@ MatchSetup setup = scenario switch
     "ustye-ground" => UstyeGroundScenario.CreateMatchSetup(scenarioGeometry!),
     "ustye-raid" => UstyeRaidScenario.CreateMatchSetup(scenarioGeometry!),
     "forest-visibility" => ForestVisibilityScenario.CreateMatchSetup(scenarioGeometry!),
-    _ => PrototypeScenario.CreateMatchSetup(map)
+    "infantry-playground" => InfantryPlaygroundScenario.CreateMatchSetup(scenarioGeometry!),
+    "prototype" => PrototypeScenario.CreateMatchSetup(map),
+    _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
 };
 
 ulong matchSeed;
@@ -152,7 +180,9 @@ Simulation CreateSimulation(ulong seed = 0)
         "ustye-ground" => UstyeGroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "ustye-raid" => UstyeRaidScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "forest-visibility" => ForestVisibilityScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
-        _ => PrototypeScenario.Create(map)
+        "infantry-playground" => InfantryPlaygroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
+        "prototype" => PrototypeScenario.Create(map),
+        _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
     };
 }
 
@@ -273,6 +303,24 @@ if (smokeTest)
             throw new InvalidOperationException("Forest-visibility smoke test: expected 5 own units.");
 
         Console.WriteLine($"FOREST_VISIBILITY_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length}");
+        return;
+    }
+
+    if (scenario == "infantry-playground")
+    {
+        for (int i = 0; i < 20; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.Replica.OwnUnits.Length != 4)
+            throw new InvalidOperationException($"Infantry-playground smoke test: expected 4 own units, got {session.Replica.OwnUnits.Length}.");
+
+        EntityId mover = session.Replica.OwnUnits[0].Id;
+        Vector2 startPos = session.Replica.OwnUnits[0].Position;
+        session.Move(mover, startPos + new Vector2(30f, 0f));
+        for (int i = 0; i < 80; i++) session.Advance(1d / Simulation.TickRate);
+        Vector2 endPos = session.Replica.SamplePosition(mover, session.Replica.LatestTick);
+        if (Vector2.Distance(startPos, endPos) < 2f)
+            throw new InvalidOperationException($"Infantry-playground smoke test: unit did not move. start={startPos} end={endPos}");
+
+        Console.WriteLine($"INFANTRY_PLAYGROUND_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} moved={Vector2.Distance(startPos, endPos):F1}");
         return;
     }
 

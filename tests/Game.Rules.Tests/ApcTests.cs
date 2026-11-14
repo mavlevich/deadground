@@ -48,7 +48,7 @@ public sealed class ApcTests
         ContactObservation contact = new(new ContactId(7), ContactState.Current, ContactClassification.Apc, 0, new Vector2(40f, 50f), 3);
 
         int size = WireProtocol.WriteSnapshot(bytes, 1, 3, [], [contact], []);
-        bytes[WireProtocol.SnapshotHeaderSize + 5] = (byte)ContactClassification.Apc + 1;
+        bytes[WireProtocol.SnapshotHeaderSize + 5] = (byte)ContactClassification.Infantry + 1;
 
         Assert.False(replica.TryApply(bytes.AsSpan(0, size)));
     }

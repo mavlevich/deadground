@@ -258,7 +258,8 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         ContactClassification.Tank => 0,
         ContactClassification.Apc => 1,
         ContactClassification.Recon => 2,
-        _ => 3
+        ContactClassification.Infantry => 3,
+        _ => 4
     };
 
     public static float NormalizeYaw(float yaw)
@@ -1146,14 +1147,24 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
             if (!alreadyDestroyed)
             {
                 TotalUnitsDestroyed++;
-                WreckState wreck = world.AddWreck(
-                    targetUnit.Definition,
-                    targetUnit.Position,
-                    targetUnit.SupportSurface,
-                    victimCs.HullHeading,
-                    victimCs.TurretYaw,
-                    tick,
-                    targetUnit.Owner);
+                bool leavesWreck = true;
+                if (_combatCatalog is not null && _combatCatalog.TryGetProfile(targetUnit.Definition, out UnitCombatProfile victimProfile))
+                {
+                    leavesWreck = victimProfile.LeavesWreck;
+                }
+
+                WreckState wreck = default;
+                if (leavesWreck)
+                {
+                    wreck = world.AddWreck(
+                        targetUnit.Definition,
+                        targetUnit.Position,
+                        targetUnit.SupportSurface,
+                        victimCs.HullHeading,
+                        victimCs.TurretYaw,
+                        tick,
+                        targetUnit.Owner);
+                }
 
                 RecordDestroyedEvent(
                     tick,
@@ -1164,7 +1175,10 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                     targetUnit.SupportSurface,
                     wreck.Id);
 
-                _detection.NotifyWreckCreated(wreck, targetUnit.Owner, targetUnit.Id);
+                if (leavesWreck)
+                {
+                    _detection.NotifyWreckCreated(wreck, targetUnit.Owner, targetUnit.Id);
+                }
 
                 if (_destroyedCount < _destroyedBuffer.Length)
                 {

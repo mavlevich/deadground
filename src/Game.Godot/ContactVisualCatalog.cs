@@ -21,9 +21,10 @@ internal static class ContactVisualCatalog
                     ContactClassification.Recon => "EnemyReconModel",
                     ContactClassification.Apc => "EnemyApcModel",
                     ContactClassification.CommandVehicle => "EnemyCommandVehicleModel",
+                    ContactClassification.Infantry => "EnemyInfantryModel",
                     _ => "EnemyVehicleModel"
                 };
-                AttachHostileAffiliationMarker(visual.Root);
+                AttachHostileAffiliationMarker(visual.Root, classification == ContactClassification.Infantry);
                 return visual.Root;
             }
         }
@@ -34,6 +35,7 @@ internal static class ContactVisualCatalog
             ContactClassification.Recon => CreateEnemyModel("contact_recon", "EnemyReconModel", hostileFaction),
             ContactClassification.Apc => CreateEnemyModel("contact_apc", "EnemyApcModel", hostileFaction),
             ContactClassification.CommandVehicle => CreateEnemyCommandVehicleModel(),
+            ContactClassification.Infantry => CreateEnemyModel("contact_infantry", "EnemyInfantryModel", hostileFaction, isInfantry: true),
             ContactClassification.Vehicle => CreateEnemyGenericVehicleModel(),
             _ => null
         };
@@ -48,12 +50,12 @@ internal static class ContactVisualCatalog
         return visual.Root;
     }
 
-    private static Node3D CreateEnemyModel(string visualId, string name, string? hostileFaction)
+    private static Node3D CreateEnemyModel(string visualId, string name, string? hostileFaction, bool isInfantry = false)
     {
         VehicleVisual visual = VehicleVisualCatalog.InstantiateVisual(visualId, hostileFaction)
             ?? throw new InvalidOperationException($"visuals.json has no {visualId} entry for enemy contact presentation.");
         visual.Root.Name = name;
-        AttachHostileAffiliationMarker(visual.Root);
+        AttachHostileAffiliationMarker(visual.Root, isInfantry);
         return visual.Root;
     }
 
@@ -147,14 +149,16 @@ internal static class ContactVisualCatalog
         return model;
     }
 
-    private static void AttachHostileAffiliationMarker(Node3D model)
+    private static void AttachHostileAffiliationMarker(Node3D model, bool isInfantry = false)
     {
         // Ground-level hostile affiliation diamond/bracket to distinguish enemy models from own models
+        Vector3 boxSize = isInfantry ? new Vector3(0.9f, 0.04f, 0.9f) : new Vector3(2.8f, 0.08f, 2.8f);
+        float posY = isInfantry ? 0.03f : 0.06f;
         MeshInstance3D hostileBase = new()
         {
             Name = "HostileAffiliationMarker",
-            Mesh = new BoxMesh { Size = new Vector3(2.8f, 0.08f, 2.8f) },
-            Position = new Vector3(0, 0.06f, 0),
+            Mesh = new BoxMesh { Size = boxSize },
+            Position = new Vector3(0, posY, 0),
             Rotation = new Vector3(0, Mathf.DegToRad(45), 0),
             MaterialOverride = new StandardMaterial3D
             {

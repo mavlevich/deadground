@@ -391,8 +391,8 @@ public sealed class BattleMatchResultTests
     {
         StaticGeometry geometry = BattleScenario.CreateStaticGeometry();
         MatchSetup serverSetup = BattleScenario.CreateMatchSetup(geometry);
-        Assert.Equal(23, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(23, serverSetup.ProtocolVersion);
+        Assert.Equal(24, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(24, serverSetup.ProtocolVersion);
 
         using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
         int port = serverTransport.Port;
@@ -403,6 +403,35 @@ public sealed class BattleMatchResultTests
         // Client configured with legacy protocol version 22 (before Draw was added)
         MatchSetup v22ClientSetup = serverSetup with { ProtocolVersion = 22 };
         using ClientSession client = ClientSession.Connect("127.0.0.1", port, v22ClientSetup);
+
+        for (int i = 0; i < 150 && client.State != SessionConnectionState.Failed; i++)
+        {
+            host.Advance(1d / Simulation.TickRate);
+            client.Advance(1d / Simulation.TickRate);
+            Thread.Sleep(5);
+        }
+
+        Assert.Equal(SessionConnectionState.Failed, client.State);
+        Assert.Contains("ProtocolVersionMismatch", client.StatusDescription);
+    }
+
+    [Fact]
+    public void LegacyVersion23Client_ConnectingToCurrentServer_IsRejectedWithProtocolMismatch()
+    {
+        StaticGeometry geometry = BattleScenario.CreateStaticGeometry();
+        MatchSetup serverSetup = BattleScenario.CreateMatchSetup(geometry);
+        Assert.Equal(24, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(24, serverSetup.ProtocolVersion);
+
+        using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
+        int port = serverTransport.Port;
+
+        Simulation simulation = BattleScenario.CreateSimulation(geometry);
+        using SimulationHost host = new(simulation, serverTransport, serverSetup);
+
+        // Client configured with legacy protocol version 23 (before Infantry wire values were added)
+        MatchSetup v23ClientSetup = serverSetup with { ProtocolVersion = 23 };
+        using ClientSession client = ClientSession.Connect("127.0.0.1", port, v23ClientSetup);
 
         for (int i = 0; i < 150 && client.State != SessionConnectionState.Failed; i++)
         {

@@ -57,8 +57,18 @@ internal sealed class UnitView
     private Vector3 _previousPosition;
     private bool _hasPosition;
     internal Node3D Model { get; }
+    private static readonly StringName AnimIdle = "Idle";
+    private static readonly StringName AnimWalk = "Walk";
+    private static readonly StringName AnimRun = "Run";
+    private static readonly StringName AnimAimStanding = "AimStanding";
+
     internal string? UnitId { get; }
     internal bool HasVehicleModel { get; }
+    internal bool IsInfantry { get; }
+    private readonly AnimationPlayer? _animPlayer;
+    private string _currentAnim = "";
+    private StringName? _currentAnimName;
+    private float _aimingTimer;
     internal int ActiveLod => _activeLod;
     internal int LodCount => _rigs.Length;
     internal float LeftTrackTravel => _leftTrackTravel;
@@ -66,16 +76,45 @@ internal sealed class UnitView
     internal float RockAngle => _rockAngle;
     internal GpuParticles3D? LeftDust => _dust[0];
     internal float DustSpeed => _dustSpeed;
+    internal void SetDustSpeedForTesting(float speed)
+    {
+        _dustSpeed = speed;
+        _distanceSinceEffects = speed * 0.016f;
+    }
+    internal string CurrentAnimation => _currentAnim;
+    internal AnimationPlayer? AnimationPlayer => _animPlayer;
 
-    public UnitView(ushort definition = 0) : this(UnitViewSet.GetDefaultUnitId(definition)) { }
+    public void SetAiming(bool aiming)
+    {
+        if (aiming)
+        {
+            _aimingTimer = 0.8f;
+        }
+    }
 
-    public UnitView(string? unitId, string? faction = null)
+    public void PlayAnimation(string clipName)
+    {
+        StringName name = clipName;
+        if (_animPlayer is not null && _animPlayer.HasAnimation(name))
+        {
+            _animPlayer.Play(name);
+            _currentAnim = clipName;
+            _currentAnimName = name;
+        }
+    }
+
+    public UnitView(ushort definition = 0) : this(UnitViewSet.GetDefaultUnitId(definition), classification: UnitViewSet.GetDefaultClassification(definition)) { }
+
+    public UnitView(string? unitId, string? faction = null, string? classification = null)
     {
         UnitId = unitId;
+        classification ??= UnitViewSet.GetDefaultClassification(unitId);
+        IsInfantry = string.Equals(classification, "infantry", StringComparison.OrdinalIgnoreCase);
         VehicleVisual? visual = VehicleVisualCatalog.InstantiateVisual(unitId, faction);
         HasVehicleModel = visual is not null;
         Model = visual?.Root ?? new Node3D { Name = "PlaceholderModel" };
         _visual = visual;
+        _animPlayer = Model.FindChild("AnimationPlayer", recursive: true, owned: false) as AnimationPlayer;
         _trackGauge = visual?.TrackGauge ?? 0f;
         _trackWrap = visual?.TrackWrap ?? 0f;
         Root.AddChild(Model);
@@ -86,6 +125,13 @@ internal sealed class UnitView
         _gunPitch = lod0.GunPitch;
         _barrelRecoil = lod0.BarrelRecoil;
         _muzzle = lod0.Muzzle;
+        if (_muzzle is null && IsInfantry)
+        {
+            Node3D mNode = new() { Name = "Muzzle", Position = new Vector3(0, 1.35f, -0.6f) };
+            Model.AddChild(mNode);
+            _muzzle = mNode;
+            lod0.Muzzle = mNode;
+        }
         _barrelBindPosition = lod0.BarrelBindPosition;
         _modelBindPosition = Model.Position;
         _modelScale = Model.Scale;
@@ -108,7 +154,9 @@ internal sealed class UnitView
 
         _selection = new MeshInstance3D
         {
-            Mesh = new TorusMesh { InnerRadius = 2.5f, OuterRadius = 2.8f, Rings = 24, RingSegments = 8 },
+            Mesh = IsInfantry
+                ? new TorusMesh { InnerRadius = 0.65f, OuterRadius = 0.85f, Rings = 24, RingSegments = 8 }
+                : new TorusMesh { InnerRadius = 2.5f, OuterRadius = 2.8f, Rings = 24, RingSegments = 8 },
             Scale = new Vector3(1, 0.15f, 1),
             Position = new Vector3(0, 0.15f, 0),
             MaterialOverride = new StandardMaterial3D
@@ -121,11 +169,12 @@ internal sealed class UnitView
         };
         Root.AddChild(_selection);
 
-        _healthBarRoot = new Node3D { Position = new Vector3(0, 3.4f, 0) };
+        _healthBarRoot = new Node3D { Position = new Vector3(0, IsInfantry ? 2.1f : 3.4f, 0) };
         Root.AddChild(_healthBarRoot);
+        Vector3 barSize = IsInfantry ? new Vector3(1.1f, 0.08f, 0.08f) : new Vector3(1.8f, 0.12f, 0.12f);
         _healthBarBg = new MeshInstance3D
         {
-            Mesh = new BoxMesh { Size = new Vector3(1.8f, 0.12f, 0.12f) },
+            Mesh = new BoxMesh { Size = barSize },
             Position = Vector3.Zero,
             MaterialOverride = new StandardMaterial3D
             {
@@ -138,7 +187,7 @@ internal sealed class UnitView
 
         _healthBarFg = new MeshInstance3D
         {
-            Mesh = new BoxMesh { Size = new Vector3(1.8f, 0.12f, 0.14f) },
+            Mesh = new BoxMesh { Size = new Vector3(barSize.X, barSize.Y, barSize.Z + 0.02f) },
             Position = new Vector3(0, 0, 0.03f),
             MaterialOverride = new StandardMaterial3D
             {
@@ -537,19 +586,27 @@ internal sealed class UnitView
 
     public void SetTurretYaw(float worldYaw)
     {
-        if (_turret is null) return;
-        _turretRotation = new Vector3(0, Mathf.Wrap(worldYaw - _heading, -Mathf.Pi, Mathf.Pi), 0);
-        _hasAim = true;
-        foreach (Rig? rig in _rigs)
+        if (_turret is not null)
         {
-            if (rig?.Turret is not null)
-                rig.Turret.Rotation = _turretRotation;
+            _turretRotation = new Vector3(0, Mathf.Wrap(worldYaw - _heading, -Mathf.Pi, Mathf.Pi), 0);
+            _hasAim = true;
+            foreach (Rig? rig in _rigs)
+            {
+                if (rig?.Turret is not null)
+                    rig.Turret.Rotation = _turretRotation;
+            }
+        }
+        else if (IsInfantry)
+        {
+            _turretRotation = new Vector3(0, Mathf.Wrap(worldYaw - _heading, -Mathf.Pi, Mathf.Pi), 0);
+            _hasAim = MathF.Abs(Mathf.Wrap(worldYaw - _heading, -Mathf.Pi, Mathf.Pi)) > 0.02f;
+            ApplyHullPose();
         }
     }
 
     public void AimAt(Vector3 observedPosition)
     {
-        if (_turret is null) return;
+        if (_turret is null && !IsInfantry) return;
         Vector3 direction = observedPosition - _previousPosition;
         if (direction.X * direction.X + direction.Z * direction.Z <= 0.000001f) return;
         float worldYaw = Mathf.Atan2(-direction.X, -direction.Z);
@@ -560,6 +617,11 @@ internal sealed class UnitView
 
     public void ApplyRecoil(Vector3 shotDirection)
     {
+        if (IsInfantry)
+        {
+            SetAiming(true);
+            return;
+        }
         if (_barrelRecoil is not null)
         {
             _recoilAmount = 0.35f;
@@ -628,7 +690,10 @@ internal sealed class UnitView
     {
         if (_rockAngle == 0f)
         {
-            Model.Rotation = new Vector3(0, _heading, 0);
+            float yaw = (IsInfantry && (_aimingTimer > 0f || _hasAim) && _dustSpeed < 0.15f)
+                ? (_turretRotation.Y + _heading)
+                : _heading;
+            Model.Rotation = new Vector3(0, yaw, 0);
             return;
         }
         Model.Basis = new Basis(Vector3.Up, _heading) * new Basis(_rockAxis, _rockAngle);
@@ -679,7 +744,7 @@ internal sealed class UnitView
         _distanceSinceEffects = 0f;
         _dustSpeed = Mathf.Lerp(_dustSpeed, speed, 1f - Mathf.Exp(-6f * dt));
         float ratio = Mathf.Clamp(_dustSpeed / FullDustSpeed, 0f, 1f);
-        bool show = ratio > 0.05f && _activeLod < 2;
+        bool show = ratio > 0.05f && _activeLod < 2 && !IsInfantry;
         foreach (GpuParticles3D? dust in _dust)
         {
             if (dust is null) continue;
@@ -688,6 +753,56 @@ internal sealed class UnitView
                 dust.AmountRatio = ratio;
             if (dust.Emitting != show)
                 dust.Emitting = show;
+        }
+
+        if (_aimingTimer > 0f)
+        {
+            _aimingTimer = MathF.Max(0f, _aimingTimer - dt);
+        }
+
+        if (_animPlayer is not null)
+        {
+            StringName targetAnimName;
+            string targetAnimStr;
+            float authoredSpeed = 1.0f;
+            if (_dustSpeed >= 2.2f)
+            {
+                targetAnimName = AnimRun;
+                targetAnimStr = "Run";
+                authoredSpeed = 3.5f;
+            }
+            else if (_dustSpeed >= 0.15f)
+            {
+                targetAnimName = AnimWalk;
+                targetAnimStr = "Walk";
+                authoredSpeed = 1.5f;
+            }
+            else if (_aimingTimer > 0f || _hasAim)
+            {
+                targetAnimName = AnimAimStanding;
+                targetAnimStr = "AimStanding";
+            }
+            else
+            {
+                targetAnimName = AnimIdle;
+                targetAnimStr = "Idle";
+            }
+
+            if (_currentAnimName != targetAnimName && _animPlayer.HasAnimation(targetAnimName))
+            {
+                _animPlayer.Play(targetAnimName);
+                _currentAnimName = targetAnimName;
+                _currentAnim = targetAnimStr;
+            }
+
+            if (targetAnimName == AnimWalk || targetAnimName == AnimRun)
+            {
+                _animPlayer.SpeedScale = MathF.Max(0.1f, _dustSpeed / authoredSpeed);
+            }
+            else
+            {
+                _animPlayer.SpeedScale = 1.0f;
+            }
         }
     }
 

@@ -795,6 +795,43 @@ To run the Ustye 5km vegetation performance benchmark:
 dotnet run --project tests/Benchmarks --configuration Release -- --ustye-vegetation
 ```
 
+### Infantry playground scenario (infantry-playground)
+
+To launch the playable infantry test ground featuring foot traversability, bridge crossing, building obstacle avoidance, vegetation observation, and small arms combat:
+
+```sh
+./tools/run-client.sh -- --scenario infantry-playground
+```
+
+On Windows with PowerShell:
+
+```powershell
+./tools/run-client.ps1 -GodotArgs @("--", "--scenario", "infantry-playground")
+```
+
+For dedicated server hosting:
+
+```sh
+dotnet run --project src/Game.Server --configuration Release -- --scenario infantry-playground --port 7777
+```
+
+In headless smoke-test mode:
+
+```sh
+./tools/run-client.sh --headless -- --smoke-test --scenario infantry-playground
+dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario infantry-playground
+```
+
+Interactive controls and features:
+- **First playable infantry unit**: US Rifleman (`us_rifleman`), representing a squad of one armed with the 5.56mm M16A1 rifle (`rifle_5_56mm_m16a1`).
+- **Animated 3D presentation**: Integrates the low-poly animated model `res://Assets/Infantry/US/us_rifleman.glb` with state transitions: `Idle`, `Walk`, `Run`, and `AimStanding`.
+- **RTS presentation**: Scaled selection ring (0.65 inner, 0.85 outer) and health bar, unit card ("Infantry"), badge ("INF"), and minimap marker.
+- **Foot traversability**: Foot capability (`TraversabilityCapabilities.Foot = Ground | DenseForest | Bridge = 11`) allows the rifleman to walk directly through dense forest and cross bridge decks, while water and buildings remain impassable obstacles.
+- **Small arms combat**: The 5.56mm M16A1 rifle damages unarmored infantry targets, depletes ammunition (210 rounds in 3-round bursts), and deflects with zero damage against armored targets (such as the M113 APC). Small arms emit a compact 0.08 m muzzle flash, thin tracer, and procedural gunshot audio, without vehicle blast dust or barrel smoke.
+- **Casualties without vehicle wrecks**: Defeated infantry units do not leave a vehicle wreck (`LeavesWreck = false`, zero wreck entity and zero wreck ID emitted), suppressing vehicle explosion, crater residue, and burning hull.
+- **Vegetation line of sight**: Human-height sensor (1.6 m) and target points (0.6 m and 1.4 m) interact with vegetation optical depth, allowing the rifleman to spot targets in forest clearings while remaining hidden deep in the forest.
+- **Performance budgets**: 0 managed heap allocations in simulation tick and presentation update hot paths; verified with scale benchmarks for 20 and 100 active riflemen.
+
 Forward+ is the default renderer. It has been run on Apple Silicon using Metal.
 For a Compatibility comparison, pass `--rendering-method gl_compatibility` to the
 launcher. Renderer and driver must be recorded with graphics performance results.
@@ -818,6 +855,7 @@ dotnet run --project src/Game.Server --configuration Release --no-build -- --smo
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario group-move
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario ustye-ground
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario forest-visibility
+dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario infantry-playground
 ./tools/run-client.sh --headless -- --smoke-test
 ./tools/run-client.sh --headless -- --smoke-test --scenario recon-raid
 ./tools/run-client.sh --headless -- --smoke-test --scenario bridge-crossing
@@ -825,6 +863,7 @@ dotnet run --project src/Game.Server --configuration Release --no-build -- --smo
 ./tools/run-client.sh --headless -- --smoke-test --scenario group-move
 ./tools/run-client.sh --headless -- --smoke-test --scenario ustye-ground
 ./tools/run-client.sh --headless -- --smoke-test --scenario forest-visibility
+./tools/run-client.sh --headless -- --smoke-test --scenario infantry-playground
 ./tools/run-client.sh --headless -- --map-preview ustye --smoke-test
 ```
 
