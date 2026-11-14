@@ -30,6 +30,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
     public const float MaxHitProbability = 0.98f;
 
     private readonly StaticGeometry _geometry;
+    private readonly DestinationEvaluator _destinationEvaluator;
     private readonly IUnitCombatCatalog _combatCatalog;
     private readonly IUnitPerceptionCatalog _perceptionCatalog;
     private readonly DetectionSystem _detection;
@@ -102,6 +103,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         _maxEventsPerPlayer = maxEventsPerPlayer;
         _combatRandom = combatRandom;
 
+        _destinationEvaluator = new DestinationEvaluator(geometry);
         _losContext = new LineOfSightContext(geometry.Structures.Count);
         _destroyedBuffer = new EntityId[maxUnits];
         _playerEvents = new CombatEventObservation[maxSides * maxEventsPerPlayer];
@@ -522,7 +524,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
             return false;
 
         // Attacker ownership validation
-        if (!world.TryGetUnit(command.Unit, out UnitState attacker) || attacker.Owner != player)
+        if (!world.TryGetUnit(command.Unit, out UnitState attacker) || attacker.Owner != player || world.IsContained(command.Unit))
             return false;
 
         // Verify attacker has an operational weapon
@@ -544,7 +546,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         if (!tracker.TryGetBoundEntity(command.Target, out EntityId targetEntityId))
             return false;
 
-        if (!world.TryGetUnit(targetEntityId, out UnitState targetUnit) || !world.AreHostile(player, targetUnit.Owner))
+        if (!world.TryGetUnit(targetEntityId, out UnitState targetUnit) || !world.AreHostile(player, targetUnit.Owner) || world.IsContained(targetEntityId))
             return false;
 
         // Attack orders out of range are accepted.
@@ -591,6 +593,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         for (int i = 0; i < unitCount; i++)
         {
             UnitState attacker = world.GetUnitAt(i);
+            if (world.IsContained(attacker.Id)) continue;
             if (!_combatCatalog.TryGetProfile(attacker.Definition, out UnitCombatProfile profile) ||
                 profile.Weapon is null)
             {
@@ -939,6 +942,10 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
             for (int d = 0; d < _destroyedCount; d++)
             {
                 EntityId destroyedId = _destroyedBuffer[d];
+                if (world.IsContainer(destroyedId) && world.GetPassengerCount(destroyedId) > 0)
+                {
+                    HandleContainerDestruction(destroyedId, world, tick);
+                }
                 world.RemoveUnit(destroyedId);
                 _navigation?.ClearUnit(destroyedId);
                 _detection.NotifyEntityDestroyed(destroyedId);
@@ -948,20 +955,24 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                 {
                     UnitState survivor = world.GetUnitAt(u);
                     if (world.TryGetCombatState(survivor.Id, out WorldState.CombatState survivorCs) &&
+                        survivorCs.TargetEntityId.Value != 0 &&
                         survivorCs.TargetEntityId.Value == destroyedId.Value)
                     {
                         SideContactTracker survivorTracker = _detection.GetTracker(survivor.Owner);
                         if (!survivorTracker.TryGetContact(survivorCs.TargetContactId, out _))
                         {
                             // Contact was observed and retired: clear order immediately
-                            survivorCs.HasAttackOrder = false;
+                            if (survivorCs.HasAttackOrder)
+                            {
+                                survivorCs.HasAttackOrder = false;
+                                world.UpdateUnitNavigation(survivor.Id, survivor.Position, survivor.Position, false);
+                                _navigation?.ClearUnit(survivor.Id);
+                            }
                             survivorCs.TargetContactId = default;
                             survivorCs.TargetEntityId = default;
                             survivorCs.Status = AttackExecutionStatus.None;
                             survivorCs.PursuitDestination = Vector2.Zero;
                             survivorCs.LastPursuitRequestTick = -1;
-                            world.UpdateUnitNavigation(survivor.Id, survivor.Position, survivor.Position, false);
-                            _navigation?.ClearUnit(survivor.Id);
                             world.SetCombatState(survivor.Id, survivorCs);
                         }
                         else
@@ -1196,6 +1207,172 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                         targetUnit.Definition,
                         targetUnit.Owner,
                         shotDistance);
+                }
+            }
+        }
+    }
+
+    public const int DefaultContainerDestructionDamage = 50;
+
+    public void DestroyUnit(EntityId unitId, WorldState world, int tick)
+    {
+        if (!world.TryGetUnit(unitId, out UnitState u)) return;
+        bool leavesWreck = true;
+        if (_combatCatalog is not null && _combatCatalog.TryGetProfile(u.Definition, out UnitCombatProfile victimProfile))
+        {
+            leavesWreck = victimProfile.LeavesWreck;
+        }
+
+        world.TryGetCombatState(u.Id, out WorldState.CombatState cs);
+        WreckState wreck = default;
+        if (leavesWreck)
+        {
+            wreck = world.AddWreck(
+                u.Definition,
+                u.Position,
+                u.SupportSurface,
+                cs.HullHeading,
+                cs.TurretYaw,
+                tick,
+                u.Owner);
+            _detection.NotifyWreckCreated(wreck, u.Owner, u.Id);
+        }
+
+        RecordDestroyedEvent(
+            tick,
+            u.Definition,
+            u.Id,
+            u.Owner,
+            u.Position,
+            u.SupportSurface,
+            wreck.Id);
+
+        if (world.IsContainer(unitId) && world.GetPassengerCount(unitId) > 0)
+        {
+            HandleContainerDestruction(unitId, world, tick);
+        }
+        world.RemoveUnit(unitId);
+        _navigation?.ClearUnit(unitId);
+        _detection.NotifyEntityDestroyed(unitId);
+
+        for (int i = 0; i < world.Count; i++)
+        {
+            UnitState survivor = world.GetUnitAt(i);
+            if (world.TryGetCombatState(survivor.Id, out WorldState.CombatState survivorCs) &&
+                survivorCs.TargetEntityId.Value != 0 &&
+                survivorCs.TargetEntityId.Value == unitId.Value)
+            {
+                if (survivorCs.HasAttackOrder)
+                {
+                    survivorCs = survivorCs with
+                    {
+                        HasAttackOrder = false,
+                        TargetEntityId = default,
+                        TargetContactId = default
+                    };
+                    world.UpdateUnitNavigation(survivor.Id, survivor.Position, survivor.Position, false);
+                    _navigation?.ClearUnit(survivor.Id);
+                }
+                else
+                {
+                    survivorCs = survivorCs with
+                    {
+                        TargetEntityId = default,
+                        TargetContactId = default
+                    };
+                }
+                world.SetCombatState(survivor.Id, survivorCs);
+            }
+        }
+    }
+
+    private void HandleContainerDestruction(EntityId transportId, WorldState world, int tick)
+    {
+        if (!world.TryGetUnit(transportId, out UnitState transport)) return;
+        ReadOnlySpan<EntityId> passengers = world.GetPassengers(transportId);
+        if (passengers.Length == 0) return;
+
+        Span<EntityId> buffer = stackalloc EntityId[passengers.Length];
+        passengers.CopyTo(buffer);
+
+        Span<EntityId> survivors = stackalloc EntityId[buffer.Length];
+        int survivorCount = 0;
+
+        int destructionDamage = DefaultContainerDestructionDamage;
+        if (_combatCatalog is not null && _combatCatalog.TryGetProfile(transport.Definition, out UnitCombatProfile transProfile))
+        {
+            destructionDamage = transProfile.ContainerDestructionDamage;
+        }
+
+        for (int p = 0; p < buffer.Length; p++)
+        {
+            EntityId pId = buffer[p];
+            world.ApplyDamage(pId, destructionDamage, out bool killed);
+            if (killed)
+            {
+                if (world.TryGetUnit(pId, out UnitState deadPassenger))
+                {
+                    TotalUnitsDestroyed++;
+                    RecordDestroyedEvent(
+                        tick,
+                        deadPassenger.Definition,
+                        deadPassenger.Id,
+                        deadPassenger.Owner,
+                        deadPassenger.Position,
+                        deadPassenger.SupportSurface,
+                        default);
+                    world.RemoveUnit(pId);
+                    _navigation?.ClearUnit(pId);
+                    _detection.NotifyEntityDestroyed(pId);
+                }
+            }
+            else
+            {
+                survivors[survivorCount++] = pId;
+            }
+        }
+
+        if (survivorCount > 0)
+        {
+            Span<Vector2> placedPositions = stackalloc Vector2[survivorCount];
+            Span<bool> placedSuccess = stackalloc bool[survivorCount];
+
+            PassengerDistribution.Distribute(
+                world,
+                _destinationEvaluator,
+                transportId,
+                transport.Position,
+                transport.SupportSurface,
+                survivors.Slice(0, survivorCount),
+                placedPositions,
+                placedSuccess,
+                _navigation?.Catalog);
+
+            for (int s = 0; s < survivorCount; s++)
+            {
+                EntityId sId = survivors[s];
+                if (placedSuccess[s])
+                {
+                    world.Disembark(transportId, sId, placedPositions[s], transport.SupportSurface);
+                }
+                else
+                {
+                    world.ApplyDamage(sId, 9999, out _);
+                    if (world.TryGetUnit(sId, out UnitState killedUnit))
+                    {
+                        TotalUnitsDestroyed++;
+                        RecordDestroyedEvent(
+                            tick,
+                            killedUnit.Definition,
+                            killedUnit.Id,
+                            killedUnit.Owner,
+                            killedUnit.Position,
+                            killedUnit.SupportSurface,
+                            default);
+                        world.RemoveUnit(sId);
+                        _navigation?.ClearUnit(sId);
+                        _detection.NotifyEntityDestroyed(sId);
+                    }
                 }
             }
         }

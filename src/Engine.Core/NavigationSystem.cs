@@ -128,6 +128,7 @@ public sealed class NavigationSystem : ISimulationSystem
     private readonly bool[] _unitHasActiveRoutes;
     private readonly bool[] _unitChunkPending;
     private readonly int[] _unitChunkWaitTicks;
+    private readonly int[] _unitClearanceWaitTicks;
     private readonly GroupUnitInput[] _groupUnitInputsBuffer = new GroupUnitInput[GroupDestinationDistribution.MaxCandidates];
     private uint _nextOrderGeneration;
 
@@ -149,6 +150,7 @@ public sealed class NavigationSystem : ISimulationSystem
     private MoveMode[] _candidateModes;
     private int[] _candidateIndices;
     private bool[] _candidateBlockedAhead;
+    private bool[] _candidateBlockedAheadByInfantry;
     private uint[] _candidateSurfaces;
     private float[] _candidateInitialDist;
     private byte[] _candidateStage;
@@ -378,6 +380,7 @@ public sealed class NavigationSystem : ISimulationSystem
         _unitHasActiveRoutes = new bool[_maxUnits];
         _unitChunkPending = new bool[_maxUnits];
         _unitChunkWaitTicks = new int[_maxUnits];
+        _unitClearanceWaitTicks = new int[_maxUnits];
 
         _slotNextChunkWaypoints = new Vector2[_maxUnits * _tuning.MaxWaypointsPerRoute];
         _slotNextChunkCounts = new int[_maxUnits];
@@ -394,6 +397,7 @@ public sealed class NavigationSystem : ISimulationSystem
         _candidateModes = new MoveMode[_maxUnits];
         _candidateIndices = new int[_maxUnits];
         _candidateBlockedAhead = new bool[_maxUnits];
+        _candidateBlockedAheadByInfantry = new bool[_maxUnits];
         _candidateSurfaces = new uint[_maxUnits];
         _candidateInitialDist = new float[_maxUnits];
         _candidateStage = new byte[_maxUnits];
@@ -411,6 +415,7 @@ public sealed class NavigationSystem : ISimulationSystem
             Array.Resize(ref _candidateModes, newCap);
             Array.Resize(ref _candidateIndices, newCap);
             Array.Resize(ref _candidateBlockedAhead, newCap);
+            Array.Resize(ref _candidateBlockedAheadByInfantry, newCap);
             Array.Resize(ref _candidateSurfaces, newCap);
             Array.Resize(ref _candidateInitialDist, newCap);
             Array.Resize(ref _candidateStage, newCap);
@@ -505,6 +510,7 @@ public sealed class NavigationSystem : ISimulationSystem
                 _unitIsBrakingToHalt[slot] = false;
                 _unitChunkPending[slot] = false;
                 _unitChunkWaitTicks[slot] = 0;
+                _unitClearanceWaitTicks[slot] = 0;
                 _slotNextChunkCounts[slot] = 0;
                 _slotGlobalPortalCounts[slot] = 0;
                 _slotGlobalPortalIndices[slot] = 0;
@@ -1246,6 +1252,7 @@ public sealed class NavigationSystem : ISimulationSystem
                         _routeIndices[slot] = 0;
                         _routeOrderGenerations[slot] = req.OrderGeneration;
                         _unitChunkWaitTicks[slot] = 0;
+                        _unitClearanceWaitTicks[slot] = 0;
                         world.UpdateUnitNavigation(req.Unit, unit.Position, _unitFinalTargets[slot], true, supportSurface: unit.SupportSurface);
                     }
                     else
@@ -1420,6 +1427,7 @@ public sealed class NavigationSystem : ISimulationSystem
                     _routeIndices[slot] = 0;
                     _routeOrderGenerations[slot] = req.OrderGeneration;
                     _unitChunkWaitTicks[slot] = 0;
+                    _unitClearanceWaitTicks[slot] = 0;
                     world.UpdateUnitNavigation(req.Unit, unit.Position, _unitFinalTargets[slot], true, supportSurface: unit.SupportSurface);
                 }
                 else
@@ -2456,6 +2464,7 @@ public sealed class NavigationSystem : ISimulationSystem
                 _routeCounts[slot] = _smoothedCount;
                 _routeIndices[slot] = 0;
                 _unitChunkWaitTicks[slot] = 0;
+                _unitClearanceWaitTicks[slot] = 0;
                 world.UpdateUnitNavigation(_activeRequest.Unit, unit.Position, _unitFinalTargets[slot], true, supportSurface: unit.SupportSurface);
             }
             else if (_unitHasActiveRoutes[slot])
@@ -2477,6 +2486,7 @@ public sealed class NavigationSystem : ISimulationSystem
                 _unitHasActiveRoutes[slot] = true;
                 _routeOrderGenerations[slot] = _activeRequest.OrderGeneration;
                 _unitChunkWaitTicks[slot] = 0;
+                _unitClearanceWaitTicks[slot] = 0;
                 world.UpdateUnitNavigation(_activeRequest.Unit, unit.Position, _unitFinalTargets[slot], true, supportSurface: unit.SupportSurface);
             }
         }
@@ -2608,6 +2618,7 @@ public sealed class NavigationSystem : ISimulationSystem
         Array.Clear(_candidateSpeeds, 0, unitCount);
         Array.Clear(_candidateStage, 0, unitCount);
         Array.Clear(_candidateBlockedAhead, 0, unitCount);
+        Array.Clear(_candidateBlockedAheadByInfantry, 0, unitCount);
 
         for (int i = 0; i < unitCount; i++)
         {
@@ -2986,13 +2997,28 @@ public sealed class NavigationSystem : ISimulationSystem
                 float actualMoved = Vector2.Distance(unit.Position, currentPosK);
                 bool isWaitingForClearanceK = _unitStatuses[slot] == PathRequestStatus.WaitingForClearance && actualMoved <= 1e-4f && !reachedFinalDestination;
 
-                if (actualMoved > 1e-4f && _unitStatuses[slot] == PathRequestStatus.WaitingForClearance && _routeOrderGenerations[slot] == _unitOrderGenerations[slot])
+                if (actualMoved > 1e-4f)
                 {
-                    _unitStatuses[slot] = PathRequestStatus.PathFound;
+                    _unitClearanceWaitTicks[slot] = 0;
+                    if (_unitStatuses[slot] == PathRequestStatus.WaitingForClearance && _routeOrderGenerations[slot] == _unitOrderGenerations[slot])
+                    {
+                        _unitStatuses[slot] = PathRequestStatus.PathFound;
+                    }
                 }
 
                 if (isWaitingForClearanceK)
                 {
+                    _unitClearanceWaitTicks[slot]++;
+                    if (_unitClearanceWaitTicks[slot] >= 120)
+                    {
+                        if (_routeOrderGenerations[slot] == _unitOrderGenerations[slot])
+                        {
+                            _unitStatuses[slot] = PathRequestStatus.NoPath;
+                        }
+                        _unitHasActiveRoutes[slot] = false;
+                        _unitClearanceWaitTicks[slot] = 0;
+                    }
+
                     _unitLinearSpeed[slot] = 0f;
                     world.UpdateUnitNavigation(unit.Id, currentPosK, finalTargetK, false, _currentTick, supportSurface, newHeading);
                 }
@@ -3482,6 +3508,7 @@ public sealed class NavigationSystem : ISimulationSystem
 
 
             bool blockedAheadByVehicle = false;
+            bool blockedAheadByInfantry = false;
             if (effectiveColRadius > 0f)
             {
                 // Phase 1 Corridor Lookahead for dynamic vehicle separation
@@ -3525,6 +3552,22 @@ public sealed class NavigationSystem : ISimulationSystem
                     {
                         vTarget = 0f;
                         blockedAheadByVehicle = true;
+                    }
+                }
+
+                if (blockingUnitIdx >= 0 && effectiveColRadius > 0.5f)
+                {
+                    UnitState blocker = world.GetUnitAt(blockingUnitIdx);
+                    if (blocker.Owner == unit.Owner &&
+                        !world.IsContained(blocker.Id) &&
+                        _catalog.TryGetProfile(blocker.Definition, out UnitMovementProfile blockerProf) &&
+                        blockerProf.EffectiveCollisionRadius <= 0.5f)
+                    {
+                        blockedAheadByInfantry = true;
+                        if (!blocker.Moving && !world.TryGetBoardingTarget(blocker.Id, out _))
+                        {
+                            TryMakeInfantryStepAside(world, unit, currentPos, moveLookaheadDir, effectiveColRadius, blocker, blockerProf);
+                        }
                     }
                 }
             }
@@ -3618,6 +3661,7 @@ public sealed class NavigationSystem : ISimulationSystem
             _candidateModes[i] = currentMode;
             _candidateIndices[i] = idx;
             _candidateBlockedAhead[i] = blockedAheadByVehicle;
+            _candidateBlockedAheadByInfantry[i] = blockedAheadByInfantry;
             _candidateSurfaces[i] = supportSurface;
             _candidateInitialDist[i] = stepDist;
             _candidateStage[i] = 3;
@@ -3645,6 +3689,7 @@ public sealed class NavigationSystem : ISimulationSystem
             MoveMode currentMode = _candidateModes[i];
             int idx = _candidateIndices[i];
             bool blockedAheadByVehicle = _candidateBlockedAhead[i];
+            bool blockedAheadByInfantry = _candidateBlockedAheadByInfantry[i];
             uint supportSurface = _candidateSurfaces[i];
             float initialStepDist = _candidateInitialDist[i];
             float stepDist = step.Length();
@@ -3822,6 +3867,27 @@ public sealed class NavigationSystem : ISimulationSystem
             bool isWaitingForClearance = (blockedAheadByVehicle || sweptClamped) && v <= 1e-4f && distToFinal > 0.15f;
             if (isWaitingForClearance)
             {
+                if (blockedAheadByInfantry)
+                {
+                    _unitClearanceWaitTicks[slot]++;
+                    if (_unitClearanceWaitTicks[slot] >= 80)
+                    {
+                        if (_routeOrderGenerations[slot] == _unitOrderGenerations[slot])
+                        {
+                            _unitStatuses[slot] = PathRequestStatus.NoPath;
+                        }
+                        _unitHasActiveRoutes[slot] = false;
+                        _unitClearanceWaitTicks[slot] = 0;
+                        _unitLinearSpeed[slot] = 0f;
+                        world.UpdateUnitNavigation(unit.Id, currentPos, finalTarget, false, _currentTick, supportSurface, newHeading);
+                        continue;
+                    }
+                }
+                else
+                {
+                    _unitClearanceWaitTicks[slot] = 0;
+                }
+
                 if (_routeOrderGenerations[slot] == _unitOrderGenerations[slot])
                 {
                     _unitStatuses[slot] = PathRequestStatus.WaitingForClearance;
@@ -3832,6 +3898,7 @@ public sealed class NavigationSystem : ISimulationSystem
             }
             else if (v > 1e-4f)
             {
+                _unitClearanceWaitTicks[slot] = 0;
                 if (_unitStatuses[slot] == PathRequestStatus.WaitingForClearance && _routeOrderGenerations[slot] == _unitOrderGenerations[slot])
                 {
                     _unitStatuses[slot] = PathRequestStatus.PathFound;
@@ -3945,6 +4012,56 @@ public sealed class NavigationSystem : ISimulationSystem
             unit.Owner, unit.Id, chunkStart, nextTarget, radius, orderGen, IsChunkContinuation: true, Capabilities: capabilities, TargetSurface: targetSurface);
         _queueTail = (_queueTail + 1) % _requestQueue.Length;
         _queueCount++;
+    }
+
+    private void TryMakeInfantryStepAside(
+        WorldState world,
+        UnitState vehicle,
+        Vector2 vehiclePos,
+        Vector2 vehicleDir,
+        float vehicleCollisionRadius,
+        UnitState infantry,
+        UnitMovementProfile infantryProf)
+    {
+        if (!GetOrCreateSlot(infantry.Id, out int slot) || _unitHasActiveRoutes[slot])
+            return;
+
+        Vector2 perp = new(-vehicleDir.Y, vehicleDir.X);
+        Vector2 toInfantry = infantry.Position - vehiclePos;
+        float lateral = Vector2.Dot(toInfantry, perp);
+        if (lateral < 0f)
+        {
+            perp = -perp;
+        }
+
+        float clearDistance = vehicleCollisionRadius + infantryProf.EffectiveCollisionRadius + 0.8f;
+        float neededShift = MathF.Max(1.2f, clearDistance - MathF.Abs(lateral));
+
+        Vector2 candidate1 = infantry.Position + perp * neededShift;
+        if (_grid.Evaluator.IsPointClear(candidate1, infantryProf.Radius, infantryProf.Capabilities, infantry.SupportSurface))
+        {
+            MoveCommand stepCmd = new(
+                Sequence: checked(++_unitOrderSequences[slot]),
+                ClientTick: _currentTick,
+                Unit: infantry.Id,
+                Target: candidate1,
+                TargetSurface: infantry.SupportSurface);
+            EnqueueCommand(infantry.Owner, stepCmd, world);
+            return;
+        }
+
+        float neededShiftOpposite = MathF.Abs(lateral) + clearDistance;
+        Vector2 candidate2 = infantry.Position - perp * neededShiftOpposite;
+        if (_grid.Evaluator.IsPointClear(candidate2, infantryProf.Radius, infantryProf.Capabilities, infantry.SupportSurface))
+        {
+            MoveCommand stepCmd = new(
+                Sequence: checked(++_unitOrderSequences[slot]),
+                ClientTick: _currentTick,
+                Unit: infantry.Id,
+                Target: candidate2,
+                TargetSurface: infantry.SupportSurface);
+            EnqueueCommand(infantry.Owner, stepCmd, world);
+        }
     }
 
     // Local window coordinate calculations

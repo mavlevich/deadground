@@ -832,6 +832,42 @@ Interactive controls and features:
 - **Vegetation line of sight**: Human-height sensor (1.6 m) and target points (0.6 m and 1.4 m) interact with vegetation optical depth, allowing the rifleman to spot targets in forest clearings while remaining hidden deep in the forest.
 - **Performance budgets**: 0 managed heap allocations in simulation tick and presentation update hot paths; verified with scale benchmarks for 20 and 100 active riflemen.
 
+### Infantry transport proving ground (infantry-transport)
+
+To launch the dedicated infantry transport test ground featuring boarding, conveyance, and disembarking:
+
+```sh
+./tools/run-client.sh -- --scenario infantry-transport
+```
+
+On Windows with PowerShell:
+
+```powershell
+./tools/run-client.ps1 -GodotArgs @("--", "--scenario", "infantry-transport")
+```
+
+For dedicated server hosting:
+
+```sh
+dotnet run --project src/Game.Server --configuration Release -- --scenario infantry-transport --port 7777
+```
+
+In headless smoke-test mode:
+
+```sh
+./tools/run-client.sh --headless -- --smoke-test --scenario infantry-transport
+dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario infantry-transport
+```
+
+Interactive controls and features:
+- **Boarding and conveyance**: Select friendly infantry and click `BOARD TRANSPORT` to enter targeting mode. Left-click a stationary friendly transport (e.g. M113A1) to issue the boarding order. The infantry approaches the vehicle hull and enters the container. Esc or right-click cancels target selection.
+- **Seat reservations**: Simultaneous boarding orders check and reserve capacity in advance (M113A1 carries 11 passengers, BTR-70 carries 8). If a vehicle is full, orders are rejected. If an infantry unit receives another order, dies, or pathfinding fails, its seat reservation is immediately freed. If the transport begins moving while infantry is approaching, boarding is aborted without endless pursuit.
+- **Conveyance in lockstep**: Contained passengers retain their entity ID, health, and ammo, but are excluded from spatial grids, vision sweeps, and auto-fire. Passenger position and support surface follow the transport in lockstep.
+- **Disembarkation**: Select a friendly transport with passengers to see the `Passengers: X/Y` badge and `DISEMBARK ALL` button. Left-click a destination on the terrain or bridge deck to disembark all passengers. Passengers are deterministically distributed around the destination point with clearance checks against vehicles, terrain, water, buildings, and each other. If space is constrained, available slots are filled and remaining passengers stay aboard.
+- **Bridge deck support**: Disembarking on an elevated bridge deck preserves the bridge support surface (`SupportSurface = 1`), preventing passengers from falling to the water bed below.
+- **Transport destruction and evacuation**: If a transport is destroyed, passengers take configured container destruction damage (50 HP). Survivors evacuate safely onto adjacent ground, while fatal casualties receive infantry death presentation without leaving vehicle wrecks.
+- **Fog of war confidentiality**: Enemies observing a transport never receive passenger counts, identities, or status in snapshots or contacts. Contained units produce no independent contacts.
+
 Forward+ is the default renderer. It has been run on Apple Silicon using Metal.
 For a Compatibility comparison, pass `--rendering-method gl_compatibility` to the
 launcher. Renderer and driver must be recorded with graphics performance results.
@@ -856,6 +892,7 @@ dotnet run --project src/Game.Server --configuration Release --no-build -- --smo
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario ustye-ground
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario forest-visibility
 dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario infantry-playground
+dotnet run --project src/Game.Server --configuration Release --no-build -- --smoke-test --scenario infantry-transport
 ./tools/run-client.sh --headless -- --smoke-test
 ./tools/run-client.sh --headless -- --smoke-test --scenario recon-raid
 ./tools/run-client.sh --headless -- --smoke-test --scenario bridge-crossing
@@ -864,6 +901,7 @@ dotnet run --project src/Game.Server --configuration Release --no-build -- --smo
 ./tools/run-client.sh --headless -- --smoke-test --scenario ustye-ground
 ./tools/run-client.sh --headless -- --smoke-test --scenario forest-visibility
 ./tools/run-client.sh --headless -- --smoke-test --scenario infantry-playground
+./tools/run-client.sh --headless -- --smoke-test --scenario infantry-transport
 ./tools/run-client.sh --headless -- --map-preview ustye --smoke-test
 ```
 

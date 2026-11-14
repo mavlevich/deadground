@@ -45,6 +45,7 @@ public sealed class ClientSession : IGameSession
     public long BytesReceived { get; private set; }
     public CommandResult? LastCommandResult { get; private set; }
     public GroupMoveResult? LastGroupMoveResult { get; private set; }
+    public DisembarkResult? LastDisembarkResult { get; private set; }
     public uint LastSubmittedCommandSequence => _nextCommand > 1 ? _nextCommand - 1 : 0;
     public long RejectedCommands { get; private set; }
     public int AssignedPlayerId { get; private set; }
@@ -211,6 +212,26 @@ public sealed class ClientSession : IGameSession
         return true;
     }
 
+    public bool BoardTransport(EntityId unit, EntityId transport)
+    {
+        if (State != SessionConnectionState.Connected) return false;
+        BoardTransportCommand command = new(_nextCommand, Replica.LatestTick, unit, transport);
+        WireProtocol.WriteBoardTransport(_command, command);
+        if (!_transport.TrySend(_command.AsSpan(0, WireProtocol.BoardTransportSize))) return false;
+        _nextCommand = checked(_nextCommand + 1);
+        return true;
+    }
+
+    public bool Disembark(EntityId transport, Vector2 target, uint targetSurface = 0)
+    {
+        if (State != SessionConnectionState.Connected) return false;
+        DisembarkCommand command = new(_nextCommand, Replica.LatestTick, transport, target, targetSurface);
+        WireProtocol.WriteDisembark(_command, command);
+        if (!_transport.TrySend(_command.AsSpan(0, WireProtocol.DisembarkSize))) return false;
+        _nextCommand = checked(_nextCommand + 1);
+        return true;
+    }
+
     private void Poll()
     {
         _transport.Poll(MaxMessagesPerPoll);
@@ -259,6 +280,16 @@ public sealed class ClientSession : IGameSession
                 {
                     if (result.Sequence >= _nextCommand || result.Sequence <= (LastGroupMoveResult?.Sequence ?? 0)) continue;
                     LastGroupMoveResult = result;
+                }
+                continue;
+            }
+
+            if (kind == WireProtocol.DisembarkResultKind)
+            {
+                if (WireProtocol.TryReadDisembarkResult(_receive.AsSpan(0, length), out DisembarkResult result))
+                {
+                    if (result.Sequence >= _nextCommand || result.Sequence <= (LastDisembarkResult?.Sequence ?? 0)) continue;
+                    LastDisembarkResult = result;
                 }
                 continue;
             }

@@ -58,8 +58,18 @@ public sealed class PlayerKnowledge
             UnitState unit = world.GetUnitAt(i);
             if (unit.Owner != Player) continue;
             if (count == _ownUnits.Length) throw new InvalidOperationException("Knowledge capacity exceeded.");
-            PathRequestStatus navStatus = navigation?.GetUnitStatus(unit.Id) ?? PathRequestStatus.None;
-            uint navOrderSeq = navigation?.GetUnitOrderSequence(unit.Id) ?? 0;
+
+            EntityId containerId = world.GetContainerId(unit.Id);
+            byte passengerCount = (byte)Math.Clamp(world.GetPassengerCount(unit.Id), 0, 255);
+            byte passengerCapacity = (byte)Math.Clamp(world.GetContainerCapacity(unit.Id), 0, 255);
+
+            PathRequestStatus navStatus = containerId.Value != 0
+                ? PathRequestStatus.None
+                : (navigation?.GetUnitStatus(unit.Id) ?? PathRequestStatus.None);
+            uint navOrderSeq = containerId.Value != 0
+                ? 0
+                : (navigation?.GetUnitOrderSequence(unit.Id) ?? 0);
+
             if (world.TryGetCombatState(unit.Id, out WorldState.CombatState combat))
             {
                 _ownUnits[count++] = new OwnUnitObservation(
@@ -71,16 +81,30 @@ public sealed class PlayerKnowledge
                     (ushort)Math.Clamp(combat.CurrentHealth, 0, ushort.MaxValue),
                     (ushort)Math.Clamp(combat.Ammunition, 0, ushort.MaxValue),
                     (ushort)Math.Clamp(combat.ReloadTicksRemaining, 0, ushort.MaxValue),
-                    combat.Status,
-                    combat.TargetContactId,
+                    containerId.Value != 0 ? AttackExecutionStatus.None : combat.Status,
+                    containerId.Value != 0 ? default : combat.TargetContactId,
                     combat.Stance,
                     combat.TurretYaw,
                     combat.HullHeading,
-                    navOrderSeq);
+                    navOrderSeq,
+                    containerId,
+                    passengerCount,
+                    passengerCapacity);
             }
             else
             {
-                _ownUnits[count++] = new OwnUnitObservation(unit.Id, unit.Definition, unit.Position, unit.SupportSurface, navStatus, Stance: FireStance.FireAtWill, TurretYaw: 0f, NavOrderSequence: navOrderSeq);
+                _ownUnits[count++] = new OwnUnitObservation(
+                    unit.Id,
+                    unit.Definition,
+                    unit.Position,
+                    unit.SupportSurface,
+                    navStatus,
+                    Stance: FireStance.FireAtWill,
+                    TurretYaw: 0f,
+                    NavOrderSequence: navOrderSeq,
+                    ContainerId: containerId,
+                    PassengerCount: passengerCount,
+                    PassengerCapacity: passengerCapacity);
             }
         }
         Count = count;

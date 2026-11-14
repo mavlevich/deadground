@@ -92,6 +92,21 @@ public sealed class HistoricalUnitsTests
     }
 
     [Fact]
+    public void PassengerCapacity_MatchesTransportSpecifications()
+    {
+        UnitCatalog catalog = ColdWarContent.LoadCatalog();
+        Assert.Equal(8, catalog.GetPassengerCapacity(catalog.RequireDefinition("btr70")));
+        Assert.Equal(11, catalog.GetPassengerCapacity(catalog.RequireDefinition("m113a1")));
+        Assert.Equal(0, catalog.GetPassengerCapacity(catalog.RequireDefinition("t62")));
+        Assert.Equal(0, catalog.GetPassengerCapacity(catalog.RequireDefinition("m60a1")));
+        Assert.Equal(0, catalog.GetPassengerCapacity(catalog.RequireDefinition("us_rifleman")));
+
+        UnitCatalog prototypeCatalog = PrototypeScenario.LoadCatalog();
+        Assert.Equal(8, prototypeCatalog.GetPassengerCapacity(prototypeCatalog.RequireDefinition("apc")));
+        Assert.Equal(0, prototypeCatalog.GetPassengerCapacity(prototypeCatalog.RequireDefinition("prototype_tank")));
+    }
+
+    [Fact]
     public void BattleScenario_SpawnsEachFactionsOwnTypes()
     {
         UnitCatalog catalog = ColdWarContent.LoadCatalog();

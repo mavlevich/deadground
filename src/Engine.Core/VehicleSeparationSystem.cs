@@ -97,6 +97,8 @@ public sealed class VehicleSeparationSystem
         float minFreeDistance = float.MaxValue;
         float selfSurfaceY = _navGrid.Evaluator.GetSurfaceHeight(selfPos, selfSurface);
         float selfTopY = selfSurfaceY + selfHeight;
+        UnitState selfUnit = world.GetUnitAt(selfUnitIndex);
+        bool hasBoardingTarget = world.TryGetBoardingTarget(selfUnit.Id, out EntityId boardingTarget);
 
         for (int i = 0; i < candidateCount; i++)
         {
@@ -104,6 +106,11 @@ public sealed class VehicleSeparationSystem
             if (otherIndex == selfUnitIndex) continue;
 
             UnitState other = world.GetUnitAt(otherIndex);
+            if (world.IsContained(other.Id)) continue;
+            if (hasBoardingTarget && other.Id == boardingTarget) continue;
+            if (world.TryGetBoardingTarget(other.Id, out EntityId otherTarget) && otherTarget == selfUnit.Id) continue;
+            if (hasBoardingTarget && world.TryGetBoardingTarget(other.Id, out EntityId otherBoardTarget) && otherBoardTarget == boardingTarget) continue;
+
             float otherRadius = 0f;
             float otherHeight = 2.5f;
             float otherMaxSpeed = 0f;
@@ -161,7 +168,8 @@ public sealed class VehicleSeparationSystem
                     }
                 }
 
-                float clearance = longitudinalDist - (selfCollisionRadius + otherRadius + _separationBuffer) - otherBrakingDist;
+                float effBuffer = (selfCollisionRadius <= 0.5f || otherRadius <= 0.5f) ? 0.2f : _separationBuffer;
+                float clearance = longitudinalDist - (selfCollisionRadius + otherRadius + effBuffer) - otherBrakingDist;
                 clearance = MathF.Max(0f, clearance);
                 if (clearance < minFreeDistance)
                 {
@@ -285,6 +293,8 @@ public sealed class VehicleSeparationSystem
 
         float selfSurfaceY = _navGrid.Evaluator.GetSurfaceHeight(selfStartPos, selfSurface);
         float selfTopY = selfSurfaceY + selfHeight;
+        UnitState selfUnit = world.GetUnitAt(selfUnitIndex);
+        bool hasBoardingTarget = world.TryGetBoardingTarget(selfUnit.Id, out EntityId boardingTarget);
 
         bool stepModified = false;
         float earliestTau = 1.0f;
@@ -295,6 +305,11 @@ public sealed class VehicleSeparationSystem
             if (otherIndex == selfUnitIndex) continue;
 
             UnitState other = world.GetUnitAt(otherIndex);
+            if (world.IsContained(other.Id)) continue;
+            if (hasBoardingTarget && other.Id == boardingTarget) continue;
+            if (world.TryGetBoardingTarget(other.Id, out EntityId otherTarget) && otherTarget == selfUnit.Id) continue;
+            if (hasBoardingTarget && world.TryGetBoardingTarget(other.Id, out EntityId otherBoardTarget) && otherBoardTarget == boardingTarget) continue;
+
             float otherRadius = 0f;
             float otherHeight = 2.5f;
             float otherMaxSpeed = 0f;
@@ -470,6 +485,10 @@ public sealed class VehicleSeparationSystem
                     if (j == i) continue;
 
                     UnitState unitJ = world.GetUnitAt(j);
+                    if (world.IsContained(unitJ.Id)) continue;
+                    if (world.TryGetBoardingTarget(unitI.Id, out EntityId bTargetI) && bTargetI == unitJ.Id) continue;
+                    if (world.TryGetBoardingTarget(unitJ.Id, out EntityId bTargetJ) && bTargetJ == unitI.Id) continue;
+
                     float radiusJ = 0f;
                     float heightJ = 2.5f;
                     if (catalog.TryGetProfile(unitJ.Definition, out UnitMovementProfile profJ))

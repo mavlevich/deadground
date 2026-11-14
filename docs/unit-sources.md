@@ -153,6 +153,10 @@ Balance, revisit after play.
   M151A2: 60.0 deg/s, pivot no, min radius 5.5 m (estimate, turning radius ~5.5 m [14]), accel 4.0 m/s^2 (estimate), decel 6.0 m/s^2 (estimate).
   US Rifleman: 360.0 deg/s (human instant turn on foot), pivot yes, min radius 0.0 m, accel 12.0 m/s^2 (sprint burst), decel 16.0 m/s^2.
   Prototype units: prototype_vehicle (pivot yes, min radius 0.0 m, reverse 3.0 m/s, accel 3.0, decel 5.0), recon_vehicle (pivot no, min radius 5.0 m, reverse 3.5 m/s, accel 4.0, decel 6.0), prototype_tank (pivot yes, min radius 0.0 m, reverse 2.5 m/s, accel 2.0, decel 4.0), apc (pivot yes, min radius 0.0 m, reverse 3.2 m/s, accel 2.5, decel 4.5). All values without direct historical sources are gameplay estimates.
+- Passenger capacity (TDD section 11.2):
+  M113A1: 11 troops (crew 2 + 11 dismounts, sourced from HistoryNet [9] and Wikipedia [10]).
+  BTR-70: 7 or 8 troops (crew 2 + 8 dismounts in standard vehicle design sourced from Wikipedia [7] and FAS [8]; 7 dismounts in typical Soviet motorized rifle squad; game value 8).
+  Prototype APC: 8 troops (gameplay estimate).
 
 ## Sources
 

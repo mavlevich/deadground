@@ -84,13 +84,14 @@ public sealed class OpsRules : RuleSet
         IMissionSystem? mission = null)
     {
         NavigationSystem nav = new(new NavigationGrid(geometry, navTuning?.CellSize ?? NavigationTuning.DefaultCellSize, enableHierarchical: true, buildLimits: buildLimits, sectorSize: navTuning?.SectorSize ?? NavigationTuning.DefaultSectorSize), movementCatalog, navTuning);
+        ContainerSystem container = new(nav);
         DetectionSystem det = new(geometry, perceptionCatalog, detTuning);
         if (combatCatalog is not null)
         {
             CombatSystem combat = new(geometry, combatCatalog, perceptionCatalog, det, nav, combatRandom: combatRandom);
-            return mission is not null ? [nav, det, combat, mission] : [nav, det, combat];
+            return mission is not null ? [nav, container, det, combat, mission] : [nav, container, det, combat];
         }
-        return mission is not null ? [nav, det, mission] : [nav, det];
+        return mission is not null ? [nav, container, det, mission] : [nav, container, det];
     }
 }
 
@@ -156,7 +157,9 @@ public sealed record UnitDefinition(
     float Acceleration = 0f,
     float Deceleration = 0f,
     float CollisionRadius = 0f,
-    float Height = 0f);
+    float Height = 0f,
+    int PassengerCapacity = 0,
+    int ContainerDestructionDamage = 50);
 
 public sealed record FactionData(string Id, string? Name = null);
 
@@ -211,6 +214,9 @@ public sealed record UnitCatalog(
         }
         return 0;
     }
+
+    // Passenger capacity of the unit, separate from crew.
+    public int GetPassengerCapacity(UnitDefinition unit) => unit.PassengerCapacity;
 
     public UnitDefinition? GetDefinition(string id)
     {
@@ -393,7 +399,14 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
                 unit.FrontSectorAngle > 0f ? unit.FrontSectorAngle : 90f,
                 unit.RearSectorAngle > 0f ? unit.RearSectorAngle : 90f);
             bool leavesWreck = !string.Equals(unit.Classification, "infantry", StringComparison.OrdinalIgnoreCase);
-            _profiles[i] = new UnitCombatProfile(unit.MaxHealth, weapon, unit.TurretTraverseRate, armor, unit.Radius > 0f ? unit.Radius : 1.0f, leavesWreck);
+            _profiles[i] = new UnitCombatProfile(
+                unit.MaxHealth,
+                weapon,
+                unit.TurretTraverseRate,
+                armor,
+                unit.Radius > 0f ? unit.Radius : 1.0f,
+                leavesWreck,
+                unit.ContainerDestructionDamage > 0 ? unit.ContainerDestructionDamage : 50);
         }
     }
 
@@ -596,6 +609,10 @@ public static class PrototypeScenario
                 throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid collision radius.");
             if (!float.IsFinite(unit.Height) || unit.Height < 0)
                 throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid height.");
+            if (unit.PassengerCapacity < 0 || unit.PassengerCapacity > 32)
+                throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid passenger capacity.");
+            if (unit.ContainerDestructionDamage < 0)
+                throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid container destruction damage.");
             if (!unit.CanPivot && unit.MinTurnRadius <= 0)
                 throw new InvalidOperationException($"Unit '{unit.Id}' cannot pivot in place but specifies no positive minimum turn radius.");
             if (!float.IsFinite(unit.ArmorFront) || unit.ArmorFront < 0 ||

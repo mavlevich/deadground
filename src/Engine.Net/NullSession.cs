@@ -14,6 +14,7 @@ public sealed class NullSession : IGameSession
     public double PendingSeconds => 0;
     public CommandResult? LastCommandResult => null;
     public GroupMoveResult? LastGroupMoveResult => null;
+    public DisembarkResult? LastDisembarkResult => null;
     public uint LastSubmittedCommandSequence => 0;
     public long RejectedCommands => 0;
     public bool IsConnected => false;
@@ -24,6 +25,8 @@ public sealed class NullSession : IGameSession
     public bool GroupMove(ReadOnlyMemory<EntityId> units, Vector2 target, uint targetSurface = 0, float? finalFacing = null, MoveMode mode = MoveMode.Forward) => false;
     public bool Attack(EntityId unit, ContactId target) => false;
     public bool SetFireStance(EntityId unit, FireStance stance) => false;
+    public bool BoardTransport(EntityId unit, EntityId transport) => false;
+    public bool Disembark(EntityId transport, Vector2 target, uint targetSurface = 0) => false;
     public void Advance(double elapsedSeconds) { }
     public void Dispose() { }
 }

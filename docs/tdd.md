@@ -715,16 +715,20 @@ Squad
 
 ### 11.2 Containers
 
-One component for transports and buildings:
+Authoritative containment model for transports and buildings:
 
 ```
 Container { capacity_seats, passengers: [EntityId] }
 ```
 
-- Capacity counts people. An 8-person squad must split to fit a 4-seat jeep.
-- Passengers leave the spatial index and get a "contained in X" state.
-- When a container is destroyed, passengers take damage and are ejected.
-- Passengers of an enemy container are not sent to clients unless detected.
+- **Data-driven capacity**: Configured in unit data separate from crew (`passenger_capacity`: 11 on M113A1, 8 on BTR-70, 8 on prototype APC). Capacity counts people.
+- **Containment state**: Passengers keep their `EntityId`, health, and ammunition. They leave vehicle spatial collision indices, vision sweeps, and auto-fire target evaluation. Passenger position and support surface follow the transport in lockstep.
+- **Boarding**: Initiated by `BoardTransportCommand`. Infantry approaches the stationary vehicle. Capacity is reserved upon command acceptance to prevent overbooking from concurrent orders. Reserved seats are freed if the passenger changes orders, dies, or navigation fails. If the transport starts moving before boarding completes, the boarding order is aborted without endless pursuit.
+- **Disembarkation**: Initiated by `DisembarkCommand` targeting terrain or bridge decks. The transport stops, and `PassengerDistribution` deterministically places passengers using radial candidate rings with safety clearance from vehicles, structures, water, and each other. If available space is constrained, partial disembarkation occurs and unplaced passengers stay aboard. Disembarking on elevated bridges preserves bridge deck support surface (`SupportSurface = bridge_id`), preventing units from falling through into water.
+- **Container destruction**: When a container is destroyed, passengers take configured damage (`DefaultContainerDestructionDamage = 50`). Survivors evacuate onto adjacent valid ground. Casualties with depleted health receive infantry death presentation without leaving vehicle wrecks.
+- **Fog of war confidentiality**: Contained units produce no independent sensor sweeps or contacts. Enemy observations of transports never leak passenger counts or identities in network snapshots.
+- **Wire protocol (v25)**: Units replicate `ContainerId` (4 bytes), `PassengerCount` (1 byte), and `PassengerCapacity` (1 byte). State restores accurately on fresh client replicas without event history.
+- **Performance budget**: Zero managed heap allocations in simulation tick and UI presentation steady-state frames. Dedicated test ground `infantry-transport` covers the full cycle.
 
 ## 12. Commands and orders
 

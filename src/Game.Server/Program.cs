@@ -96,7 +96,8 @@ string[] validScenarios =
     "ustye-ground",
     "ustye-raid",
     "forest-visibility",
-    "infantry-playground"
+    "infantry-playground",
+    "infantry-transport"
 ];
 
 if (!validScenarios.Contains(scenario))
@@ -125,6 +126,7 @@ StaticGeometry? scenarioGeometry = scenario switch
     "ustye-raid" => UstyeRaidScenario.CreateStaticGeometry(),
     "forest-visibility" => ForestVisibilityScenario.CreateStaticGeometry(),
     "infantry-playground" => InfantryPlaygroundScenario.CreateStaticGeometry(),
+    "infantry-transport" => InfantryTransportScenario.CreateStaticGeometry(),
     "prototype" => null,
     _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
 };
@@ -147,6 +149,7 @@ MatchSetup setup = scenario switch
     "ustye-raid" => UstyeRaidScenario.CreateMatchSetup(scenarioGeometry!),
     "forest-visibility" => ForestVisibilityScenario.CreateMatchSetup(scenarioGeometry!),
     "infantry-playground" => InfantryPlaygroundScenario.CreateMatchSetup(scenarioGeometry!),
+    "infantry-transport" => InfantryTransportScenario.CreateMatchSetup(scenarioGeometry!),
     "prototype" => PrototypeScenario.CreateMatchSetup(map),
     _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
 };
@@ -181,6 +184,7 @@ Simulation CreateSimulation(ulong seed = 0)
         "ustye-raid" => UstyeRaidScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "forest-visibility" => ForestVisibilityScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "infantry-playground" => InfantryPlaygroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
+        "infantry-transport" => InfantryTransportScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "prototype" => PrototypeScenario.Create(map),
         _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
     };
@@ -321,6 +325,39 @@ if (smokeTest)
             throw new InvalidOperationException($"Infantry-playground smoke test: unit did not move. start={startPos} end={endPos}");
 
         Console.WriteLine($"INFANTRY_PLAYGROUND_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} moved={Vector2.Distance(startPos, endPos):F1}");
+        return;
+    }
+
+    if (scenario == "infantry-transport")
+    {
+        for (int i = 0; i < 20; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.Replica.OwnUnits.Length != 5)
+            throw new InvalidOperationException($"Infantry-transport smoke test: expected 5 own units, got {session.Replica.OwnUnits.Length}.");
+
+        EntityId transportId = session.Replica.OwnUnits[0].Id;
+        EntityId riflemanId = session.Replica.OwnUnits[1].Id;
+        bool boardQueued = session.BoardTransport(riflemanId, transportId);
+        for (int i = 0; i < 80; i++) session.Advance(1d / Simulation.TickRate);
+
+        OwnUnitObservation transObs = session.Replica.OwnUnits[0];
+        OwnUnitObservation rifleman = session.Replica.OwnUnits[1];
+        if (rifleman.ContainerId != transportId)
+            throw new InvalidOperationException($"Infantry-transport smoke test: rifleman failed to board. queued={boardQueued} transCap={transObs.PassengerCapacity} transCount={transObs.PassengerCount} riflemanCont={rifleman.ContainerId} riflePos={rifleman.Position} transPos={transObs.Position} dist={Vector2.Distance(rifleman.Position, transObs.Position)}");
+
+        session.Disembark(transportId, new Vector2(128f, 218f));
+        for (int i = 0; i < 200; i++)
+        {
+            session.Advance(1d / Simulation.TickRate);
+            rifleman = session.Replica.OwnUnits[1];
+            if (rifleman.ContainerId == default)
+                break;
+        }
+
+        rifleman = session.Replica.OwnUnits[1];
+        if (rifleman.ContainerId != default)
+            throw new InvalidOperationException($"Infantry-transport smoke test: rifleman failed to disembark. container={rifleman.ContainerId}");
+
+        Console.WriteLine($"INFANTRY_TRANSPORT_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} board_disembark=true");
         return;
     }
 

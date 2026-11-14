@@ -40,14 +40,15 @@ public partial class Main : Node3D
     private StaticGeometry? _scenarioGeometry;
     private UnitCatalog _catalog = null!;
     private SelectionCard _selectionCard = null!;
+    private ContextActionPanel _contextActionPanel = null!;
     private OrderNotification _orderNotification = null!;
     private RoleBadgeOverlay _roleBadgeOverlay = null!;
     private SelectionBoxOverlay _selectionBoxOverlay = null!;
     private readonly SelectionController _selectionController = new();
     private PanelContainer _topHud = null!, _bottomHud = null!;
     private TacticalMinimap _minimap = null!;
-    private readonly Rect2[] _badgeOccludingPanels = new Rect2[7];
-    private readonly Rect2[] _inputOccludingPanels = new Rect2[6];
+    private readonly Rect2[] _badgeOccludingPanels = new Rect2[8];
+    private readonly Rect2[] _inputOccludingPanels = new Rect2[7];
     private FogOfWarView? _fogOfWar;
     private string? _screenshotPath;
     private double _screenshotTimer = 0.5;
@@ -59,6 +60,10 @@ public partial class Main : Node3D
     private double _forestDemoTimer = 0.5;
     private bool _forestDemoTargetSpotted;
     private bool _forestDemoContactLost;
+    private string? _transportDemoCaptureDir;
+    private int _transportDemoStage = -1;
+    private double _transportDemoTimer = 0.5;
+    private bool _transportDemoStage2Arrived;
     private bool _showVehicleCollisionBounds;
     private readonly MeshInstance3D _collisionDebugMeshInstance = new();
     private readonly ImmediateMesh _collisionDebugMesh = new();
@@ -116,6 +121,7 @@ public partial class Main : Node3D
     internal CanvasLayer HudCanvas => _hudCanvas;
     internal MissionPanel? MissionPanel => _missionPanel;
     internal SelectionCard SelectionCard => _selectionCard;
+    internal ContextActionPanel ContextActionPanel => _contextActionPanel;
     internal OrderNotification OrderNotification => _orderNotification;
     internal RoleBadgeOverlay RoleBadgeOverlay => _roleBadgeOverlay;
     internal SelectionBoxOverlay SelectionBoxOverlay => _selectionBoxOverlay;
@@ -338,6 +344,11 @@ public partial class Main : Node3D
                     _forestDemoCaptureDir = args[i + 1];
                     i++;
                 }
+                else if (args[i] == "--transport-demo-capture" && i + 1 < args.Length)
+                {
+                    _transportDemoCaptureDir = args[i + 1];
+                    i++;
+                }
                 else if (args[i] == "--enemy-hold-fire")
                 {
                     enemyHoldFire = true;
@@ -501,6 +512,12 @@ public partial class Main : Node3D
                 _map = scenarioGeometry.HeightMap;
                 setup = InfantryPlaygroundScenario.CreateMatchSetup(scenarioGeometry);
             }
+            else if (_scenario == "infantry-transport")
+            {
+                scenarioGeometry = InfantryTransportScenario.CreateStaticGeometry();
+                _map = scenarioGeometry.HeightMap;
+                setup = InfantryTransportScenario.CreateMatchSetup(scenarioGeometry);
+            }
             else
             {
                 _map = HeightMap.CreatePrototype();
@@ -542,6 +559,7 @@ public partial class Main : Node3D
                     "ustye-raid" => UstyeRaidScenario.CreateSimulation(scenarioGeometry!),
                     "forest-visibility" => ForestVisibilityScenario.CreateSimulation(scenarioGeometry!),
                     "infantry-playground" => InfantryPlaygroundScenario.CreateSimulation(scenarioGeometry!),
+                    "infantry-transport" => InfantryTransportScenario.CreateSimulation(scenarioGeometry!),
                     _ => PrototypeScenario.Create(_map)
                 };
                 // Test switch: the enemy holds fire, so own units can be tried out without losing them.
@@ -603,6 +621,7 @@ public partial class Main : Node3D
             "ustye-raid" => 160,
             "forest-visibility" => 150,
             "infantry-playground" => 120,
+            "infantry-transport" => 120,
             _ => 112
         };
         _camera = new Camera3D { Projection = Camera3D.ProjectionType.Orthogonal, Size = initialCameraSize, Far = 3500, Current = true };
@@ -620,6 +639,7 @@ public partial class Main : Node3D
             "ustye-raid" => new Vector3(2160f, 10f, 2325f),
             "forest-visibility" => new Vector3(100f, 0f, 110f),
             "infantry-playground" => new Vector3(130f, 0f, 180f),
+            "infantry-transport" => new Vector3(128f, 0f, 195f),
             _ => new Vector3(64, 0, 64)
         };
         _hasExplicitCameraFocus = overrideCameraFocus.HasValue;
@@ -720,6 +740,10 @@ public partial class Main : Node3D
             {
                 _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
             }
+            else if (_scenario == "infantry-transport" && _session.Replica.OwnUnits.Length >= 1)
+            {
+                _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
+            }
         }
 
         _destination = new OrderDestinationView();
@@ -799,6 +823,15 @@ public partial class Main : Node3D
             UpdateVegetationDebugOverlay();
             _forestDemoStage = 0;
             _forestDemoTimer = 0.8;
+        }
+
+        if (_transportDemoCaptureDir is not null && _scenario == "infantry-transport")
+        {
+            _cameraRig.Model.CurrentSize = 80f;
+            _cameraRig.Model.SetZoom(80f);
+            _cameraRig.CenterOn(new Vector3(128f, 0f, 205f));
+            _transportDemoStage = 0;
+            _transportDemoTimer = 0.8;
         }
 
         if (_smokeTest && !ClientRegressionTests.Run(this))
@@ -970,6 +1003,7 @@ public partial class Main : Node3D
             _cameraRig.Update(delta, allowInput: false);
             ProcessScreenshot(delta);
             ProcessForestDemoCapture(delta);
+            ProcessTransportDemoCapture(delta);
             return;
         }
 
@@ -1047,8 +1081,74 @@ public partial class Main : Node3D
                     break;
                 }
             }
-            bool hasEnemyContact = TryGetTargetContactUnderMouse(mousePos, out _);
-            _previewController?.UpdateHover(_camera, mousePos, viewportSize, isOccluded, hasEnemyContact, _unitViews, _session.Replica);
+
+            if (_contextActionPanel?.TargetingMode == ContextTargetingMode.BoardTransport)
+            {
+                if (TryGetOwnUnitUnderMouse(mousePos, out EntityId hoverTransportId) &&
+                    _session.Replica.TryGetOwnUnit(hoverTransportId, out OwnUnitObservation hoverTrans))
+                {
+                    if (hoverTrans.PassengerCapacity > 0)
+                    {
+                        string transName = GetUnitDisplayName(hoverTrans.Definition);
+                        int seats = hoverTrans.PassengerCapacity - hoverTrans.PassengerCount;
+                        if (seats > 0)
+                        {
+                            _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Valid, $"Board {transName} ({seats} seats open) [LMB]");
+                        }
+                        else
+                        {
+                            _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Blocked, $"{transName} is full [LMB blocked]");
+                        }
+                    }
+                    else
+                    {
+                        _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Blocked, "Target is not a transport vehicle");
+                    }
+                }
+                else
+                {
+                    _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Adjusted, "Click friendly transport to board [Esc to cancel]");
+                }
+                _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
+            }
+            else if (_contextActionPanel?.TargetingMode == ContextTargetingMode.Disembark)
+            {
+                if (TryGetGroundPositionUnderMouse(mousePos, out NumericsVector2 groundPos))
+                {
+                    _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Valid, $"Unload at ({groundPos.X:0.0}, {groundPos.Y:0.0}) [LMB] [Esc to cancel]");
+                }
+                else
+                {
+                    _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Blocked, "Invalid ground location [Esc to cancel]");
+                }
+                _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
+            }
+            else
+            {
+                bool hasEnemyContact = TryGetTargetContactUnderMouse(mousePos, out _);
+                if (!hasEnemyContact &&
+                    HasSelectedInfantry() &&
+                    TryGetOwnUnitUnderMouse(mousePos, out EntityId hoverTransportId) &&
+                    _session.Replica.TryGetOwnUnit(hoverTransportId, out OwnUnitObservation hoverTrans) &&
+                    hoverTrans.PassengerCapacity > 0)
+                {
+                    string transName = GetUnitDisplayName(hoverTrans.Definition);
+                    int seats = hoverTrans.PassengerCapacity - hoverTrans.PassengerCount;
+                    if (seats > 0)
+                    {
+                        _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Valid, $"Board {transName} ({seats} seats open) [RMB]");
+                    }
+                    else
+                    {
+                        _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Blocked, $"{transName} is full [0 seats open]");
+                    }
+                    _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
+                }
+                else
+                {
+                    _previewController?.UpdateHover(_camera, mousePos, viewportSize, isOccluded, hasEnemyContact, _unitViews, _session.Replica);
+                }
+            }
         }
         else
         {
@@ -1104,6 +1204,7 @@ public partial class Main : Node3D
 
         ProcessScreenshot(delta);
         ProcessForestDemoCapture(delta);
+        ProcessTransportDemoCapture(delta);
 
         if (_screenshotOnFinishPath is not null && _missionPanel?.IsMissionFinished == true)
         {
@@ -1187,6 +1288,7 @@ public partial class Main : Node3D
                     "ustye-raid" => (_terrainWindingValid || (_ustyeMapView?.HasUpwardFrontFaces() ?? false)) && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
                     "forest-visibility" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 5 && CheckForestVisibilityCleanPositions(_session.Replica.OwnUnits),
                     "infantry-playground" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 4 && CheckInfantryPlaygroundCleanPositions(_session.Replica.OwnUnits),
+                    "infantry-transport" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 5,
                     _ => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
                         _session.Replica.OwnUnits[0].Position.Y > 24
                 };
@@ -1203,6 +1305,7 @@ public partial class Main : Node3D
                     "ustye-raid" => "USTYE_RAID_SMOKE",
                     "forest-visibility" => "FOREST_VISIBILITY_SMOKE",
                     "infantry-playground" => "INFANTRY_PLAYGROUND_SMOKE",
+                    "infantry-transport" => "INFANTRY_TRANSPORT_SMOKE",
                     _ => "M0_CLIENT_SMOKE"
                 };
                 string token = prefix + (ok ? "_OK" : "_FAILED");
@@ -1371,6 +1474,182 @@ public partial class Main : Node3D
                     _forestDemoStage = -1;
                     GetTree().Quit(0);
                 }
+            }
+        }
+    }
+
+    private void ProcessTransportDemoCapture(double delta)
+    {
+        if (_transportDemoCaptureDir is null || _transportDemoStage < 0)
+            return;
+
+        _transportDemoTimer -= delta;
+
+        if (_transportDemoStage == 0)
+        {
+            _unitViews.Selected.Clear();
+            _unitViews.Selected.Add(new EntityId(2));
+            _unitViews.Selected.Add(new EntityId(3));
+            _unitViews.Selected.Add(new EntityId(4));
+            _unitViews.Selected.Add(new EntityId(5));
+            UpdateSelectionPresentation();
+
+            if (_transportDemoTimer <= 0)
+            {
+                Image? img = GetViewport().GetTexture().GetImage();
+                if (img is not null)
+                {
+                    string p1 = System.IO.Path.Combine(_transportDemoCaptureDir, "transport_cycle_1_staging.png");
+                    img.SavePng(p1);
+                    GD.Print($"TRANSPORT_DEMO_SCREENSHOT 1: {p1}");
+                }
+
+                if (_session is LocalSession local)
+                {
+                    local.BoardTransport(new EntityId(2), new EntityId(1));
+                    local.BoardTransport(new EntityId(3), new EntityId(1));
+                    local.BoardTransport(new EntityId(4), new EntityId(1));
+                    local.BoardTransport(new EntityId(5), new EntityId(1));
+                }
+                _transportDemoStage = 1;
+                _transportDemoTimer = 2.0;
+            }
+        }
+        else if (_transportDemoStage == 1)
+        {
+            bool allBoarded = true;
+            for (uint u = 2; u <= 5; u++)
+            {
+                if (_session.Replica.TryGetOwnUnit(new EntityId(u), out OwnUnitObservation obs))
+                {
+                    if (obs.ContainerId.Value != 1)
+                    {
+                        allBoarded = false;
+                        break;
+                    }
+                }
+            }
+
+            if (allBoarded)
+            {
+                _unitViews.Selected.Clear();
+                _unitViews.Selected.Add(new EntityId(1));
+                UpdateSelectionPresentation();
+
+                if (_transportDemoTimer <= 0)
+                {
+                    Image? img = GetViewport().GetTexture().GetImage();
+                    if (img is not null)
+                    {
+                        string p2 = System.IO.Path.Combine(_transportDemoCaptureDir, "transport_cycle_2_boarded.png");
+                        img.SavePng(p2);
+                        GD.Print($"TRANSPORT_DEMO_SCREENSHOT 2: {p2}");
+                    }
+
+                    if (_session is LocalSession local)
+                    {
+                        local.Move(new EntityId(1), new NumericsVector2(128f, 165f));
+                    }
+                    _transportDemoStage = 2;
+                    _transportDemoStage2Arrived = false;
+                }
+            }
+        }
+        else if (_transportDemoStage == 2)
+        {
+            if (_session.Replica.TryGetOwnUnit(new EntityId(1), out OwnUnitObservation transObs))
+            {
+                float dist = NumericsVector2.Distance(transObs.Position, new NumericsVector2(128f, 165f));
+                _cameraRig.CenterOn(new Vector3(transObs.Position.X, 0f, transObs.Position.Y));
+
+                if (!_transportDemoStage2Arrived)
+                {
+                    if (dist < 2.0f)
+                    {
+                        _transportDemoStage2Arrived = true;
+                        _transportDemoTimer = 0.5;
+                    }
+                }
+                else if (_transportDemoTimer <= 0)
+                {
+                    Image? img = GetViewport().GetTexture().GetImage();
+                    if (img is not null)
+                    {
+                        string p3 = System.IO.Path.Combine(_transportDemoCaptureDir, "transport_cycle_3_conveyed.png");
+                        img.SavePng(p3);
+                        GD.Print($"TRANSPORT_DEMO_SCREENSHOT 3: {p3}");
+                    }
+
+                    if (_session is LocalSession local)
+                    {
+                        local.Disembark(new EntityId(1), new NumericsVector2(128f, 165f));
+                    }
+                    _transportDemoStage = 3;
+                    _transportDemoTimer = 0.8;
+                }
+            }
+        }
+        else if (_transportDemoStage == 3)
+        {
+            bool allDisembarked = true;
+            for (uint u = 2; u <= 5; u++)
+            {
+                if (_session.Replica.TryGetOwnUnit(new EntityId(u), out OwnUnitObservation obs))
+                {
+                    if (obs.ContainerId.Value != 0)
+                    {
+                        allDisembarked = false;
+                        break;
+                    }
+                }
+            }
+
+            if (allDisembarked)
+            {
+                _unitViews.Selected.Clear();
+                _unitViews.Selected.Add(new EntityId(2));
+                _unitViews.Selected.Add(new EntityId(3));
+                _unitViews.Selected.Add(new EntityId(4));
+                _unitViews.Selected.Add(new EntityId(5));
+                UpdateSelectionPresentation();
+
+                if (_transportDemoTimer <= 0)
+                {
+                    Image? img = GetViewport().GetTexture().GetImage();
+                    if (img is not null)
+                    {
+                        string p4 = System.IO.Path.Combine(_transportDemoCaptureDir, "transport_cycle_4_disembarked.png");
+                        img.SavePng(p4);
+                        GD.Print($"TRANSPORT_DEMO_SCREENSHOT 4: {p4}");
+                    }
+
+                    if (_session is LocalSession local)
+                    {
+                        local.Move(new EntityId(2), new NumericsVector2(85f, 165f));
+                        local.Move(new EntityId(3), new NumericsVector2(85f, 168f));
+                        local.Move(new EntityId(4), new NumericsVector2(85f, 162f));
+                        local.Move(new EntityId(5), new NumericsVector2(85f, 171f));
+                    }
+                    _transportDemoStage = 4;
+                    _transportDemoTimer = 3.0;
+                }
+            }
+        }
+        else if (_transportDemoStage == 4)
+        {
+            _cameraRig.CenterOn(new Vector3(105f, 0f, 165f));
+            if (_transportDemoTimer <= 0)
+            {
+                Image? img = GetViewport().GetTexture().GetImage();
+                if (img is not null)
+                {
+                    string p5 = System.IO.Path.Combine(_transportDemoCaptureDir, "transport_cycle_5_forest_advance.png");
+                    img.SavePng(p5);
+                    GD.Print($"TRANSPORT_DEMO_SCREENSHOT 5: {p5}");
+                }
+
+                _transportDemoStage = -1;
+                GetTree().Quit(0);
             }
         }
     }
@@ -1593,6 +1872,15 @@ public partial class Main : Node3D
 
             if (key.Keycode == Key.Escape)
             {
+                if (_contextActionPanel?.TargetingMode != ContextTargetingMode.None)
+                {
+                    _contextActionPanel?.CancelTargeting();
+                    _orderCursorOverlay?.HideTooltip();
+                    _status.Text = "Targeting cancelled";
+                    GetViewport().SetInputAsHandled();
+                    return;
+                }
+
                 if (_previewController?.IsFacingGestureActive == true)
                 {
                     _previewController.CancelFacingGesture();
@@ -1748,6 +2036,78 @@ public partial class Main : Node3D
         if (mouse.ButtonIndex == MouseButton.Left)
         {
             RefreshOccludingPanels();
+            if (SelectionController.IsPointOccluded(mouse.Position, _inputOccludingPanels))
+            {
+                return;
+            }
+
+            if (_contextActionPanel?.TargetingMode == ContextTargetingMode.BoardTransport)
+            {
+                if (TryGetOwnUnitUnderMouse(mouse.Position, out EntityId targetTransportId))
+                {
+                    if (_session.Replica.TryGetOwnUnit(targetTransportId, out OwnUnitObservation transObs))
+                    {
+                        if (transObs.PassengerCapacity == 0)
+                        {
+                            _orderNotification?.ShowNotification("Target is not a transport vehicle");
+                            _status.Text = "Target is not a transport vehicle";
+                        }
+                        else if (transObs.PassengerCount >= transObs.PassengerCapacity)
+                        {
+                            _orderNotification?.ShowNotification("Transport is full (0 seats available)");
+                            _status.Text = "Transport is full (0 seats available)";
+                        }
+                        else
+                        {
+                            int available = transObs.PassengerCapacity - transObs.PassengerCount;
+                            int total = _unitViews.Selected.Count;
+                            int sent = 0;
+                            foreach (EntityId soldierId in _unitViews.Selected)
+                            {
+                                if (sent < available)
+                                {
+                                    if (_session.BoardTransport(soldierId, targetTransportId))
+                                        sent++;
+                                }
+                            }
+                            string msg = sent < total
+                                ? $"Boarding transport #{targetTransportId.Value}: {sent} ordered to board ({total - sent} capacity exceeded)"
+                                : $"Boarding transport #{targetTransportId.Value}: {sent} infantry ordered to board";
+                            _orderNotification?.ShowNotification(msg);
+                            _status.Text = msg;
+                            _contextActionPanel.CancelTargeting();
+                            _orderCursorOverlay?.HideTooltip();
+                        }
+                    }
+                }
+                else
+                {
+                    _orderNotification?.ShowNotification("Click a friendly transport to board");
+                    _status.Text = "Click a friendly transport to board";
+                }
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if (_contextActionPanel?.TargetingMode == ContextTargetingMode.Disembark)
+            {
+                if (TryGetGroundPositionUnderMouse(mouse.Position, out NumericsVector2 groundPos))
+                {
+                    if (TryGetFirstSelectedUnit(out EntityId transportId))
+                    {
+                        _session.Disembark(transportId, groundPos);
+                        string transName = _session.Replica.TryGetOwnUnit(transportId, out OwnUnitObservation tObs) ? GetUnitDisplayName(tObs.Definition) : "Transport";
+                        string msg = $"Disembark order submitted for {transName}";
+                        _orderNotification?.ShowNotification(msg);
+                        _status.Text = msg;
+                        _contextActionPanel.CancelTargeting();
+                        _orderCursorOverlay?.HideTooltip();
+                    }
+                }
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
             if (_selectionController.BeginPress(mouse.Position, mouse.ShiftPressed, mouse.DoubleClick, _inputOccludingPanels))
             {
                 _selectionBoxOverlay?.HideBox();
@@ -1761,6 +2121,15 @@ public partial class Main : Node3D
             RefreshOccludingPanels();
             if (SelectionController.IsPointOccluded(mouse.Position, _inputOccludingPanels))
                 return;
+
+            if (_contextActionPanel?.TargetingMode != ContextTargetingMode.None)
+            {
+                _contextActionPanel?.CancelTargeting();
+                _orderCursorOverlay?.HideTooltip();
+                _status.Text = "Targeting cancelled";
+                GetViewport().SetInputAsHandled();
+                return;
+            }
 
             if (_unitViews.Selected.Count > 0)
             {
@@ -1781,6 +2150,48 @@ public partial class Main : Node3D
                     _orderNotification?.ShowNotification(attackMsg);
                     _status.Text = attackMsg;
                     return;
+                }
+
+                if (HasSelectedInfantry() &&
+                    TryGetOwnUnitUnderMouse(mouse.Position, out EntityId targetTransportId) &&
+                    _session.Replica.TryGetOwnUnit(targetTransportId, out OwnUnitObservation transObs) &&
+                    transObs.PassengerCapacity > 0)
+                {
+                    int available = transObs.PassengerCapacity - transObs.PassengerCount;
+                    if (available <= 0)
+                    {
+                        _orderNotification?.ShowNotification("Transport is full (0 seats available)");
+                        _status.Text = "Transport is full (0 seats available)";
+                        GetViewport().SetInputAsHandled();
+                        return;
+                    }
+
+                    int sent = 0;
+                    int total = 0;
+                    foreach (EntityId unitId in _unitViews.Selected)
+                    {
+                        if (_session.Replica.TryGetOwnUnit(unitId, out OwnUnitObservation obs) &&
+                            _catalog.Units[obs.Definition].Classification == "infantry")
+                        {
+                            total++;
+                            if (sent < available)
+                            {
+                                if (_session.BoardTransport(unitId, targetTransportId))
+                                    sent++;
+                            }
+                        }
+                    }
+
+                    if (sent > 0)
+                    {
+                        string msg = sent < total
+                            ? $"Boarding transport #{targetTransportId.Value}: {sent} ordered to board ({total - sent} capacity exceeded)"
+                            : $"Boarding transport #{targetTransportId.Value}: {sent} infantry ordered to board";
+                        _orderNotification?.ShowNotification(msg);
+                        _status.Text = msg;
+                        GetViewport().SetInputAsHandled();
+                        return;
+                    }
                 }
 
                 bool isReverse = Input.IsKeyPressed(Key.R);
@@ -1830,6 +2241,52 @@ public partial class Main : Node3D
             }
         }
         return found;
+    }
+
+    private bool TryGetOwnUnitUnderMouse(Vector2 mousePos, out EntityId unitId)
+    {
+        unitId = default;
+        if (_roleBadgeOverlay is not null &&
+            _roleBadgeOverlay.TryHitBadge(mousePos, out EntityId? badgeUnit, out _) &&
+            badgeUnit is not null)
+        {
+            unitId = badgeUnit.Value;
+            return true;
+        }
+
+        if (_unitViews is null) return false;
+
+        float nearestDistance = 28 * 28;
+        bool found = false;
+        foreach ((EntityId id, UnitView view) in _unitViews.Views)
+        {
+            if (!view.Root.Visible) continue;
+            Vector3 center = view.Root.Position + Vector3.Up;
+            if (_camera.IsPositionBehind(center)) continue;
+            float distance = _camera.UnprojectPosition(center).DistanceSquaredTo(mousePos);
+            if (distance < nearestDistance)
+            {
+                nearestDistance = distance;
+                unitId = id;
+                found = true;
+            }
+        }
+        return found;
+    }
+
+    private bool TryGetGroundPositionUnderMouse(Vector2 mousePos, out NumericsVector2 groundPos)
+    {
+        groundPos = default;
+        Vector3 origin = _camera.ProjectRayOrigin(mousePos);
+        Vector3 normal = _camera.ProjectRayNormal(mousePos);
+
+        if (MathF.Abs(normal.Y) < 1e-5f) return false;
+        float t = -origin.Y / normal.Y;
+        if (t < 0f) return false;
+        Vector3 hit = origin + normal * t;
+        if (hit.X < 0f || hit.X > _map.Width || hit.Z < 0f || hit.Z > _map.Depth) return false;
+        groundPos = new NumericsVector2(hit.X, hit.Z);
+        return true;
     }
 
     private void HandleLeftMouseMotion(Vector2 position)
@@ -1905,6 +2362,7 @@ public partial class Main : Node3D
         _inputOccludingPanels[3] = settingsRect;
         _inputOccludingPanels[4] = missionRect;
         _inputOccludingPanels[5] = minimapRect;
+        _inputOccludingPanels[6] = _contextActionPanel?.Visible == true ? _contextActionPanel.GetGlobalRect() : default;
 
         _badgeOccludingPanels[0] = topRect;
         _badgeOccludingPanels[1] = bottomRect;
@@ -1913,6 +2371,7 @@ public partial class Main : Node3D
         _badgeOccludingPanels[4] = settingsRect;
         _badgeOccludingPanels[5] = missionRect;
         _badgeOccludingPanels[6] = minimapRect;
+        _badgeOccludingPanels[7] = _contextActionPanel?.Visible == true ? _contextActionPanel.GetGlobalRect() : default;
     }
 
     internal static bool TryGetNavigationLargeDebugTarget(
@@ -2052,6 +2511,8 @@ public partial class Main : Node3D
                 _status.Text = _cachedStatusText;
             }
         }
+
+        _contextActionPanel?.UpdateContext(_unitViews.Selected, _session.Replica);
     }
 
     private static uint ComputeSelectionHash(HashSet<EntityId> set)
@@ -2084,6 +2545,46 @@ public partial class Main : Node3D
         }
         first = default;
         return false;
+    }
+
+    private bool HasSelectedInfantry()
+    {
+        foreach (EntityId id in _unitViews.Selected)
+        {
+            if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) &&
+                _catalog.Units[obs.Definition].Classification == "infantry")
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private string GetUnitDisplayName(ushort definition)
+    {
+        if (_catalog is not null && definition < _catalog.Units.Length)
+        {
+            UnitDefinition def = _catalog.Units[definition];
+            if (!string.IsNullOrWhiteSpace(def.Name)) return def.Name;
+            if (!string.IsNullOrWhiteSpace(def.Id)) return def.Id;
+        }
+        return "Transport";
+    }
+
+    private void OnDisembarkHereRequested()
+    {
+        if (TryGetFirstSelectedUnit(out EntityId transportId) &&
+            _session.Replica.TryGetOwnUnit(transportId, out OwnUnitObservation transObs) &&
+            transObs.PassengerCount > 0)
+        {
+            _session.Disembark(transportId, transObs.Position);
+            string transName = GetUnitDisplayName(transObs.Definition);
+            string msg = $"Disembarking passengers here from {transName}";
+            _orderNotification?.ShowNotification(msg);
+            _status.Text = msg;
+            _contextActionPanel?.CancelTargeting();
+            _orderCursorOverlay?.HideTooltip();
+        }
     }
 
     internal void UpdateViews()
@@ -2489,6 +2990,15 @@ public partial class Main : Node3D
         _selectionCard.OffsetRight = 24 + 380;
         canvas.AddChild(_selectionCard);
 
+        _contextActionPanel = new ContextActionPanel(_catalog);
+        _contextActionPanel.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.BottomLeft);
+        _contextActionPanel.OffsetLeft = 24;
+        _contextActionPanel.OffsetBottom = -96 - 100 - 8;
+        _contextActionPanel.OffsetTop = -96 - 100 - 8 - 44;
+        _contextActionPanel.OffsetRight = 24 + 380;
+        _contextActionPanel.DisembarkHereRequested += OnDisembarkHereRequested;
+        canvas.AddChild(_contextActionPanel);
+
         _orderNotification = new OrderNotification();
         _orderNotification.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.CenterBottom);
         _orderNotification.OffsetBottom = -96;
@@ -2797,6 +3307,17 @@ public partial class Main : Node3D
             Simulation localSimulation = InfantryPlaygroundScenario.CreateSimulation(scenarioGeometry);
             _session = new LocalSession(localSimulation, player: 1);
         }
+        else if (scenarioName == "infantry-transport")
+        {
+            scenarioGeometry = InfantryTransportScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = InfantryTransportScenario.CreateMatchSetup(scenarioGeometry);
+            _matchSetup = setup;
+            _scenarioGeometry = scenarioGeometry;
+            _catalog = ScenarioContent.LoadCatalog("infantry-transport");
+            Simulation localSimulation = InfantryTransportScenario.CreateSimulation(scenarioGeometry);
+            _session = new LocalSession(localSimulation, player: 1);
+        }
         else
         {
             throw new ArgumentException($"Unsupported test scenario: {scenarioName}");
@@ -2813,6 +3334,7 @@ public partial class Main : Node3D
             "ustye-raid" => new Vector3(2160f, 10f, 2325f),
             "forest-visibility" => new Vector3(100f, 0f, 110f),
             "infantry-playground" => new Vector3(130f, 0f, 180f),
+            "infantry-transport" => new Vector3(128f, 0f, 195f),
             _ => new Vector3(64, 0, 64)
         };
         float initialCameraSize = scenarioName switch
@@ -2822,6 +3344,7 @@ public partial class Main : Node3D
             "ustye-raid" => 160f,
             "forest-visibility" => 150f,
             "infantry-playground" => 120f,
+            "infantry-transport" => 120f,
             _ => 112f
         };
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
@@ -3015,6 +3538,7 @@ public partial class Main : Node3D
             "ustye-raid" => "USTYE RECON RAID",
             "forest-visibility" => "FOREST VISIBILITY POLYGON",
             "infantry-playground" => "INFANTRY PLAYGROUND",
+            "infantry-transport" => "INFANTRY TRANSPORT PROVING GROUND",
             _ => "M0 NETWORK TEST"
         };
         return $"DEAD GROUND   /   SIDE {assignedSide}   /   {name}";
@@ -3072,6 +3596,11 @@ public partial class Main : Node3D
         if (scenario == "infantry-playground")
         {
             return new Vector3(130f, 0f, 180f);
+        }
+
+        if (scenario == "infantry-transport")
+        {
+            return new Vector3(128f, 0f, 195f);
         }
 
         return fallbackFocus;

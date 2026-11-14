@@ -248,4 +248,21 @@ internal sealed partial class OrderCursorOverlay : Control
             Input.SetDefaultCursorShape(Input.CursorShape.Arrow);
         }
     }
+
+    public void SetCustomTooltip(bool visible, DestinationValidity validity, string text)
+    {
+        if (!visible)
+        {
+            HideTooltip();
+            return;
+        }
+
+        _hasState = false;
+        _panel.Visible = true;
+        _icon.Validity = validity;
+        _icon.IsMixed = false;
+        _icon.QueueRedraw();
+        _label.Text = text;
+        Input.SetDefaultCursorShape(validity == DestinationValidity.Blocked ? Input.CursorShape.Forbidden : Input.CursorShape.Cross);
+    }
 }
