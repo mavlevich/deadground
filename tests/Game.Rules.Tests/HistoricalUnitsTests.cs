@@ -72,6 +72,7 @@ public sealed class HistoricalUnitsTests
         Assert.Equal(ScenarioContent.LoadCatalog("battle").ContentHash, BattleScenario.CreateMatchSetup().ContentHash);
         Assert.Equal(ScenarioContent.LoadCatalog("combat").ContentHash, CombatScenario.CreateMatchSetup().ContentHash);
         Assert.Equal(ScenarioContent.LoadCatalog("recon-raid").ContentHash, ReconRaidScenario.CreateMatchSetup().ContentHash);
+        Assert.Equal(ScenarioContent.LoadCatalog("infantry-playground").ContentHash, InfantryPlaygroundScenario.CreateMatchSetup().ContentHash);
         Assert.Equal(ScenarioContent.LoadCatalog("prototype").ContentHash,
             PrototypeScenario.CreateMatchSetup(HeightMap.CreatePrototype()).ContentHash);
         Assert.NotEqual(ColdWarContent.LoadCatalog().ContentHash, PrototypeScenario.LoadCatalog().ContentHash);
@@ -87,6 +88,7 @@ public sealed class HistoricalUnitsTests
         Assert.Equal(2000, catalog.GetAmmoCapacity(catalog.RequireDefinition("m113a1")));
         Assert.Equal(500, catalog.GetAmmoCapacity(catalog.RequireDefinition("brdm2")));
         Assert.Equal(1000, catalog.GetAmmoCapacity(catalog.RequireDefinition("m151a2")));
+        Assert.Equal(210, catalog.GetAmmoCapacity(catalog.RequireDefinition("us_rifleman")));
     }
 
     [Fact]

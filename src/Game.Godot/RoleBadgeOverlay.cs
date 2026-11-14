@@ -213,6 +213,7 @@ internal sealed partial class RoleBadgeOverlay : Control
                     "recon" => "RECON",
                     "apc" => "APC",
                     "command_vehicle" => "CMD",
+                    "infantry" => "INF",
                     _ => def.Classification.ToUpperInvariant()
                 };
             }
@@ -227,6 +228,7 @@ internal sealed partial class RoleBadgeOverlay : Control
             ContactClassification.Apc => "APC",
             ContactClassification.CommandVehicle => "CMD",
             ContactClassification.Vehicle => "VEH",
+            ContactClassification.Infantry => "INF",
             _ => "UNIT"
         };
     }

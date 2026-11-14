@@ -130,5 +130,13 @@
   "m577": {
     "scene": "res://Assets/Vehicles/recon.glb",
     "scale": 1.0
+  },
+  "us_rifleman": {
+    "scene": "res://Assets/Infantry/US/us_rifleman.glb",
+    "scale": 1.0
+  },
+  "contact_infantry": {
+    "scene": "res://Assets/Infantry/US/us_rifleman.glb",
+    "scale": 1.0
   }
 }

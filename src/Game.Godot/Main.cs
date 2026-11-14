@@ -495,6 +495,12 @@ public partial class Main : Node3D
                 _map = scenarioGeometry.HeightMap;
                 setup = ForestVisibilityScenario.CreateMatchSetup(scenarioGeometry);
             }
+            else if (_scenario == "infantry-playground")
+            {
+                scenarioGeometry = InfantryPlaygroundScenario.CreateStaticGeometry();
+                _map = scenarioGeometry.HeightMap;
+                setup = InfantryPlaygroundScenario.CreateMatchSetup(scenarioGeometry);
+            }
             else
             {
                 _map = HeightMap.CreatePrototype();
@@ -535,6 +541,7 @@ public partial class Main : Node3D
                     "ustye-ground" => UstyeGroundScenario.CreateSimulation(scenarioGeometry!, setupIndex: _ustyeSetupIndex),
                     "ustye-raid" => UstyeRaidScenario.CreateSimulation(scenarioGeometry!),
                     "forest-visibility" => ForestVisibilityScenario.CreateSimulation(scenarioGeometry!),
+                    "infantry-playground" => InfantryPlaygroundScenario.CreateSimulation(scenarioGeometry!),
                     _ => PrototypeScenario.Create(_map)
                 };
                 // Test switch: the enemy holds fire, so own units can be tried out without losing them.
@@ -595,6 +602,7 @@ public partial class Main : Node3D
             "ustye-ground" => 220,
             "ustye-raid" => 160,
             "forest-visibility" => 150,
+            "infantry-playground" => 120,
             _ => 112
         };
         _camera = new Camera3D { Projection = Camera3D.ProjectionType.Orthogonal, Size = initialCameraSize, Far = 3500, Current = true };
@@ -611,6 +619,7 @@ public partial class Main : Node3D
             "ustye-ground" => new Vector3(2550f, 4.5f, 2450f),
             "ustye-raid" => new Vector3(2160f, 10f, 2325f),
             "forest-visibility" => new Vector3(100f, 0f, 110f),
+            "infantry-playground" => new Vector3(130f, 0f, 180f),
             _ => new Vector3(64, 0, 64)
         };
         _hasExplicitCameraFocus = overrideCameraFocus.HasValue;
@@ -704,6 +713,10 @@ public partial class Main : Node3D
                 }
             }
             else if (_scenario == "forest-visibility" && _session.Replica.OwnUnits.Length >= 1)
+            {
+                _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
+            }
+            else if (_scenario == "infantry-playground" && _session.Replica.OwnUnits.Length >= 1)
             {
                 _unitViews.Selected.Add(_session.Replica.OwnUnits[0].Id);
             }
@@ -1173,6 +1186,7 @@ public partial class Main : Node3D
                     "ustye-ground" => (_terrainWindingValid || (_ustyeMapView?.HasUpwardFrontFaces() ?? false)) && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 6,
                     "ustye-raid" => (_terrainWindingValid || (_ustyeMapView?.HasUpwardFrontFaces() ?? false)) && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 3,
                     "forest-visibility" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 5 && CheckForestVisibilityCleanPositions(_session.Replica.OwnUnits),
+                    "infantry-playground" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 4 && CheckInfantryPlaygroundCleanPositions(_session.Replica.OwnUnits),
                     _ => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
                         _session.Replica.OwnUnits[0].Position.Y > 24
                 };
@@ -1188,6 +1202,7 @@ public partial class Main : Node3D
                     "ustye-ground" => "USTYE_GROUND_SMOKE",
                     "ustye-raid" => "USTYE_RAID_SMOKE",
                     "forest-visibility" => "FOREST_VISIBILITY_SMOKE",
+                    "infantry-playground" => "INFANTRY_PLAYGROUND_SMOKE",
                     _ => "M0_CLIENT_SMOKE"
                 };
                 string token = prefix + (ok ? "_OK" : "_FAILED");
@@ -1209,6 +1224,24 @@ public partial class Main : Node3D
             ForestVisibilityScenario.ObserverBeltsStart,
             ForestVisibilityScenario.ObserverSparseStart,
             ForestVisibilityScenario.ObserverOpenStart,
+        ];
+        for (int i = 0; i < ownUnits.Length; i++)
+        {
+            if (ownUnits[i].NavStatus != PathRequestStatus.None) return false;
+            if ((ownUnits[i].Position - expectedPositions[i]).LengthSquared() > 0.01f) return false;
+        }
+        return true;
+    }
+
+    private static bool CheckInfantryPlaygroundCleanPositions(ReadOnlySpan<OwnUnitObservation> ownUnits)
+    {
+        if (ownUnits.Length != 4) return false;
+        NumericsVector2[] expectedPositions =
+        [
+            InfantryPlaygroundScenario.UsRiflemanOpen,
+            InfantryPlaygroundScenario.UsRiflemanForest,
+            InfantryPlaygroundScenario.UsRiflemanBridge,
+            InfantryPlaygroundScenario.UsRiflemanBuilding,
         ];
         for (int i = 0; i < ownUnits.Length; i++)
         {
@@ -2277,6 +2310,14 @@ public partial class Main : Node3D
                 targets[4] = ForestVisibilityScenario.TargetOpenPos;
                 targetCount = 5;
             }
+            else if (_scenario == "infantry-playground")
+            {
+                targets[0] = InfantryPlaygroundScenario.OpforRiflemanClearing;
+                targets[1] = InfantryPlaygroundScenario.OpforRiflemanBridge;
+                targets[2] = InfantryPlaygroundScenario.OpforRiflemanBuilding;
+                targets[3] = InfantryPlaygroundScenario.OpforVehiclePos;
+                targetCount = 4;
+            }
 
             for (int t = 0; t < targetCount; t++)
             {
@@ -2745,6 +2786,17 @@ public partial class Main : Node3D
             Simulation localSimulation = ForestVisibilityScenario.CreateSimulation(scenarioGeometry);
             _session = new LocalSession(localSimulation, player: 1);
         }
+        else if (scenarioName == "infantry-playground")
+        {
+            scenarioGeometry = InfantryPlaygroundScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = InfantryPlaygroundScenario.CreateMatchSetup(scenarioGeometry);
+            _matchSetup = setup;
+            _scenarioGeometry = scenarioGeometry;
+            _catalog = ScenarioContent.LoadCatalog("infantry-playground");
+            Simulation localSimulation = InfantryPlaygroundScenario.CreateSimulation(scenarioGeometry);
+            _session = new LocalSession(localSimulation, player: 1);
+        }
         else
         {
             throw new ArgumentException($"Unsupported test scenario: {scenarioName}");
@@ -2760,6 +2812,7 @@ public partial class Main : Node3D
             "recon-raid" => new Vector3(100, 0, 100),
             "ustye-raid" => new Vector3(2160f, 10f, 2325f),
             "forest-visibility" => new Vector3(100f, 0f, 110f),
+            "infantry-playground" => new Vector3(130f, 0f, 180f),
             _ => new Vector3(64, 0, 64)
         };
         float initialCameraSize = scenarioName switch
@@ -2768,6 +2821,7 @@ public partial class Main : Node3D
             "recon-raid" => 160f,
             "ustye-raid" => 160f,
             "forest-visibility" => 150f,
+            "infantry-playground" => 120f,
             _ => 112f
         };
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
@@ -2960,6 +3014,7 @@ public partial class Main : Node3D
             "ustye-ground" => "USTYE PLAYGROUND",
             "ustye-raid" => "USTYE RECON RAID",
             "forest-visibility" => "FOREST VISIBILITY POLYGON",
+            "infantry-playground" => "INFANTRY PLAYGROUND",
             _ => "M0 NETWORK TEST"
         };
         return $"DEAD GROUND   /   SIDE {assignedSide}   /   {name}";
@@ -3012,6 +3067,11 @@ public partial class Main : Node3D
         if (scenario == "forest-visibility")
         {
             return new Vector3(100f, 0f, 110f);
+        }
+
+        if (scenario == "infantry-playground")
+        {
+            return new Vector3(130f, 0f, 180f);
         }
 
         return fallbackFocus;

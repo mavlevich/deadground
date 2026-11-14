@@ -22,7 +22,8 @@ public enum WeaponPresentationKind : byte
 {
     None = 0,
     Cannon = 1,
-    MachineGun = 2
+    MachineGun = 2,
+    Rifle = 3
 }
 
 public static class WeaponPresentation
@@ -37,6 +38,7 @@ public static class WeaponPresentation
         {
             (byte)WeaponPresentationKind.Cannon => WeaponPresentationKind.Cannon,
             (byte)WeaponPresentationKind.MachineGun => WeaponPresentationKind.MachineGun,
+            (byte)WeaponPresentationKind.Rifle => WeaponPresentationKind.Rifle,
             _ => WeaponPresentationKind.None
         };
     }
@@ -46,6 +48,9 @@ public static class WeaponPresentation
 
     public static bool IsCannon(ushort presentationId) =>
         GetKind(presentationId) == WeaponPresentationKind.Cannon;
+
+    public static bool IsRifle(ushort presentationId) =>
+        GetKind(presentationId) == WeaponPresentationKind.Rifle;
 }
 
 public readonly record struct AccuracyPoint(float Range, float HitProbability);
@@ -126,7 +131,8 @@ public readonly record struct UnitCombatProfile(
     WeaponDefinition? Weapon,
     float TurretTraverseRate = 0f,
     UnitArmor Armor = default,
-    float Radius = 1.0f);
+    float Radius = 1.0f,
+    bool LeavesWreck = true);
 
 /// <summary>
 /// Catalog interface providing combat profiles to combat systems.

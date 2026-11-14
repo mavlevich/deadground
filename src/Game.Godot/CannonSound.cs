@@ -11,6 +11,7 @@ internal static class CannonSound
     internal const int SampleRate = 44100;
     internal const float Duration = 3.0f;
     internal const float BurstDuration = 1.0f;
+    internal const float RifleDuration = 0.6f;
     internal const float GroundImpactDuration = 0.4f;
     internal const float Peak = 0.95f;
 
@@ -38,6 +39,82 @@ internal static class CannonSound
             Stereo = false,
             Data = data
         };
+    }
+
+    internal static AudioStreamWav CreateRifleStream(int seed)
+    {
+        float[] samples = RenderRifleBurst(seed);
+        byte[] data = new byte[samples.Length * 2];
+        for (int i = 0; i < samples.Length; i++)
+        {
+            short pcm = (short)MathF.Round(samples[i] * 32767f);
+            data[i * 2] = (byte)(pcm & 0xFF);
+            data[i * 2 + 1] = (byte)((pcm >> 8) & 0xFF);
+        }
+        return new AudioStreamWav
+        {
+            Format = AudioStreamWav.FormatEnum.Format16Bits,
+            MixRate = SampleRate,
+            Stereo = false,
+            Data = data
+        };
+    }
+
+    internal static float[] RenderRifleBurst(int seed)
+    {
+        int count = (int)(SampleRate * RifleDuration);
+        Random rand = new(seed);
+        float[] dry = new float[count];
+
+        int shotCount = 3;
+        float shotInterval = 0.075f;
+
+        float hp = 0f, hpPrev = 0f, b1 = 0f, b2 = 0f;
+        for (int i = 0; i < count; i++)
+        {
+            float t = (float)i / SampleRate;
+            float white = (float)rand.NextDouble() * 2f - 1f;
+
+            hp = 0.90f * (hp + white - hpPrev);
+            hpPrev = white;
+
+            float k = Coefficient(800f + 1600f * MathF.Exp(-t / 0.10f));
+            b1 += (white - b1) * k;
+            b2 += (b1 - b2) * k;
+
+            float burstSignal = 0f;
+            for (int s = 0; s < shotCount; s++)
+            {
+                float shotTime = s * shotInterval;
+                if (t >= shotTime)
+                {
+                    float dt = t - shotTime;
+                    if (dt < 0.05f)
+                    {
+                        float crack = hp * MathF.Exp(-dt / 0.004f);
+                        float pop = b2 * MathF.Sin(MathF.Tau * 380f * dt) * MathF.Exp(-dt / 0.018f);
+                        burstSignal += crack * 0.8f + pop * 0.45f;
+                    }
+                }
+            }
+
+            float tail = b1 * 0.08f * MathF.Exp(-t / 0.15f);
+            dry[i] = burstSignal + tail;
+        }
+
+        float maxAbs = 0.0001f;
+        for (int i = 0; i < count; i++)
+        {
+            float a = MathF.Abs(dry[i]);
+            if (a > maxAbs) maxAbs = a;
+        }
+        float scale = (Peak * 0.85f) / maxAbs;
+        for (int i = 0; i < count; i++)
+        {
+            dry[i] *= scale;
+        }
+
+        return dry;
     }
 
     internal static float[] RenderBurst(int seed)

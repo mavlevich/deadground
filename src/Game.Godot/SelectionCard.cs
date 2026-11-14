@@ -339,6 +339,7 @@ internal sealed partial class SelectionCard : PanelContainer
                 "recon" => "Scout",
                 "apc" => "Armored Personnel Carrier",
                 "command_vehicle" => "Command Vehicle",
+                "infantry" => "Infantry",
                 _ => def.Classification
             };
         }
@@ -366,6 +367,7 @@ internal sealed partial class SelectionCard : PanelContainer
         "mg_14_5mm_kpvt" => "14.5mm KPVT HMG",
         "mg_12_7mm_m2hb" => "12.7mm M2HB HMG",
         "mg_7_62mm_m60" => "7.62mm M60 MG",
+        "rifle_5_56mm_m16a1" => "5.56mm M16A1 Rifle",
         _ => id
     };
 
@@ -375,6 +377,7 @@ internal sealed partial class SelectionCard : PanelContainer
         ContactClassification.Recon => "Recon Vehicle",
         ContactClassification.Apc => "APC",
         ContactClassification.CommandVehicle => "Command Vehicle",
+        ContactClassification.Infantry => "Infantry",
         ContactClassification.Vehicle => "Vehicle",
         _ => "Unknown"
     };

@@ -198,7 +198,7 @@ public sealed class ClientLifecycleController : IDisposable
         if (statusDescription.Contains("ProtocolVersionMismatch", StringComparison.OrdinalIgnoreCase) ||
             statusDescription.Contains("ProtocolMismatch", StringComparison.OrdinalIgnoreCase))
         {
-            return "Protocol version mismatch with server. Server requires protocol v23.";
+            return $"Protocol version mismatch with server. Server requires protocol v{MatchSetup.CurrentProtocolVersion}.";
         }
 
         if (statusDescription.Contains("ContentMismatch", StringComparison.OrdinalIgnoreCase))
