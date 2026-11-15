@@ -70,6 +70,27 @@ public sealed class WorldState : IDisposable
 
     private record struct Identity(EntityId Id, int Owner, ushort Definition);
 
+    public sealed class ContainerData
+    {
+        public int Capacity;
+        public int ReservedSeats;
+        public int PassengerCount;
+        public readonly EntityId[] Passengers = new EntityId[32];
+    }
+
+    public readonly record struct PendingDisembarkOrder(
+        uint Sequence,
+        int Player,
+        Vector2 Target,
+        uint Surface,
+        int WaitTicks = 0);
+
+    private readonly Dictionary<EntityId, ContainerData> _containers = new();
+    private readonly List<EntityId> _containerIds = new(32);
+    private readonly Dictionary<EntityId, EntityId> _containedIn = new();
+    private readonly Dictionary<EntityId, EntityId> _boardingOrders = new();
+    private readonly Dictionary<EntityId, PendingDisembarkOrder> _pendingDisembarks = new();
+
     public WorldState(HeightMap map, int capacity = 1024, ReadOnlySpan<int> playerTeams = default)
     {
         ArgumentNullException.ThrowIfNull(map);
@@ -120,7 +141,16 @@ public sealed class WorldState : IDisposable
         int LastMovedTick = -1,
         bool HasSwitchedTargetThisReload = false);
 
-    public EntityId CreateUnit(int owner, ushort definition, Vector2 position, float speed, int maxHealth = 100, int ammo = 0, float initialTurretYaw = 0f, uint initialSupportSurface = 0)
+    public EntityId CreateUnit(
+        int owner,
+        ushort definition,
+        Vector2 position,
+        float speed,
+        int maxHealth = 100,
+        int ammo = 0,
+        float initialTurretYaw = 0f,
+        uint initialSupportSurface = 0,
+        int passengerCapacity = 0)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (Count == Capacity) throw new InvalidOperationException("World capacity exceeded.");
@@ -148,12 +178,49 @@ public sealed class WorldState : IDisposable
             new Position(position), new Motion(position, speed, false, initialSupportSurface), combat);
         _entities[Count] = entity;
         _indices.Add(id, Count++);
+
+        if (passengerCapacity > 0)
+        {
+            RegisterContainer(id, passengerCapacity);
+        }
+
         return id;
     }
 
     public bool RemoveUnit(EntityId id)
     {
         if (!_indices.Remove(id, out int index)) return false;
+
+        if (_boardingOrders.Remove(id, out EntityId targetTransport))
+        {
+            ReleaseSeatReservation(targetTransport);
+        }
+        _pendingDisembarks.Remove(id);
+        if (_containedIn.Remove(id, out EntityId containerId))
+        {
+            if (_containers.TryGetValue(containerId, out ContainerData? c))
+            {
+                int pIdx = Array.IndexOf(c.Passengers, id, 0, c.PassengerCount);
+                if (pIdx >= 0)
+                {
+                    for (int i = pIdx; i < c.PassengerCount - 1; i++)
+                    {
+                        c.Passengers[i] = c.Passengers[i + 1];
+                    }
+                    c.PassengerCount--;
+                    c.Passengers[c.PassengerCount] = default;
+                }
+            }
+        }
+        if (_containers.Remove(id, out ContainerData? container))
+        {
+            _containerIds.Remove(id);
+            for (int i = 0; i < container.PassengerCount; i++)
+            {
+                _containedIn.Remove(container.Passengers[i]);
+            }
+        }
+
         _storage.Destroy(_entities[index]);
         Count--;
         RemovalCount++;
@@ -163,6 +230,158 @@ public sealed class WorldState : IDisposable
             _indices[_storage.Get<Identity>(_entities[index]).Id] = index;
         }
         return true;
+    }
+
+    public void RegisterContainer(EntityId id, int capacity)
+    {
+        if (capacity > 0)
+        {
+            _containers[id] = new ContainerData { Capacity = capacity };
+            if (!_containerIds.Contains(id)) _containerIds.Add(id);
+        }
+    }
+
+    public bool IsContainer(EntityId id) => _containers.ContainsKey(id);
+    public int ContainerCount => _containerIds.Count;
+    public EntityId GetContainerIdAt(int index) => _containerIds[index];
+    public int GetContainerCapacity(EntityId id) => _containers.TryGetValue(id, out ContainerData? c) ? c.Capacity : 0;
+    public int GetPassengerCount(EntityId id) => _containers.TryGetValue(id, out ContainerData? c) ? c.PassengerCount : 0;
+    public int GetReservedSeats(EntityId id) => _containers.TryGetValue(id, out ContainerData? c) ? c.ReservedSeats : 0;
+    public int GetAvailableSeats(EntityId id) => _containers.TryGetValue(id, out ContainerData? c) ? Math.Max(0, c.Capacity - c.PassengerCount - c.ReservedSeats) : 0;
+
+    public bool TryReserveSeat(EntityId transportId)
+    {
+        if (_containers.TryGetValue(transportId, out ContainerData? c))
+        {
+            if (c.PassengerCount + c.ReservedSeats < c.Capacity)
+            {
+                c.ReservedSeats++;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public void ReleaseSeatReservation(EntityId transportId)
+    {
+        if (_containers.TryGetValue(transportId, out ContainerData? c) && c.ReservedSeats > 0)
+        {
+            c.ReservedSeats--;
+        }
+    }
+
+    public bool IsContained(EntityId unitId) => _containedIn.ContainsKey(unitId);
+    public EntityId GetContainerId(EntityId unitId) => _containedIn.TryGetValue(unitId, out EntityId cId) ? cId : default;
+
+    public ReadOnlySpan<EntityId> GetPassengers(EntityId transportId)
+    {
+        if (_containers.TryGetValue(transportId, out ContainerData? c))
+            return c.Passengers.AsSpan(0, c.PassengerCount);
+        return [];
+    }
+
+    public bool Board(EntityId transportId, EntityId passengerId)
+    {
+        if (!_containers.TryGetValue(transportId, out ContainerData? c)) return false;
+        if (c.PassengerCount >= c.Capacity) return false;
+        if (_containedIn.ContainsKey(passengerId)) return false;
+
+        if (_boardingOrders.Remove(passengerId))
+        {
+            if (c.ReservedSeats > 0) c.ReservedSeats--;
+        }
+
+        c.Passengers[c.PassengerCount++] = passengerId;
+        _containedIn[passengerId] = transportId;
+
+        if (TryGetUnit(transportId, out UnitState transport))
+        {
+            SetPosition(passengerId, transport.Position);
+            UpdateUnitNavigation(passengerId, transport.Position, transport.Position, false, supportSurface: transport.SupportSurface);
+        }
+        return true;
+    }
+
+    public bool Disembark(EntityId transportId, EntityId passengerId, Vector2 destination, uint supportSurface = 0)
+    {
+        if (!_containers.TryGetValue(transportId, out ContainerData? c)) return false;
+        if (!_containedIn.TryGetValue(passengerId, out EntityId containerId) || containerId != transportId) return false;
+
+        int idx = -1;
+        for (int i = 0; i < c.PassengerCount; i++)
+        {
+            if (c.Passengers[i] == passengerId)
+            {
+                idx = i;
+                break;
+            }
+        }
+        if (idx < 0) return false;
+
+        for (int i = idx; i < c.PassengerCount - 1; i++)
+        {
+            c.Passengers[i] = c.Passengers[i + 1];
+        }
+        c.PassengerCount--;
+        c.Passengers[c.PassengerCount] = default;
+        _containedIn.Remove(passengerId);
+
+        SetPosition(passengerId, destination);
+        UpdateUnitNavigation(passengerId, destination, destination, false, supportSurface: supportSurface);
+        return true;
+    }
+
+    public bool SetBoardingOrder(EntityId unitId, EntityId transportId)
+    {
+        _boardingOrders[unitId] = transportId;
+        return true;
+    }
+
+    public bool TryGetBoardingTarget(EntityId unitId, out EntityId transportId) => _boardingOrders.TryGetValue(unitId, out transportId);
+
+    public bool ClearBoardingOrder(EntityId unitId)
+    {
+        if (_boardingOrders.Remove(unitId, out EntityId transportId))
+        {
+            ReleaseSeatReservation(transportId);
+            return true;
+        }
+        return false;
+    }
+
+    public int PendingDisembarkCount => _pendingDisembarks.Count;
+
+    public void SetPendingDisembark(EntityId transportId, uint sequence, int player, Vector2 target, uint surface)
+    {
+        _pendingDisembarks[transportId] = new PendingDisembarkOrder(sequence, player, target, surface);
+    }
+
+    public bool TryGetPendingDisembark(EntityId transportId, out PendingDisembarkOrder order) =>
+        _pendingDisembarks.TryGetValue(transportId, out order);
+
+    public void UpdatePendingDisembark(EntityId transportId, PendingDisembarkOrder order) =>
+        _pendingDisembarks[transportId] = order;
+
+    public bool ClearPendingDisembark(EntityId transportId) =>
+        _pendingDisembarks.Remove(transportId);
+
+    public void UpdateContainedPositions()
+    {
+        for (int k = 0; k < _containerIds.Count; k++)
+        {
+            EntityId transportId = _containerIds[k];
+            if (!_containers.TryGetValue(transportId, out ContainerData? container) || container.PassengerCount == 0)
+                continue;
+            if (!TryGetUnit(transportId, out UnitState transport))
+                continue;
+
+            for (int i = 0; i < container.PassengerCount; i++)
+            {
+                EntityId passengerId = container.Passengers[i];
+                SetPosition(passengerId, transport.Position);
+                UpdateUnitNavigation(passengerId, transport.Position, transport.Position, false, supportSurface: transport.SupportSurface);
+            }
+        }
     }
 
     public UnitState GetUnitAt(int index)

@@ -520,6 +520,7 @@ internal static class TacticalMinimapRegressionTests
         public double PendingSeconds => 0.0;
         public CommandResult? LastCommandResult => null;
         public GroupMoveResult? LastGroupMoveResult => null;
+        public DisembarkResult? LastDisembarkResult => null;
         public uint LastSubmittedCommandSequence => 0;
         public long RejectedCommands => 0;
         public bool IsConnected => true;
@@ -567,6 +568,8 @@ internal static class TacticalMinimapRegressionTests
         public bool Move(EntityId unit, NumericsVector2 target, float? finalFacing = null, MoveMode mode = MoveMode.Forward, uint? targetSurface = null) => true;
         public bool GroupMove(ReadOnlyMemory<EntityId> units, NumericsVector2 target, uint targetSurface = 0, float? finalFacing = null, MoveMode mode = MoveMode.Forward) => true;
         public bool SetFireStance(EntityId unit, FireStance stance) => true;
+        public bool BoardTransport(EntityId unit, EntityId transport) => true;
+        public bool Disembark(EntityId transport, NumericsVector2 target, uint targetSurface = 0) => true;
         public void Advance(double elapsedSeconds) { }
         public void Disconnect() { }
         public void Dispose() { }

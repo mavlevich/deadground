@@ -132,7 +132,8 @@ public readonly record struct UnitCombatProfile(
     float TurretTraverseRate = 0f,
     UnitArmor Armor = default,
     float Radius = 1.0f,
-    bool LeavesWreck = true);
+    bool LeavesWreck = true,
+    int ContainerDestructionDamage = 50);
 
 /// <summary>
 /// Catalog interface providing combat profiles to combat systems.

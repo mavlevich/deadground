@@ -137,6 +137,14 @@ public sealed class DetectionSystem : ISimulationSystem
             _unitTurretYaws[i] = hasCombat ? cs.TurretYaw : 0f;
             _unitHullHeadings[i] = hasCombat ? cs.HullHeading : 0f;
 
+            if (world.IsContained(u.Id))
+            {
+                _unitHasSensor[i] = false;
+                _unitClassifications[i] = ContactClassification.Infantry;
+                _unitTargetPoints[i] = null;
+                continue;
+            }
+
             if (_catalog.TryGetProfile(u.Definition, out UnitPerceptionProfile profile))
             {
                 _unitClassifications[i] = profile.Classification;

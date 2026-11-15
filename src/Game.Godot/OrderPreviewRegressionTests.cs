@@ -1659,6 +1659,7 @@ internal static class OrderPreviewRegressionTests
         public double PendingSeconds => 0;
         public CommandResult? LastCommandResult { get; set; }
         public GroupMoveResult? LastGroupMoveResult { get; set; }
+        public DisembarkResult? LastDisembarkResult { get; set; }
         public DestinationEvaluator? Evaluator { get; set; }
         public IUnitMovementCatalog? MovementCatalog { get; set; }
         public uint LastSubmittedCommandSequence { get; set; }
@@ -1741,6 +1742,8 @@ internal static class OrderPreviewRegressionTests
 
         public bool Attack(EntityId unit, ContactId target) => true;
         public bool SetFireStance(EntityId unit, FireStance stance) => true;
+        public bool BoardTransport(EntityId unit, EntityId transport) => true;
+        public bool Disembark(EntityId transport, NumericsVector2 target, uint targetSurface = 0) => true;
         public void Advance(double elapsedSeconds) { }
         public void Dispose() { }
     }

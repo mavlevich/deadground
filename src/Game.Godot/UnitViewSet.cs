@@ -179,7 +179,16 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
             }
             int maxHealth = _maxHealthProvider?.Invoke(unit.Definition) ?? GetDefaultMaxHealth(unit.Definition);
             view.UpdateHealth(unit.Health, maxHealth);
-            view.SetSelected(Selected.Contains(unit.Id));
+            if (unit.ContainerId != default)
+            {
+                Selected.Remove(unit.Id);
+                view.Root.Visible = false;
+            }
+            else
+            {
+                view.Root.Visible = true;
+                view.SetSelected(Selected.Contains(unit.Id));
+            }
         }
         _removed.Clear();
         foreach (EntityId id in Views.Keys)

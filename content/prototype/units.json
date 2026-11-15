@@ -107,6 +107,8 @@
     },
     {
       "id": "apc",
+      "passenger_capacity": 8,
+      "container_destruction_damage": 50,
       "speed": 6.5,
       "reverse_speed": 3.2,
       "can_pivot": true,

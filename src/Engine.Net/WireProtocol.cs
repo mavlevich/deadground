@@ -25,7 +25,7 @@ public static class WireProtocol
     public const int CommandResultSize = 11;
     public const int MissionSize = 32;
     public const int SnapshotHeaderSize = 18 + MissionSize;
-    public const int UnitSize = 39;
+    public const int UnitSize = 45;
     public const int MaxUnits = 1024;
     public const int ContactSize = 28;
     public const int MaxContacts = 256;
@@ -41,6 +41,9 @@ public static class WireProtocol
     public const int GroupMoveResultHeaderSize = 27;
     public const int GroupMovePlacedRecordSize = 21;
     public const int GroupMoveUnplacedRecordSize = 5;
+    public const int BoardTransportSize = 18;
+    public const int DisembarkSize = 26;
+    public const int DisembarkResultSize = 17;
 
     public const byte MoveKind = 1;
     public const byte SnapshotKind = 2;
@@ -52,6 +55,9 @@ public static class WireProtocol
     public const byte SetFireStanceKind = 8;
     public const byte GroupMoveKind = 9;
     public const byte GroupMoveResultKind = 10;
+    public const byte BoardTransportKind = 11;
+    public const byte DisembarkKind = 12;
+    public const byte DisembarkResultKind = 13;
 
     // Yaw in 65536 steps over a full turn: code 32768 is exactly 0, and the quarter turns are exact too.
     // +pi and -pi share code 0.
@@ -375,6 +381,84 @@ public static class WireProtocol
         return true;
     }
 
+    public static void WriteBoardTransport(Span<byte> bytes, BoardTransportCommand command)
+    {
+        if (bytes.Length < BoardTransportSize) throw new ArgumentException("Buffer is too small.");
+        bytes[0] = Version; bytes[1] = BoardTransportKind;
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[2..], command.Sequence);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[6..], command.ClientTick);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[10..], command.Unit.Value);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[14..], command.Transport.Value);
+    }
+
+    public static bool TryReadBoardTransport(ReadOnlySpan<byte> bytes, out BoardTransportCommand command)
+    {
+        command = default;
+        if (bytes.Length != BoardTransportSize || bytes[0] != Version || bytes[1] != BoardTransportKind) return false;
+        uint sequence = BinaryPrimitives.ReadUInt32LittleEndian(bytes[2..]);
+        int tick = BinaryPrimitives.ReadInt32LittleEndian(bytes[6..]);
+        uint unitId = BinaryPrimitives.ReadUInt32LittleEndian(bytes[10..]);
+        uint transportId = BinaryPrimitives.ReadUInt32LittleEndian(bytes[14..]);
+        if (sequence == 0 || unitId == 0 || transportId == 0 || tick < 0) return false;
+        command = new BoardTransportCommand(sequence, tick, new EntityId(unitId), new EntityId(transportId));
+        return true;
+    }
+
+    public static void WriteDisembark(Span<byte> bytes, DisembarkCommand command)
+    {
+        if (bytes.Length < DisembarkSize) throw new ArgumentException("Buffer is too small.");
+        bytes[0] = Version; bytes[1] = DisembarkKind;
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[2..], command.Sequence);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[6..], command.ClientTick);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[10..], command.Transport.Value);
+        BinaryPrimitives.WriteSingleLittleEndian(bytes[14..], command.Target.X);
+        BinaryPrimitives.WriteSingleLittleEndian(bytes[18..], command.Target.Y);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[22..], command.TargetSurface);
+    }
+
+    public static bool TryReadDisembark(ReadOnlySpan<byte> bytes, out DisembarkCommand command)
+    {
+        command = default;
+        if (bytes.Length != DisembarkSize || bytes[0] != Version || bytes[1] != DisembarkKind) return false;
+        uint sequence = BinaryPrimitives.ReadUInt32LittleEndian(bytes[2..]);
+        int tick = BinaryPrimitives.ReadInt32LittleEndian(bytes[6..]);
+        uint transportId = BinaryPrimitives.ReadUInt32LittleEndian(bytes[10..]);
+        float targetX = BinaryPrimitives.ReadSingleLittleEndian(bytes[14..]);
+        float targetY = BinaryPrimitives.ReadSingleLittleEndian(bytes[18..]);
+        uint targetSurface = BinaryPrimitives.ReadUInt32LittleEndian(bytes[22..]);
+        if (sequence == 0 || transportId == 0 || tick < 0 || !float.IsFinite(targetX) || !float.IsFinite(targetY)) return false;
+        command = new DisembarkCommand(sequence, tick, new EntityId(transportId), new Vector2(targetX, targetY), targetSurface);
+        return true;
+    }
+
+    public static int WriteDisembarkResult(Span<byte> bytes, DisembarkResult result)
+    {
+        if (bytes.Length < DisembarkResultSize) throw new ArgumentException("Buffer is too small.");
+        bytes[0] = Version; bytes[1] = DisembarkResultKind;
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[2..], result.Sequence);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[6..], result.ServerTick);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[10..], result.Transport.Value);
+        bytes[14] = result.DisembarkedCount;
+        bytes[15] = result.RemainingCount;
+        bytes[16] = result.Success ? (byte)1 : (byte)0;
+        return DisembarkResultSize;
+    }
+
+    public static bool TryReadDisembarkResult(ReadOnlySpan<byte> bytes, out DisembarkResult result)
+    {
+        result = default;
+        if (bytes.Length != DisembarkResultSize || bytes[0] != Version || bytes[1] != DisembarkResultKind) return false;
+        uint sequence = BinaryPrimitives.ReadUInt32LittleEndian(bytes[2..]);
+        int tick = BinaryPrimitives.ReadInt32LittleEndian(bytes[6..]);
+        uint transportId = BinaryPrimitives.ReadUInt32LittleEndian(bytes[10..]);
+        byte disembarked = bytes[14];
+        byte remaining = bytes[15];
+        bool success = bytes[16] == 1;
+        if (sequence == 0 || tick < 0 || transportId == 0) return false;
+        result = new DisembarkResult(sequence, tick, new EntityId(transportId), disembarked, remaining, success);
+        return true;
+    }
+
     public static int WriteHandshakeRequest(Span<byte> bytes, MatchSetup setup)
     {
         int stringByteCount = Encoding.UTF8.GetByteCount(setup.RuleSetId);
@@ -483,6 +567,9 @@ public static class WireProtocol
             BinaryPrimitives.WriteUInt16LittleEndian(record[31..], QuantizeYaw(unit.TurretYaw));
             BinaryPrimitives.WriteUInt16LittleEndian(record[33..], QuantizeYaw(unit.HullHeading));
             BinaryPrimitives.WriteUInt32LittleEndian(record[35..], unit.NavOrderSequence);
+            BinaryPrimitives.WriteUInt32LittleEndian(record[39..], unit.ContainerId.Value);
+            record[43] = unit.PassengerCount;
+            record[44] = unit.PassengerCapacity;
         }
 
         int contactsOffset = SnapshotHeaderSize + units.Length * UnitSize;
@@ -661,6 +748,9 @@ public static class WireProtocol
             float turretYaw = DequantizeYaw(BinaryPrimitives.ReadUInt16LittleEndian(record[31..]));
             float hullHeading = DequantizeYaw(BinaryPrimitives.ReadUInt16LittleEndian(record[33..]));
             uint navOrderSequence = BinaryPrimitives.ReadUInt32LittleEndian(record[35..]);
+            uint containerIdVal = BinaryPrimitives.ReadUInt32LittleEndian(record[39..]);
+            byte passengerCount = record[43];
+            byte passengerCapacity = record[44];
 
             if (id.Value == 0 || !float.IsFinite(position.X) || !float.IsFinite(position.Y) ||
                 navStatusByte > (byte)PathRequestStatus.WaitingForClearance ||
@@ -682,7 +772,10 @@ public static class WireProtocol
                 (FireStance)stanceByte,
                 turretYaw,
                 hullHeading,
-                navOrderSequence);
+                navOrderSequence,
+                new EntityId(containerIdVal),
+                passengerCount,
+                passengerCapacity);
         }
 
         int contactsOffset = SnapshotHeaderSize + unitCount * UnitSize;

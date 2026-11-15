@@ -227,6 +227,36 @@ public sealed class SimulationHost : IDisposable
                         DroppedCommandResults++;
                 }
             }
+            else if (kind == WireProtocol.BoardTransportKind)
+            {
+                if (connectionId == 0 || _admittedConnectionIds[player - 1] != connectionId)
+                    continue;
+
+                if (WireProtocol.TryReadBoardTransport(_receive.AsSpan(0, length), out BoardTransportCommand command))
+                {
+                    bool queued = _simulation.TryEnqueue(player, command);
+                    WireProtocol.WriteCommandResult(_reply, new CommandResult(command.Sequence, Tick, queued));
+                    if (_transport.TrySend(player, _reply.AsSpan(0, WireProtocol.CommandResultSize)))
+                        BytesSent += WireProtocol.CommandResultSize;
+                    else
+                        DroppedCommandResults++;
+                }
+            }
+            else if (kind == WireProtocol.DisembarkKind)
+            {
+                if (connectionId == 0 || _admittedConnectionIds[player - 1] != connectionId)
+                    continue;
+
+                if (WireProtocol.TryReadDisembark(_receive.AsSpan(0, length), out DisembarkCommand command))
+                {
+                    bool queued = _simulation.TryEnqueue(player, command);
+                    WireProtocol.WriteCommandResult(_reply, new CommandResult(command.Sequence, Tick, queued));
+                    if (_transport.TrySend(player, _reply.AsSpan(0, WireProtocol.CommandResultSize)))
+                        BytesSent += WireProtocol.CommandResultSize;
+                    else
+                        DroppedCommandResults++;
+                }
+            }
         }
 
         // Bound work per call, not elapsed time. Later calls drain the remaining debt.
@@ -245,6 +275,13 @@ public sealed class SimulationHost : IDisposable
                     while (_simulation.TryPopGroupMoveResult(p, out GroupMoveResult groupResult))
                     {
                         int written = WireProtocol.WriteGroupMoveResult(_send, groupResult);
+                        if (_transport.TrySend(p, _send.AsSpan(0, written)))
+                            BytesSent += written;
+                    }
+
+                    while (_simulation.TryPopDisembarkResult(p, out DisembarkResult disembarkResult))
+                    {
+                        int written = WireProtocol.WriteDisembarkResult(_send, disembarkResult);
                         if (_transport.TrySend(p, _send.AsSpan(0, written)))
                             BytesSent += written;
                     }

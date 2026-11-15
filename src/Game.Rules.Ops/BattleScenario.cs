@@ -18,12 +18,12 @@ public static class ColdWarContent
 // cannot run on the server with one catalog and on the client with another.
 public static class ScenarioContent
 {
-    public static bool UsesColdWarContent(string scenario) => scenario == "battle" || scenario == "vehicle-traffic" || scenario == "group-move" || scenario == "ustye-ground" || scenario == "ustye-raid" || scenario == "forest-visibility" || scenario == "infantry-playground";
+    public static bool UsesColdWarContent(string scenario) => scenario == "battle" || scenario == "vehicle-traffic" || scenario == "group-move" || scenario == "ustye-ground" || scenario == "ustye-raid" || scenario == "forest-visibility" || scenario == "infantry-playground" || scenario == "infantry-transport";
 
     public static UnitCatalog LoadCatalog(string scenario) =>
         scenario switch
         {
-            "battle" or "vehicle-traffic" or "group-move" or "ustye-ground" or "ustye-raid" or "forest-visibility" or "infantry-playground" => ColdWarContent.LoadCatalog(),
+            "battle" or "vehicle-traffic" or "group-move" or "ustye-ground" or "ustye-raid" or "forest-visibility" or "infantry-playground" or "infantry-transport" => ColdWarContent.LoadCatalog(),
             "bridge-crossing" => BridgeCrossingScenario.LoadCatalog(),
             _ => PrototypeScenario.LoadCatalog()
         };
@@ -153,7 +153,7 @@ public static class BattleScenario
         UnitDefinition def = catalog.RequireDefinition(type);
         Vector2 dir = enemySide - position;
         float initialYaw = MathF.Atan2(-dir.X, -dir.Y);
-        world.CreateUnit(player, catalog.RequireDefinitionIndex(type), position, def.Speed, def.MaxHealth, catalog.GetAmmoCapacity(def), initialYaw);
+        world.CreateUnit(player, catalog.RequireDefinitionIndex(type), position, def.Speed, def.MaxHealth, catalog.GetAmmoCapacity(def), initialYaw, passengerCapacity: catalog.GetPassengerCapacity(def));
     }
 
     public static MatchSetup CreateMatchSetup(StaticGeometry? geometry = null, string ruleSetId = "Battle", UnitCatalog? catalog = null)

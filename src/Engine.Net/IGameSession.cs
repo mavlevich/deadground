@@ -12,6 +12,7 @@ public interface IGameSession : IDisposable
     double PendingSeconds { get; }
     CommandResult? LastCommandResult { get; }
     GroupMoveResult? LastGroupMoveResult { get; }
+    DisembarkResult? LastDisembarkResult { get; }
     uint LastSubmittedCommandSequence { get; }
     long RejectedCommands { get; }
     bool IsConnected { get; }
@@ -21,5 +22,7 @@ public interface IGameSession : IDisposable
     bool GroupMove(ReadOnlyMemory<EntityId> units, System.Numerics.Vector2 target, uint targetSurface = 0, float? finalFacing = null, MoveMode mode = MoveMode.Forward);
     bool Attack(EntityId unit, ContactId target);
     bool SetFireStance(EntityId unit, FireStance stance);
+    bool BoardTransport(EntityId unit, EntityId transport);
+    bool Disembark(EntityId transport, System.Numerics.Vector2 target, uint targetSurface = 0);
     void Advance(double elapsedSeconds);
 }

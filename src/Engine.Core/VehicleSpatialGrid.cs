@@ -73,6 +73,12 @@ public sealed class VehicleSpatialGrid
             UnitState unit = world.GetUnitAt(i);
             _positions[i] = unit.Position;
 
+            if (world.IsContained(unit.Id))
+            {
+                _next[i] = -1;
+                continue;
+            }
+
             if (!catalog.TryGetProfile(unit.Definition, out UnitMovementProfile profile) || profile.EffectiveCollisionRadius <= 0f)
             {
                 _next[i] = -1;

@@ -49,6 +49,27 @@ public readonly record struct GroupMoveResult(
 
 public readonly record struct AttackCommand(uint Sequence, int ClientTick, EntityId Unit, ContactId Target);
 
+public readonly record struct BoardTransportCommand(
+    uint Sequence,
+    int ClientTick,
+    EntityId Unit,
+    EntityId Transport);
+
+public readonly record struct DisembarkCommand(
+    uint Sequence,
+    int ClientTick,
+    EntityId Transport,
+    Vector2 Target,
+    uint TargetSurface = 0);
+
+public readonly record struct DisembarkResult(
+    uint Sequence,
+    int ServerTick,
+    EntityId Transport,
+    byte DisembarkedCount,
+    byte RemainingCount,
+    bool Success);
+
 public enum FireStance : byte
 {
     FireAtWill = 0,
@@ -133,7 +154,10 @@ public readonly record struct OwnUnitObservation(
     FireStance Stance = FireStance.FireAtWill,
     float TurretYaw = 0f,
     float HullHeading = 0f,
-    uint NavOrderSequence = 0);
+    uint NavOrderSequence = 0,
+    EntityId ContainerId = default,
+    byte PassengerCount = 0,
+    byte PassengerCapacity = 0);
 
 public interface ISimulationRules
 {
