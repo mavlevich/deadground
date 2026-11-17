@@ -10,6 +10,8 @@ namespace DeadGround.Client;
 /// </summary>
 internal sealed partial class SettingsPanel : CanvasLayer
 {
+    public static readonly bool IsHeadlessDisplay = DisplayServer.GetName() == "headless";
+
     private const string ConfigPath = "user://display_settings.cfg";
     private readonly Control _backdrop;
     private readonly PanelContainer _container;
@@ -359,7 +361,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
         if (windowSizeOverride.HasValue) return windowSizeOverride.Value;
         try
         {
-            if (DisplayServer.GetName() != "headless")
+            if (!IsHeadlessDisplay)
             {
                 Vector2I winSize = DisplayServer.WindowGetSize();
                 if (winSize.X > 0 && winSize.Y > 0) return winSize;
@@ -405,7 +407,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
     {
         try
         {
-            if (DisplayServer.GetName() != "headless")
+            if (!IsHeadlessDisplay)
             {
                 DisplayServer.WindowSetVsyncMode(settings.VSyncEnabled
                     ? DisplayServer.VSyncMode.Enabled

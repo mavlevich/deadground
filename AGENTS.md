@@ -56,6 +56,14 @@ These are hard rules, enforced for project references, SDK use and resolved comp
 - Clients never receive enemy `EntityId` values. Enemies are contacts.
 - Unit, weapon and faction types are data, not classes or enums.
 
+## Rendering and performance rules
+
+- Keep steady-state frame and camera updates allocation-free: no per-frame LINQ, boxing, mesh rebuilds, or new collections in render updates.
+- Partition large terrain and scene geometry into chunks with frustum culling, distance or screen-space LOD, and bounded per-frame instantiation.
+- Disable shadow casting on flat surface layers (water, roads, ground pads) and keep terrain/prop shadow proxies decoupled from specific map views.
+- Scale only the 3D scene buffer (`Scaling3DScale`) so 2D UI, badges, text, and minimap stay at native resolution across aspect ratios.
+- Measure before and after frame pacing metrics (windowed and fullscreen) alongside visual checks when changing rendering, geometry, or shadows.
+
 ## Build and test
 
 ```sh

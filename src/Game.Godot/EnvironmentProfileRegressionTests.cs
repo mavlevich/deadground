@@ -29,9 +29,10 @@ internal static class EnvironmentProfileRegressionTests
         CheckShadowZoomTiersAndFlatLayerShadows(scene);
         CheckShadowTargetLifecycleAcrossMapSwitch(scene);
         CheckRenderScaleViewportMapping(scene);
+        CheckChunkedTerrainSharedEdgesAndLod(scene);
         CheckRegressionFailurePropagation();
 
-        GD.Print("ENVIRONMENT_PROFILE_REGRESSIONS_OK 16/16 passed: load_profiles validation required_fields apply_light runtime_switching haze_scaling haze_mode hashes_unaffected zero_allocations quality_levels preview_saved_quality road_normals render_budget shadow_zoom_tiers map_switch_lifecycle render_scale_msaa");
+        GD.Print("ENVIRONMENT_PROFILE_REGRESSIONS_OK 17/17 passed: load_profiles validation required_fields apply_light runtime_switching haze_scaling haze_mode hashes_unaffected zero_allocations quality_levels preview_saved_quality road_normals render_budget shadow_zoom_tiers map_switch_lifecycle render_scale_msaa chunked_terrain_lod");
     }
 
     private static void Require(bool condition, string message)
@@ -599,8 +600,7 @@ internal static class EnvironmentProfileRegressionTests
         UstyePlanData plan = UstyePlanData.Load();
         UstyeMapView ustye = new(plan, includeScaleVehicles: false);
         HeightMap battleMap = HeightMap.CreatePrototype();
-        MeshInstance3D terrainMesh = TerrainView.Create(battleMap);
-        TerrainShadowTarget terrainTarget = new(terrainMesh);
+        TerrainView terrain = TerrainView.Create(battleMap);
         EnvironmentView envView = new();
 
         scene.AddChild(ustye);
@@ -615,14 +615,14 @@ internal static class EnvironmentProfileRegressionTests
             scene.RemoveChild(ustye);
             ustye.QueueFree();
             envView.SetShadowTarget(null);
-            scene.AddChild(terrainMesh);
-            envView.UpdateShadowTierForCamera(220f, terrainTarget);
-            Require(!terrainTarget.TerrainShadowsEnabled, "Battle TerrainView wide zoom must disable terrain shadows.");
+            scene.AddChild(terrain);
+            envView.UpdateShadowTierForCamera(220f, terrain);
+            Require(!terrain.TerrainShadowsEnabled, "Battle TerrainView wide zoom must disable terrain shadows.");
 
-            // Zoom to close and mutate quality/profile repeatedly: must affect terrainTarget without touching queued-free ustye
-            envView.UpdateShadowTierForCamera(35f, terrainTarget);
+            // Zoom to close and mutate quality/profile repeatedly: must affect terrain without touching queued-free ustye
+            envView.UpdateShadowTierForCamera(35f, terrain);
             envView.UpdateShadowFade(0.35);
-            Require(terrainTarget.TerrainShadowsEnabled, "Battle TerrainView close zoom must enable terrain shadows.");
+            Require(terrain.TerrainShadowsEnabled, "Battle TerrainView close zoom must enable terrain shadows.");
             envView.SetQuality(EnvironmentQuality.Medium);
             envView.SetProfile(EnvironmentProfile.Load("clear_afternoon"));
             Require(envView.Sun.DirectionalShadowMode == DirectionalLight3D.ShadowMode.Parallel2Splits,
@@ -630,7 +630,7 @@ internal static class EnvironmentProfileRegressionTests
         }
         finally
         {
-            if (GodotObject.IsInstanceValid(terrainMesh)) terrainMesh.QueueFree();
+            if (GodotObject.IsInstanceValid(terrain)) terrain.QueueFree();
             envView.QueueFree();
         }
     }
@@ -675,6 +675,413 @@ internal static class EnvironmentProfileRegressionTests
             vp.Scaling3DScale = origScale;
             vp.Scaling3DMode = origMode;
             vp.Msaa3D = origMsaa;
+        }
+    }
+
+    private static void CheckChunkedTerrainSharedEdgesAndLod(Node3D scene)
+    {
+        // 1. Non-divisible rectangular map with steep ridges and narrow hollow
+        const int cols = 146;
+        const int rows = 94;
+        ushort[] heights = new ushort[cols * rows];
+        for (int z = 0; z < rows; z++)
+        {
+            for (int x = 0; x < cols; x++)
+            {
+                float h = 12f + 10f * MathF.Sin(x * 0.08f) * MathF.Cos(z * 0.07f);
+                if (x >= 40 && x <= 60 && z >= 30 && z <= 50)
+                {
+                    // Steep hollow to verify shadow proxy lowers beneath valley floor
+                    h = 2f;
+                }
+                heights[z * cols + x] = (ushort)MathF.Round(MathF.Max(0f, h) * 100f);
+            }
+        }
+        HeightMap rectMap = new(cols, rows, 2f, 0.01f, heights);
+        TerrainView rectTerrain = TerrainView.Create(rectMap);
+        scene.AddChild(rectTerrain);
+        try
+        {
+            Require(rectTerrain.ChunkCols == 2 && rectTerrain.ChunkRows == 1,
+                $"Expected 2x1 chunks for 145x93 cells, got {rectTerrain.ChunkCols}x{rectTerrain.ChunkRows}.");
+            Require(rectTerrain.HasUpwardFrontFaces(), "Rectangular terrain chunks must have upward front faces.");
+
+            // Shared edge positions & normals must match bit-for-bit at every LOD
+            TerrainView.TerrainChunk left = rectTerrain.Chunks[0];
+            TerrainView.TerrainChunk right = rectTerrain.Chunks[1];
+            for (int li = 0; li < rectTerrain.LodStrides.Count; li++)
+            {
+                int stride = rectTerrain.LodStrides[li];
+                int[] lxs = TerrainView.BuildSampleIndices(left.StartCellX, left.EndCellX, stride);
+                int[] lzs = TerrainView.BuildSampleIndices(left.StartCellZ, left.EndCellZ, stride);
+                int[] rxs = TerrainView.BuildSampleIndices(right.StartCellX, right.EndCellX, stride);
+                int[] rzs = TerrainView.BuildSampleIndices(right.StartCellZ, right.EndCellZ, stride);
+                Require(lzs.Length == rzs.Length, "Shared Z sample count must match between adjacent chunks.");
+
+                using Godot.Collections.Array la = left.LodMeshes[li].SurfaceGetArrays(0);
+                using Godot.Collections.Array ra = right.LodMeshes[li].SurfaceGetArrays(0);
+                Vector3[] lv = la[(int)Mesh.ArrayType.Vertex].AsVector3Array();
+                Vector3[] rv = ra[(int)Mesh.ArrayType.Vertex].AsVector3Array();
+                Vector3[] ln = la[(int)Mesh.ArrayType.Normal].AsVector3Array();
+                Vector3[] rn = ra[(int)Mesh.ArrayType.Normal].AsVector3Array();
+
+                for (int iz = 0; iz < lzs.Length; iz++)
+                {
+                    int liIdx = iz * lxs.Length + (lxs.Length - 1);
+                    int riIdx = iz * rxs.Length;
+                    Require(lv[liIdx].IsEqualApprox(rv[riIdx]),
+                        $"Shared edge vertex mismatch at LOD {li}, row {iz}: {lv[liIdx]} vs {rv[riIdx]}.");
+                    Require(ln[liIdx].IsEqualApprox(rn[riIdx]),
+                        $"Shared edge normal mismatch at LOD {li}, row {iz}: {ln[liIdx]} vs {rn[riIdx]}.");
+                }
+            }
+
+            // Visible chunks must not cast shadows; shadow proxies stay ShadowsOnly and toggle via Visible
+            foreach (TerrainView.TerrainChunk chunk in rectTerrain.Chunks)
+            {
+                Require(chunk.VisibleInstance.CastShadow == GeometryInstance3D.ShadowCastingSetting.Off,
+                    "Visible terrain chunk must have CastShadow=Off.");
+                Require(chunk.ShadowProxyInstance is not null &&
+                        chunk.ShadowProxyInstance.CastShadow == GeometryInstance3D.ShadowCastingSetting.ShadowsOnly &&
+                        chunk.ShadowProxyInstance.Visible,
+                    "Shadow proxy chunk must use ShadowsOnly and Visible=true when enabled.");
+            }
+            rectTerrain.SetTerrainShadowsEnabled(false);
+            foreach (TerrainView.TerrainChunk chunk in rectTerrain.Chunks)
+            {
+                Require(chunk.ShadowProxyInstance!.CastShadow == GeometryInstance3D.ShadowCastingSetting.ShadowsOnly &&
+                        !chunk.ShadowProxyInstance.Visible,
+                    "Disabling terrain shadows must keep CastShadow=ShadowsOnly and hide proxy via Visible=false.");
+            }
+            rectTerrain.SetTerrainShadowsEnabled(true);
+            foreach (TerrainView.TerrainChunk chunk in rectTerrain.Chunks)
+            {
+                Require(chunk.ShadowProxyInstance!.CastShadow == GeometryInstance3D.ShadowCastingSetting.ShadowsOnly &&
+                        chunk.ShadowProxyInstance.Visible,
+                    "Re-enabling terrain shadows must keep CastShadow=ShadowsOnly and set Visible=true.");
+            }
+        }
+        finally
+        {
+            scene.RemoveChild(rectTerrain);
+            rectTerrain.QueueFree();
+        }
+
+        // 2. Diagonal edge-crossing 4m error counterexample (34x33 map, terminal odd column)
+        const int ceCols = 34;
+        const int ceRows = 33;
+        ushort[] ceSamples = new ushort[ceCols * ceRows];
+        ceSamples[1 * ceCols + 33] = 800;
+        ceSamples[2 * ceCols + 33] = 1600;
+        ceSamples[3 * ceCols + 33] = 800;
+        HeightMap counterExampleMap = new(ceCols, ceRows, 1f, 0.01f, ceSamples);
+        int[] ceXs = TerrainView.BuildSampleIndices(0, ceCols - 1, 2);
+        int[] ceZs = TerrainView.BuildSampleIndices(0, ceRows - 1, 2);
+        float ceErr = TerrainView.ComputeExactMaxHeightError(counterExampleMap, ceXs, ceZs);
+        Require(ceErr >= 3.99f, $"Expected >= 4.0m diagonal edge-crossing error, got {ceErr:F3}m.");
+        int pickedCeLod = TerrainView.SelectOrthoLodIndex(
+            metersPerPixel: 70f / 800f,
+            baseCellSizeMeters: 1f,
+            strides: [1, 2],
+            maxHeightErrors: [0f, ceErr],
+            previousLodIndex: 0,
+            previousMetersPerPixel: -1f);
+        Require(pickedCeLod == 0, $"Selector must reject stride 2 with {ceErr:F3}m error, picked LOD {pickedCeLod}.");
+
+        // 3. Stride-8 shadow proxy compensation with hollow outside first chunk (201x201, chunkCells=100)
+        const int spCols = 201;
+        const int spRows = 201;
+        ushort[] spSamples = new ushort[spCols * spRows];
+        Array.Fill(spSamples, (ushort)1000);
+        spSamples[111 * spCols + 111] = 0;
+        HeightMap spMap = new(spCols, spRows, 1f, 0.01f, spSamples);
+        TerrainView spTerrain = TerrainView.Create(spMap, chunkCells: 100, shadowStride: 8);
+        scene.AddChild(spTerrain);
+        try
+        {
+            Require(spTerrain.ChunkCols == 2 && spTerrain.ChunkRows == 2,
+                $"Expected 2x2 chunks for 201x201 map, got {spTerrain.ChunkCols}x{spTerrain.ChunkRows}.");
+            TerrainView.TerrainChunk chunk11 = spTerrain.Chunks[3];
+            int[] pxs = TerrainView.BuildSampleIndices(chunk11.StartCellX, chunk11.EndCellX, 8);
+            int[] pzs = TerrainView.BuildSampleIndices(chunk11.StartCellZ, chunk11.EndCellZ, 8);
+            using Godot.Collections.Array pa = chunk11.ShadowProxyInstance!.Mesh.SurfaceGetArrays(0);
+            Vector3[] pv = pa[(int)Mesh.ArrayType.Vertex].AsVector3Array();
+            float hollowProxyY = TerrainView.EvaluateSurfaceHeightAtWorld(spMap, pxs, pzs, pv, 111f, 111f);
+            Require(hollowProxyY <= 0.001f,
+                $"Stride-8 shadow proxy must drop below 0m hollow at (111,111), got {hollowProxyY:F3}m.");
+
+            // Shared proxy boundary between chunk (0,1) and (1,1) must match bit-for-bit
+            TerrainView.TerrainChunk chunk01 = spTerrain.Chunks[2];
+            int[] pxs01 = TerrainView.BuildSampleIndices(chunk01.StartCellX, chunk01.EndCellX, 8);
+            using Godot.Collections.Array pa01 = chunk01.ShadowProxyInstance!.Mesh.SurfaceGetArrays(0);
+            Vector3[] pv01 = pa01[(int)Mesh.ArrayType.Vertex].AsVector3Array();
+            for (int iz = 0; iz < pzs.Length; iz++)
+            {
+                Vector3 leftSeam = pv01[iz * pxs01.Length + (pxs01.Length - 1)];
+                Vector3 rightSeam = pv[iz * pxs.Length];
+                Require(leftSeam.IsEqualApprox(rightSeam),
+                    $"Shadow proxy shared boundary mismatch at row {iz}: {leftSeam} vs {rightSeam}.");
+            }
+        }
+        finally
+        {
+            scene.RemoveChild(spTerrain);
+            spTerrain.QueueFree();
+        }
+
+        // 4. Synthetic rough map + grid never below active surface + 2x pixel height invariant
+        const int rCols = 201;
+        const int rRows = 201;
+        ushort[] roughSamples = new ushort[rCols * rRows];
+        for (int z = 0; z < rRows; z++)
+        {
+            for (int x = 0; x < rCols; x++)
+            {
+                float h = 15f + 6f * MathF.Sin(x * 0.25f) + 5f * MathF.Cos(z * 0.20f)
+                    + (x == 103 && z == 103 ? -12f : 0f);
+                roughSamples[z * rCols + x] = (ushort)MathF.Round(MathF.Max(0f, h) * 100f);
+            }
+        }
+        HeightMap roughMap = new(rCols, rRows, 2f, 0.01f, roughSamples);
+        TerrainView roughTerrain = TerrainView.Create(roughMap);
+        MeshInstance3D roughGrid = TerrainView.CreateGrid(roughMap);
+        roughTerrain.AttachGrid(roughGrid);
+        scene.AddChild(roughTerrain);
+        scene.AddChild(roughGrid);
+        try
+        {
+            // Verify MaxCellScreenPixels=20 and error caps hold at every zoom
+            foreach (float camSize in new[] { 35f, 160f, 360f, 900f, 2200f })
+            {
+                float mpp = camSize / 900f;
+                int picked = TerrainView.SelectOrthoLodIndex(
+                    mpp,
+                    roughMap.CellSize,
+                    roughTerrain.LodStrides.ToArray(),
+                    roughTerrain.GlobalMaxHeightErrors.ToArray(),
+                    0,
+                    previousMetersPerPixel: -1f);
+                float cellScreenPx = (roughTerrain.LodStrides[picked] * roughMap.CellSize) / mpp;
+                if (picked > 0)
+                {
+                    Require(cellScreenPx <= TerrainView.MaxCellScreenPixels + 0.01f,
+                        $"Selected coarse LOD {picked} has cell width {cellScreenPx:F2}px > {TerrainView.MaxCellScreenPixels}px.");
+                }
+                Require(roughTerrain.GlobalMaxHeightErrors[picked] <= TerrainView.MaxWorldHeightErrorMeters,
+                    $"Selected LOD {picked} exceeds max world error.");
+                Require(roughTerrain.GlobalMaxHeightErrors[picked] / mpp <= TerrainView.MaxScreenHeightErrorPixels + 0.01f,
+                    $"Selected LOD {picked} exceeds max screen height error.");
+            }
+            // At cameraSize=160 (mpp=160/900=0.1778), stride=2 (4m) is 22.5px > 20px, so no coarse LOD may be picked
+            Require(TerrainView.SelectOrthoLodIndex(
+                160f / 900f, roughMap.CellSize, roughTerrain.LodStrides.ToArray(), roughTerrain.GlobalMaxHeightErrors.ToArray(), 0, -1f) == 0,
+                "Must keep LOD 0 while stride 2 cell exceeds MaxCellScreenPixels.");
+
+            // 2x window height must pick finer or equal LOD at same cameraSize
+            roughTerrain.UpdateLod(Camera3D.ProjectionType.Orthogonal, 500f, 900f);
+            int strideAt900 = roughTerrain.ActiveGlobalStride;
+            roughTerrain.UpdateLod(Camera3D.ProjectionType.Orthogonal, 500f, 1800f);
+            int strideAt1800 = roughTerrain.ActiveGlobalStride;
+            Require(strideAt1800 <= strideAt900,
+                $"2x viewport height must pick finer or equal LOD: 900px stride={strideAt900}, 1800px stride={strideAt1800}.");
+
+            // Effective pixel height multiplies SubViewport height by Scaling3DScale
+            SubViewport sv = new() { Size = new Vector2I(1280, 900), Scaling3DScale = 0.5f };
+            try
+            {
+                float halfPx = TerrainView.GetEffectiveViewportPixelHeight(sv);
+                Require(Mathf.IsEqualApprox(halfPx, 450f), $"Expected 450px at 0.5 scale, got {halfPx}.");
+            }
+            finally
+            {
+                sv.Free();
+            }
+
+            // Verify grid lines never sit below active terrain surface across zoom levels
+            foreach (float camSize in new[] { 35f, 500f, 1800f })
+            {
+                roughTerrain.UpdateLod(Camera3D.ProjectionType.Orthogonal, camSize, 900f);
+                VerifyGridAboveActiveTerrain(roughMap, roughTerrain, roughGrid);
+            }
+        }
+        finally
+        {
+            scene.RemoveChild(roughGrid);
+            scene.RemoveChild(roughTerrain);
+            roughGrid.QueueFree();
+            roughTerrain.QueueFree();
+        }
+
+        // 5. Battle map LOD selection, ortho<->perspective round-trip, grid offset, and 0 steady-state allocs
+        HeightMap battleMap = BattleScenario.CreateMap();
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        long liveBefore = GC.GetTotalMemory(false);
+        long allocBeforeBuild = GC.GetTotalAllocatedBytes(precise: true);
+        var swBuild = System.Diagnostics.Stopwatch.StartNew();
+        TerrainView battleTerrain = TerrainView.Create(battleMap);
+        swBuild.Stop();
+        long allocAfterBuild = GC.GetTotalAllocatedBytes(precise: true);
+        long retainedMemBytes = Math.Max(0L, GC.GetTotalMemory(true) - liveBefore);
+        long totalAllocatedBytes = Math.Max(0L, allocAfterBuild - allocBeforeBuild);
+        MeshInstance3D battleGrid = TerrainView.CreateGrid(battleMap);
+        battleTerrain.AttachGrid(battleGrid);
+        scene.AddChild(battleTerrain);
+        scene.AddChild(battleGrid);
+        try
+        {
+            Require(battleTerrain.Chunks.Count == 100, $"Expected 10x10 chunks on battle map, got {battleTerrain.Chunks.Count}.");
+
+            battleTerrain.UpdateLod(Camera3D.ProjectionType.Orthogonal, 35f, 900f);
+            Require(battleTerrain.ActiveGlobalStride == 1, $"Close zoom 35 must pick stride 1, got {battleTerrain.ActiveGlobalStride}.");
+
+            battleTerrain.UpdateLod(Camera3D.ProjectionType.Orthogonal, 360f, 900f);
+            Require(battleTerrain.ActiveGlobalStride >= 2, $"Zoom 360@900px should coarsen stride >= 2, got {battleTerrain.ActiveGlobalStride}.");
+
+            battleTerrain.UpdateLod(Camera3D.ProjectionType.Orthogonal, 700f, 900f);
+            int wideStride = battleTerrain.ActiveGlobalStride;
+            Require(wideStride >= 5, $"Zoom 700@900px should coarsen stride >= 5, got {wideStride}.");
+            VerifyGridAboveActiveTerrain(battleMap, battleTerrain, battleGrid);
+
+            // Perspective forces LOD0 across all chunks with zero allocations
+            long perspAllocBefore = GC.GetAllocatedBytesForCurrentThread();
+            battleTerrain.UpdateLod(Camera3D.ProjectionType.Perspective, 700f, 900f);
+            long perspAllocDelta = GC.GetAllocatedBytesForCurrentThread() - perspAllocBefore;
+            Require(perspAllocDelta == 0, $"Switching to perspective must allocate 0 bytes, got {perspAllocDelta}.");
+            Require(battleTerrain.ActiveGlobalLodIndex == 0, "Perspective mode must use LOD 0.");
+            foreach (TerrainView.TerrainChunk chunk in battleTerrain.Chunks)
+            {
+                Require(chunk.CurrentLodIndex == 0 &&
+                        ReferenceEquals(chunk.VisibleInstance.Mesh, chunk.LodMeshes[0]),
+                    "Every chunk in perspective mode must use LodMeshes[0].");
+            }
+
+            // Return to ortho at same zoom must synchronize all chunks back to coarse LOD with matching edges
+            battleTerrain.UpdateLod(Camera3D.ProjectionType.Orthogonal, 700f, 900f);
+            Require(battleTerrain.ActiveGlobalStride == wideStride,
+                $"Return from perspective must restore stride {wideStride}, got {battleTerrain.ActiveGlobalStride}.");
+            foreach (TerrainView.TerrainChunk chunk in battleTerrain.Chunks)
+            {
+                Require(chunk.CurrentLodIndex == battleTerrain.ActiveGlobalLodIndex &&
+                        ReferenceEquals(chunk.VisibleInstance.Mesh, chunk.LodMeshes[battleTerrain.ActiveGlobalLodIndex]),
+                    "Return from perspective must synchronize every chunk to ActiveGlobalLodIndex.");
+            }
+
+            // Runtime transition timing across all LODs
+            var swSwitch = System.Diagnostics.Stopwatch.StartNew();
+            battleTerrain.UpdateLod(Camera3D.ProjectionType.Orthogonal, 35f, 900f);
+            battleTerrain.UpdateLod(Camera3D.ProjectionType.Orthogonal, 360f, 900f);
+            battleTerrain.UpdateLod(Camera3D.ProjectionType.Orthogonal, 900f, 900f);
+            battleTerrain.UpdateLod(Camera3D.ProjectionType.Orthogonal, 2000f, 900f);
+            swSwitch.Stop();
+
+            // Steady-state zero allocations across 120 frames covering full Main frame path (Camera3D + cached height)
+            SubViewport cachedSv = new() { Size = new Vector2I(1280, 900), Scaling3DScale = 1.0f };
+            Camera3D testCam = new() { Projection = Camera3D.ProjectionType.Orthogonal, Size = 2000f };
+            try
+            {
+                float cachedHeightPx = TerrainView.GetEffectiveViewportPixelHeight(cachedSv);
+                Require(Mathf.IsEqualApprox(cachedHeightPx, 900f), $"Expected initial cached height 900, got {cachedHeightPx}.");
+
+                // Warm once before measuring allocations so JIT/branch state is settled
+                Main.UpdateTerrainLodStep(battleTerrain, testCam, cachedHeightPx);
+
+                int switchesBefore = battleTerrain.LodSwitchCount;
+                long allocBefore = GC.GetAllocatedBytesForCurrentThread();
+                for (int f = 0; f < 120; f++)
+                {
+                    testCam.Size = 2000f + (f % 2);
+                    Main.UpdateTerrainLodStep(battleTerrain, testCam, cachedHeightPx);
+                }
+                long allocDelta = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
+                Require(battleTerrain.LodSwitchCount == switchesBefore, "Steady-state jitter must not switch terrain LOD.");
+                Require(allocDelta == 0, $"Main terrain LOD frame step must allocate 0 bytes, got {allocDelta}.");
+
+                // Resize / Scaling3DScale event updates cached pixel height when queried outside the frame loop
+                cachedSv.Size = new Vector2I(1280, 1800);
+                cachedSv.Scaling3DScale = 0.5f;
+                cachedHeightPx = TerrainView.GetEffectiveViewportPixelHeight(cachedSv);
+                Require(Mathf.IsEqualApprox(cachedHeightPx, 900f), $"Expected 1800*0.5=900 after resize+scale, got {cachedHeightPx}.");
+            }
+            finally
+            {
+                testCam.Free();
+                cachedSv.Free();
+            }
+
+            GD.Print(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"TERRAIN_CHUNKED_PERF chunks={battleTerrain.Chunks.Count} build_ms={swBuild.Elapsed.TotalMilliseconds:F1} allocated_kb={totalAllocatedBytes / 1024} retained_kb={retainedMemBytes / 1024} switch4_ms={swSwitch.Elapsed.TotalMilliseconds:F3} max_errors=[{string.Join(",", battleTerrain.GlobalMaxHeightErrors.Select(e => $"{e:F3}"))}]"));
+        }
+        finally
+        {
+            scene.RemoveChild(battleGrid);
+            scene.RemoveChild(battleTerrain);
+            battleGrid.QueueFree();
+            battleTerrain.QueueFree();
+        }
+
+        // 6. Repeated create & dispose lifecycle check
+        for (int iter = 0; iter < 2; iter++)
+        {
+            TerrainView copy = TerrainView.Create(battleMap);
+            scene.AddChild(copy);
+            copy.UpdateLod(Camera3D.ProjectionType.Orthogonal, 360f, 900f);
+            scene.RemoveChild(copy);
+            copy.Free();
+        }
+    }
+
+    private static void VerifyGridAboveActiveTerrain(HeightMap map, TerrainView terrain, MeshInstance3D grid)
+    {
+        int lod = terrain.ActiveGlobalLodIndex;
+        int stride = terrain.LodStrides[lod];
+        float liftY = grid.Position.Y;
+        using Godot.Collections.Array ga = grid.Mesh.SurfaceGetArrays(0);
+        Vector3[] gv = ga[(int)Mesh.ArrayType.Vertex].AsVector3Array();
+
+        // Cache active chunk sample arrays and vertex arrays for fast lookup
+        TerrainView.TerrainChunk[] chunks = terrain.Chunks.ToArray();
+        Vector3[][] chunkVerts = new Vector3[chunks.Length][];
+        int[][] chunkXs = new int[chunks.Length][];
+        int[][] chunkZs = new int[chunks.Length][];
+        for (int c = 0; c < chunks.Length; c++)
+        {
+            using Godot.Collections.Array ca = chunks[c].VisibleInstance.Mesh.SurfaceGetArrays(0);
+            chunkVerts[c] = ca[(int)Mesh.ArrayType.Vertex].AsVector3Array();
+            chunkXs[c] = TerrainView.BuildSampleIndices(chunks[c].StartCellX, chunks[c].EndCellX, stride);
+            chunkZs[c] = TerrainView.BuildSampleIndices(chunks[c].StartCellZ, chunks[c].EndCellZ, stride);
+        }
+
+        int step = Math.Max(1, gv.Length / 1500);
+        for (int i = 0; i + 1 < gv.Length; i += 2 * step)
+        {
+            Vector3 p0 = gv[i];
+            Vector3 p1 = gv[i + 1];
+            Vector3 mid = (p0 + p1) * 0.5f;
+            CheckPointAbove(p0.X, p0.Z, p0.Y + liftY);
+            CheckPointAbove(mid.X, mid.Z, mid.Y + liftY);
+        }
+
+        void CheckPointAbove(float wx, float wz, float gridWorldY)
+        {
+            float gx = Math.Clamp(wx / map.CellSize, 0f, map.Columns - 1);
+            float gz = Math.Clamp(wz / map.CellSize, 0f, map.Rows - 1);
+            int chunkIdx = -1;
+            for (int c = 0; c < chunks.Length; c++)
+            {
+                if (gx >= chunks[c].StartCellX && gx <= chunks[c].EndCellX &&
+                    gz >= chunks[c].StartCellZ && gz <= chunks[c].EndCellZ)
+                {
+                    chunkIdx = c;
+                    break;
+                }
+            }
+            if (chunkIdx < 0) return;
+            float activeTerrainY = TerrainView.EvaluateSurfaceHeightAtWorld(
+                map, chunkXs[chunkIdx], chunkZs[chunkIdx], chunkVerts[chunkIdx], wx, wz);
+            Require(gridWorldY >= activeTerrainY + 0.05f,
+                $"Grid point ({wx:F1},{wz:F1}) height {gridWorldY:F3} fell below active LOD {lod} surface {activeTerrainY:F3}.");
         }
     }
 }

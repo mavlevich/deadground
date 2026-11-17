@@ -20,6 +20,8 @@ public partial class Main : Node3D
     private int _benchmarkTargetFrames;
     private float? _benchmarkZoomToSize;
     private int _lodBudgetPerFrame = VehicleLod.DefaultMaxInstantiationsPerFrame;
+    private int _terrainShadowStride = TerrainView.DefaultShadowStride;
+    private float _cachedTerrainViewportHeightPx = 900f;
     private long _lastFrameTimestamp;
     private int _benchmarkWarmupFrames = 5;
     private bool _benchmarkQuit;
@@ -104,6 +106,7 @@ public partial class Main : Node3D
     private bool _trafficLeaderCleared;
     private int _ustyeSetupIndex;
     private UstyeMapView? _ustyeMapView;
+    private TerrainView? _terrainView;
     private IMapShadowLayers? _activeShadowMapLayers;
     private bool _hasExplicitCameraFocus;
     private Vector3 _initialSpawnFocus;
@@ -374,6 +377,11 @@ public partial class Main : Node3D
                 else if (args[i] == "--lod-budget" && i + 1 < args.Length && int.TryParse(args[i + 1], out int lodBudget))
                 {
                     _lodBudgetPerFrame = Math.Max(1, lodBudget);
+                    i++;
+                }
+                else if (args[i] == "--terrain-shadow-stride" && i + 1 < args.Length && int.TryParse(args[i + 1], out int shadowStride))
+                {
+                    _terrainShadowStride = Math.Max(1, shadowStride);
                     i++;
                 }
                 else if (args[i] == "--fullscreen")
@@ -652,6 +660,7 @@ public partial class Main : Node3D
         _settingsPanel.SettingsChanged += newSettings =>
         {
             SettingsPanel.ApplyRenderSettingsToViewport(GetViewport(), newSettings);
+            RefreshCachedTerrainViewportHeight(GetViewport());
             EnvironmentProfile profile = EnvironmentProfile.Load(newSettings.EnvironmentProfile);
             _environmentView.ApplyProfile(profile, newSettings.Quality);
             _environmentView.UpdateShadowTierForCamera(_cameraRig.Size, _activeShadowMapLayers);
@@ -661,12 +670,13 @@ public partial class Main : Node3D
             }
         };
 
-        if (_fullscreenCli && DisplayServer.GetName() != "headless")
+        if (_fullscreenCli && !SettingsPanel.IsHeadlessDisplay)
         {
             DisplayServer.WindowSetMode(DisplayServer.WindowMode.Fullscreen);
         }
 
         SettingsPanel.ApplyRenderSettingsToViewport(GetViewport(), activeSettings);
+        RefreshCachedTerrainViewportHeight(GetViewport());
         GetViewport().SizeChanged += () =>
         {
             DisplaySettings? cur = _settingsPanel?.CurrentSettings;
@@ -674,6 +684,7 @@ public partial class Main : Node3D
             {
                 SettingsPanel.ApplyRenderSettingsToViewport(GetViewport(), cur);
             }
+            RefreshCachedTerrainViewportHeight(GetViewport());
         };
 
         if (activeSettings.BenchmarkFrames > 0)
@@ -731,6 +742,7 @@ public partial class Main : Node3D
         }
         _cameraRig.SetDefaultView(initialFocus, initialCameraSize);
         _environmentView?.UpdateShadowTierForCamera(_cameraRig.Size, _activeShadowMapLayers);
+        UpdateTerrainLodStep(_terrainView, _camera, _cachedTerrainViewportHeightPx);
 
         // Historical scenarios use the Cold War catalog; the small test maps keep prototype data.
         _catalog = ScenarioContent.LoadCatalog(_scenario);
@@ -1003,11 +1015,14 @@ public partial class Main : Node3D
         }
         else
         {
-            MeshInstance3D terrain = TerrainView.Create(_map, _fogOfWar);
-            _activeShadowMapLayers = new TerrainShadowTarget(terrain);
+            TerrainView terrain = TerrainView.Create(_map, _fogOfWar, shadowStride: _terrainShadowStride);
+            _terrainView = terrain;
+            _activeShadowMapLayers = terrain;
             _environmentRoot.AddChild(terrain);
-            _terrainWindingValid = !_smokeTest || TerrainView.HasUpwardFrontFaces(terrain);
-            _environmentRoot.AddChild(TerrainView.CreateGrid(_map));
+            _terrainWindingValid = !_smokeTest || terrain.HasUpwardFrontFaces();
+            MeshInstance3D grid = TerrainView.CreateGrid(_map);
+            terrain.AttachGrid(grid);
+            _environmentRoot.AddChild(grid);
 
             if (scenarioGeometry is not null)
             {
@@ -1016,8 +1031,19 @@ public partial class Main : Node3D
         }
     }
 
+    internal void RefreshCachedTerrainViewportHeight(Viewport? viewport = null)
+    {
+        _cachedTerrainViewportHeightPx = TerrainView.GetEffectiveViewportPixelHeight(viewport ?? GetViewport());
+    }
+
+    internal static void UpdateTerrainLodStep(TerrainView? terrain, Camera3D? camera, float cachedViewportHeightPx)
+    {
+        terrain?.UpdateLod(camera, cachedViewportHeightPx);
+    }
+
     private void ClearEnvironment()
     {
+        _terrainView = null;
         _activeShadowMapLayers = null;
         _environmentView?.SetShadowTarget(null);
         foreach (Node child in _environmentRoot.GetChildren())
@@ -1271,6 +1297,7 @@ public partial class Main : Node3D
         _environmentView?.UpdateHazeForCamera(_cameraRig.Size, _cameraRig.Focus, _cameraRig.ViewPitch);
         _environmentView?.UpdateShadowTierForCamera(_cameraRig.Size, _activeShadowMapLayers);
         _environmentView?.UpdateShadowFade(delta);
+        UpdateTerrainLodStep(_terrainView, _camera, _cachedTerrainViewportHeightPx);
 
         if (_roleBadgeOverlay is not null && _topHud is not null && _bottomHud is not null && _selectionCard is not null)
         {
@@ -1324,7 +1351,7 @@ public partial class Main : Node3D
                 {
                     string hardware = $"{OS.GetName()} / {OS.GetProcessorName()} / Cores: {OS.GetProcessorCount()}";
                     Vector2 viewSize = GetViewport().GetVisibleRect().Size;
-                    Vector2I winSize = DisplayServer.GetName() != "headless"
+                    Vector2I winSize = !SettingsPanel.IsHeadlessDisplay
                         ? DisplayServer.WindowGetSize()
                         : new Vector2I((int)viewSize.X, (int)viewSize.Y);
                     float scale3D = GetViewport().Scaling3DScale;
@@ -3361,6 +3388,7 @@ public partial class Main : Node3D
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
         _cameraRig.SetDefaultView(initialFocus, initialCameraSize);
         _environmentView?.UpdateShadowTierForCamera(_cameraRig.Size, _activeShadowMapLayers);
+        UpdateTerrainLodStep(_terrainView, _camera, _cachedTerrainViewportHeightPx);
         _cameraRig.ResetToDefault();
 
         _unitViews?.Clear();
@@ -3532,6 +3560,7 @@ public partial class Main : Node3D
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
         _cameraRig.SetDefaultView(initialFocus, initialCameraSize);
         _environmentView?.UpdateShadowTierForCamera(_cameraRig.Size, _activeShadowMapLayers);
+        UpdateTerrainLodStep(_terrainView, _camera, _cachedTerrainViewportHeightPx);
         _cameraRig.ResetToDefault();
 
         _unitViews?.Clear();
