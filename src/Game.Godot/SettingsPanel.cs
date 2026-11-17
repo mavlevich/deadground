@@ -4,7 +4,8 @@ using Godot;
 namespace DeadGround.Client;
 
 /// <summary>
-/// In-game settings overlay for VSync and frame pacing limit configuration.
+/// In-game settings overlay for VSync, frame pacing limit, environment profile,
+/// and graphics quality configuration.
 /// Persists player choices to user://display_settings.cfg with safe default fallback.
 /// </summary>
 internal sealed partial class SettingsPanel : CanvasLayer
@@ -14,11 +15,17 @@ internal sealed partial class SettingsPanel : CanvasLayer
     private readonly PanelContainer _container;
     private readonly CheckButton _vsyncButton;
     private readonly OptionButton _fpsOptions;
+    private readonly OptionButton _profileOptions;
+    private readonly OptionButton _qualityOptions;
     private readonly Label _statusLabel;
     private DisplaySettings _savedConfig = DisplaySettings.CreateDefault();
     private DisplaySettings _effectiveSettings = DisplaySettings.CreateDefault();
     private bool _cliOverridesVsync;
     private bool _cliOverridesMaxFps;
+    private bool _cliOverridesProfile;
+    private bool _cliOverridesQuality;
+
+    public event Action<DisplaySettings>? SettingsChanged;
 
     public DisplaySettings CurrentSettings => _effectiveSettings;
     public DisplaySettings SavedConfig => _savedConfig;
@@ -40,7 +47,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
         _container = new PanelContainer
         {
             Visible = false,
-            CustomMinimumSize = new Vector2(360, 260)
+            CustomMinimumSize = new Vector2(400, 340)
         };
         _container.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.Center);
         _container.AddThemeStyleboxOverride("panel", PanelStyle());
@@ -59,12 +66,39 @@ internal sealed partial class SettingsPanel : CanvasLayer
 
         Label title = new()
         {
-            Text = "DISPLAY SETTINGS",
+            Text = "DISPLAY & ENVIRONMENT SETTINGS",
             HorizontalAlignment = HorizontalAlignment.Center
         };
         title.AddThemeFontSizeOverride("font_size", 18);
         title.AddThemeColorOverride("font_color", new Color("edc76b"));
         stack.AddChild(title);
+
+        // Environment Profile Row
+        HBoxContainer profileRow = new();
+        profileRow.AddThemeConstantOverride("separation", 12);
+        Label profileLabel = new() { Text = "Environment:", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        profileLabel.AddThemeColorOverride("font_color", new Color("d5ded0"));
+        _profileOptions = new OptionButton();
+        _profileOptions.AddItem("Overcast Autumn (Ustye)", 0);
+        _profileOptions.AddItem("Clear Afternoon", 1);
+        _profileOptions.ItemSelected += OnProfileSelected;
+        profileRow.AddChild(profileLabel);
+        profileRow.AddChild(_profileOptions);
+        stack.AddChild(profileRow);
+
+        // Graphics Quality Row
+        HBoxContainer qualityRow = new();
+        qualityRow.AddThemeConstantOverride("separation", 12);
+        Label qualityLabel = new() { Text = "Graphics Quality:", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        qualityLabel.AddThemeColorOverride("font_color", new Color("d5ded0"));
+        _qualityOptions = new OptionButton();
+        _qualityOptions.AddItem("Low", 0);
+        _qualityOptions.AddItem("Medium", 1);
+        _qualityOptions.AddItem("High", 2);
+        _qualityOptions.ItemSelected += OnQualitySelected;
+        qualityRow.AddChild(qualityLabel);
+        qualityRow.AddChild(_qualityOptions);
+        stack.AddChild(qualityRow);
 
         // VSync Row
         HBoxContainer vsyncRow = new();
@@ -117,28 +151,29 @@ internal sealed partial class SettingsPanel : CanvasLayer
         DisplaySettings savedConfig,
         DisplaySettings effectiveSettings,
         bool cliOverridesVsync,
-        bool cliOverridesMaxFps)
+        bool cliOverridesMaxFps,
+        bool cliOverridesProfile = false,
+        bool cliOverridesQuality = false)
     {
         _savedConfig = savedConfig.WithSanitizedValues();
         _effectiveSettings = effectiveSettings.WithSanitizedValues();
         _cliOverridesVsync = cliOverridesVsync;
         _cliOverridesMaxFps = cliOverridesMaxFps;
+        _cliOverridesProfile = cliOverridesProfile;
+        _cliOverridesQuality = cliOverridesQuality;
 
         ApplyToEngine(_effectiveSettings);
         UpdateUiFromSettings();
 
-        if (cliOverridesVsync || cliOverridesMaxFps)
+        if (cliOverridesVsync || cliOverridesMaxFps || cliOverridesProfile || cliOverridesQuality)
         {
-            string detail = (cliOverridesVsync && cliOverridesMaxFps)
-                ? "VSync and FPS limit overridden via command-line arguments"
-                : (cliOverridesVsync ? "VSync overridden via command-line arguments" : "FPS limit overridden via command-line arguments");
-            _statusLabel.Text = detail;
+            _statusLabel.Text = "Some settings are overridden via command-line arguments";
             _statusLabel.AddThemeColorOverride("font_color", new Color("edc76b"));
         }
     }
 
     public void Initialize(DisplaySettings initialSettings, bool wasOverriddenByCli = false) =>
-        Initialize(initialSettings, initialSettings, wasOverriddenByCli, wasOverriddenByCli);
+        Initialize(initialSettings, initialSettings, wasOverriddenByCli, wasOverriddenByCli, wasOverriddenByCli, wasOverriddenByCli);
 
     public void Open()
     {
@@ -175,6 +210,38 @@ internal sealed partial class SettingsPanel : CanvasLayer
             _ => 0
         };
         _fpsOptions.Selected = idx;
+
+        _profileOptions.Selected = _effectiveSettings.EnvironmentProfile == "clear_afternoon" ? 1 : 0;
+        _qualityOptions.Selected = (int)_effectiveSettings.Quality;
+    }
+
+    private void OnProfileSelected(long index)
+    {
+        string profile = index == 1 ? "clear_afternoon" : "overcast";
+        _savedConfig = _savedConfig with { EnvironmentProfile = profile };
+        _effectiveSettings = _effectiveSettings with { EnvironmentProfile = profile };
+        _cliOverridesProfile = false;
+        SaveConfig(_savedConfig);
+        SettingsChanged?.Invoke(_effectiveSettings);
+        _statusLabel.Text = "Environment profile applied and saved";
+        _statusLabel.AddThemeColorOverride("font_color", new Color("889988"));
+    }
+
+    private void OnQualitySelected(long index)
+    {
+        EnvironmentQuality quality = index switch
+        {
+            0 => EnvironmentQuality.Low,
+            1 => EnvironmentQuality.Medium,
+            _ => EnvironmentQuality.High
+        };
+        _savedConfig = _savedConfig with { Quality = quality };
+        _effectiveSettings = _effectiveSettings with { Quality = quality };
+        _cliOverridesQuality = false;
+        SaveConfig(_savedConfig);
+        SettingsChanged?.Invoke(_effectiveSettings);
+        _statusLabel.Text = "Graphics quality applied and saved";
+        _statusLabel.AddThemeColorOverride("font_color", new Color("889988"));
     }
 
     private void OnVsyncToggled(bool toggled)
@@ -185,6 +252,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
         _vsyncButton.Text = toggled ? "Enabled" : "Disabled";
         ApplyToEngine(_effectiveSettings);
         SaveConfig(_savedConfig);
+        SettingsChanged?.Invoke(_effectiveSettings);
         _statusLabel.Text = _cliOverridesMaxFps
             ? "VSync saved (FPS limit still overridden by CLI)"
             : "Settings applied and saved";
@@ -208,6 +276,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
         _cliOverridesMaxFps = false;
         ApplyToEngine(_effectiveSettings);
         SaveConfig(_savedConfig);
+        SettingsChanged?.Invoke(_effectiveSettings);
         _statusLabel.Text = _cliOverridesVsync
             ? "FPS limit saved (VSync still overridden by CLI)"
             : "Settings applied and saved";
@@ -233,6 +302,18 @@ internal sealed partial class SettingsPanel : CanvasLayer
         Godot.Engine.MaxFps = settings.MaxFps;
     }
 
+    public static bool TryLoadSavedEnvironmentProfile(out string profile)
+    {
+        ConfigFile config = new();
+        if (config.Load(ConfigPath) == Error.Ok && config.HasSectionKey("display", "environment_profile"))
+        {
+            profile = DisplaySettings.SanitizeProfile((string)config.GetValue("display", "environment_profile", "overcast"));
+            return true;
+        }
+        profile = "";
+        return false;
+    }
+
     public static DisplaySettings LoadConfig()
     {
         ConfigFile config = new();
@@ -246,7 +327,15 @@ internal sealed partial class SettingsPanel : CanvasLayer
         {
             bool vsync = (bool)config.GetValue("display", "vsync", true);
             int maxFps = (int)config.GetValue("display", "max_fps", 0);
-            return new DisplaySettings(vsync, DisplaySettings.SanitizeMaxFps(maxFps));
+            string profile = (string)config.GetValue("display", "environment_profile", "overcast");
+            string qualityStr = (string)config.GetValue("display", "environment_quality", "High");
+            EnvironmentQuality quality = DisplaySettings.ParseQuality(qualityStr);
+            return new DisplaySettings(
+                vsync,
+                DisplaySettings.SanitizeMaxFps(maxFps),
+                0,
+                DisplaySettings.SanitizeProfile(profile),
+                quality);
         }
         catch
         {
@@ -261,6 +350,8 @@ internal sealed partial class SettingsPanel : CanvasLayer
             ConfigFile config = new();
             config.SetValue("display", "vsync", settings.VSyncEnabled);
             config.SetValue("display", "max_fps", settings.MaxFps);
+            config.SetValue("display", "environment_profile", settings.EnvironmentProfile);
+            config.SetValue("display", "environment_quality", settings.Quality.ToString());
             config.Save(ConfigPath);
         }
         catch (Exception ex)

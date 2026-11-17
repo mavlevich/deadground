@@ -164,7 +164,8 @@ internal sealed partial class OrderDestinationView : Node3D
             AlbedoColor = new Color(0.93f, 0.78f, 0.42f, 0.5f),
             ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
             Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
-            CullMode = BaseMaterial3D.CullModeEnum.Disabled
+            CullMode = BaseMaterial3D.CullModeEnum.Disabled,
+            DisableFog = true
         };
 
         TorusMesh ringMesh = new()
@@ -278,7 +279,8 @@ internal sealed partial class OrderDestinationView : Node3D
         AlbedoColor = color,
         ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
         Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
-        CullMode = BaseMaterial3D.CullModeEnum.Disabled
+        CullMode = BaseMaterial3D.CullModeEnum.Disabled,
+        DisableFog = true
     };
 
     public void Show(Vector3 worldPos, OrderMarkerVisualState state)

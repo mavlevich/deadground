@@ -1528,6 +1528,37 @@ avoidance, a network spectator protocol, unlimited ammunition, artillery or airc
   - Zero managed heap allocations during steady-state animation advance and presentation effect updates.
   - Client scale benchmarks for 20 and 100 active riflemen verify sub-millisecond frame overhead (< 0.25 ms for 100 active models).
 
+### 18.15 Lighting and atmosphere profiles
+
+- Presentation profile schema (`content/environments/<id>.json`):
+  - Strict data-driven specification for visual atmosphere loaded client-side via `EnvironmentProfile`:
+    - `sun`: directional light pitch, yaw, hex color, energy multiplier, shadow distance, shadow pancake size, and shadow bias.
+    - `sky`: procedural sky top, horizon, ground bottom, ground horizon colors, sun disc angle, and energy multiplier.
+    - `ambient`: ambient source (`Sky`, `Color`, `Disabled`), hex color, and energy multiplier.
+    - `tonemap`: tonemapper mode (`Linear`, `Reinhardt`, `Filmic`, `Aces`), exposure, and white point.
+    - `haze`: volumetric depth and height fog, base density, zoom-scaled density range (`close_zoom_density` to `wide_zoom_density`), aerial perspective factor, elevation height and density, depth begin and end.
+    - `ssao`: screen-space ambient occlusion toggle, radius, intensity, power curve, and detail level.
+    - `glow`: glow toggle, intensity, and bloom threshold.
+    - `material_tints`: harmonized albedo tints for terrain, conifer forest, deciduous forest, shallow water, deep water, asphalt roads, gravel roads, and dirt roads.
+  - Strict validation: missing fields or out-of-range numerical parameters throw `EnvironmentProfileValidationException` naming the exact violating property.
+  - Two primary profiles prove reuse across battlefields: `overcast` (default look: overcast autumn day in Hesse, circa 1980) and `clear_afternoon`.
+- Presentation-only guarantee:
+  - Visual profiles are purely presentation-level and isolated in `Game.Godot`.
+  - Excluded from `MapHash`, `ContentHash`, simulation tick logic, server authority, and network wire protocol.
+- Zoom-dependent haze scaling:
+  - Camera zoom modulates depth fog density linearly between close inspection zoom and wide battlefield zoom (camera size 40 m to 5500 m).
+  - Preserves aerial perspective and contrast up close without washing out tactical readability at wide zoom.
+  - Implemented in `EnvironmentView.UpdateHazeForCamera` with zero managed heap allocations per frame.
+- Tactical overlay isolation:
+  - Tactical HUD elements, selection rings, range circles, destination ghosts, and role badges configure `DisableFog = true` on their unshaded spatial materials, keeping markers crisp and legible through dense fog.
+- Graphics quality presets:
+  - `Low`: disables SSAO and contact shadows, tightens shadow range, sets minimal fog overhead. Frame time costs no more than main baseline.
+  - `Medium`: balanced shadow resolution and distance, activates depth fog.
+  - `High`: full procedural sky, dynamic haze scaling, screen-space ambient occlusion, and extended shadow range. Frame budget adds <= 2.0 ms p95 frame time over baseline at play zoom.
+- Interactive switching and inspection:
+  - Configurable via CLI flags `--environment <id>`, `--quality <low|medium|high>`, and runtime settings panel UI (`SettingsPanel`).
+  - Automated view capture `--capture-views <dir>` renders and saves 6 standardized camera presets (wide map, river bridge, vehicle and infantry inspection, forest edge, combat flashes and smoke, fog-of-war borders) before clean exit.
+
 ## 19. Rule sets and modularity
 
 A rule set is a list of systems plus data. Replaceable points:

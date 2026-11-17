@@ -48,6 +48,12 @@ internal sealed class CameraRig
         SyncCamera();
     }
 
+    public void ResetOrbit()
+    {
+        _orbit.Reset();
+        SyncCamera();
+    }
+
     public bool HandleZoomInput(InputEvent input)
     {
         if (input is InputEventMagnifyGesture magnify)

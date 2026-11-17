@@ -212,7 +212,8 @@ internal partial class CombatEffects : Node3D
         StandardMaterial3D tracerMat = new()
         {
             AlbedoColor = new Color("ffe477"),
-            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded
+            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+            DisableFog = true
         };
         for (int i = 0; i < MaxTracers; i++)
         {
@@ -233,7 +234,8 @@ internal partial class CombatEffects : Node3D
         StandardMaterial3D flashMat = new()
         {
             AlbedoColor = new Color("fff275"),
-            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded
+            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+            DisableFog = true
         };
         for (int i = 0; i < MaxMuzzleFlashes; i++)
         {
@@ -276,7 +278,8 @@ internal partial class CombatEffects : Node3D
         StandardMaterial3D sparksMat = new()
         {
             AlbedoColor = new Color("ffaa33"),
-            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded
+            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+            DisableFog = true
         };
         for (int i = 0; i < MaxSparks; i++)
         {
@@ -297,7 +300,8 @@ internal partial class CombatEffects : Node3D
         StandardMaterial3D impactMat = new()
         {
             AlbedoColor = new Color("ff7733"),
-            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded
+            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+            DisableFog = true
         };
         for (int i = 0; i < MaxImpacts; i++)
         {
@@ -318,7 +322,8 @@ internal partial class CombatEffects : Node3D
         StandardMaterial3D explosionMat = new()
         {
             AlbedoColor = new Color("ff4411"),
-            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded
+            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+            DisableFog = true
         };
         for (int i = 0; i < MaxExplosions; i++)
         {

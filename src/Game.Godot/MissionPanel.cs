@@ -194,7 +194,8 @@ internal sealed partial class MissionPanel : Control
                 AlbedoColor = new Color(0.93f, 0.78f, 0.42f, 0.45f),
                 ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
                 Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
-                CullMode = BaseMaterial3D.CullModeEnum.Disabled
+                CullMode = BaseMaterial3D.CullModeEnum.Disabled,
+                DisableFog = true
             },
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
             Visible = false

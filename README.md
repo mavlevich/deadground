@@ -59,7 +59,7 @@ Launching without arguments opens the Start Menu:
 - **Settings**: opens display and graphics settings (shortcut: F10 or O).
 - **Exit**: closes the application.
 
-Direct CLI arguments bypass the start menu: pass `--scenario <name>` to launch directly into a scenario (e.g. `--scenario battle`), or `--connect <host:port>` to connect immediately.
+Direct CLI arguments bypass the start menu: pass `--scenario <name>` to launch directly into a scenario (e.g. `--scenario battle`), `--connect <host:port>` to connect immediately, `--environment <overcast|clear_afternoon>` to select an environment profile, `--quality <low|medium|high>` to set graphics quality, or `--capture-views <dir>` to capture 7 standardized camera view presets.
 
 During gameplay, press Escape to open the Pause Menu and select **Leave Battle** to return to the Start Menu. When a match ends, the outcome screen also provides a **Leave Battle** button. If the server restarts between matches, players can return to the Multiplayer menu and connect again without restarting the game client.
 
@@ -118,7 +118,7 @@ and pressing the same group number twice within 0.35 s centers the camera on the
 smoothly pan the camera with normalized diagonal speed scaled by zoom. The mouse wheel smoothly zooms,
 Space restores the overview, and Escape closes open dialogs or clears unit selection. Left-clicking or dragging
 on the tactical minimap (bottom-right) centers the camera on the target position while preserving pitch, yaw, zoom,
-and active selections. F10, O, or the HUD SETTINGS button opens display settings (VSync toggle and FPS cap). F9 or V toggles fog of war on the map.
+and active selections. F10, O, or the HUD SETTINGS button opens display and graphics settings (VSync toggle, FPS cap, Environment Profile, and Graphics Quality). F9 or V toggles fog of war on the map.
 Keys Z (Fire at will), X (Return fire), and C (Hold fire) set the fire stance of selected units. The HUD shows
 connection state, tick time, allocations and traffic.
 The host reports whether a valid command was queued or rejected. Rejections give
@@ -1038,9 +1038,10 @@ Follow this checklist to verify an exported client interactively:
    - Zoom using the mouse scroll wheel. Confirm smooth exponential zooming.
    - Press Space to return the camera to the default overview position.
    - Click or drag on the tactical minimap in the bottom-right corner: verify the camera centers on the clicked location while maintaining current zoom, pitch, yaw, and active unit selections. Confirm that clicking the letterbox/pillarbox margins does not reposition the camera, and clicking inside the minimap never issues ground move orders.
-7. Display settings and frame pacing:
+7. Display settings and environment profiles:
    - Press F10, O, or click SETTINGS in the HUD to open the settings panel.
    - Toggle VSync and select frame rate limits (Unlimited, 30, 60, 120, 144 FPS).
+   - Select Environment Profile (`overcast` or `clear_afternoon`) and Graphics Quality (`low`, `medium`, or `high`) with immediate live update.
    - Press Escape to close the settings panel before clearing unit selections.
 8. Unit and contact readability:
    - Tactical minimap: displays Cold War military topographic map styling (olive-gray terrain, cool blue-gray rivers, dark settlement blocks, high-contrast roads and crossings). Friendly units appear as filled dots with yellow rings when selected; active contacts appear as solid diamonds; last-known contacts appear as hollow squares. Hovering over a last-known contact displays a tooltip with observation age ("LAST SEEN: X.Xs AGO").

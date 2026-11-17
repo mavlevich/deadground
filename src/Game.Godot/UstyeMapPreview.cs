@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using DeadGround.Rules.Ops;
+using DeadGround.Sandbox;
 using Godot;
 
 namespace DeadGround.Client;
@@ -52,8 +53,10 @@ public partial class UstyeMapPreview : Node3D
     private UstyeMapView _mapView = null!;
     private Camera3D _camera = null!;
     private CameraRig _cameraRig = null!;
-    private DirectionalLight3D _sun = null!;
-    private WorldEnvironment _environment = null!;
+    private EnvironmentView _environmentView = null!;
+    public EnvironmentView EnvironmentView => _environmentView;
+    public DirectionalLight3D Sun => _environmentView.Sun;
+    public WorldEnvironment WorldEnvironment => _environmentView.WorldEnvironment;
 
     private CanvasLayer _hud = null!;
     private Label _titleLabel = null!;
@@ -123,6 +126,19 @@ public partial class UstyeMapPreview : Node3D
     internal CameraRig Rig => _cameraRig;
     public CameraLandmark[] Landmarks => _landmarks;
 
+    private readonly string[]? _customArgs;
+
+    public UstyeMapPreview() : this(null)
+    {
+    }
+
+    public UstyeMapPreview(string[]? customArgs)
+    {
+        _customArgs = customArgs;
+    }
+
+    private string[] EffectiveArgs => _customArgs ?? [.. OS.GetCmdlineArgs(), .. OS.GetCmdlineUserArgs()];
+
     internal static float SmoothNoise2D(float x, float z, float frequency)
     {
         float nx = x * frequency;
@@ -170,9 +186,7 @@ public partial class UstyeMapPreview : Node3D
 
     private void ParseArgs()
     {
-        string[] userArgs = OS.GetCmdlineUserArgs();
-        string[] allArgs = OS.GetCmdlineArgs();
-        string[] args = [.. userArgs, .. allArgs];
+        string[] args = EffectiveArgs;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -207,49 +221,32 @@ public partial class UstyeMapPreview : Node3D
 
     private void SetupEnvironment()
     {
-        _sun = new DirectionalLight3D
-        {
-            Name = "Sun",
-            LightColor = new Color("fff3e3"),
-            LightEnergy = 1.22f,
-            ShadowEnabled = true,
-            DirectionalShadowMode = DirectionalLight3D.ShadowMode.Parallel4Splits,
-            DirectionalShadowMaxDistance = 1800f,
-            DirectionalShadowPancakeSize = 15f,
-            RotationDegrees = new Vector3(-48f, -40f, 0f)
-        };
-        AddChild(_sun);
+        _environmentView = new EnvironmentView();
+        AddChild(_environmentView);
 
-        Godot.Environment env = new()
-        {
-            BackgroundMode = Godot.Environment.BGMode.Sky,
-            Sky = new Sky
-            {
-                SkyMaterial = new ProceduralSkyMaterial
-                {
-                    SkyTopColor = new Color("527396"),
-                    SkyHorizonColor = new Color("8d9fae"),
-                    GroundBottomColor = new Color("22241e"),
-                    GroundHorizonColor = new Color("7f8d7c"),
-                    SunAngleMax = 30f
-                }
-            },
-            AmbientLightSource = Godot.Environment.AmbientSource.Color,
-            AmbientLightColor = new Color("708ba4"),
-            AmbientLightEnergy = 0.48f,
-            FogEnabled = true,
-            FogMode = Godot.Environment.FogModeEnum.Exponential,
-            FogDensity = 0.00008f,
-            FogLightColor = new Color("8fa2b2"),
-            FogLightEnergy = 0.42f
-        };
+        DisplaySettings loadedConfig = SettingsPanel.LoadConfig();
+        string[] combinedArgs = EffectiveArgs;
+        DisplaySettings activeSettings = DisplaySettings.ParseCommandLine(combinedArgs, loadedConfig);
 
-        _environment = new WorldEnvironment
+        string profileId = "overcast";
+        if (SettingsPanel.TryLoadSavedEnvironmentProfile(out string savedProfile))
         {
-            Name = "Environment",
-            Environment = env
-        };
-        AddChild(_environment);
+            profileId = savedProfile;
+        }
+        if (DisplaySettings.HasEnvironmentOverride(combinedArgs))
+        {
+            profileId = activeSettings.EnvironmentProfile;
+        }
+
+        EnvironmentQuality quality = activeSettings.Quality;
+
+        EnvironmentProfile profile = EnvironmentProfile.Load(profileId);
+        _environmentView.ApplyProfile(profile, quality);
+
+        if (_mapView is not null)
+        {
+            _mapView.ApplyEnvironmentTints(profile.MaterialTints);
+        }
     }
 
     private void SetupCamera(UstyePlanData plan)
@@ -456,6 +453,7 @@ public partial class UstyeMapPreview : Node3D
         }
 
         _cameraRig.Update(delta, allowInput: !_isTransitioning && !_runBenchmark);
+        _environmentView?.UpdateHazeForCamera(_cameraRig.Size, _cameraRig.Focus, _cameraRig.ViewPitch);
         _mapView.UpdateVehicleLods(_cameraRig.Size);
 
         _telemetryTimer += delta;
