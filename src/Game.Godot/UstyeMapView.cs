@@ -33,6 +33,14 @@ public partial class UstyeMapView : Node3D
     private readonly List<MultiMeshInstance3D> _deciduousMultiMeshes = [];
     private readonly List<ScaleVehicle> _scaleVehicles = [];
 
+    private ShaderMaterial? _waterMaterial;
+    private StandardMaterial3D? _asphaltMaterial;
+    private StandardMaterial3D? _gravelMaterial;
+    private StandardMaterial3D? _dirtPathMaterial;
+    private StandardMaterial3D? _coniferMat;
+    private StandardMaterial3D? _deciduousMat;
+    private Material? _terrainMaterial;
+
     public UstyePlanData Plan => _plan;
     public Node3D TerrainRoot => _terrainRoot;
     public Node3D WaterRoot => _waterRoot;
@@ -75,6 +83,45 @@ public partial class UstyeMapView : Node3D
                     mesh.MaterialOverride = fog.Material;
                 }
             }
+        }
+    }
+
+    public void ApplyEnvironmentTints(MaterialTintsSettings tints)
+    {
+        if (_waterMaterial is not null)
+        {
+            if (EnvironmentProfile.TryParseHexColor(tints.WaterShallowsHex, out Color shallows))
+                _waterMaterial.SetShaderParameter("shallows_color", shallows);
+            if (EnvironmentProfile.TryParseHexColor(tints.WaterDeepHex, out Color deep))
+                _waterMaterial.SetShaderParameter("deep_color", deep);
+        }
+        if (_coniferMat is not null && EnvironmentProfile.TryParseHexColor(tints.ForestConiferHex, out Color conifer))
+        {
+            _coniferMat.AlbedoColor = conifer;
+        }
+        if (_deciduousMat is not null && EnvironmentProfile.TryParseHexColor(tints.ForestDeciduousHex, out Color deciduous))
+        {
+            _deciduousMat.AlbedoColor = deciduous;
+        }
+        if (_asphaltMaterial is not null && EnvironmentProfile.TryParseHexColor(tints.RoadsAsphaltHex, out Color asphalt))
+        {
+            _asphaltMaterial.AlbedoColor = asphalt;
+        }
+        if (_gravelMaterial is not null && EnvironmentProfile.TryParseHexColor(tints.RoadsGravelHex, out Color gravel))
+        {
+            _gravelMaterial.AlbedoColor = gravel;
+        }
+        if (_dirtPathMaterial is not null && EnvironmentProfile.TryParseHexColor(tints.RoadsDirtHex, out Color dirt))
+        {
+            _dirtPathMaterial.AlbedoColor = dirt;
+        }
+        if (_terrainMaterial is StandardMaterial3D stdTerrain && EnvironmentProfile.TryParseHexColor(tints.TerrainHex, out Color terrain))
+        {
+            stdTerrain.AlbedoColor = terrain;
+        }
+        if (_fogOverlay is not null && EnvironmentProfile.TryParseHexColor(tints.TerrainHex, out Color fowTerrain))
+        {
+            _fogOverlay.SetTerrainTint(fowTerrain);
         }
     }
 
@@ -168,7 +215,7 @@ public partial class UstyeMapView : Node3D
         int chunkCols = (int)(_plan.ExtentX / chunkSize);
         int chunkRows = (int)(_plan.ExtentZ / chunkSize);
 
-        Material terrainMaterial = _fogOverlay != null
+        _terrainMaterial = _fogOverlay != null
             ? _fogOverlay.Material
             : new StandardMaterial3D
             {
@@ -314,7 +361,7 @@ public partial class UstyeMapView : Node3D
                 {
                     Name = $"TerrainChunk_{cx}_{cz}",
                     Mesh = chunkMesh,
-                    MaterialOverride = terrainMaterial
+                    MaterialOverride = _terrainMaterial
                 };
                 _terrainRoot.AddChild(chunkInstance);
             }
@@ -327,7 +374,7 @@ public partial class UstyeMapView : Node3D
         AddChild(_waterRoot);
 
         Shader waterShader = GD.Load<Shader>("res://UstyeWater.gdshader");
-        ShaderMaterial waterMaterial = new()
+        _waterMaterial = new ShaderMaterial
         {
             Shader = waterShader
         };
@@ -396,7 +443,7 @@ public partial class UstyeMapView : Node3D
         {
             Name = "RiverWater",
             Mesh = riverMesh,
-            MaterialOverride = waterMaterial
+            MaterialOverride = _waterMaterial
         };
         _waterRoot.AddChild(riverInstance);
 
@@ -448,7 +495,7 @@ public partial class UstyeMapView : Node3D
         {
             Name = "BayWater",
             Mesh = bayMesh,
-            MaterialOverride = waterMaterial
+            MaterialOverride = _waterMaterial
         };
         _waterRoot.AddChild(bayInstance);
     }
@@ -458,21 +505,21 @@ public partial class UstyeMapView : Node3D
         _roadsRoot = new Node3D { Name = "RoadsRoot" };
         AddChild(_roadsRoot);
 
-        StandardMaterial3D asphaltMaterial = new()
+        _asphaltMaterial = new StandardMaterial3D
         {
             AlbedoColor = new Color("353638"),
             Roughness = 0.88f,
             CullMode = BaseMaterial3D.CullModeEnum.Disabled
         };
 
-        StandardMaterial3D gravelMaterial = new()
+        _gravelMaterial = new StandardMaterial3D
         {
             AlbedoColor = new Color("585246"),
             Roughness = 0.94f,
             CullMode = BaseMaterial3D.CullModeEnum.Disabled
         };
 
-        StandardMaterial3D dirtPathMaterial = new()
+        _dirtPathMaterial = new StandardMaterial3D
         {
             AlbedoColor = new Color("655b4b"),
             Roughness = 0.98f,
@@ -483,9 +530,9 @@ public partial class UstyeMapView : Node3D
         {
             Material mat = road.Id switch
             {
-                "central" => asphaltMaterial,
-                "foot" => dirtPathMaterial,
-                _ => gravelMaterial
+                "central" => _asphaltMaterial,
+                "foot" => _dirtPathMaterial,
+                _ => _gravelMaterial
             };
 
             UstyePlanData.Crossing? crossing = _plan.Crossings.FirstOrDefault(c => c.RoadId == road.Id);
@@ -494,7 +541,7 @@ public partial class UstyeMapView : Node3D
 
         foreach (UstyePlanData.Road access in _plan.AccessRoads)
         {
-            BuildRoadRibbon(access.Points, access.Width, gravelMaterial, $"Road_{access.Id}", null);
+            BuildRoadRibbon(access.Points, access.Width, _gravelMaterial, $"Road_{access.Id}", null);
         }
     }
 
@@ -587,9 +634,11 @@ public partial class UstyeMapView : Node3D
             {
                 Vector2 curr = densePoints[i];
 
-                Vector2 tangent = i < densePoints.Count - 1
-                    ? (densePoints[i + 1] - curr).Normalized()
-                    : (curr - densePoints[i - 1]).Normalized();
+                Vector2 tangent = (i == 0)
+                    ? (densePoints[1] - densePoints[0]).Normalized()
+                    : (i == densePoints.Count - 1)
+                        ? (densePoints[^1] - densePoints[^2]).Normalized()
+                        : (densePoints[i + 1] - densePoints[i - 1]).Normalized();
                 Vector2 normal = new(-tangent.Y, tangent.X);
 
                 Vector2 left = curr - normal * halfWidth;
@@ -612,12 +661,12 @@ public partial class UstyeMapView : Node3D
                     int d = baseIdx + 1;
 
                     indices.Add(a);
-                    indices.Add(b);
                     indices.Add(c);
+                    indices.Add(b);
 
                     indices.Add(b);
-                    indices.Add(d);
                     indices.Add(c);
+                    indices.Add(d);
                 }
             }
         }
@@ -1229,14 +1278,14 @@ public partial class UstyeMapView : Node3D
         AddChild(_vegetationRoot);
 
         _coniferTreeMesh = BuildConiferTreeMesh();
-        StandardMaterial3D coniferMat = new()
+        _coniferMat = new StandardMaterial3D
         {
             AlbedoColor = new Color("234226"),
             Roughness = 0.95f
         };
 
         _deciduousTreeMesh = BuildDeciduousTreeMesh();
-        StandardMaterial3D deciduousMat = new()
+        _deciduousMat = new StandardMaterial3D
         {
             AlbedoColor = new Color("42562c"),
             Roughness = 0.95f
@@ -1315,7 +1364,7 @@ public partial class UstyeMapView : Node3D
                     {
                         Name = $"Conifers_{cx}_{cz}",
                         Multimesh = mm,
-                        MaterialOverride = coniferMat
+                        MaterialOverride = _coniferMat
                     };
                     _vegetationRoot.AddChild(mmi);
                     _coniferMultiMeshes.Add(mmi);
@@ -1339,7 +1388,7 @@ public partial class UstyeMapView : Node3D
                     {
                         Name = $"Deciduous_{cx}_{cz}",
                         Multimesh = mm,
-                        MaterialOverride = deciduousMat
+                        MaterialOverride = _deciduousMat
                     };
                     _vegetationRoot.AddChild(mmi);
                     _deciduousMultiMeshes.Add(mmi);
@@ -1493,5 +1542,30 @@ public partial class UstyeMapView : Node3D
             if ((b - a).Cross(c - a).Y >= 0) return false;
         }
         return indices.Length > 0;
+    }
+
+    public bool HasUpwardRoadFrontFaces()
+    {
+        if (_roadsRoot is null) return false;
+        int checkedTriangles = 0;
+        foreach (Node child in _roadsRoot.GetChildren())
+        {
+            if (child is MeshInstance3D mi && mi.Mesh is ArrayMesh mesh && mesh.GetSurfaceCount() > 0)
+            {
+                using Godot.Collections.Array arrays = mesh.SurfaceGetArrays(0);
+                Vector3[] verts = arrays[(int)Mesh.ArrayType.Vertex].AsVector3Array();
+                int[] indices = arrays[(int)Mesh.ArrayType.Index].AsInt32Array();
+                for (int i = 0; i < indices.Length; i += 3)
+                {
+                    Vector3 a = verts[indices[i]];
+                    Vector3 b = verts[indices[i + 1]];
+                    Vector3 c = verts[indices[i + 2]];
+                    Vector3 clockwiseNormal = (c - a).Cross(b - a).Normalized();
+                    if (clockwiseNormal.Dot(Vector3.Up) <= 0.8f) return false;
+                    checkedTriangles++;
+                }
+            }
+        }
+        return checkedTriangles > 0;
     }
 }

@@ -8,4 +8,7 @@
     <ProjectReference Include="../Game.Rules.Ops/Game.Rules.Ops.csproj" />
     <ProjectReference Include="../Game.Sandbox/Game.Sandbox.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../../content/environments/*.json" LogicalName="DeadGround.Environments.%(Filename).json" />
+  </ItemGroup>
 </Project>

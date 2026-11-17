@@ -14,11 +14,14 @@ public partial class Main : Node3D
     private IGameSession _session = null!;
     private Camera3D _camera = null!;
     private CameraRig _cameraRig = null!;
+    private EnvironmentView _environmentView = null!;
     private SettingsPanel _settingsPanel = null!;
     private FramePacingMetrics? _benchmarkMetrics;
     private int _benchmarkTargetFrames;
     private long _lastFrameTimestamp;
     private int _benchmarkWarmupFrames = 5;
+    private bool _benchmarkQuit;
+    private EnvironmentViewCapture? _viewCapture;
     private Label _stats = null!, _status = null!, _subtitle = null!, _title = null!;
     private UnitViewSet _unitViews = null!;
     private ContactViewSet _contactViews = null!;
@@ -113,6 +116,7 @@ public partial class Main : Node3D
     internal FogOfWarView? FogOfWar => _fogOfWar;
     internal CameraRig CameraRig => _cameraRig;
     internal Camera3D Camera => _camera;
+    internal EnvironmentView EnvironmentView => _environmentView;
     internal SettingsPanel SettingsPanel => _settingsPanel;
     internal SessionMenu SessionMenu => _sessionMenu;
     internal PauseMenu PauseMenu => _pauseMenu;
@@ -573,34 +577,58 @@ public partial class Main : Node3D
         _fogOfWar = new FogOfWarView(_map, scenarioGeometry);
         BuildEnvironment(scenarioGeometry);
 
-        AddChild(new DirectionalLight3D
-        {
-            RotationDegrees = new Vector3(-55, -35, 0),
-            LightColor = new Color("fff0d2"),
-            LightEnergy = 1.2f,
-            ShadowEnabled = true
-        });
-        AddChild(new WorldEnvironment
-        {
-            Environment = new Godot.Environment
-            {
-                BackgroundMode = Godot.Environment.BGMode.Color,
-                BackgroundColor = new Color("17211c"),
-                AmbientLightSource = Godot.Environment.AmbientSource.Color,
-                AmbientLightColor = new Color("b9c6b2"),
-                AmbientLightEnergy = 0.55f,
-                TonemapMode = Godot.Environment.ToneMapper.Filmic
-            }
-        });
         DisplaySettings loadedConfig = SettingsPanel.LoadConfig();
         string[] combinedArgs = allArgs.Concat(userArgs).ToArray();
         bool cliOverridesVsync = DisplaySettings.HasVsyncOverride(combinedArgs);
         bool cliOverridesMaxFps = DisplaySettings.HasMaxFpsOverride(combinedArgs);
+        bool cliOverridesProfile = DisplaySettings.HasEnvironmentOverride(combinedArgs);
+        bool cliOverridesQuality = DisplaySettings.HasQualityOverride(combinedArgs);
         DisplaySettings activeSettings = DisplaySettings.ParseCommandLine(combinedArgs, loadedConfig);
+        _benchmarkQuit = activeSettings.BenchmarkQuit;
+
+        _environmentView = new EnvironmentView();
+        AddChild(_environmentView);
+        string scenarioDefault = _scenario switch
+        {
+            "ustye-ground" or "ustye-raid" => "overcast",
+            _ => "overcast"
+        };
+        string profileName = scenarioDefault;
+        if (SettingsPanel.TryLoadSavedEnvironmentProfile(out string savedProfile))
+        {
+            profileName = savedProfile;
+        }
+        if (cliOverridesProfile)
+        {
+            profileName = activeSettings.EnvironmentProfile;
+        }
+        EnvironmentProfile activeProfile = EnvironmentProfile.Load(profileName);
+        _environmentView.ApplyProfile(activeProfile, activeSettings.Quality);
+
+        if (_ustyeMapView is not null)
+        {
+            _ustyeMapView.ApplyEnvironmentTints(activeProfile.MaterialTints);
+        }
 
         _settingsPanel = new SettingsPanel();
         AddChild(_settingsPanel);
-        _settingsPanel.Initialize(loadedConfig, activeSettings, cliOverridesVsync, cliOverridesMaxFps);
+        _settingsPanel.Initialize(
+            loadedConfig,
+            activeSettings,
+            cliOverridesVsync,
+            cliOverridesMaxFps,
+            cliOverridesProfile,
+            cliOverridesQuality);
+
+        _settingsPanel.SettingsChanged += newSettings =>
+        {
+            EnvironmentProfile profile = EnvironmentProfile.Load(newSettings.EnvironmentProfile);
+            _environmentView.ApplyProfile(profile, newSettings.Quality);
+            if (_ustyeMapView is not null)
+            {
+                _ustyeMapView.ApplyEnvironmentTints(profile.MaterialTints);
+            }
+        };
 
         if (activeSettings.BenchmarkFrames > 0)
         {
@@ -763,6 +791,12 @@ public partial class Main : Node3D
             _orderNotification);
         UpdateViews();
 
+        if (activeSettings.CaptureViewsDir is not null)
+        {
+            UstyePlanData plan = UstyePlanData.Load();
+            _viewCapture = new EnvironmentViewCapture(this, activeSettings.CaptureViewsDir, plan, _map, _cameraRig, _combatEffects, _unitViews, _session);
+        }
+
         _lifecycleController = new ClientLifecycleController();
         _lifecycleController.OnSessionReady += session => EnterGameSession(session);
         _lifecycleController.OnConnectionFailed += err => _sessionMenu.SetStatus(err, ClientLifecycleState.Failed);
@@ -905,6 +939,10 @@ public partial class Main : Node3D
             _ustyeMapView = new(plan, includeScaleVehicles: false, fogOverlay: _fogOfWar);
             _environmentRoot.AddChild(_ustyeMapView);
             _terrainWindingValid = !_smokeTest || _ustyeMapView.HasUpwardFrontFaces();
+            if (_environmentView is not null)
+            {
+                _ustyeMapView.ApplyEnvironmentTints(_environmentView.ActiveProfile.MaterialTints);
+            }
         }
         else
         {
@@ -1001,9 +1039,11 @@ public partial class Main : Node3D
                 _sessionMenu.SetStatus(_lifecycleController.StatusDescription, _lifecycleController.State);
             }
             _cameraRig.Update(delta, allowInput: false);
+            _environmentView?.UpdateHazeForCamera(_cameraRig.Size, _cameraRig.Focus, _cameraRig.ViewPitch);
             ProcessScreenshot(delta);
             ProcessForestDemoCapture(delta);
             ProcessTransportDemoCapture(delta);
+            _viewCapture?.Process(delta);
             return;
         }
 
@@ -1156,6 +1196,7 @@ public partial class Main : Node3D
         }
 
         _cameraRig.Update(delta, allowInput: !_settingsPanel.IsOpen && !_pauseMenu.IsOpen);
+        _environmentView?.UpdateHazeForCamera(_cameraRig.Size, _cameraRig.Focus, _cameraRig.ViewPitch);
 
         if (_roleBadgeOverlay is not null && _topHud is not null && _bottomHud is not null && _selectionCard is not null)
         {
@@ -1186,6 +1227,10 @@ public partial class Main : Node3D
                     string report = _benchmarkMetrics.FormatReport(
                         _scenario, hardware, resolution, _settingsPanel.CurrentSettings.VSyncEnabled, _settingsPanel.CurrentSettings.MaxFps, warmupFrames: 5);
                     GD.Print(report);
+                    if (_benchmarkQuit)
+                    {
+                        GetTree().Quit(0);
+                    }
                 }
             }
         }
@@ -1205,6 +1250,7 @@ public partial class Main : Node3D
         ProcessScreenshot(delta);
         ProcessForestDemoCapture(delta);
         ProcessTransportDemoCapture(delta);
+        _viewCapture?.Process(delta);
 
         if (_screenshotOnFinishPath is not null && _missionPanel?.IsMissionFinished == true)
         {
@@ -3318,6 +3364,17 @@ public partial class Main : Node3D
             Simulation localSimulation = InfantryTransportScenario.CreateSimulation(scenarioGeometry);
             _session = new LocalSession(localSimulation, player: 1);
         }
+        else if (scenarioName == "ustye-ground")
+        {
+            scenarioGeometry = UstyeGroundScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = UstyeGroundScenario.CreateMatchSetup(scenarioGeometry);
+            _matchSetup = setup;
+            _scenarioGeometry = scenarioGeometry;
+            _catalog = ScenarioContent.LoadCatalog("ustye-ground");
+            Simulation localSimulation = UstyeGroundScenario.CreateSimulation(scenarioGeometry);
+            _session = new LocalSession(localSimulation, player: 1);
+        }
         else
         {
             throw new ArgumentException($"Unsupported test scenario: {scenarioName}");
@@ -3331,6 +3388,7 @@ public partial class Main : Node3D
         {
             "battle" => new Vector3(BattleScenario.SovietStart.X, 0, BattleScenario.SovietStart.Y),
             "recon-raid" => new Vector3(100, 0, 100),
+            "ustye-ground" => new Vector3(2550f, 4.5f, 2450f),
             "ustye-raid" => new Vector3(2160f, 10f, 2325f),
             "forest-visibility" => new Vector3(100f, 0f, 110f),
             "infantry-playground" => new Vector3(130f, 0f, 180f),
@@ -3341,6 +3399,7 @@ public partial class Main : Node3D
         {
             "battle" => 160f,
             "recon-raid" => 160f,
+            "ustye-ground" => 220f,
             "ustye-raid" => 160f,
             "forest-visibility" => 150f,
             "infantry-playground" => 120f,

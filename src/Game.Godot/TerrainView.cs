@@ -70,7 +70,13 @@ internal static class TerrainView
 
         Material material = fogOverlay != null
             ? fogOverlay.Material
-            : new StandardMaterial3D { ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded, VertexColorUseAsAlbedo = true };
+            : new StandardMaterial3D
+            {
+                ShadingMode = BaseMaterial3D.ShadingModeEnum.PerPixel,
+                VertexColorUseAsAlbedo = true,
+                Roughness = 0.95f,
+                SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled
+            };
         return new MeshInstance3D
         {
             Mesh = mesh,
@@ -124,7 +130,8 @@ internal static class TerrainView
             MaterialOverride = new StandardMaterial3D
             {
                 AlbedoColor = new Color(0.19f, 0.26f, 0.21f),
-                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded
+                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+                DisableFog = true
             },
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
         };

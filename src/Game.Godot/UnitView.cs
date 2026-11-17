@@ -162,7 +162,8 @@ internal sealed class UnitView
             MaterialOverride = new StandardMaterial3D
             {
                 AlbedoColor = new Color("edc76b"),
-                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded
+                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+                DisableFog = true
             },
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
             Visible = false
@@ -179,7 +180,8 @@ internal sealed class UnitView
             MaterialOverride = new StandardMaterial3D
             {
                 AlbedoColor = new Color("1a1a1a"),
-                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded
+                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+                DisableFog = true
             },
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
         };
@@ -192,7 +194,8 @@ internal sealed class UnitView
             MaterialOverride = new StandardMaterial3D
             {
                 AlbedoColor = new Color("44bb44"),
-                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded
+                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+                DisableFog = true
             },
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
         };
@@ -234,7 +237,8 @@ internal sealed class UnitView
         AlbedoColor = new Color(0.9294118f, 0.7803922f, 0.41960785f, 0.8f),
         Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
         ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
-        CullMode = BaseMaterial3D.CullModeEnum.Disabled
+        CullMode = BaseMaterial3D.CullModeEnum.Disabled,
+        DisableFog = true
     };
 
     private static readonly StandardMaterial3D SensorRangeMaterial = new()
@@ -242,7 +246,8 @@ internal sealed class UnitView
         AlbedoColor = new Color(0.60784316f, 0.76862746f, 0.8862745f, 0.35f),
         Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
         ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
-        CullMode = BaseMaterial3D.CullModeEnum.Disabled
+        CullMode = BaseMaterial3D.CullModeEnum.Disabled,
+        DisableFog = true
     };
 
     private readonly Node3D _healthBarRoot;

@@ -21,11 +21,12 @@ internal sealed class FogOfWarView : IDisposable
 {
     private const string TerrainShaderCode = @"
 shader_type spatial;
-render_mode unshaded, cull_back;
+render_mode cull_back, diffuse_burley, specular_disabled;
 
 uniform sampler2D fog_texture : filter_linear, repeat_disable;
 uniform vec2 map_size;
 uniform bool fog_enabled = true;
+uniform vec3 terrain_tint = vec3(1.0, 1.0, 1.0);
 
 varying vec2 terrain_uv;
 
@@ -34,7 +35,7 @@ void vertex() {
 }
 
 void fragment() {
-    vec3 base_color = COLOR.rgb;
+    vec3 base_color = COLOR.rgb * terrain_tint;
     if (fog_enabled) {
         float vis = texture(fog_texture, clamp(terrain_uv, vec2(0.0), vec2(1.0))).r;
         float gray = dot(base_color, vec3(0.299, 0.587, 0.114));
@@ -44,6 +45,8 @@ void fragment() {
     } else {
         ALBEDO = base_color;
     }
+    ROUGHNESS = 0.95;
+    SPECULAR = 0.0;
 }
 ";
 
@@ -178,11 +181,17 @@ void fragment() {
         _material.SetShaderParameter("fog_texture", _texture);
         _material.SetShaderParameter("map_size", new Vector2(map.Width, map.Depth));
         _material.SetShaderParameter("fog_enabled", IsEnabled);
+        _material.SetShaderParameter("terrain_tint", new Vector3(1f, 1f, 1f));
     }
 
     public void AttachToTerrain(MeshInstance3D terrain)
     {
         terrain.MaterialOverride = _material;
+    }
+
+    public void SetTerrainTint(Color tint)
+    {
+        _material.SetShaderParameter("terrain_tint", new Vector3(tint.R, tint.G, tint.B));
     }
 
     public void Toggle()

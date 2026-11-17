@@ -69,7 +69,8 @@ internal sealed class ContactView
             MaterialOverride = new StandardMaterial3D
             {
                 AlbedoColor = new Color("a86658"),
-                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded
+                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+                DisableFog = true
             },
             Visible = false
         };
@@ -85,7 +86,8 @@ internal sealed class ContactView
             MaterialOverride = new StandardMaterial3D
             {
                 AlbedoColor = new Color("ff3322"),
-                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded
+                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+                DisableFog = true
             },
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
             Visible = false

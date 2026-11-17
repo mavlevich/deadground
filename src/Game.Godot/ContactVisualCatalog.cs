@@ -165,7 +165,8 @@ internal static class ContactVisualCatalog
                 AlbedoColor = new Color(0.85f, 0.2f, 0.15f, 0.6f),
                 Roughness = 0.9f,
                 Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
-                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded
+                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+                DisableFog = true
             },
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
         };
