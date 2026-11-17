@@ -140,7 +140,11 @@ public sealed class FramePacingTests
             RenderDrawCalls: 420,
             RenderPrimitives: 180000,
             ActiveSceneNodes: 350,
-            LodSwitches: 2));
+            LodSwitches: 2,
+            VisibleDrawCalls: 250,
+            VisiblePrimitives: 110000,
+            ShadowDrawCalls: 170,
+            ShadowPrimitives: 70000));
         metrics.Record(18.0f, 5.0f, 9.0f, new FramePacingMetrics.FramePhaseSample(
             SessionMs: 3.0f,
             FogOfWarMs: 0.9f,
@@ -151,7 +155,11 @@ public sealed class FramePacingTests
             RenderDrawCalls: 460,
             RenderPrimitives: 220000,
             ActiveSceneNodes: 355,
-            LodSwitches: 1));
+            LodSwitches: 1,
+            VisibleDrawCalls: 270,
+            VisiblePrimitives: 130000,
+            ShadowDrawCalls: 190,
+            ShadowPrimitives: 90000));
 
         FramePacingMetrics.PercentileResults res = metrics.CalculateResults();
         Assert.True(res.HasGpuTiming);
@@ -169,12 +177,17 @@ public sealed class FramePacingTests
         Assert.Equal(460, summary.MaxDrawCalls);
         Assert.Equal(355, summary.LastActiveSceneNodes);
         Assert.Equal(3, summary.TotalLodSwitches);
+        Assert.True(summary.HasPassCounters);
+        Assert.True(MathF.Abs(summary.MeanVisiblePrimitives - 120000f) < 1f);
+        Assert.True(MathF.Abs(summary.MeanShadowPrimitives - 80000f) < 1f);
 
         string report = metrics.FormatReport("phase_test", "Hardware", "1920x1080", vsync: true, maxFps: 60);
         Assert.Contains("p50=9.00 ms | p95=11.70 ms | mean=9.00 ms", report);
         Assert.Contains("Bottleneck:         GPU bound", report);
         Assert.Contains("CPU PHASE BREAKDOWN", report);
         Assert.Contains("RENDER COUNTERS", report);
+        Assert.Contains("Visible Pass:", report);
+        Assert.Contains("Shadow Pass:", report);
         Assert.Contains("LOD Switches:     3", report);
         Assert.DoesNotContain("\u2013", report);
         Assert.DoesNotContain("\u2014", report);
@@ -214,6 +227,60 @@ public sealed class FramePacingTests
         // Saved config must retain original VSync true, NOT the CLI override false!
         Assert.True(updatedSavedConfig2.VSyncEnabled);
         Assert.Equal(120, updatedSavedConfig2.MaxFps);
+    }
+
+    [Fact]
+    public void DisplaySettings_RenderScale_And_AntiAliasing_WorkCorrectly()
+    {
+        DisplaySettings defaults = DisplaySettings.CreateDefault();
+        Assert.Equal(RenderScalePreset.Native100, defaults.RenderScale);
+        Assert.Equal(AntiAliasingPreset.Auto, defaults.AntiAliasing);
+
+        Assert.Equal(RenderScalePreset.Auto, DisplaySettings.ParseRenderScale("auto"));
+        Assert.Equal(RenderScalePreset.Native100, DisplaySettings.ParseRenderScale("100%"));
+        Assert.Equal(RenderScalePreset.Native100, DisplaySettings.ParseRenderScale("1.0"));
+        Assert.Equal(RenderScalePreset.Scale85, DisplaySettings.ParseRenderScale("85"));
+        Assert.Equal(RenderScalePreset.Scale75, DisplaySettings.ParseRenderScale("0.75"));
+        Assert.Equal(RenderScalePreset.Scale50, DisplaySettings.ParseRenderScale("50%"));
+        Assert.Equal(RenderScalePreset.Native100, DisplaySettings.ParseRenderScale("bogus", RenderScalePreset.Native100));
+
+        // Pixel-budget Auto scaling: clamp(sqrt(TargetPixels / windowPixels), 0.5, 1.0)
+        float scale6880 = DisplaySettings.ResolveRenderScaleFactor(RenderScalePreset.Auto, 6880, 2880);
+        Assert.True(MathF.Abs(scale6880 - 0.50f) < 0.001f, $"Expected 0.50 on 6880x2880, got {scale6880}");
+        float scale2560 = DisplaySettings.ResolveRenderScaleFactor(RenderScalePreset.Auto, 2560, 1600);
+        Assert.True(MathF.Abs(scale2560 - 0.9487f) < 0.01f, $"Expected ~0.95 on 2560x1600, got {scale2560}");
+        float scale1440 = DisplaySettings.ResolveRenderScaleFactor(RenderScalePreset.Auto, 1440, 900);
+        Assert.Equal(1.0f, scale1440);
+
+        Assert.Equal(1.0f, DisplaySettings.ResolveRenderScaleFactor(RenderScalePreset.Native100, 6880, 2880));
+        Assert.Equal(0.85f, DisplaySettings.ResolveRenderScaleFactor(RenderScalePreset.Scale85, 1440, 900));
+        Assert.Equal(0.75f, DisplaySettings.ResolveRenderScaleFactor(RenderScalePreset.Scale75, 1440, 900));
+        Assert.Equal(0.50f, DisplaySettings.ResolveRenderScaleFactor(RenderScalePreset.Scale50, 1440, 900));
+
+        // Anti-aliasing parsing & Auto cutoff (~3.7M internal pixels)
+        Assert.Equal(AntiAliasingPreset.Auto, DisplaySettings.ParseAntiAliasing("auto"));
+        Assert.Equal(AntiAliasingPreset.Off, DisplaySettings.ParseAntiAliasing("off"));
+        Assert.Equal(AntiAliasingPreset.Msaa2x, DisplaySettings.ParseAntiAliasing("2x"));
+        Assert.Equal(AntiAliasingPreset.Msaa4x, DisplaySettings.ParseAntiAliasing("4x"));
+        Assert.Equal(2, DisplaySettings.ResolveMsaaSamples(AntiAliasingPreset.Auto, 1440, 900, scale1440));
+        Assert.Equal(2, DisplaySettings.ResolveMsaaSamples(AntiAliasingPreset.Auto, 2560, 1600, scale2560));
+        Assert.Equal(0, DisplaySettings.ResolveMsaaSamples(AntiAliasingPreset.Auto, 6880, 2880, scale6880));
+        Assert.Equal(0, DisplaySettings.ResolveMsaaSamples(AntiAliasingPreset.Off, 1440, 900, 1.0f));
+        Assert.Equal(2, DisplaySettings.ResolveMsaaSamples(AntiAliasingPreset.Msaa2x, 6880, 2880, 1.0f));
+        Assert.Equal(4, DisplaySettings.ResolveMsaaSamples(AntiAliasingPreset.Msaa4x, 6880, 2880, 1.0f));
+
+        Assert.True(DisplaySettings.HasRenderScaleOverride(["--render-scale", "75"]));
+        Assert.False(DisplaySettings.HasRenderScaleOverride(["--max-fps", "60"]));
+        Assert.True(DisplaySettings.HasAntiAliasingOverride(["--msaa", "off"]));
+        Assert.False(DisplaySettings.HasAntiAliasingOverride(["--max-fps", "60"]));
+
+        DisplaySettings parsed = DisplaySettings.ParseCommandLine(["--render-scale=85%", "--msaa=4x"], defaults);
+        Assert.Equal(RenderScalePreset.Scale85, parsed.RenderScale);
+        Assert.Equal(AntiAliasingPreset.Msaa4x, parsed.AntiAliasing);
+
+        DisplaySettings edited = DisplaySettings.ApplyUserEdit(defaults, newVsync: false);
+        Assert.Equal(RenderScalePreset.Native100, edited.RenderScale);
+        Assert.Equal(AntiAliasingPreset.Auto, edited.AntiAliasing);
     }
 
     [Fact]

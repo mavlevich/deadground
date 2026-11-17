@@ -1212,10 +1212,11 @@ Planned controls (client only unless a section is named):
 
 ### 18.2 Display settings and frame pacing
 
-- 4x MSAA is the default for 3D geometry edges. It is a rendering setting and does not affect simulation ticks.
-- VSync toggle (On/Off) and Max FPS cap (0 = Unlimited, 30, 60, 120, 144 FPS).
+- Anti-aliasing defaults to `Auto` (`Off` above ~3.7M internal 3D pixels, `2x` MSAA otherwise), with explicit `Off`, `2x`, and `4x` overrides.
+- 3D Render Scale defaults to `100%` (`Native100`), with optional `Auto` pixel-budget scaling (`clamp(sqrt(3,686,400 / windowPixels), 0.5, 1.0)`), `85%`, `75%`, and `50%` FSR modes; 2D HUD, minimap, and role badges stay at native resolution.
+- VSync toggle (On/Off) and Max FPS cap (0 = Unlimited, 30, 60, 120, 144, 165, 240 FPS).
 - Display settings persisted to `user://display_settings.cfg`.
-- Command line overrides: `--vsync <on|off>`, `--max-fps <fps>`, `--benchmark-frames <N>`.
+- Command line overrides: `--vsync <on|off>`, `--max-fps <fps>`, `--render-scale <auto|100|85|75|50>`, `--msaa <auto|off|2x|4x>`, `--fullscreen`, `--benchmark-frames <N>`.
 - In-game settings overlay panel (F10 / O / HUD button), with Escape key closing the panel first before clearing unit selections.
 - Unfocused window throttling to 30 FPS, restoring saved settings when window focus returns.
 - Clamped delta (max 0.1 s) on window focus return and long frame hitches to prevent camera teleportation.
@@ -1555,8 +1556,10 @@ avoidance, a network spectator protocol, unlimited ammunition, artillery or airc
   - `Low`: disables SSAO and contact shadows, tightens shadow range, sets minimal fog overhead. Frame time costs no more than main baseline.
   - `Medium`: balanced shadow resolution and distance, activates depth fog.
   - `High`: full procedural sky, dynamic haze scaling, screen-space ambient occlusion, and extended shadow range. Frame budget adds <= 2.0 ms p95 frame time over baseline at play zoom.
+- Data-driven shadow zoom tiers (`content/render/render_budget.json`, validated by `RenderBudget`):
+  - `Close` (`< 55 m`), `Play` (`55..185 m`), and `Wide` (`>= 185 m`) tiers with `+-5 m` hysteresis control directional light shadow splits, range, smooth `0.3 s` fade on entering/leaving `Wide`, and `IMapShadowLayers` toggles (flat water/road/courtyard layers always `CastShadow = Off`; vegetation shadows on `Close` only; terrain shadows off on `Wide`).
 - Interactive switching and inspection:
-  - Configurable via CLI flags `--environment <id>`, `--quality <low|medium|high>`, and runtime settings panel UI (`SettingsPanel`).
+  - Configurable via CLI flags `--environment <id>`, `--quality <low|medium|high>`, `--render-scale <auto|100|85|75|50>`, `--msaa <auto|off|2x|4x>`, and runtime settings panel UI (`SettingsPanel`).
   - Automated view capture `--capture-views <dir>` renders and saves 6 standardized camera presets (wide map, river bridge, vehicle and infantry inspection, forest edge, combat flashes and smoke, fog-of-war borders) before clean exit.
 
 ## 19. Rule sets and modularity

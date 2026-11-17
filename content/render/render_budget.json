@@ -1,0 +1,28 @@
+{
+  "shadow_tiers": {
+    "close_to_play": 55.0,
+    "play_to_wide": 185.0,
+    "hysteresis": 5.0,
+    "close": {
+      "shadow_enabled": true,
+      "shadow_splits": 4,
+      "shadow_max_distance": 1800.0,
+      "tree_shadows": true,
+      "terrain_shadows": true
+    },
+    "play": {
+      "shadow_enabled": true,
+      "shadow_splits": 2,
+      "shadow_max_distance": 1400.0,
+      "tree_shadows": false,
+      "terrain_shadows": true
+    },
+    "wide": {
+      "shadow_enabled": false,
+      "shadow_splits": 1,
+      "shadow_max_distance": 1000.0,
+      "tree_shadows": false,
+      "terrain_shadows": false
+    }
+  }
+}

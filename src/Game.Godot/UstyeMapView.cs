@@ -12,7 +12,7 @@ namespace DeadGround.Client;
 /// Shared between standalone map preview and playable game modes.
 /// Generates terrain chunks, water surfaces, roads, bridges, structures, landmarks, and vegetation.
 /// </summary>
-public partial class UstyeMapView : Node3D
+public partial class UstyeMapView : Node3D, IMapShadowLayers
 {
     private readonly UstyePlanData _plan;
     private readonly bool _includeScaleVehicles;
@@ -32,6 +32,7 @@ public partial class UstyeMapView : Node3D
     private Mesh _deciduousTreeMesh = null!;
     private readonly List<MultiMeshInstance3D> _coniferMultiMeshes = [];
     private readonly List<MultiMeshInstance3D> _deciduousMultiMeshes = [];
+    private readonly List<MeshInstance3D> _terrainChunks = [];
     private readonly List<ScaleVehicle> _scaleVehicles = [];
 
     private ShaderMaterial? _waterMaterial;
@@ -41,6 +42,8 @@ public partial class UstyeMapView : Node3D
     private StandardMaterial3D? _coniferMat;
     private StandardMaterial3D? _deciduousMat;
     private Material? _terrainMaterial;
+    private bool _vegetationShadowsEnabled = true;
+    private bool _terrainShadowsEnabled = true;
 
     public UstyePlanData Plan => _plan;
     public Node3D TerrainRoot => _terrainRoot;
@@ -363,9 +366,13 @@ public partial class UstyeMapView : Node3D
                 {
                     Name = $"TerrainChunk_{cx}_{cz}",
                     Mesh = chunkMesh,
-                    MaterialOverride = _terrainMaterial
+                    MaterialOverride = _terrainMaterial,
+                    CastShadow = _terrainShadowsEnabled
+                        ? GeometryInstance3D.ShadowCastingSetting.On
+                        : GeometryInstance3D.ShadowCastingSetting.Off
                 };
                 _terrainRoot.AddChild(chunkInstance);
+                _terrainChunks.Add(chunkInstance);
             }
         }
     }
@@ -445,7 +452,8 @@ public partial class UstyeMapView : Node3D
         {
             Name = "RiverWater",
             Mesh = riverMesh,
-            MaterialOverride = _waterMaterial
+            MaterialOverride = _waterMaterial,
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
         };
         _waterRoot.AddChild(riverInstance);
 
@@ -497,7 +505,8 @@ public partial class UstyeMapView : Node3D
         {
             Name = "BayWater",
             Mesh = bayMesh,
-            MaterialOverride = _waterMaterial
+            MaterialOverride = _waterMaterial,
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
         };
         _waterRoot.AddChild(bayInstance);
     }
@@ -688,7 +697,8 @@ public partial class UstyeMapView : Node3D
         {
             Name = name,
             Mesh = mesh,
-            MaterialOverride = material
+            MaterialOverride = material,
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
         };
         _roadsRoot.AddChild(inst);
     }
@@ -1010,7 +1020,8 @@ public partial class UstyeMapView : Node3D
                     Name = $"Courtyard_{st.Id}",
                     Mesh = new BoxMesh { Size = new Vector3(st.Size.X + 8f, 0.15f, st.Size.Y + 8f) },
                     MaterialOverride = concretePadMat,
-                    Position = new Vector3(center.X, y + 0.05f, center.Y)
+                    Position = new Vector3(center.X, y + 0.05f, center.Y),
+                    CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
                 };
                 _contextRoot.AddChild(pad);
             }
@@ -1366,7 +1377,10 @@ public partial class UstyeMapView : Node3D
                     {
                         Name = $"Conifers_{cx}_{cz}",
                         Multimesh = mm,
-                        MaterialOverride = _coniferMat
+                        MaterialOverride = _coniferMat,
+                        CastShadow = _vegetationShadowsEnabled
+                            ? GeometryInstance3D.ShadowCastingSetting.On
+                            : GeometryInstance3D.ShadowCastingSetting.Off
                     };
                     _vegetationRoot.AddChild(mmi);
                     _coniferMultiMeshes.Add(mmi);
@@ -1390,11 +1404,58 @@ public partial class UstyeMapView : Node3D
                     {
                         Name = $"Deciduous_{cx}_{cz}",
                         Multimesh = mm,
-                        MaterialOverride = _deciduousMat
+                        MaterialOverride = _deciduousMat,
+                        CastShadow = _vegetationShadowsEnabled
+                            ? GeometryInstance3D.ShadowCastingSetting.On
+                            : GeometryInstance3D.ShadowCastingSetting.Off
                     };
                     _vegetationRoot.AddChild(mmi);
                     _deciduousMultiMeshes.Add(mmi);
                 }
+            }
+        }
+    }
+
+    public bool VegetationShadowsEnabled => _vegetationShadowsEnabled;
+    public bool TerrainShadowsEnabled => _terrainShadowsEnabled;
+
+    public void SetVegetationShadowsEnabled(bool enabled)
+    {
+        if (_vegetationShadowsEnabled == enabled)
+        {
+            return;
+        }
+
+        _vegetationShadowsEnabled = enabled;
+        GeometryInstance3D.ShadowCastingSetting setting = enabled
+            ? GeometryInstance3D.ShadowCastingSetting.On
+            : GeometryInstance3D.ShadowCastingSetting.Off;
+        SetListShadowCasting(_coniferMultiMeshes, setting);
+        SetListShadowCasting(_deciduousMultiMeshes, setting);
+    }
+
+    public void SetTerrainShadowsEnabled(bool enabled)
+    {
+        if (_terrainShadowsEnabled == enabled)
+        {
+            return;
+        }
+
+        _terrainShadowsEnabled = enabled;
+        GeometryInstance3D.ShadowCastingSetting setting = enabled
+            ? GeometryInstance3D.ShadowCastingSetting.On
+            : GeometryInstance3D.ShadowCastingSetting.Off;
+        SetListShadowCasting(_terrainChunks, setting);
+    }
+
+    private static void SetListShadowCasting<T>(List<T> instances, GeometryInstance3D.ShadowCastingSetting setting)
+        where T : GeometryInstance3D
+    {
+        for (int i = 0; i < instances.Count; i++)
+        {
+            if (GodotObject.IsInstanceValid(instances[i]))
+            {
+                instances[i].CastShadow = setting;
             }
         }
     }

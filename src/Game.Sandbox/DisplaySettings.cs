@@ -7,9 +7,26 @@ public enum EnvironmentQuality : byte
     High = 2
 }
 
+public enum RenderScalePreset : byte
+{
+    Auto = 0,
+    Native100 = 1,
+    Scale85 = 2,
+    Scale75 = 3,
+    Scale50 = 4
+}
+
+public enum AntiAliasingPreset : byte
+{
+    Auto = 0,
+    Off = 1,
+    Msaa2x = 2,
+    Msaa4x = 3
+}
+
 /// <summary>
 /// Display configuration data model with VSync, frame capping, environment profile,
-/// and command-line override support. Free of any Godot dependencies for clean testing and validation.
+/// render scale, anti-aliasing, and command-line override support. Free of any Godot dependencies.
 /// </summary>
 public sealed record DisplaySettings(
     bool VSyncEnabled = true,
@@ -18,8 +35,14 @@ public sealed record DisplaySettings(
     string EnvironmentProfile = "overcast",
     EnvironmentQuality Quality = EnvironmentQuality.High,
     bool BenchmarkQuit = false,
-    string? CaptureViewsDir = null)
+    string? CaptureViewsDir = null,
+    RenderScalePreset RenderScale = RenderScalePreset.Native100,
+    AntiAliasingPreset AntiAliasing = AntiAliasingPreset.Auto)
 {
+    public const float AutoRenderTargetPixels = 2560f * 1440f;
+    public const float MsaaAutoCutoffPixels = 3_700_000f;
+    public const float MinAutoRenderScale = 0.50f;
+    public const float MaxAutoRenderScale = 1.0f;
     public static readonly int[] ValidFpsLimits = [0, 30, 60, 120, 144, 165, 240];
 
     public static int SanitizeMaxFps(int fps)
@@ -60,6 +83,67 @@ public sealed record DisplaySettings(
         };
     }
 
+    public static RenderScalePreset ParseRenderScale(string? val, RenderScalePreset defaultPreset = RenderScalePreset.Native100)
+    {
+        if (string.IsNullOrWhiteSpace(val)) return defaultPreset;
+        string lower = val.Trim().ToLowerInvariant();
+        return lower switch
+        {
+            "auto" => RenderScalePreset.Auto,
+            "100" or "100%" or "1.0" or "1.00" or "1" or "native" or "native100" => RenderScalePreset.Native100,
+            "85" or "85%" or "0.85" or "scale85" => RenderScalePreset.Scale85,
+            "75" or "75%" or "0.75" or "scale75" => RenderScalePreset.Scale75,
+            "50" or "50%" or "0.5" or "0.50" or "scale50" => RenderScalePreset.Scale50,
+            _ => defaultPreset
+        };
+    }
+
+    public static float ResolveRenderScaleFactor(RenderScalePreset preset, int windowWidth, int windowHeight)
+    {
+        switch (preset)
+        {
+            case RenderScalePreset.Native100: return 1.0f;
+            case RenderScalePreset.Scale85: return 0.85f;
+            case RenderScalePreset.Scale75: return 0.75f;
+            case RenderScalePreset.Scale50: return 0.50f;
+            case RenderScalePreset.Auto:
+            default:
+                if (windowWidth <= 0 || windowHeight <= 0) return 1.0f;
+                float windowPixels = (float)windowWidth * windowHeight;
+                return Math.Clamp(MathF.Sqrt(AutoRenderTargetPixels / windowPixels), MinAutoRenderScale, MaxAutoRenderScale);
+        }
+    }
+
+    public static AntiAliasingPreset ParseAntiAliasing(string? val, AntiAliasingPreset defaultPreset = AntiAliasingPreset.Auto)
+    {
+        if (string.IsNullOrWhiteSpace(val)) return defaultPreset;
+        string lower = val.Trim().ToLowerInvariant();
+        return lower switch
+        {
+            "auto" => AntiAliasingPreset.Auto,
+            "off" or "0" or "none" or "disabled" => AntiAliasingPreset.Off,
+            "2x" or "2" or "msaa2x" => AntiAliasingPreset.Msaa2x,
+            "4x" or "4" or "msaa4x" => AntiAliasingPreset.Msaa4x,
+            _ => defaultPreset
+        };
+    }
+
+    public static int ResolveMsaaSamples(AntiAliasingPreset preset, int windowWidth, int windowHeight, float effectiveRenderScale)
+    {
+        switch (preset)
+        {
+            case AntiAliasingPreset.Off: return 0;
+            case AntiAliasingPreset.Msaa2x: return 2;
+            case AntiAliasingPreset.Msaa4x: return 4;
+            case AntiAliasingPreset.Auto:
+            default:
+                if (windowWidth <= 0 || windowHeight <= 0) return 2;
+                float scale = Math.Clamp(effectiveRenderScale, MinAutoRenderScale, MaxAutoRenderScale);
+                float internalPixels = (windowWidth * scale) * (windowHeight * scale);
+                return internalPixels > MsaaAutoCutoffPixels ? 0 : 2;
+        }
+    }
+
     public static DisplaySettings CreateDefault() => new();
 
     public DisplaySettings WithSanitizedValues() =>
@@ -82,6 +166,8 @@ public sealed record DisplaySettings(
         EnvironmentQuality quality = result.Quality;
         bool benchmarkQuit = result.BenchmarkQuit;
         string? captureViewsDir = result.CaptureViewsDir;
+        RenderScalePreset renderScale = result.RenderScale;
+        AntiAliasingPreset antiAliasing = result.AntiAliasing;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -185,72 +271,90 @@ public sealed record DisplaySettings(
             {
                 captureViewsDir = arg["--capture-views=".Length..];
             }
-        }
-
-        return new DisplaySettings(vsync, maxFps, benchmarkFrames, profile, quality, benchmarkQuit, captureViewsDir);
-    }
-
-    public static bool HasVsyncOverride(string[]? args)
-    {
-        if (args is null) return false;
-        for (int i = 0; i < args.Length; i++)
-        {
-            if (args[i].StartsWith("--vsync", StringComparison.OrdinalIgnoreCase)) return true;
-        }
-        return false;
-    }
-
-    public static bool HasMaxFpsOverride(string[]? args)
-    {
-        if (args is null) return false;
-        for (int i = 0; i < args.Length; i++)
-        {
-            if (args[i].StartsWith("--max-fps", StringComparison.OrdinalIgnoreCase)) return true;
-        }
-        return false;
-    }
-
-    public static bool HasEnvironmentOverride(string[]? args)
-    {
-        if (args is null) return false;
-        for (int i = 0; i < args.Length; i++)
-        {
-            if (args[i].Equals("--environment", StringComparison.OrdinalIgnoreCase) ||
-                args[i].StartsWith("--environment=", StringComparison.OrdinalIgnoreCase) ||
-                args[i].Equals("--env", StringComparison.OrdinalIgnoreCase) ||
-                args[i].StartsWith("--env=", StringComparison.OrdinalIgnoreCase))
+            else if (arg.Equals("--render-scale", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
             {
-                return true;
+                renderScale = ParseRenderScale(args[i + 1], renderScale);
+                i++;
+            }
+            else if (arg.StartsWith("--render-scale=", StringComparison.OrdinalIgnoreCase))
+            {
+                renderScale = ParseRenderScale(arg["--render-scale=".Length..], renderScale);
+            }
+            else if ((arg.Equals("--msaa", StringComparison.OrdinalIgnoreCase) ||
+                      arg.Equals("--anti-aliasing", StringComparison.OrdinalIgnoreCase) ||
+                      arg.Equals("--aa", StringComparison.OrdinalIgnoreCase)) && i + 1 < args.Length)
+            {
+                antiAliasing = ParseAntiAliasing(args[i + 1], antiAliasing);
+                i++;
+            }
+            else if (arg.StartsWith("--msaa=", StringComparison.OrdinalIgnoreCase))
+            {
+                antiAliasing = ParseAntiAliasing(arg["--msaa=".Length..], antiAliasing);
+            }
+            else if (arg.StartsWith("--anti-aliasing=", StringComparison.OrdinalIgnoreCase))
+            {
+                antiAliasing = ParseAntiAliasing(arg["--anti-aliasing=".Length..], antiAliasing);
+            }
+            else if (arg.StartsWith("--aa=", StringComparison.OrdinalIgnoreCase))
+            {
+                antiAliasing = ParseAntiAliasing(arg["--aa=".Length..], antiAliasing);
+            }
+        }
+
+        return new DisplaySettings(vsync, maxFps, benchmarkFrames, profile, quality, benchmarkQuit, captureViewsDir, renderScale, antiAliasing);
+    }
+
+    private static bool HasOptionOverride(string[]? args, params string[] names)
+    {
+        if (args is null) return false;
+        for (int i = 0; i < args.Length; i++)
+        {
+            string arg = args[i];
+            for (int j = 0; j < names.Length; j++)
+            {
+                string name = names[j];
+                if (arg.Equals(name, StringComparison.OrdinalIgnoreCase) ||
+                    (arg.Length > name.Length &&
+                     arg.StartsWith(name, StringComparison.OrdinalIgnoreCase) &&
+                     arg[name.Length] == '='))
+                {
+                    return true;
+                }
             }
         }
         return false;
     }
 
-    public static bool HasQualityOverride(string[]? args)
-    {
-        if (args is null) return false;
-        for (int i = 0; i < args.Length; i++)
-        {
-            if (args[i].Equals("--quality", StringComparison.OrdinalIgnoreCase) ||
-                args[i].StartsWith("--quality=", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
+    public static bool HasVsyncOverride(string[]? args) => HasOptionOverride(args, "--vsync");
+    public static bool HasMaxFpsOverride(string[]? args) => HasOptionOverride(args, "--max-fps");
+    public static bool HasEnvironmentOverride(string[]? args) => HasOptionOverride(args, "--environment", "--env");
+    public static bool HasQualityOverride(string[]? args) => HasOptionOverride(args, "--quality");
+    public static bool HasRenderScaleOverride(string[]? args) => HasOptionOverride(args, "--render-scale");
+    public static bool HasAntiAliasingOverride(string[]? args) => HasOptionOverride(args, "--msaa", "--anti-aliasing", "--aa");
 
     public static DisplaySettings ApplyUserEdit(
         DisplaySettings savedConfig,
         bool? newVsync = null,
         int? newMaxFps = null,
         string? newProfile = null,
-        EnvironmentQuality? newQuality = null)
+        EnvironmentQuality? newQuality = null,
+        RenderScalePreset? newRenderScale = null,
+        AntiAliasingPreset? newAntiAliasing = null)
     {
         bool vsync = newVsync ?? savedConfig.VSyncEnabled;
         int maxFps = newMaxFps.HasValue ? SanitizeMaxFps(newMaxFps.Value) : savedConfig.MaxFps;
         string profile = newProfile is not null ? SanitizeProfile(newProfile) : savedConfig.EnvironmentProfile;
         EnvironmentQuality quality = newQuality ?? savedConfig.Quality;
-        return savedConfig with { VSyncEnabled = vsync, MaxFps = maxFps, EnvironmentProfile = profile, Quality = quality };
+        RenderScalePreset renderScale = newRenderScale ?? savedConfig.RenderScale;
+        AntiAliasingPreset antiAliasing = newAntiAliasing ?? savedConfig.AntiAliasing;
+        return savedConfig with
+        {
+            VSyncEnabled = vsync,
+            MaxFps = maxFps,
+            EnvironmentProfile = profile,
+            Quality = quality,
+            RenderScale = renderScale,
+            AntiAliasing = antiAliasing
+        };
     }
 }
