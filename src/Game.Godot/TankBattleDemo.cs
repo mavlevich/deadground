@@ -19,6 +19,8 @@ public partial class TankBattleDemo : Node3D
     private FogOfWarView? _sovietFog;
     private FogOfWarView? _usFog;
     private ShaderMaterial _groundMaterial = null!;
+    private TerrainView _terrain = null!;
+    private float _cachedViewportHeightPx = 900f;
     private int _fogMode;
     private bool _smokeFogPassed;
     private CameraRig _camera = null!;
@@ -93,12 +95,13 @@ public partial class TankBattleDemo : Node3D
         _geometry = TankBattleScenario.CreateStaticGeometry();
         if (_smoke) _smokeControlsPassed &= CheckBackdropSeams(_geometry.HeightMap);
         _catalog = ColdWarContent.LoadCatalog();
-        MeshInstance3D terrain = TerrainView.Create(_geometry.HeightMap);
         _groundMaterial = new ShaderMaterial { Shader = GD.Load<Shader>("res://TankBattleGround.gdshader") };
         _groundMaterial.SetShaderParameter("map_size", TankBattleScenario.MapSize);
-        terrain.MaterialOverride = _groundMaterial;
-        AddChild(terrain);
-        AddChild(TankBattleBackdrop.Create(_geometry.HeightMap, terrain.MaterialOverride));
+        _terrain = TerrainView.Create(_geometry.HeightMap, materialOverride: _groundMaterial);
+        AddChild(_terrain);
+        _cachedViewportHeightPx = TerrainView.GetEffectiveViewportPixelHeight(GetViewport());
+        GetViewport().SizeChanged += () => _cachedViewportHeightPx = TerrainView.GetEffectiveViewportPixelHeight(GetViewport());
+        AddChild(TankBattleBackdrop.Create(_geometry.HeightMap, _terrain.TerrainMaterial));
         for (int i = 0; i < _shotLights.Length; i++)
         {
             _shotLights[i] = new OmniLight3D
@@ -401,6 +404,7 @@ public partial class TankBattleDemo : Node3D
         _sovietWreckViews.Sync(_session.Soviet.Replica);
         _usWreckViews.Sync(_session.Us.Replica);
         Basis healthBarBasis = GetViewport().GetCamera3D().GlobalTransform.Basis;
+        _terrain.UpdateLod(GetViewport().GetCamera3D(), _cachedViewportHeightPx);
         _sovietViews.FaceHealthBars(healthBarBasis);
         _usViews.FaceHealthBars(healthBarBasis);
         int lodBudget = VehicleLod.DefaultMaxInstantiationsPerFrame;

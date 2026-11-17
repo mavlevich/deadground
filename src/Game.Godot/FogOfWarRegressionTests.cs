@@ -306,38 +306,39 @@ internal static class FogOfWarRegressionTests
 
         // 2. Height tint scaling and brightness limit on battle map
         HeightMap battleMap = BattleScenario.CreateMap();
-        MeshInstance3D terrain = TerrainView.Create(battleMap);
+        TerrainView terrain = TerrainView.Create(battleMap);
         try
         {
-            using Godot.Collections.Array arrays = terrain.Mesh.SurfaceGetArrays(0);
-            Vector3[] vertices = arrays[(int)Mesh.ArrayType.Vertex].AsVector3Array();
-            Color[] colors = arrays[(int)Mesh.ArrayType.Color].AsColorArray();
-
+            Require(terrain.Chunks.Count > 1, "Battle map must be partitioned into multiple terrain chunks.");
             float minHeight = battleMap.MinHeight;
             float maxHeight = battleMap.MaxHeight;
             Require(maxHeight > minHeight + 15f, "Battle map must have significant elevation variation.");
 
-            int lowestIdx = -1;
-            int highestIdx = -1;
             float lowestH = float.MaxValue;
             float highestH = float.MinValue;
+            Color lowestColor = default;
+            Color highestColor = default;
 
-            for (int i = 0; i < vertices.Length; i++)
+            foreach (TerrainView.TerrainChunk chunk in terrain.Chunks)
             {
-                float h = vertices[i].Y;
-                if (h < lowestH) { lowestH = h; lowestIdx = i; }
-                if (h > highestH) { highestH = h; highestIdx = i; }
+                using Godot.Collections.Array arrays = chunk.VisibleInstance.Mesh.SurfaceGetArrays(0);
+                Vector3[] vertices = arrays[(int)Mesh.ArrayType.Vertex].AsVector3Array();
+                Color[] colors = arrays[(int)Mesh.ArrayType.Color].AsColorArray();
 
-                Color c = colors[i];
-                Require(c.R <= 0.75f && c.G <= 0.75f && c.B <= 0.75f,
-                    $"Seen ground vertex colors must stay below brightness limit 0.75, got ({c.R:F3}, {c.G:F3}, {c.B:F3}).");
-                float lum = 0.299f * c.R + 0.587f * c.G + 0.114f * c.B;
-                Require(lum <= 0.65f,
-                    $"Seen ground luminance must stay below 0.65, got {lum:F3}.");
+                for (int i = 0; i < vertices.Length; i++)
+                {
+                    float h = vertices[i].Y;
+                    Color c = colors[i];
+                    if (h < lowestH) { lowestH = h; lowestColor = c; }
+                    if (h > highestH) { highestH = h; highestColor = c; }
+
+                    Require(c.R <= 0.75f && c.G <= 0.75f && c.B <= 0.75f,
+                        $"Seen ground vertex colors must stay below brightness limit 0.75, got ({c.R:F3}, {c.G:F3}, {c.B:F3}).");
+                    float lum = 0.299f * c.R + 0.587f * c.G + 0.114f * c.B;
+                    Require(lum <= 0.65f,
+                        $"Seen ground luminance must stay below 0.65, got {lum:F3}.");
+                }
             }
-
-            Color lowestColor = colors[lowestIdx];
-            Color highestColor = colors[highestIdx];
 
             // Shaded colors should distinctly reflect the low vs high tint gradient
             float colorDiff = MathF.Abs(highestColor.R - lowestColor.R) +
@@ -349,7 +350,6 @@ internal static class FogOfWarRegressionTests
         }
         finally
         {
-            terrain.Mesh.Dispose();
             terrain.Free();
         }
     }

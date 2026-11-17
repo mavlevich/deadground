@@ -74,9 +74,11 @@ public partial class LosSandboxView : Node3D
 
     private void SetupTerrain()
     {
-        MeshInstance3D terrain = TerrainView.Create(_geometry.HeightMap);
+        TerrainView terrain = TerrainView.Create(_geometry.HeightMap);
         AddChild(terrain);
-        AddChild(TerrainView.CreateGrid(_geometry.HeightMap));
+        MeshInstance3D grid = TerrainView.CreateGrid(_geometry.HeightMap);
+        terrain.AttachGrid(grid);
+        AddChild(grid);
     }
 
     private void SetupStructures()
