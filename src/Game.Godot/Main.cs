@@ -23,6 +23,7 @@ public partial class Main : Node3D
     private long _lastFrameTimestamp;
     private int _benchmarkWarmupFrames = 5;
     private bool _benchmarkQuit;
+    private bool _fullscreenCli;
     private EnvironmentViewCapture? _viewCapture;
     private Label _stats = null!, _status = null!, _subtitle = null!, _title = null!;
     private UnitViewSet _unitViews = null!;
@@ -103,6 +104,7 @@ public partial class Main : Node3D
     private bool _trafficLeaderCleared;
     private int _ustyeSetupIndex;
     private UstyeMapView? _ustyeMapView;
+    private IMapShadowLayers? _activeShadowMapLayers;
     private bool _hasExplicitCameraFocus;
     private Vector3 _initialSpawnFocus;
     private float _initialSpawnSize;
@@ -374,6 +376,10 @@ public partial class Main : Node3D
                     _lodBudgetPerFrame = Math.Max(1, lodBudget);
                     i++;
                 }
+                else if (args[i] == "--fullscreen")
+                {
+                    _fullscreenCli = true;
+                }
                 else if (args[i] == "--camera-focus" && i + 1 < args.Length)
                 {
                     string[] parts = args[i + 1].Split(',');
@@ -602,6 +608,8 @@ public partial class Main : Node3D
         bool cliOverridesMaxFps = DisplaySettings.HasMaxFpsOverride(combinedArgs);
         bool cliOverridesProfile = DisplaySettings.HasEnvironmentOverride(combinedArgs);
         bool cliOverridesQuality = DisplaySettings.HasQualityOverride(combinedArgs);
+        bool cliOverridesRenderScale = DisplaySettings.HasRenderScaleOverride(combinedArgs);
+        bool cliOverridesAntiAliasing = DisplaySettings.HasAntiAliasingOverride(combinedArgs);
         DisplaySettings activeSettings = DisplaySettings.ParseCommandLine(combinedArgs, loadedConfig);
         _benchmarkQuit = activeSettings.BenchmarkQuit;
 
@@ -637,15 +645,34 @@ public partial class Main : Node3D
             cliOverridesVsync,
             cliOverridesMaxFps,
             cliOverridesProfile,
-            cliOverridesQuality);
+            cliOverridesQuality,
+            cliOverridesRenderScale,
+            cliOverridesAntiAliasing);
 
         _settingsPanel.SettingsChanged += newSettings =>
         {
+            SettingsPanel.ApplyRenderSettingsToViewport(GetViewport(), newSettings);
             EnvironmentProfile profile = EnvironmentProfile.Load(newSettings.EnvironmentProfile);
             _environmentView.ApplyProfile(profile, newSettings.Quality);
+            _environmentView.UpdateShadowTierForCamera(_cameraRig.Size, _activeShadowMapLayers);
             if (_ustyeMapView is not null)
             {
                 _ustyeMapView.ApplyEnvironmentTints(profile.MaterialTints);
+            }
+        };
+
+        if (_fullscreenCli && DisplayServer.GetName() != "headless")
+        {
+            DisplayServer.WindowSetMode(DisplayServer.WindowMode.Fullscreen);
+        }
+
+        SettingsPanel.ApplyRenderSettingsToViewport(GetViewport(), activeSettings);
+        GetViewport().SizeChanged += () =>
+        {
+            DisplaySettings? cur = _settingsPanel?.CurrentSettings;
+            if (cur is not null && (cur.RenderScale == RenderScalePreset.Auto || cur.AntiAliasing == AntiAliasingPreset.Auto))
+            {
+                SettingsPanel.ApplyRenderSettingsToViewport(GetViewport(), cur);
             }
         };
 
@@ -703,6 +730,7 @@ public partial class Main : Node3D
             _cameraRig.GroundHeight = (x, z) => _map.GetHeight(x, z);
         }
         _cameraRig.SetDefaultView(initialFocus, initialCameraSize);
+        _environmentView?.UpdateShadowTierForCamera(_cameraRig.Size, _activeShadowMapLayers);
 
         // Historical scenarios use the Cold War catalog; the small test maps keep prototype data.
         _catalog = ScenarioContent.LoadCatalog(_scenario);
@@ -965,6 +993,7 @@ public partial class Main : Node3D
         {
             UstyePlanData plan = UstyePlanData.Load();
             _ustyeMapView = new(plan, includeScaleVehicles: false, fogOverlay: _fogOfWar);
+            _activeShadowMapLayers = _ustyeMapView;
             _environmentRoot.AddChild(_ustyeMapView);
             _terrainWindingValid = !_smokeTest || _ustyeMapView.HasUpwardFrontFaces();
             if (_environmentView is not null)
@@ -975,6 +1004,7 @@ public partial class Main : Node3D
         else
         {
             MeshInstance3D terrain = TerrainView.Create(_map, _fogOfWar);
+            _activeShadowMapLayers = new TerrainShadowTarget(terrain);
             _environmentRoot.AddChild(terrain);
             _terrainWindingValid = !_smokeTest || TerrainView.HasUpwardFrontFaces(terrain);
             _environmentRoot.AddChild(TerrainView.CreateGrid(_map));
@@ -988,6 +1018,8 @@ public partial class Main : Node3D
 
     private void ClearEnvironment()
     {
+        _activeShadowMapLayers = null;
+        _environmentView?.SetShadowTarget(null);
         foreach (Node child in _environmentRoot.GetChildren())
         {
             _environmentRoot.RemoveChild(child);
@@ -1068,6 +1100,8 @@ public partial class Main : Node3D
             }
             _cameraRig.Update(delta, allowInput: false);
             _environmentView?.UpdateHazeForCamera(_cameraRig.Size, _cameraRig.Focus, _cameraRig.ViewPitch);
+            _environmentView?.UpdateShadowTierForCamera(_cameraRig.Size, _activeShadowMapLayers);
+            _environmentView?.UpdateShadowFade(delta);
             ProcessScreenshot(delta);
             ProcessForestDemoCapture(delta);
             ProcessTransportDemoCapture(delta);
@@ -1235,6 +1269,8 @@ public partial class Main : Node3D
         long previewEnd = collectBench ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         _cameraRig.Update(delta, allowInput: !_settingsPanel.IsOpen && !_pauseMenu.IsOpen);
         _environmentView?.UpdateHazeForCamera(_cameraRig.Size, _cameraRig.Focus, _cameraRig.ViewPitch);
+        _environmentView?.UpdateShadowTierForCamera(_cameraRig.Size, _activeShadowMapLayers);
+        _environmentView?.UpdateShadowFade(delta);
 
         if (_roleBadgeOverlay is not null && _topHud is not null && _bottomHud is not null && _selectionCard is not null)
         {
@@ -1277,14 +1313,30 @@ public partial class Main : Node3D
                     RenderDrawCalls: (int)Performance.GetMonitor(Performance.Monitor.RenderTotalDrawCallsInFrame),
                     RenderPrimitives: (int)Performance.GetMonitor(Performance.Monitor.RenderTotalPrimitivesInFrame),
                     ActiveSceneNodes: (int)Performance.GetMonitor(Performance.Monitor.ObjectNodeCount),
-                    LodSwitches: lodSwitches);
+                    LodSwitches: lodSwitches,
+                    VisibleDrawCalls: RenderingServer.ViewportGetRenderInfo(vpRid, RenderingServer.ViewportRenderInfoType.Visible, RenderingServer.ViewportRenderInfo.DrawCallsInFrame),
+                    VisiblePrimitives: RenderingServer.ViewportGetRenderInfo(vpRid, RenderingServer.ViewportRenderInfoType.Visible, RenderingServer.ViewportRenderInfo.PrimitivesInFrame),
+                    ShadowDrawCalls: RenderingServer.ViewportGetRenderInfo(vpRid, RenderingServer.ViewportRenderInfoType.Shadow, RenderingServer.ViewportRenderInfo.DrawCallsInFrame),
+                    ShadowPrimitives: RenderingServer.ViewportGetRenderInfo(vpRid, RenderingServer.ViewportRenderInfoType.Shadow, RenderingServer.ViewportRenderInfo.PrimitivesInFrame));
                 _benchmarkMetrics.Record(wallClockIntervalMs, cpuWorkMs, gpuMs, in phaseSample);
 
                 if (_benchmarkMetrics.Count >= _benchmarkTargetFrames)
                 {
                     string hardware = $"{OS.GetName()} / {OS.GetProcessorName()} / Cores: {OS.GetProcessorCount()}";
                     Vector2 viewSize = GetViewport().GetVisibleRect().Size;
-                    string resolution = $"{viewSize.X:F0}x{viewSize.Y:F0}";
+                    Vector2I winSize = DisplayServer.GetName() != "headless"
+                        ? DisplayServer.WindowGetSize()
+                        : new Vector2I((int)viewSize.X, (int)viewSize.Y);
+                    float scale3D = GetViewport().Scaling3DScale;
+                    string msaaLabel = GetViewport().Msaa3D switch
+                    {
+                        Viewport.Msaa.Msaa4X => "4x",
+                        Viewport.Msaa.Msaa2X => "2x",
+                        _ => "off"
+                    };
+                    string resolution = string.Create(
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        $"{viewSize.X:F0}x{viewSize.Y:F0} (window {winSize.X}x{winSize.Y}, renderScale={scale3D:F2}, msaa={msaaLabel})");
                     string report = _benchmarkMetrics.FormatReport(
                         _scenario, hardware, resolution, _settingsPanel.CurrentSettings.VSyncEnabled, _settingsPanel.CurrentSettings.MaxFps, warmupFrames: 5);
                     GD.Print(report);
@@ -3308,6 +3360,7 @@ public partial class Main : Node3D
         float initialCameraSize = 160f;
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
         _cameraRig.SetDefaultView(initialFocus, initialCameraSize);
+        _environmentView?.UpdateShadowTierForCamera(_cameraRig.Size, _activeShadowMapLayers);
         _cameraRig.ResetToDefault();
 
         _unitViews?.Clear();
@@ -3478,6 +3531,7 @@ public partial class Main : Node3D
         };
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
         _cameraRig.SetDefaultView(initialFocus, initialCameraSize);
+        _environmentView?.UpdateShadowTierForCamera(_cameraRig.Size, _activeShadowMapLayers);
         _cameraRig.ResetToDefault();
 
         _unitViews?.Clear();

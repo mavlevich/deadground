@@ -240,6 +240,7 @@ public partial class UstyeMapPreview : Node3D
 
         EnvironmentProfile profile = EnvironmentProfile.Load(profileId);
         _environmentView.ApplyProfile(profile, quality);
+        SettingsPanel.ApplyRenderSettingsToViewport(GetViewport(), activeSettings);
 
         if (_mapView is not null)
         {
@@ -264,6 +265,7 @@ public partial class UstyeMapPreview : Node3D
         _cameraRig.Model.SetSizeLimits(30f, 5500f);
         _cameraRig.FarClipMargin = 3000f;
         _cameraRig.GroundHeight = (x, z) => plan.SampleTerrainElevation(x, z);
+        _environmentView?.UpdateShadowTierForCamera(_cameraRig.Size, _mapView);
 
         _landmarks =
         [
@@ -452,6 +454,8 @@ public partial class UstyeMapPreview : Node3D
 
         _cameraRig.Update(delta, allowInput: !_isTransitioning && !_runBenchmark);
         _environmentView?.UpdateHazeForCamera(_cameraRig.Size, _cameraRig.Focus, _cameraRig.ViewPitch);
+        _environmentView?.UpdateShadowTierForCamera(_cameraRig.Size, _mapView);
+        _environmentView?.UpdateShadowFade(delta);
         _mapView.UpdateVehicleLods(_cameraRig.Size);
 
         _telemetryTimer += delta;

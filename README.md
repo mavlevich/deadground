@@ -59,7 +59,7 @@ Launching without arguments opens the Start Menu:
 - **Settings**: opens display and graphics settings (shortcut: F10 or O).
 - **Exit**: closes the application.
 
-Direct CLI arguments bypass the start menu: pass `--scenario <name>` to launch directly into a scenario (e.g. `--scenario battle`), `--connect <host:port>` to connect immediately, `--environment <overcast|clear_afternoon>` to select an environment profile, `--quality <low|medium|high>` to set graphics quality, or `--capture-views <dir>` to capture 7 standardized camera view presets.
+Direct CLI arguments bypass the start menu: pass `--scenario <name>` to launch directly into a scenario (e.g. `--scenario battle`), `--connect <host:port>` to connect immediately, `--environment <overcast|clear_afternoon>` to select an environment profile, `--quality <low|medium|high>` to set graphics quality, `--render-scale <auto|100|85|75|50>` to set 3D render scaling, `--msaa <auto|off|2x|4x>` to configure 3D anti-aliasing, `--fullscreen` to open fullscreen, or `--capture-views <dir>` to capture 7 standardized camera view presets.
 
 During gameplay, press Escape to open the Pause Menu and select **Leave Battle** to return to the Start Menu. When a match ends, the outcome screen also provides a **Leave Battle** button. If the server restarts between matches, players can return to the Multiplayer menu and connect again without restarting the game client.
 
@@ -1041,7 +1041,7 @@ Follow this checklist to verify an exported client interactively:
 7. Display settings and environment profiles:
    - Press F10, O, or click SETTINGS in the HUD to open the settings panel.
    - Toggle VSync and select frame rate limits (Unlimited, 30, 60, 120, 144 FPS).
-   - Select Environment Profile (`overcast` or `clear_afternoon`) and Graphics Quality (`low`, `medium`, or `high`) with immediate live update.
+   - Select Environment Profile (`overcast` or `clear_afternoon`), Graphics Quality (`low`, `medium`, or `high`), 3D Render Scale (`Auto`, `100%`, `85%`, `75%`, `50%`), and Anti-aliasing (`Auto`, `Off`, `2x`, `4x`) with immediate live update.
    - Press Escape to close the settings panel before clearing unit selections.
 8. Unit and contact readability:
    - Tactical minimap: displays Cold War military topographic map styling (olive-gray terrain, cool blue-gray rivers, dark settlement blocks, high-contrast roads and crossings). Friendly units appear as filled dots with yellow rings when selected; active contacts appear as solid diamonds; last-known contacts appear as hollow squares. Hovering over a last-known contact displays a tooltip with observation age ("LAST SEEN: X.Xs AGO").

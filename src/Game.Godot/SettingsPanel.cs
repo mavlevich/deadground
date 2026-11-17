@@ -17,6 +17,8 @@ internal sealed partial class SettingsPanel : CanvasLayer
     private readonly OptionButton _fpsOptions;
     private readonly OptionButton _profileOptions;
     private readonly OptionButton _qualityOptions;
+    private readonly OptionButton _renderScaleOptions;
+    private readonly OptionButton _antiAliasingOptions;
     private readonly Label _statusLabel;
     private DisplaySettings _savedConfig = DisplaySettings.CreateDefault();
     private DisplaySettings _effectiveSettings = DisplaySettings.CreateDefault();
@@ -24,6 +26,8 @@ internal sealed partial class SettingsPanel : CanvasLayer
     private bool _cliOverridesMaxFps;
     private bool _cliOverridesProfile;
     private bool _cliOverridesQuality;
+    private bool _cliOverridesRenderScale;
+    private bool _cliOverridesAntiAliasing;
 
     public event Action<DisplaySettings>? SettingsChanged;
 
@@ -47,7 +51,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
         _container = new PanelContainer
         {
             Visible = false,
-            CustomMinimumSize = new Vector2(400, 340)
+            CustomMinimumSize = new Vector2(420, 420)
         };
         _container.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.Center);
         _container.AddThemeStyleboxOverride("panel", PanelStyle());
@@ -99,6 +103,37 @@ internal sealed partial class SettingsPanel : CanvasLayer
         qualityRow.AddChild(qualityLabel);
         qualityRow.AddChild(_qualityOptions);
         stack.AddChild(qualityRow);
+
+        // Render Scale Row
+        HBoxContainer renderScaleRow = new();
+        renderScaleRow.AddThemeConstantOverride("separation", 12);
+        Label renderScaleLabel = new() { Text = "3D Render Scale:", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        renderScaleLabel.AddThemeColorOverride("font_color", new Color("d5ded0"));
+        _renderScaleOptions = new OptionButton();
+        _renderScaleOptions.AddItem("Auto (Pixel Budget)", 0);
+        _renderScaleOptions.AddItem("100% (Native)", 1);
+        _renderScaleOptions.AddItem("85% (FSR)", 2);
+        _renderScaleOptions.AddItem("75% (FSR)", 3);
+        _renderScaleOptions.AddItem("50% (FSR)", 4);
+        _renderScaleOptions.ItemSelected += OnRenderScaleSelected;
+        renderScaleRow.AddChild(renderScaleLabel);
+        renderScaleRow.AddChild(_renderScaleOptions);
+        stack.AddChild(renderScaleRow);
+
+        // Anti-aliasing Row
+        HBoxContainer aaRow = new();
+        aaRow.AddThemeConstantOverride("separation", 12);
+        Label aaLabel = new() { Text = "Anti-aliasing (MSAA):", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        aaLabel.AddThemeColorOverride("font_color", new Color("d5ded0"));
+        _antiAliasingOptions = new OptionButton();
+        _antiAliasingOptions.AddItem("Auto", 0);
+        _antiAliasingOptions.AddItem("Off", 1);
+        _antiAliasingOptions.AddItem("2x", 2);
+        _antiAliasingOptions.AddItem("4x", 3);
+        _antiAliasingOptions.ItemSelected += OnAntiAliasingSelected;
+        aaRow.AddChild(aaLabel);
+        aaRow.AddChild(_antiAliasingOptions);
+        stack.AddChild(aaRow);
 
         // VSync Row
         HBoxContainer vsyncRow = new();
@@ -153,7 +188,9 @@ internal sealed partial class SettingsPanel : CanvasLayer
         bool cliOverridesVsync,
         bool cliOverridesMaxFps,
         bool cliOverridesProfile = false,
-        bool cliOverridesQuality = false)
+        bool cliOverridesQuality = false,
+        bool cliOverridesRenderScale = false,
+        bool cliOverridesAntiAliasing = false)
     {
         _savedConfig = savedConfig.WithSanitizedValues();
         _effectiveSettings = effectiveSettings.WithSanitizedValues();
@@ -161,11 +198,13 @@ internal sealed partial class SettingsPanel : CanvasLayer
         _cliOverridesMaxFps = cliOverridesMaxFps;
         _cliOverridesProfile = cliOverridesProfile;
         _cliOverridesQuality = cliOverridesQuality;
+        _cliOverridesRenderScale = cliOverridesRenderScale;
+        _cliOverridesAntiAliasing = cliOverridesAntiAliasing;
 
         ApplyToEngine(_effectiveSettings);
         UpdateUiFromSettings();
 
-        if (cliOverridesVsync || cliOverridesMaxFps || cliOverridesProfile || cliOverridesQuality)
+        if (cliOverridesVsync || cliOverridesMaxFps || cliOverridesProfile || cliOverridesQuality || cliOverridesRenderScale || cliOverridesAntiAliasing)
         {
             _statusLabel.Text = "Some settings are overridden via command-line arguments";
             _statusLabel.AddThemeColorOverride("font_color", new Color("edc76b"));
@@ -173,7 +212,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
     }
 
     public void Initialize(DisplaySettings initialSettings, bool wasOverriddenByCli = false) =>
-        Initialize(initialSettings, initialSettings, wasOverriddenByCli, wasOverriddenByCli, wasOverriddenByCli, wasOverriddenByCli);
+        Initialize(initialSettings, initialSettings, wasOverriddenByCli, wasOverriddenByCli, wasOverriddenByCli, wasOverriddenByCli, wasOverriddenByCli, wasOverriddenByCli);
 
     public void Open()
     {
@@ -213,18 +252,18 @@ internal sealed partial class SettingsPanel : CanvasLayer
 
         _profileOptions.Selected = _effectiveSettings.EnvironmentProfile == "clear_afternoon" ? 1 : 0;
         _qualityOptions.Selected = (int)_effectiveSettings.Quality;
+        _renderScaleOptions.Selected = (int)_effectiveSettings.RenderScale;
+        _antiAliasingOptions.Selected = (int)_effectiveSettings.AntiAliasing;
     }
 
     private void OnProfileSelected(long index)
     {
         string profile = index == 1 ? "clear_afternoon" : "overcast";
-        _savedConfig = _savedConfig with { EnvironmentProfile = profile };
-        _effectiveSettings = _effectiveSettings with { EnvironmentProfile = profile };
         _cliOverridesProfile = false;
-        SaveConfig(_savedConfig);
-        SettingsChanged?.Invoke(_effectiveSettings);
-        _statusLabel.Text = "Environment profile applied and saved";
-        _statusLabel.AddThemeColorOverride("font_color", new Color("889988"));
+        CommitSettingEdit(
+            _savedConfig with { EnvironmentProfile = profile },
+            _effectiveSettings with { EnvironmentProfile = profile },
+            "Environment profile applied and saved");
     }
 
     private void OnQualitySelected(long index)
@@ -235,28 +274,54 @@ internal sealed partial class SettingsPanel : CanvasLayer
             1 => EnvironmentQuality.Medium,
             _ => EnvironmentQuality.High
         };
-        _savedConfig = _savedConfig with { Quality = quality };
-        _effectiveSettings = _effectiveSettings with { Quality = quality };
         _cliOverridesQuality = false;
-        SaveConfig(_savedConfig);
-        SettingsChanged?.Invoke(_effectiveSettings);
-        _statusLabel.Text = "Graphics quality applied and saved";
-        _statusLabel.AddThemeColorOverride("font_color", new Color("889988"));
+        CommitSettingEdit(
+            _savedConfig with { Quality = quality },
+            _effectiveSettings with { Quality = quality },
+            "Graphics quality applied and saved");
+    }
+
+    private void OnRenderScaleSelected(long index)
+    {
+        RenderScalePreset scale = index switch
+        {
+            1 => RenderScalePreset.Native100,
+            2 => RenderScalePreset.Scale85,
+            3 => RenderScalePreset.Scale75,
+            4 => RenderScalePreset.Scale50,
+            _ => RenderScalePreset.Auto
+        };
+        _cliOverridesRenderScale = false;
+        CommitSettingEdit(
+            _savedConfig with { RenderScale = scale },
+            _effectiveSettings with { RenderScale = scale },
+            "Render scale applied and saved");
+    }
+
+    private void OnAntiAliasingSelected(long index)
+    {
+        AntiAliasingPreset aa = index switch
+        {
+            1 => AntiAliasingPreset.Off,
+            2 => AntiAliasingPreset.Msaa2x,
+            3 => AntiAliasingPreset.Msaa4x,
+            _ => AntiAliasingPreset.Auto
+        };
+        _cliOverridesAntiAliasing = false;
+        CommitSettingEdit(
+            _savedConfig with { AntiAliasing = aa },
+            _effectiveSettings with { AntiAliasing = aa },
+            "Anti-aliasing applied and saved");
     }
 
     private void OnVsyncToggled(bool toggled)
     {
-        _savedConfig = _savedConfig with { VSyncEnabled = toggled };
-        _effectiveSettings = _effectiveSettings with { VSyncEnabled = toggled };
         _cliOverridesVsync = false;
         _vsyncButton.Text = toggled ? "Enabled" : "Disabled";
-        ApplyToEngine(_effectiveSettings);
-        SaveConfig(_savedConfig);
-        SettingsChanged?.Invoke(_effectiveSettings);
-        _statusLabel.Text = _cliOverridesMaxFps
-            ? "VSync saved (FPS limit still overridden by CLI)"
-            : "Settings applied and saved";
-        _statusLabel.AddThemeColorOverride("font_color", new Color("889988"));
+        DisplaySettings updatedSaved = _savedConfig with { VSyncEnabled = toggled };
+        DisplaySettings updatedEffective = _effectiveSettings with { VSyncEnabled = toggled };
+        ApplyToEngine(updatedEffective);
+        CommitSettingEdit(updatedSaved, updatedEffective, "Settings applied and saved");
     }
 
     private void OnFpsSelected(long index)
@@ -271,16 +336,69 @@ internal sealed partial class SettingsPanel : CanvasLayer
             6 => 240,
             _ => 0
         };
-        _savedConfig = _savedConfig with { MaxFps = fps };
-        _effectiveSettings = _effectiveSettings with { MaxFps = fps };
         _cliOverridesMaxFps = false;
-        ApplyToEngine(_effectiveSettings);
+        DisplaySettings updatedSaved = _savedConfig with { MaxFps = fps };
+        DisplaySettings updatedEffective = _effectiveSettings with { MaxFps = fps };
+        ApplyToEngine(updatedEffective);
+        CommitSettingEdit(updatedSaved, updatedEffective, "Settings applied and saved");
+    }
+
+    private void CommitSettingEdit(DisplaySettings saved, DisplaySettings effective, string message)
+    {
+        _savedConfig = saved;
+        _effectiveSettings = effective;
         SaveConfig(_savedConfig);
         SettingsChanged?.Invoke(_effectiveSettings);
-        _statusLabel.Text = _cliOverridesVsync
-            ? "FPS limit saved (VSync still overridden by CLI)"
-            : "Settings applied and saved";
-        _statusLabel.AddThemeColorOverride("font_color", new Color("889988"));
+        bool hasAnyOverride = _cliOverridesVsync || _cliOverridesMaxFps || _cliOverridesProfile || _cliOverridesQuality || _cliOverridesRenderScale || _cliOverridesAntiAliasing;
+        _statusLabel.Text = hasAnyOverride ? $"{message} (other CLI overrides active)" : message;
+        _statusLabel.AddThemeColorOverride("font_color", hasAnyOverride ? new Color("edc76b") : new Color("889988"));
+    }
+
+    public static Vector2I ResolveWindowPixelSize(Viewport? viewport, Vector2I? windowSizeOverride = null)
+    {
+        if (windowSizeOverride.HasValue) return windowSizeOverride.Value;
+        try
+        {
+            if (DisplayServer.GetName() != "headless")
+            {
+                Vector2I winSize = DisplayServer.WindowGetSize();
+                if (winSize.X > 0 && winSize.Y > 0) return winSize;
+            }
+        }
+        catch
+        {
+            // Headless / mock fallback
+        }
+        if (viewport is not null && GodotObject.IsInstanceValid(viewport))
+        {
+            Vector2 rect = viewport.GetVisibleRect().Size;
+            if (rect.X > 0f && rect.Y > 0f) return new Vector2I((int)rect.X, (int)rect.Y);
+        }
+        return new Vector2I(1440, 900);
+    }
+
+    public static (float RenderScale, int MsaaSamples) ApplyRenderSettingsToViewport(
+        Viewport? viewport,
+        DisplaySettings settings,
+        Vector2I? windowSizeOverride = null)
+    {
+        Vector2I winSize = ResolveWindowPixelSize(viewport, windowSizeOverride);
+        float scale = DisplaySettings.ResolveRenderScaleFactor(settings.RenderScale, winSize.X, winSize.Y);
+        int msaaSamples = DisplaySettings.ResolveMsaaSamples(settings.AntiAliasing, winSize.X, winSize.Y, scale);
+        if (viewport is not null && GodotObject.IsInstanceValid(viewport))
+        {
+            viewport.Scaling3DScale = scale;
+            viewport.Scaling3DMode = scale < 0.999f
+                ? Viewport.Scaling3DModeEnum.Fsr
+                : Viewport.Scaling3DModeEnum.Bilinear;
+            viewport.Msaa3D = msaaSamples switch
+            {
+                4 => Viewport.Msaa.Msaa4X,
+                2 => Viewport.Msaa.Msaa2X,
+                _ => Viewport.Msaa.Disabled
+            };
+        }
+        return (scale, msaaSamples);
     }
 
     public static void ApplyToEngine(DisplaySettings settings)
@@ -330,12 +448,18 @@ internal sealed partial class SettingsPanel : CanvasLayer
             string profile = (string)config.GetValue("display", "environment_profile", "overcast");
             string qualityStr = (string)config.GetValue("display", "environment_quality", "High");
             EnvironmentQuality quality = DisplaySettings.ParseQuality(qualityStr);
+            string renderScaleStr = (string)config.GetValue("display", "render_scale", "Native100");
+            RenderScalePreset renderScale = DisplaySettings.ParseRenderScale(renderScaleStr, RenderScalePreset.Native100);
+            string msaaStr = (string)config.GetValue("display", "msaa", "Auto");
+            AntiAliasingPreset antiAliasing = DisplaySettings.ParseAntiAliasing(msaaStr, AntiAliasingPreset.Auto);
             return new DisplaySettings(
                 vsync,
                 DisplaySettings.SanitizeMaxFps(maxFps),
                 0,
                 DisplaySettings.SanitizeProfile(profile),
-                quality);
+                quality,
+                RenderScale: renderScale,
+                AntiAliasing: antiAliasing);
         }
         catch
         {
@@ -352,6 +476,8 @@ internal sealed partial class SettingsPanel : CanvasLayer
             config.SetValue("display", "max_fps", settings.MaxFps);
             config.SetValue("display", "environment_profile", settings.EnvironmentProfile);
             config.SetValue("display", "environment_quality", settings.Quality.ToString());
+            config.SetValue("display", "render_scale", settings.RenderScale.ToString());
+            config.SetValue("display", "msaa", settings.AntiAliasing.ToString());
             config.Save(ConfigPath);
         }
         catch (Exception ex)

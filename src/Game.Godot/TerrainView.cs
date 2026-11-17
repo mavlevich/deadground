@@ -3,6 +3,36 @@ using Godot;
 
 namespace DeadGround.Client;
 
+internal sealed class TerrainShadowTarget : IMapShadowLayers
+{
+    private readonly MeshInstance3D _terrainMesh;
+    private bool _terrainShadowsEnabled = true;
+
+    public TerrainShadowTarget(MeshInstance3D terrainMesh)
+    {
+        _terrainMesh = terrainMesh;
+    }
+
+    public bool VegetationShadowsEnabled => false;
+    public bool TerrainShadowsEnabled => _terrainShadowsEnabled;
+
+    public void SetVegetationShadowsEnabled(bool enabled)
+    {
+    }
+
+    public void SetTerrainShadowsEnabled(bool enabled)
+    {
+        if (_terrainShadowsEnabled == enabled) return;
+        _terrainShadowsEnabled = enabled;
+        if (GodotObject.IsInstanceValid(_terrainMesh))
+        {
+            _terrainMesh.CastShadow = enabled
+                ? GeometryInstance3D.ShadowCastingSetting.On
+                : GeometryInstance3D.ShadowCastingSetting.Off;
+        }
+    }
+}
+
 internal static class TerrainView
 {
     public static readonly Vector3 LightDirection = new(-0.5f, 0.70710678f, -0.5f);

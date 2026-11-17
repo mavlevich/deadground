@@ -10,5 +10,6 @@
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="../../content/environments/*.json" LogicalName="DeadGround.Environments.%(Filename).json" />
+    <EmbeddedResource Include="../../content/render/*.json" LogicalName="DeadGround.Render.%(Filename).json" />
   </ItemGroup>
 </Project>

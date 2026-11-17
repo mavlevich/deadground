@@ -18,7 +18,11 @@ public sealed class FramePacingMetrics
         int RenderDrawCalls = -1,
         int RenderPrimitives = -1,
         int ActiveSceneNodes = -1,
-        int LodSwitches = 0);
+        int LodSwitches = 0,
+        int VisibleDrawCalls = -1,
+        int VisiblePrimitives = -1,
+        int ShadowDrawCalls = -1,
+        int ShadowPrimitives = -1);
 
     public readonly record struct PhaseSummary(
         bool HasPhaseData,
@@ -40,7 +44,33 @@ public sealed class FramePacingMetrics
         float MeanPrimitives,
         int MaxPrimitives,
         int LastActiveSceneNodes,
-        int TotalLodSwitches);
+        int TotalLodSwitches,
+        bool HasPassCounters = false,
+        float MeanVisibleDrawCalls = 0f,
+        int MaxVisibleDrawCalls = 0,
+        float MeanVisiblePrimitives = 0f,
+        int MaxVisiblePrimitives = 0,
+        float MeanShadowDrawCalls = 0f,
+        int MaxShadowDrawCalls = 0,
+        float MeanShadowPrimitives = 0f,
+        int MaxShadowPrimitives = 0);
+
+    private struct CounterAccumulator
+    {
+        private long _sum;
+        private int _count;
+        public int Max { get; private set; }
+        public readonly bool HasData => _count > 0;
+        public readonly float Mean => _count > 0 ? (float)_sum / _count : 0f;
+
+        public void Add(int value)
+        {
+            if (value < 0) return;
+            _sum += value;
+            _count++;
+            if (value > Max) Max = value;
+        }
+    }
 
     private readonly float[] _frameIntervalsMs;
     private readonly float[] _cpuTimesMs;
@@ -194,13 +224,12 @@ public sealed class FramePacingMetrics
         float sumMinimap = 0f, maxMinimap = 0f;
         float sumEffectsHud = 0f, maxEffectsHud = 0f;
 
-        long sumDrawCalls = 0;
-        int drawCallSamples = 0;
-        int maxDrawCalls = 0;
-
-        long sumPrimitives = 0;
-        int primitiveSamples = 0;
-        int maxPrimitives = 0;
+        CounterAccumulator drawCalls = default;
+        CounterAccumulator primitives = default;
+        CounterAccumulator visibleDrawCalls = default;
+        CounterAccumulator visiblePrimitives = default;
+        CounterAccumulator shadowDrawCalls = default;
+        CounterAccumulator shadowPrimitives = default;
 
         int lastActiveNodes = -1;
         int totalLodSwitches = 0;
@@ -227,18 +256,12 @@ public sealed class FramePacingMetrics
             sumEffectsHud += s.EffectsAndHudMs;
             if (s.EffectsAndHudMs > maxEffectsHud) maxEffectsHud = s.EffectsAndHudMs;
 
-            if (s.RenderDrawCalls >= 0)
-            {
-                sumDrawCalls += s.RenderDrawCalls;
-                drawCallSamples++;
-                if (s.RenderDrawCalls > maxDrawCalls) maxDrawCalls = s.RenderDrawCalls;
-            }
-            if (s.RenderPrimitives >= 0)
-            {
-                sumPrimitives += s.RenderPrimitives;
-                primitiveSamples++;
-                if (s.RenderPrimitives > maxPrimitives) maxPrimitives = s.RenderPrimitives;
-            }
+            drawCalls.Add(s.RenderDrawCalls);
+            primitives.Add(s.RenderPrimitives);
+            visibleDrawCalls.Add(s.VisibleDrawCalls);
+            visiblePrimitives.Add(s.VisiblePrimitives);
+            shadowDrawCalls.Add(s.ShadowDrawCalls);
+            shadowPrimitives.Add(s.ShadowPrimitives);
             if (s.ActiveSceneNodes >= 0)
             {
                 lastActiveNodes = s.ActiveSceneNodes;
@@ -247,7 +270,8 @@ public sealed class FramePacingMetrics
         }
 
         float invPhaseCount = 1f / _phaseSampleCount;
-        bool hasCounters = drawCallSamples > 0 || primitiveSamples > 0 || lastActiveNodes >= 0;
+        bool hasCounters = drawCalls.HasData || primitives.HasData || lastActiveNodes >= 0;
+        bool hasPassCounters = visibleDrawCalls.HasData || visiblePrimitives.HasData || shadowDrawCalls.HasData || shadowPrimitives.HasData;
         return new PhaseSummary(
             HasPhaseData: true,
             MeanSessionMs: sumSession * invPhaseCount,
@@ -263,12 +287,21 @@ public sealed class FramePacingMetrics
             MeanEffectsAndHudMs: sumEffectsHud * invPhaseCount,
             MaxEffectsAndHudMs: maxEffectsHud,
             HasRenderCounters: hasCounters,
-            MeanDrawCalls: drawCallSamples > 0 ? (float)sumDrawCalls / drawCallSamples : 0f,
-            MaxDrawCalls: maxDrawCalls,
-            MeanPrimitives: primitiveSamples > 0 ? (float)sumPrimitives / primitiveSamples : 0f,
-            MaxPrimitives: maxPrimitives,
+            MeanDrawCalls: drawCalls.Mean,
+            MaxDrawCalls: drawCalls.Max,
+            MeanPrimitives: primitives.Mean,
+            MaxPrimitives: primitives.Max,
             LastActiveSceneNodes: lastActiveNodes,
-            TotalLodSwitches: totalLodSwitches);
+            TotalLodSwitches: totalLodSwitches,
+            HasPassCounters: hasPassCounters,
+            MeanVisibleDrawCalls: visibleDrawCalls.Mean,
+            MaxVisibleDrawCalls: visibleDrawCalls.Max,
+            MeanVisiblePrimitives: visiblePrimitives.Mean,
+            MaxVisiblePrimitives: visiblePrimitives.Max,
+            MeanShadowDrawCalls: shadowDrawCalls.Mean,
+            MaxShadowDrawCalls: shadowDrawCalls.Max,
+            MeanShadowPrimitives: shadowPrimitives.Mean,
+            MaxShadowPrimitives: shadowPrimitives.Max);
     }
 
     private static float GetPercentile(float[] sorted, float percentile)
@@ -313,7 +346,7 @@ public sealed class FramePacingMetrics
             $"Active Settings:    VSync={vsyncStr}, MaxFPS={maxFpsStr}, BackgroundCap=30\n" +
             $"Warmup Policy:      {warmupStr}\n" +
             $"Measurement Point:  _Process callback-to-callback (monotonic wall-clock)\n" +
-            $"CPU Work Point:     _Process callback execution duration\n" +
+            $"CPU Work Point:     _Process callback duration (subset of total engine CPU)\n" +
             $"------------------------------------------------------------------------\n" +
             $"Samples:            {res.SampleCount} frames\n" +
             $"------------------------------------------------------------------------\n" +
@@ -324,7 +357,7 @@ public sealed class FramePacingMetrics
             $"------------------------------------------------------------------------\n" +
             $"Mean CPU Work:      {res.MeanCpuMs:F2} ms\n" +
             $"GPU Timing:         {gpuStr}\n" +
-            $"Bottleneck:         {bottleneckStr}\n" +
+            $"Bottleneck:         {bottleneckStr} (GPU p50 vs _Process mean)\n" +
             $"Frames >  8.33 ms:  {res.LongFramesOver8Ms} ({(float)res.LongFramesOver8Ms / Math.Max(1, res.SampleCount) * 100f:F1}%)\n" +
             $"Frames > 16.67 ms:  {res.LongFramesOver16Ms} ({(float)res.LongFramesOver16Ms / Math.Max(1, res.SampleCount) * 100f:F1}%)\n" +
             $"Frames > 33.33 ms:  {res.LongFramesOver33Ms} ({(float)res.LongFramesOver33Ms / Math.Max(1, res.SampleCount) * 100f:F1}%)\n" +
@@ -348,8 +381,14 @@ public sealed class FramePacingMetrics
                     $"  Draw Calls:       mean {phases.MeanDrawCalls:F0} / max {phases.MaxDrawCalls}\n" +
                     $"  Primitives:       mean {phases.MeanPrimitives:F0} / max {phases.MaxPrimitives}\n" +
                     $"  Scene Nodes:      {phases.LastActiveSceneNodes}\n" +
-                    $"  LOD Switches:     {phases.TotalLodSwitches}\n" +
-                    $"------------------------------------------------------------------------\n");
+                    $"  LOD Switches:     {phases.TotalLodSwitches}\n");
+                if (phases.HasPassCounters)
+                {
+                    report += string.Create(CultureInfo.InvariantCulture,
+                        $"  Visible Pass:     calls {phases.MeanVisibleDrawCalls:F0}/{phases.MaxVisibleDrawCalls} | prims {phases.MeanVisiblePrimitives:F0}/{phases.MaxVisiblePrimitives}\n" +
+                        $"  Shadow Pass:      calls {phases.MeanShadowDrawCalls:F0}/{phases.MaxShadowDrawCalls} | prims {phases.MeanShadowPrimitives:F0}/{phases.MaxShadowPrimitives}\n");
+                }
+                report += "------------------------------------------------------------------------\n";
             }
         }
 

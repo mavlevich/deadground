@@ -3,9 +3,16 @@ using Godot;
 
 namespace DeadGround.Client;
 
+public enum ShadowZoomTier : byte
+{
+    Close = 0,
+    Play = 1,
+    Wide = 2
+}
+
 /// <summary>
 /// Presentation environment view managing DirectionalLight3D, WorldEnvironment,
-/// procedural sky, atmosphere haze, and graphics quality levels.
+/// procedural sky, atmosphere haze, shadow zoom tiers, and graphics quality levels.
 /// Pure presentation component with zero simulation dependencies and zero per-frame heap allocations.
 /// </summary>
 public sealed partial class EnvironmentView : Node3D
@@ -17,6 +24,16 @@ public sealed partial class EnvironmentView : Node3D
     private EnvironmentQuality _activeQuality = EnvironmentQuality.High;
     private float _lastCameraSize = -999f;
     private float _lastCameraPitch = -999f;
+    private ShadowZoomTier? _activeShadowTier;
+    private bool _shadowTierApplied;
+    private bool _effectiveTreeShadows;
+    private bool _effectiveTerrainShadows = true;
+    private int _shadowTierApplyCount;
+    private IMapShadowLayers? _lastShadowTarget;
+    private RenderBudget _renderBudget;
+    private float _shadowFadeOpacity = 1f;
+    private float _targetShadowFadeOpacity = 1f;
+    private const float ShadowFadeDurationSeconds = 0.3f;
     private const float SizeUpdateThreshold = 1.0f;
     private const float PitchUpdateThreshold = 0.02f;
 
@@ -25,10 +42,16 @@ public sealed partial class EnvironmentView : Node3D
     public Godot.Environment GodotEnvironment => _worldEnvironment.Environment;
     public EnvironmentProfile ActiveProfile => _activeProfile;
     public EnvironmentQuality ActiveQuality => _activeQuality;
+    public RenderBudget ActiveRenderBudget => _renderBudget;
+    public ShadowZoomTier? ActiveShadowTier => _activeShadowTier;
+    public bool EffectiveTreeShadows => _effectiveTreeShadows;
+    public bool EffectiveTerrainShadows => _effectiveTerrainShadows;
+    public int ShadowTierApplyCount => _shadowTierApplyCount;
 
-    public EnvironmentView()
+    public EnvironmentView(RenderBudget? renderBudget = null)
     {
         Name = "EnvironmentView";
+        _renderBudget = renderBudget ?? RenderBudget.LoadDefault();
 
         _sun = new DirectionalLight3D
         {
@@ -141,6 +164,7 @@ public sealed partial class EnvironmentView : Node3D
         }
 
         // Apply quality level adjustments
+        _shadowTierApplied = false;
         SetQuality(quality);
     }
 
@@ -182,6 +206,216 @@ public sealed partial class EnvironmentView : Node3D
                 env.GlowEnabled = _activeProfile.Glow?.Enabled ?? false;
                 env.FogAerialPerspective = _activeProfile.Haze.AerialPerspective;
                 break;
+        }
+
+        _shadowTierApplied = false;
+        if (_activeShadowTier.HasValue)
+        {
+            ApplyShadowTier(_activeShadowTier.Value, GetAliveTarget(_lastShadowTarget), allowFade: false);
+        }
+    }
+
+    public void SetRenderBudget(RenderBudget renderBudget)
+    {
+        _renderBudget = renderBudget ?? throw new ArgumentNullException(nameof(renderBudget));
+        _shadowTierApplied = false;
+        if (_activeShadowTier.HasValue)
+        {
+            ApplyShadowTier(_activeShadowTier.Value, GetAliveTarget(_lastShadowTarget), allowFade: false);
+        }
+    }
+
+    public void SetShadowTarget(IMapShadowLayers? mapLayers)
+    {
+        IMapShadowLayers? alive = GetAliveTarget(mapLayers);
+        if (!ReferenceEquals(alive, _lastShadowTarget))
+        {
+            _lastShadowTarget = alive;
+            _shadowTierApplied = false;
+        }
+    }
+
+    private static IMapShadowLayers? GetAliveTarget(IMapShadowLayers? target)
+    {
+        if (target is null) return null;
+        if (target is Node node)
+        {
+            return GodotObject.IsInstanceValid(node) && !node.IsQueuedForDeletion() ? target : null;
+        }
+        if (target is GodotObject go)
+        {
+            return GodotObject.IsInstanceValid(go) ? target : null;
+        }
+        return target;
+    }
+
+    public static ShadowZoomTier SelectShadowZoomTier(
+        float cameraSize,
+        ShadowZoomTier? previousTier,
+        ShadowTiersSettings? settings = null)
+    {
+        ShadowTiersSettings s = settings ?? RenderBudget.Default.ShadowTiers;
+        if (!previousTier.HasValue)
+        {
+            if (cameraSize < s.CloseToPlay) return ShadowZoomTier.Close;
+            if (cameraSize < s.PlayToWide) return ShadowZoomTier.Play;
+            return ShadowZoomTier.Wide;
+        }
+
+        float h = s.Hysteresis;
+        return previousTier.Value switch
+        {
+            ShadowZoomTier.Close => cameraSize > s.CloseToPlay + h
+                ? (cameraSize > s.PlayToWide + h ? ShadowZoomTier.Wide : ShadowZoomTier.Play)
+                : ShadowZoomTier.Close,
+            ShadowZoomTier.Play => cameraSize < s.CloseToPlay - h
+                ? ShadowZoomTier.Close
+                : (cameraSize > s.PlayToWide + h ? ShadowZoomTier.Wide : ShadowZoomTier.Play),
+            ShadowZoomTier.Wide => cameraSize < s.PlayToWide - h
+                ? (cameraSize < s.CloseToPlay - h ? ShadowZoomTier.Close : ShadowZoomTier.Play)
+                : ShadowZoomTier.Wide,
+            _ => ShadowZoomTier.Play
+        };
+    }
+
+    public static (bool ShadowEnabled, DirectionalLight3D.ShadowMode ShadowMode, float ShadowMaxDistance, bool TreeShadows, bool TerrainShadows)
+        ResolveTierShadowSettings(ShadowTiersSettings tiers, ShadowZoomTier tier, EnvironmentQuality quality, SunSettings sun)
+    {
+        ShadowTierSettings cfg = tier switch
+        {
+            ShadowZoomTier.Close => tiers.Close,
+            ShadowZoomTier.Wide => tiers.Wide,
+            _ => tiers.Play
+        };
+
+        bool enabled = sun.ShadowEnabled && cfg.ShadowEnabled;
+        int maxSplits = quality switch
+        {
+            EnvironmentQuality.Low => 1,
+            EnvironmentQuality.Medium => 2,
+            _ => 4
+        };
+        int effectiveSplits = Math.Min(cfg.ShadowSplits, maxSplits);
+        DirectionalLight3D.ShadowMode mode = effectiveSplits switch
+        {
+            >= 4 => DirectionalLight3D.ShadowMode.Parallel4Splits,
+            >= 2 => DirectionalLight3D.ShadowMode.Parallel2Splits,
+            _ => DirectionalLight3D.ShadowMode.Orthogonal
+        };
+
+        float qualityMaxDist = quality switch
+        {
+            EnvironmentQuality.Low => 1200f,
+            EnvironmentQuality.Medium => 1600f,
+            _ => sun.ShadowMaxDistance
+        };
+        float maxDist = Math.Min(cfg.ShadowMaxDistance, qualityMaxDist);
+        bool treeShadows = enabled && cfg.TreeShadows && quality != EnvironmentQuality.Low;
+        bool terrainShadows = enabled && cfg.TerrainShadows;
+        return (enabled, mode, maxDist, treeShadows, terrainShadows);
+    }
+
+    public bool UpdateShadowTierForCamera(float cameraSize, IMapShadowLayers? mapLayers = null)
+    {
+        if (_activeProfile is null) return false;
+
+        bool targetChanged = false;
+        if (mapLayers is not null)
+        {
+            IMapShadowLayers? aliveTarget = GetAliveTarget(mapLayers);
+            if (!ReferenceEquals(aliveTarget, _lastShadowTarget))
+            {
+                _lastShadowTarget = aliveTarget;
+                _shadowTierApplied = false;
+                targetChanged = true;
+            }
+        }
+        else
+        {
+            IMapShadowLayers? aliveExisting = GetAliveTarget(_lastShadowTarget);
+            if (!ReferenceEquals(aliveExisting, _lastShadowTarget))
+            {
+                _lastShadowTarget = null;
+                targetChanged = true;
+            }
+        }
+
+        ShadowZoomTier nextTier = SelectShadowZoomTier(cameraSize, _activeShadowTier, _renderBudget.ShadowTiers);
+        if (_shadowTierApplied && _activeShadowTier == nextTier)
+        {
+            return false;
+        }
+
+        bool isTransition = !targetChanged && _activeShadowTier.HasValue && _activeShadowTier.Value != nextTier;
+        ApplyShadowTier(nextTier, _lastShadowTarget, allowFade: isTransition);
+        return true;
+    }
+
+    public void UpdateShadowFade(double delta)
+    {
+        if (MathF.Abs(_shadowFadeOpacity - _targetShadowFadeOpacity) <= 0.0001f)
+        {
+            return;
+        }
+
+        float step = (float)(Math.Max(0.0, delta) / ShadowFadeDurationSeconds);
+        if (_shadowFadeOpacity < _targetShadowFadeOpacity)
+        {
+            _shadowFadeOpacity = MathF.Min(_targetShadowFadeOpacity, _shadowFadeOpacity + step);
+        }
+        else
+        {
+            _shadowFadeOpacity = MathF.Max(_targetShadowFadeOpacity, _shadowFadeOpacity - step);
+        }
+
+        _sun.ShadowOpacity = _shadowFadeOpacity;
+        if (_targetShadowFadeOpacity <= 0f && _shadowFadeOpacity <= 0.001f)
+        {
+            _sun.ShadowEnabled = false;
+            IMapShadowLayers? target = GetAliveTarget(_lastShadowTarget);
+            target?.SetVegetationShadowsEnabled(_effectiveTreeShadows);
+            target?.SetTerrainShadowsEnabled(_effectiveTerrainShadows);
+        }
+    }
+
+    private void ApplyShadowTier(ShadowZoomTier tier, IMapShadowLayers? mapLayers, bool allowFade)
+    {
+        (bool enabled, DirectionalLight3D.ShadowMode mode, float maxDist, bool treeShadows, bool terrainShadows) =
+            ResolveTierShadowSettings(_renderBudget.ShadowTiers, tier, _activeQuality, _activeProfile.Sun);
+
+        float nextTargetOpacity = enabled ? 1.0f : 0.0f;
+        bool fadingOut = allowFade && nextTargetOpacity <= 0f && _shadowFadeOpacity > 0.01f;
+        if (allowFade && MathF.Abs(nextTargetOpacity - _shadowFadeOpacity) > 0.01f)
+        {
+            _targetShadowFadeOpacity = nextTargetOpacity;
+            _sun.ShadowEnabled = true;
+            _sun.ShadowOpacity = _shadowFadeOpacity;
+            if (enabled)
+            {
+                _sun.DirectionalShadowMode = mode;
+                _sun.DirectionalShadowMaxDistance = maxDist;
+            }
+        }
+        else
+        {
+            _targetShadowFadeOpacity = nextTargetOpacity;
+            _shadowFadeOpacity = nextTargetOpacity;
+            _sun.ShadowOpacity = nextTargetOpacity;
+            _sun.ShadowEnabled = enabled;
+            _sun.DirectionalShadowMode = mode;
+            _sun.DirectionalShadowMaxDistance = maxDist;
+        }
+
+        _effectiveTreeShadows = treeShadows;
+        _effectiveTerrainShadows = terrainShadows;
+        _activeShadowTier = tier;
+        _shadowTierApplied = true;
+        _shadowTierApplyCount++;
+        IMapShadowLayers? target = GetAliveTarget(mapLayers);
+        if (target is not null && !fadingOut)
+        {
+            target.SetVegetationShadowsEnabled(treeShadows);
+            target.SetTerrainShadowsEnabled(terrainShadows);
         }
     }
 

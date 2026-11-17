@@ -25,9 +25,13 @@ internal static class EnvironmentProfileRegressionTests
         CheckQualityLevels(scene);
         CheckPreviewSavedQuality(scene);
         CheckRoadFrontNormalsUpward(scene);
+        CheckRenderBudgetValidation();
+        CheckShadowZoomTiersAndFlatLayerShadows(scene);
+        CheckShadowTargetLifecycleAcrossMapSwitch(scene);
+        CheckRenderScaleViewportMapping(scene);
         CheckRegressionFailurePropagation();
 
-        GD.Print("ENVIRONMENT_PROFILE_REGRESSIONS_OK 12/12 passed: load_profiles validation required_fields apply_light runtime_switching haze_scaling haze_mode hashes_unaffected zero_allocations quality_levels preview_saved_quality road_normals");
+        GD.Print("ENVIRONMENT_PROFILE_REGRESSIONS_OK 16/16 passed: load_profiles validation required_fields apply_light runtime_switching haze_scaling haze_mode hashes_unaffected zero_allocations quality_levels preview_saved_quality road_normals render_budget shadow_zoom_tiers map_switch_lifecycle render_scale_msaa");
     }
 
     private static void Require(bool condition, string message)
@@ -436,5 +440,241 @@ internal static class EnvironmentProfileRegressionTests
             caught = true;
         }
         Require(caught, "Regression assertions must propagate InvalidOperationException.");
+    }
+
+    private static void CheckRenderBudgetValidation()
+    {
+        string raw = RenderBudget.ReadBudgetJson();
+        RenderBudget loaded = RenderBudget.Parse(raw, "test_budget");
+        Require(loaded.ShadowTiers.Close.ShadowEnabled, "Close tier must enable shadows.");
+        Require(loaded.ShadowTiers.Close.TreeShadows, "Close tier must enable tree shadows.");
+        Require(!loaded.ShadowTiers.Wide.TerrainShadows, "Wide tier must disable terrain shadows.");
+
+        string noCloseEnabled = raw.Replace("\"shadow_enabled\": true,\n      \"shadow_splits\": 4,", "\"shadow_splits\": 4,");
+        AssertValidationErrorBudget(noCloseEnabled, "shadow_tiers.close.shadow_enabled");
+
+        string noCloseTrees = raw.Replace("\"tree_shadows\": true,", "");
+        AssertValidationErrorBudget(noCloseTrees, "shadow_tiers.close.tree_shadows");
+
+        string noWideTerrain = raw.Replace("\"terrain_shadows\": false", "");
+        AssertValidationErrorBudget(noWideTerrain, "shadow_tiers.wide.terrain_shadows");
+    }
+
+    private static void AssertValidationErrorBudget(string json, string expectedField)
+    {
+        try
+        {
+            RenderBudget.Parse(json, "test_budget_validation");
+            throw new InvalidOperationException($"Expected RenderBudget validation error for '{expectedField}', but parse succeeded.");
+        }
+        catch (EnvironmentProfileValidationException vex)
+        {
+            Require(vex.FieldName == expectedField || vex.Message.Contains(expectedField, StringComparison.OrdinalIgnoreCase),
+                $"Expected RenderBudget field '{expectedField}', got '{vex.FieldName}': {vex.Message}");
+        }
+    }
+
+    private static void CheckShadowZoomTiersAndFlatLayerShadows(Node3D scene)
+    {
+        EnvironmentProfile overcast = EnvironmentProfile.Load("overcast");
+        RenderBudget budget = RenderBudget.LoadDefault();
+        ShadowTiersSettings tiers = budget.ShadowTiers;
+
+        // Pure hysteresis progression across Close (<=55), Play (55..185), Wide (>=185)
+        ShadowZoomTier tier = EnvironmentView.SelectShadowZoomTier(35f, null, tiers);
+        Require(tier == ShadowZoomTier.Close, "35 should start in Close tier.");
+        Require(EnvironmentView.SelectShadowZoomTier(59f, tier, tiers) == ShadowZoomTier.Close,
+            "59 within hysteresis must stay Close.");
+        tier = EnvironmentView.SelectShadowZoomTier(61f, tier, tiers);
+        Require(tier == ShadowZoomTier.Play, "61 past Close+hysteresis must switch to Play.");
+        Require(EnvironmentView.SelectShadowZoomTier(51f, tier, tiers) == ShadowZoomTier.Play,
+            "51 within hysteresis must stay Play.");
+        Require(EnvironmentView.SelectShadowZoomTier(49f, tier, tiers) == ShadowZoomTier.Close,
+            "49 below Close-hysteresis must return to Close.");
+        Require(EnvironmentView.SelectShadowZoomTier(189f, ShadowZoomTier.Play, tiers) == ShadowZoomTier.Play,
+            "189 within hysteresis must stay Play.");
+        tier = EnvironmentView.SelectShadowZoomTier(191f, ShadowZoomTier.Play, tiers);
+        Require(tier == ShadowZoomTier.Wide, "191 past PlayToWide+hysteresis must switch to Wide.");
+        Require(EnvironmentView.SelectShadowZoomTier(181f, tier, tiers) == ShadowZoomTier.Wide,
+            "181 within hysteresis must stay Wide.");
+        Require(EnvironmentView.SelectShadowZoomTier(179f, tier, tiers) == ShadowZoomTier.Play,
+            "179 below PlayToWide-hysteresis must return to Play.");
+
+        UstyePlanData plan = UstyePlanData.Load();
+        UstyeMapView mapView = new(plan, includeScaleVehicles: false);
+        EnvironmentView envView = new(budget);
+        scene.AddChild(mapView);
+        scene.AddChild(envView);
+        try
+        {
+            foreach (Node waterChild in mapView.WaterRoot.GetChildren())
+            {
+                if (waterChild is GeometryInstance3D gi)
+                {
+                    Require(gi.CastShadow == GeometryInstance3D.ShadowCastingSetting.Off,
+                        $"Water '{waterChild.Name}' must have CastShadow=Off.");
+                }
+            }
+            foreach (Node roadChild in mapView.RoadsRoot.GetChildren())
+            {
+                if (roadChild is MeshInstance3D roadMi && roadMi.Name.ToString().StartsWith("Road_", StringComparison.Ordinal))
+                {
+                    Require(roadMi.CastShadow == GeometryInstance3D.ShadowCastingSetting.Off,
+                        $"Flat road '{roadMi.Name}' must have CastShadow=Off.");
+                }
+            }
+            foreach (Node ctxChild in mapView.ContextRoot.GetChildren())
+            {
+                if (ctxChild is MeshInstance3D ctxMi && ctxMi.Name.ToString().StartsWith("Courtyard_", StringComparison.Ordinal))
+                {
+                    Require(ctxMi.CastShadow == GeometryInstance3D.ShadowCastingSetting.Off,
+                        $"Flat pad '{ctxMi.Name}' must have CastShadow=Off.");
+                }
+            }
+
+            envView.ApplyProfile(overcast, EnvironmentQuality.High);
+
+            // Close zoom: full shadows + tree shadows ON + terrain shadows ON
+            Require(envView.UpdateShadowTierForCamera(35f, mapView), "Initial Close tier must apply.");
+            Require(envView.Sun.ShadowEnabled, "Close tier must enable shadows.");
+            Require(envView.Sun.DirectionalShadowMode == DirectionalLight3D.ShadowMode.Parallel4Splits,
+                "Close tier on High must use Parallel4Splits.");
+            Require(mapView.VegetationShadowsEnabled, "Close tier must enable vegetation shadows.");
+            Require(mapView.TerrainShadowsEnabled, "Close tier must enable terrain shadows.");
+            foreach (MultiMeshInstance3D mmi in mapView.ConiferMultiMeshes)
+            {
+                Require(mmi.CastShadow == GeometryInstance3D.ShadowCastingSetting.On,
+                    "Close tier must enable conifer CastShadow.");
+            }
+
+            // Play zoom: 2 splits + tree shadows OFF + terrain shadows ON
+            Require(envView.UpdateShadowTierForCamera(70f, mapView), "Play tier must apply.");
+            Require(envView.Sun.ShadowEnabled, "Play tier must keep shadows enabled.");
+            Require(envView.Sun.DirectionalShadowMode == DirectionalLight3D.ShadowMode.Parallel2Splits,
+                "Play tier must use Parallel2Splits.");
+            Require(!mapView.VegetationShadowsEnabled, "Play tier must disable vegetation shadows.");
+            Require(mapView.TerrainShadowsEnabled, "Play tier must keep terrain shadows enabled.");
+            foreach (MultiMeshInstance3D mmi in mapView.DeciduousMultiMeshes)
+            {
+                Require(mmi.CastShadow == GeometryInstance3D.ShadowCastingSetting.Off,
+                    "Play tier must disable deciduous CastShadow.");
+            }
+
+            // Steady state: no re-apply and zero allocations across 100 frames
+            int countBefore = envView.ShadowTierApplyCount;
+            _ = envView.UpdateShadowTierForCamera(70f, mapView);
+            long allocBefore = GC.GetAllocatedBytesForCurrentThread();
+            for (int f = 0; f < 100; f++)
+            {
+                bool changed = envView.UpdateShadowTierForCamera(70f + (f % 3), mapView);
+                Require(!changed, "Steady-state jitter must not change shadow tier.");
+                envView.UpdateShadowFade(0.016);
+            }
+            long allocDelta = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
+            Require(envView.ShadowTierApplyCount == countBefore,
+                $"Steady-state camera calls must not re-apply shadow settings (count {countBefore} -> {envView.ShadowTierApplyCount}).");
+            Require(allocDelta == 0,
+                $"UpdateShadowTierForCamera steady state must allocate 0 bytes, got {allocDelta}.");
+
+            // Wide zoom transitions shadow opacity smoothly over 0.3s, then disables directional + terrain shadows
+            Require(envView.UpdateShadowTierForCamera(220f, mapView), "Wide tier must apply.");
+            envView.UpdateShadowFade(0.15);
+            Require(envView.Sun.ShadowEnabled && envView.Sun.ShadowOpacity < 0.9f && envView.Sun.ShadowOpacity > 0.1f,
+                $"Expected mid-fade shadow opacity around 0.5, got {envView.Sun.ShadowOpacity}.");
+            envView.UpdateShadowFade(0.20);
+            Require(!envView.Sun.ShadowEnabled, "Wide tier must disable directional shadows once fade finishes.");
+            Require(!mapView.VegetationShadowsEnabled, "Wide tier must keep vegetation shadows disabled.");
+            Require(!mapView.TerrainShadowsEnabled, "Wide tier must disable terrain shadows.");
+        }
+        finally
+        {
+            envView.QueueFree();
+            mapView.QueueFree();
+        }
+    }
+
+    private static void CheckShadowTargetLifecycleAcrossMapSwitch(Node3D scene)
+    {
+        EnvironmentProfile overcast = EnvironmentProfile.Load("overcast");
+        UstyePlanData plan = UstyePlanData.Load();
+        UstyeMapView ustye = new(plan, includeScaleVehicles: false);
+        HeightMap battleMap = HeightMap.CreatePrototype();
+        MeshInstance3D terrainMesh = TerrainView.Create(battleMap);
+        TerrainShadowTarget terrainTarget = new(terrainMesh);
+        EnvironmentView envView = new();
+
+        scene.AddChild(ustye);
+        scene.AddChild(envView);
+        try
+        {
+            envView.ApplyProfile(overcast, EnvironmentQuality.High);
+            envView.UpdateShadowTierForCamera(35f, ustye);
+            Require(ustye.VegetationShadowsEnabled, "Ustye close zoom must enable tree shadows.");
+
+            // Dispose/remove old Ustye and switch to TerrainView (first via explicit clear, and simulate freed old ref)
+            scene.RemoveChild(ustye);
+            ustye.QueueFree();
+            envView.SetShadowTarget(null);
+            scene.AddChild(terrainMesh);
+            envView.UpdateShadowTierForCamera(220f, terrainTarget);
+            Require(!terrainTarget.TerrainShadowsEnabled, "Battle TerrainView wide zoom must disable terrain shadows.");
+
+            // Zoom to close and mutate quality/profile repeatedly: must affect terrainTarget without touching queued-free ustye
+            envView.UpdateShadowTierForCamera(35f, terrainTarget);
+            envView.UpdateShadowFade(0.35);
+            Require(terrainTarget.TerrainShadowsEnabled, "Battle TerrainView close zoom must enable terrain shadows.");
+            envView.SetQuality(EnvironmentQuality.Medium);
+            envView.SetProfile(EnvironmentProfile.Load("clear_afternoon"));
+            Require(envView.Sun.DirectionalShadowMode == DirectionalLight3D.ShadowMode.Parallel2Splits,
+                "Quality switch to Medium after map switch must clamp shadow splits to 2.");
+        }
+        finally
+        {
+            if (GodotObject.IsInstanceValid(terrainMesh)) terrainMesh.QueueFree();
+            envView.QueueFree();
+        }
+    }
+
+    private static void CheckRenderScaleViewportMapping(Node3D scene)
+    {
+        Viewport? vp = scene.GetViewport();
+        Require(vp is not null, "Scene must have a Viewport.");
+        float origScale = vp!.Scaling3DScale;
+        Viewport.Scaling3DModeEnum origMode = vp.Scaling3DMode;
+        Viewport.Msaa origMsaa = vp.Msaa3D;
+        try
+        {
+            // Verify Native100 is default when DisplaySettings has default or omitted render_scale
+            DisplaySettings defaults = DisplaySettings.CreateDefault();
+            Require(defaults.RenderScale == RenderScalePreset.Native100, "Default RenderScale must be Native100.");
+
+            (float s6880, int aa6880) = SettingsPanel.ApplyRenderSettingsToViewport(
+                vp, new DisplaySettings(RenderScale: RenderScalePreset.Auto, AntiAliasing: AntiAliasingPreset.Auto), new Vector2I(6880, 2880));
+            Require(Mathf.IsEqualApprox(s6880, 0.50f), $"6880x2880 Auto scale expected 0.50, got {s6880}");
+            Require(aa6880 == 0 && vp.Msaa3D == Viewport.Msaa.Disabled, "6880x2880 Auto AA expected Disabled.");
+            Require(vp.Scaling3DMode == Viewport.Scaling3DModeEnum.Fsr, "0.50 scale must use FSR.");
+
+            (float s2560, int aa2560) = SettingsPanel.ApplyRenderSettingsToViewport(
+                vp, new DisplaySettings(RenderScale: RenderScalePreset.Auto, AntiAliasing: AntiAliasingPreset.Auto), new Vector2I(2560, 1600));
+            Require(Mathf.Abs(s2560 - 0.9487f) < 0.01f, $"2560x1600 Auto scale expected ~0.95, got {s2560}");
+            Require(aa2560 == 2 && vp.Msaa3D == Viewport.Msaa.Msaa2X, "2560x1600 Auto AA expected 2x.");
+
+            (float s1440, int aa1440) = SettingsPanel.ApplyRenderSettingsToViewport(
+                vp, new DisplaySettings(RenderScale: RenderScalePreset.Auto, AntiAliasing: AntiAliasingPreset.Auto), new Vector2I(1440, 900));
+            Require(Mathf.IsEqualApprox(s1440, 1.0f), $"1440x900 Auto scale expected 1.0, got {s1440}");
+            Require(aa1440 == 2 && vp.Msaa3D == Viewport.Msaa.Msaa2X, "1440x900 Auto AA expected 2x.");
+            Require(vp.Scaling3DMode == Viewport.Scaling3DModeEnum.Bilinear, "1.0 scale must use Bilinear.");
+
+            (float s75, int aa4) = SettingsPanel.ApplyRenderSettingsToViewport(
+                vp, new DisplaySettings(RenderScale: RenderScalePreset.Scale75, AntiAliasing: AntiAliasingPreset.Msaa4x), new Vector2I(1440, 900));
+            Require(Mathf.IsEqualApprox(s75, 0.75f), $"75% preset expected 0.75, got {s75}");
+            Require(aa4 == 4 && vp.Msaa3D == Viewport.Msaa.Msaa4X, "4x preset expected Msaa4X.");
+        }
+        finally
+        {
+            vp.Scaling3DScale = origScale;
+            vp.Scaling3DMode = origMode;
+            vp.Msaa3D = origMsaa;
+        }
     }
 }
