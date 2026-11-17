@@ -133,6 +133,10 @@ public partial class TankBattleDemo : Node3D
         _usViews = new UnitViewSet(this, _geometry.HeightMap, _catalog, () => "us", _geometry);
         _sovietWreckViews = new WreckViewSet(this, _geometry.HeightMap, _catalog, () => "soviet", _geometry);
         _usWreckViews = new WreckViewSet(this, _geometry.HeightMap, _catalog, () => "us", _geometry);
+        _sovietViews.UpdateLod(_camera.Size);
+        _usViews.UpdateLod(_camera.Size);
+        _sovietWreckViews.UpdateLod(_camera.Size);
+        _usWreckViews.UpdateLod(_camera.Size);
         _effects = new CombatEffects(_geometry.HeightMap, _geometry);
         AddChild(_effects);
         CanvasLayer canvas = new();
@@ -399,10 +403,11 @@ public partial class TankBattleDemo : Node3D
         Basis healthBarBasis = GetViewport().GetCamera3D().GlobalTransform.Basis;
         _sovietViews.FaceHealthBars(healthBarBasis);
         _usViews.FaceHealthBars(healthBarBasis);
-        _sovietViews.UpdateLod(_camera.Size);
-        _usViews.UpdateLod(_camera.Size);
-        _sovietWreckViews.UpdateLod(_camera.Size);
-        _usWreckViews.UpdateLod(_camera.Size);
+        int lodBudget = VehicleLod.DefaultMaxInstantiationsPerFrame;
+        _sovietViews.UpdateLod(_camera.Size, ref lodBudget);
+        _usViews.UpdateLod(_camera.Size, ref lodBudget);
+        _sovietWreckViews.UpdateLod(_camera.Size, ref lodBudget);
+        _usWreckViews.UpdateLod(_camera.Size, ref lodBudget);
         WreckViewSet.UpdateSceneEffects(
             [_sovietWreckViews, _usWreckViews],
             delta,

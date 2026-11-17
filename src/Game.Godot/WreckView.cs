@@ -34,21 +34,23 @@ internal sealed class WreckView
     private float _hullHeading;
     private float _turretYaw;
 
-    public WreckView(ushort definition = 0) : this(UnitViewSet.GetDefaultUnitId(definition)) { }
+    public WreckView(ushort definition = 0, float? initialCameraSize = null)
+        : this(UnitViewSet.GetDefaultUnitId(definition), initialCameraSize: initialCameraSize) { }
 
-    public WreckView(string? unitId, string? faction = null)
+    public WreckView(string? unitId, string? faction = null, float? initialCameraSize = null)
     {
         UnitId = unitId;
-        _visual = VehicleVisualCatalog.InstantiateVisual(unitId, faction);
+        _visual = VehicleVisualCatalog.InstantiateVisual(unitId, faction, initialCameraSize);
         HasVehicleModel = _visual is not null;
 
         if (_visual is not null)
         {
             Model = _visual.Root;
+            _activeLod = _visual.ActiveLod;
             _turretNodes = new Node3D?[_visual.LodCount];
-            Node3D lod0 = _visual.GetOrCreateLod(0);
-            ApplyCharredMaterial(lod0, CharredMaterial);
-            _turretNodes[0] = lod0.FindChild("TurretYaw", recursive: true, owned: false) as Node3D;
+            Node3D initialNode = _visual.GetOrCreateLod(_activeLod);
+            ApplyCharredMaterial(initialNode, CharredMaterial);
+            _turretNodes[_activeLod] = initialNode.FindChild("TurretYaw", recursive: true, owned: false) as Node3D;
         }
         else
         {
@@ -62,6 +64,10 @@ internal sealed class WreckView
 
         Root.AddChild(Model);
     }
+
+    internal bool IsLodLoaded(int index) => _visual is not null && _visual.IsLoaded(index);
+
+    internal Node3D? GetLod(int index) => _visual?.GetLoadedLod(index);
 
     public void Update(WreckObservation wreck, float groundY)
     {
@@ -80,26 +86,30 @@ internal sealed class WreckView
         }
     }
 
-    internal void UpdateLod(float cameraSize)
+    internal bool UpdateLod(float cameraSize)
     {
-        if (_visual is null || _turretNodes is null) return;
+        int unlimited = int.MaxValue;
+        return UpdateLod(cameraSize, ref unlimited);
+    }
 
-        int targetLod = cameraSize switch
+    internal bool UpdateLod(float cameraSize, ref int remainingInstantiations)
+    {
+        if (_visual is null || _turretNodes is null) return false;
+
+        int targetLod = VehicleLod.SelectNextLod(cameraSize, _activeLod, _visual.LodCount);
+        if (targetLod == _activeLod) return false;
+
+        bool firstLoad = !_visual.IsLoaded(targetLod);
+        if (firstLoad)
         {
-            > UnitView.Lod2CameraSize when _visual.LodCount > 2 => 2,
-            > UnitView.Lod1CameraSize when _visual.LodCount > 1 => 1,
-            _ => 0
-        };
+            if (remainingInstantiations <= 0) return false;
+            remainingInstantiations--;
+        }
 
-        if (targetLod == _activeLod) return;
-
-        Node3D current = _visual.GetOrCreateLod(_activeLod);
-        current.Visible = false;
-
+        _visual.SwitchLod(targetLod, out Node3D next);
         _activeLod = targetLod;
-        Node3D next = _visual.GetOrCreateLod(targetLod);
-        ApplyCharredMaterial(next, CharredMaterial);
-        next.Visible = true;
+        if (firstLoad)
+            ApplyCharredMaterial(next, CharredMaterial);
 
         Node3D? turret = _turretNodes[targetLod];
         if (turret is null)
@@ -112,6 +122,7 @@ internal sealed class WreckView
         {
             turret.Rotation = new Vector3(0, Mathf.Wrap(_turretYaw - _hullHeading, -Mathf.Pi, Mathf.Pi), 0);
         }
+        return true;
     }
 
     internal void UpdateEffects(float ageSeconds, bool allowEffects)

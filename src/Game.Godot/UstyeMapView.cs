@@ -16,6 +16,7 @@ public partial class UstyeMapView : Node3D
 {
     private readonly UstyePlanData _plan;
     private readonly bool _includeScaleVehicles;
+    private readonly float _initialVehicleCameraSize;
     private FogOfWarView? _fogOverlay;
 
     private Node3D _terrainRoot = null!;
@@ -59,16 +60,17 @@ public partial class UstyeMapView : Node3D
     public int TotalDeciduousCount => _deciduousMultiMeshes.Sum(m => m.Multimesh?.InstanceCount ?? 0);
     public IReadOnlyList<ScaleVehicle> ScaleVehicles => _scaleVehicles;
 
-    public UstyeMapView(UstyePlanData? plan = null, bool includeScaleVehicles = false)
-        : this(plan, includeScaleVehicles, null)
+    public UstyeMapView(UstyePlanData? plan = null, bool includeScaleVehicles = false, float initialVehicleCameraSize = 4500f)
+        : this(plan, includeScaleVehicles, null, initialVehicleCameraSize)
     {
     }
 
-    internal UstyeMapView(UstyePlanData? plan, bool includeScaleVehicles, FogOfWarView? fogOverlay)
+    internal UstyeMapView(UstyePlanData? plan, bool includeScaleVehicles, FogOfWarView? fogOverlay, float initialVehicleCameraSize = 4500f)
     {
         _plan = plan ?? UstyePlanData.Load();
         _includeScaleVehicles = includeScaleVehicles;
         _fogOverlay = fogOverlay;
+        _initialVehicleCameraSize = initialVehicleCameraSize;
     }
 
     internal void AttachFogOfWar(FogOfWarView fog)
@@ -1494,13 +1496,11 @@ public partial class UstyeMapView : Node3D
         PlaceScaleVehicle("m60a1", "us", new Vector3(2800f, 0f, 2450f), MathF.PI);
         PlaceScaleVehicle("m60a1", "us", new Vector3(3050f, 0f, 2435f), MathF.PI + 0.15f);
         PlaceScaleVehicle("btr70", "soviet", new Vector3(2530f, 0f, 3630f), 0.8f);
-
-        UpdateVehicleLods(4500f);
     }
 
     private void PlaceScaleVehicle(string id, string? faction, Vector3 pos, float yaw)
     {
-        VehicleVisual? visual = VehicleVisualCatalog.InstantiateVisual(id, faction);
+        VehicleVisual? visual = VehicleVisualCatalog.InstantiateVisual(id, faction, _initialVehicleCameraSize);
         if (visual is null) return;
 
         Node3D root = visual.Root;

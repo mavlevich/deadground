@@ -18,6 +18,8 @@ public partial class Main : Node3D
     private SettingsPanel _settingsPanel = null!;
     private FramePacingMetrics? _benchmarkMetrics;
     private int _benchmarkTargetFrames;
+    private float? _benchmarkZoomToSize;
+    private int _lodBudgetPerFrame = VehicleLod.DefaultMaxInstantiationsPerFrame;
     private long _lastFrameTimestamp;
     private int _benchmarkWarmupFrames = 5;
     private bool _benchmarkQuit;
@@ -362,6 +364,16 @@ public partial class Main : Node3D
                     overrideCameraSize = cSize;
                     i++;
                 }
+                else if (args[i] == "--benchmark-zoom-to" && i + 1 < args.Length && float.TryParse(args[i + 1], System.Globalization.CultureInfo.InvariantCulture, out float zoomTo))
+                {
+                    _benchmarkZoomToSize = zoomTo;
+                    i++;
+                }
+                else if (args[i] == "--lod-budget" && i + 1 < args.Length && int.TryParse(args[i + 1], out int lodBudget))
+                {
+                    _lodBudgetPerFrame = Math.Max(1, lodBudget);
+                    i++;
+                }
                 else if (args[i] == "--camera-focus" && i + 1 < args.Length)
                 {
                     string[] parts = args[i + 1].Split(',');
@@ -522,6 +534,12 @@ public partial class Main : Node3D
                 _map = scenarioGeometry.HeightMap;
                 setup = InfantryTransportScenario.CreateMatchSetup(scenarioGeometry);
             }
+            else if (_scenario == "tank-battle")
+            {
+                scenarioGeometry = TankBattleScenario.CreateStaticGeometry();
+                _map = scenarioGeometry.HeightMap;
+                setup = TankBattleScenario.CreateMatchSetup(scenarioGeometry, ColdWarContent.LoadCatalog());
+            }
             else
             {
                 _map = HeightMap.CreatePrototype();
@@ -564,6 +582,7 @@ public partial class Main : Node3D
                     "forest-visibility" => ForestVisibilityScenario.CreateSimulation(scenarioGeometry!),
                     "infantry-playground" => InfantryPlaygroundScenario.CreateSimulation(scenarioGeometry!),
                     "infantry-transport" => InfantryTransportScenario.CreateSimulation(scenarioGeometry!),
+                    "tank-battle" => TankBattleScenario.CreateSimulation(scenarioGeometry!),
                     _ => PrototypeScenario.Create(_map)
                 };
                 // Test switch: the enemy holds fire, so own units can be tried out without losing them.
@@ -634,6 +653,7 @@ public partial class Main : Node3D
         {
             _benchmarkMetrics = new FramePacingMetrics(activeSettings.BenchmarkFrames + 16);
             _benchmarkTargetFrames = activeSettings.BenchmarkFrames;
+            RenderingServer.ViewportSetMeasureRenderTime(GetViewport().GetViewportRid(), true);
         }
 
         float initialCameraSize = overrideCameraSize ?? _scenario switch
@@ -650,6 +670,7 @@ public partial class Main : Node3D
             "forest-visibility" => 150,
             "infantry-playground" => 120,
             "infantry-transport" => 120,
+            "tank-battle" => 160,
             _ => 112
         };
         _camera = new Camera3D { Projection = Camera3D.ProjectionType.Orthogonal, Size = initialCameraSize, Far = 3500, Current = true };
@@ -668,13 +689,14 @@ public partial class Main : Node3D
             "forest-visibility" => new Vector3(100f, 0f, 110f),
             "infantry-playground" => new Vector3(130f, 0f, 180f),
             "infantry-transport" => new Vector3(128f, 0f, 195f),
+            "tank-battle" => new Vector3(TankBattleScenario.Center.X - TankBattleScenario.StartOffset, 4f, TankBattleScenario.Center.Y),
             _ => new Vector3(64, 0, 64)
         };
         _hasExplicitCameraFocus = overrideCameraFocus.HasValue;
         _initialSpawnFocus = initialFocus;
         _initialSpawnSize = initialCameraSize;
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
-        if (_scenario == "ustye-ground" || _scenario == "ustye-raid")
+        if (_scenario == "ustye-ground" || _scenario == "ustye-raid" || _scenario == "tank-battle")
         {
             _cameraRig.Model.SetSizeLimits(30f, 5500f);
             _cameraRig.FarClipMargin = 3000f;
@@ -701,6 +723,9 @@ public partial class Main : Node3D
         _unitViews = new UnitViewSet(this, _map, _catalog, () => matchSetup.GetPlayerFaction(_session.AssignedPlayerId), _scenarioGeometry);
         _contactViews = new ContactViewSet(this, _map, _catalog, () => matchSetup.GetHostileFaction(_session.AssignedPlayerId), _scenarioGeometry);
         _wreckViews = new WreckViewSet(this, _map, _catalog, () => matchSetup.GetPlayerFaction(_session.AssignedPlayerId), _scenarioGeometry);
+        _unitViews.UpdateLod(_cameraRig.Size);
+        _contactViews.UpdateLod(_cameraRig.Size);
+        _wreckViews.UpdateLod(_cameraRig.Size);
         _combatEffects = new CombatEffects(_map, _scenarioGeometry);
         AddChild(_combatEffects);
 
@@ -789,6 +814,9 @@ public partial class Main : Node3D
             _orderCursorOverlay,
             _destination,
             _orderNotification);
+        _unitViews.UpdateLod(_cameraRig.Size);
+        _contactViews.UpdateLod(_cameraRig.Size);
+        _wreckViews.UpdateLod(_cameraRig.Size);
         UpdateViews();
 
         if (activeSettings.CaptureViewsDir is not null)
@@ -1057,6 +1085,8 @@ public partial class Main : Node3D
         }
         _lastFrameTimestamp = frameStartTimestamp;
 
+        bool collectBench = _benchmarkMetrics is not null;
+        long sessionStart = collectBench ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         if (_lifecycleController.NetworkSession is not null && ReferenceEquals(_lifecycleController.NetworkSession, _session))
         {
             _lifecycleController.Advance(delta);
@@ -1069,11 +1099,17 @@ public partial class Main : Node3D
         {
             _session.Advance(delta);
         }
+        long fogStart = collectBench ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         _fogOfWar?.Update((float)delta, _session.Replica, _catalog);
+        long viewsStart = collectBench ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         UpdateViews();
         _unitViews.FaceHealthBars(_camera.GlobalTransform.Basis);
-        _unitViews.UpdateLod(_cameraRig.Size);
-        _wreckViews.UpdateLod(_cameraRig.Size);
+        int lodInstantiationBudget = _lodBudgetPerFrame;
+        int lodSwitches = 0;
+        lodSwitches += _unitViews.UpdateLod(_cameraRig.Size, ref lodInstantiationBudget);
+        lodSwitches += _contactViews.UpdateLod(_cameraRig.Size, ref lodInstantiationBudget);
+        lodSwitches += _wreckViews.UpdateLod(_cameraRig.Size, ref lodInstantiationBudget);
+        long effectsStart = collectBench ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         _wreckViews.UpdateEffects(delta, _cameraRig.Focus, _cameraRig.Size, _session.Tick);
         _unitViews.UpdateRecoil(delta);
         _unitViews.UpdateEffects(delta);
@@ -1106,6 +1142,7 @@ public partial class Main : Node3D
 
         _orderNotification?.Update(delta);
         UpdateSelectionPresentation();
+        long previewStart = collectBench ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         _previewController?.UpdateOrders(_session, delta);
 
         if (!_settingsPanel.IsOpen && !_pauseMenu.IsOpen)
@@ -1195,6 +1232,7 @@ public partial class Main : Node3D
             _orderCursorOverlay?.HideTooltip();
         }
 
+        long previewEnd = collectBench ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         _cameraRig.Update(delta, allowInput: !_settingsPanel.IsOpen && !_pauseMenu.IsOpen);
         _environmentView?.UpdateHazeForCamera(_cameraRig.Size, _cameraRig.Focus, _cameraRig.ViewPitch);
 
@@ -1204,8 +1242,8 @@ public partial class Main : Node3D
             _roleBadgeOverlay.UpdateBadges(_camera, _camera.Size, _unitViews, _contactViews, _session.Replica, _session.Tick, _badgeOccludingPanels);
         }
 
+        long minimapStart = collectBench ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         _minimap?.UpdateMinimap(delta);
-
         long frameEndTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
         float cpuWorkMs = (float)((frameEndTimestamp - frameStartTimestamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
 
@@ -1214,10 +1252,33 @@ public partial class Main : Node3D
             if (_benchmarkWarmupFrames > 0)
             {
                 _benchmarkWarmupFrames--;
+                if (_benchmarkWarmupFrames == 0 && _benchmarkZoomToSize.HasValue)
+                {
+                    float targetZoom = _benchmarkZoomToSize.Value;
+                    _benchmarkZoomToSize = null;
+                    _cameraRig.Model.SetSizeLimits(MathF.Min(30f, targetZoom), MathF.Max(5500f, targetZoom));
+                    _cameraRig.Model.CurrentSize = targetZoom;
+                    _cameraRig.Model.SetZoom(targetZoom);
+                }
             }
             else if (_benchmarkMetrics.Count < _benchmarkTargetFrames && wallClockIntervalMs > 0f)
             {
-                _benchmarkMetrics.Record(wallClockIntervalMs, cpuWorkMs);
+                double toMs = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                Rid vpRid = GetViewport().GetViewportRid();
+                double measuredGpu = RenderingServer.ViewportGetMeasuredRenderTimeGpu(vpRid);
+                float gpuMs = measuredGpu > 0.0 && double.IsFinite(measuredGpu) ? (float)measuredGpu : -1f;
+                FramePacingMetrics.FramePhaseSample phaseSample = new(
+                    SessionMs: (float)((fogStart - sessionStart) * toMs),
+                    FogOfWarMs: (float)((viewsStart - fogStart) * toMs),
+                    ViewsMs: (float)((effectsStart - viewsStart) * toMs),
+                    OrderPreviewMs: (float)((previewEnd - previewStart) * toMs),
+                    MinimapMs: (float)((frameEndTimestamp - minimapStart) * toMs),
+                    EffectsAndHudMs: (float)(((previewStart - effectsStart) + (minimapStart - previewEnd)) * toMs),
+                    RenderDrawCalls: (int)Performance.GetMonitor(Performance.Monitor.RenderTotalDrawCallsInFrame),
+                    RenderPrimitives: (int)Performance.GetMonitor(Performance.Monitor.RenderTotalPrimitivesInFrame),
+                    ActiveSceneNodes: (int)Performance.GetMonitor(Performance.Monitor.ObjectNodeCount),
+                    LodSwitches: lodSwitches);
+                _benchmarkMetrics.Record(wallClockIntervalMs, cpuWorkMs, gpuMs, in phaseSample);
 
                 if (_benchmarkMetrics.Count >= _benchmarkTargetFrames)
                 {
@@ -2932,7 +2993,10 @@ public partial class Main : Node3D
             _orderCursorOverlay?.HideTooltip();
             _destination?.HideGhost();
             Input.SetDefaultCursorShape(Input.CursorShape.Arrow);
-            Godot.Engine.MaxFps = 30;
+            if (_benchmarkMetrics is null)
+            {
+                Godot.Engine.MaxFps = 30;
+            }
         }
         else if (what is (int)NotificationApplicationFocusIn or (int)NotificationWMWindowFocusIn)
         {
@@ -3151,6 +3215,9 @@ public partial class Main : Node3D
         UstyePlanData? plan = (_scenario == "ustye-ground" || _scenario == "ustye-raid") ? UstyePlanData.Load() : null;
         _minimap?.Initialize(_scenarioGeometry, _cameraRig, _camera, _session, _unitViews, _contactViews, _catalog, plan);
         _minimap?.Reset();
+        _unitViews.UpdateLod(_cameraRig.Size);
+        _contactViews.UpdateLod(_cameraRig.Size);
+        _wreckViews.UpdateLod(_cameraRig.Size);
         UpdateViews();
 
         if (_session.Replica.OwnUnits.Length > 0)
@@ -3245,12 +3312,15 @@ public partial class Main : Node3D
 
         _unitViews?.Clear();
         _unitViews = new UnitViewSet(this, _map, _catalog, () => _matchSetup.GetPlayerFaction(_session.AssignedPlayerId), _scenarioGeometry);
+        _unitViews.UpdateLod(_cameraRig.Size);
 
         _contactViews?.Clear();
         _contactViews = new ContactViewSet(this, _map, _catalog, () => _matchSetup.GetHostileFaction(_session.AssignedPlayerId), _scenarioGeometry);
+        _contactViews.UpdateLod(_cameraRig.Size);
 
         _wreckViews?.Clear();
         _wreckViews = new WreckViewSet(this, _map, _catalog, () => _matchSetup.GetPlayerFaction(_session.AssignedPlayerId), _scenarioGeometry);
+        _wreckViews.UpdateLod(_cameraRig.Size);
 
         _combatEffects?.Clear();
         _combatEffects?.QueueFree();
@@ -3412,12 +3482,15 @@ public partial class Main : Node3D
 
         _unitViews?.Clear();
         _unitViews = new UnitViewSet(this, _map, _catalog, () => _matchSetup.GetPlayerFaction(_session.AssignedPlayerId), _scenarioGeometry);
+        _unitViews.UpdateLod(_cameraRig.Size);
 
         _contactViews?.Clear();
         _contactViews = new ContactViewSet(this, _map, _catalog, () => _matchSetup.GetHostileFaction(_session.AssignedPlayerId), _scenarioGeometry);
+        _contactViews.UpdateLod(_cameraRig.Size);
 
         _wreckViews?.Clear();
         _wreckViews = new WreckViewSet(this, _map, _catalog, () => _matchSetup.GetPlayerFaction(_session.AssignedPlayerId), _scenarioGeometry);
+        _wreckViews.UpdateLod(_cameraRig.Size);
 
         _combatEffects?.Clear();
         _combatEffects?.QueueFree();
@@ -3702,6 +3775,9 @@ public partial class Main : Node3D
         _cameraRig.Model.CurrentSize = 520f;
         _cameraRig.Model.SetZoom(520f);
         _cameraRig.CenterOn(new Vector3(2650f, 4.5f, 2450f));
+        _unitViews.UpdateLod(_cameraRig.Size);
+        _contactViews.UpdateLod(_cameraRig.Size);
+        _wreckViews.UpdateLod(_cameraRig.Size);
         UpdateViews();
         _minimap?.UpdateMinimap(0.016);
     }

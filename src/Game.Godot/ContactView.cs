@@ -13,17 +13,25 @@ internal sealed class ContactView
     private static readonly StringName AnimRun = "Run";
     private static readonly StringName AnimAimStanding = "AimStanding";
 
+    private sealed record ContactRig(Node3D? Turret, Node3D? Muzzle, AnimationPlayer? AnimPlayer);
+
     private readonly MeshInstance3D _ghostBase;
     private readonly MeshInstance3D _selection;
 
     private Node3D? _enemyModel;
-    // Found once per model: a tree search per frame and per shot would cost every visible contact.
+    private VehicleVisual? _visual;
+    private ContactRig?[] _rigs = [];
+    private int _activeLod;
+    // Found once per model LOD: a tree search per frame and per shot would cost every visible contact.
     private Node3D? _turret;
     private Node3D? _muzzle;
     private AnimationPlayer? _animPlayer;
     private string _currentAnim = "";
     private StringName? _currentAnimName;
     private float _aimingTimer;
+    private float _relativeTurretYaw;
+    private float? _lastCameraSize;
+    private bool _hasPendingLodWhileHidden;
     private Vector3 _prevPos;
     private bool _hasPrevPos;
     private ushort _currentModelType = ushort.MaxValue;
@@ -31,6 +39,10 @@ internal sealed class ContactView
 
     internal Node3D? EnemyModel => _enemyModel;
     internal bool HasEnemyModel => _enemyModel is not null && _enemyModel.Visible;
+    internal int ActiveLod => _activeLod;
+    internal int LodCount => _visual?.LodCount ?? (_enemyModel is not null ? 1 : 0);
+    internal bool IsLodLoaded(int index) => _visual is not null ? _visual.IsLoaded(index) : index == 0 && _enemyModel is not null;
+    internal Node3D? GetLod(int index) => _visual is not null ? _visual.GetLoadedLod(index) : index == 0 ? _enemyModel : null;
     internal MeshInstance3D GhostBase => _ghostBase;
     internal ushort CurrentModelType => _currentModelType;
     internal ContactClassification CurrentModelClassification => _currentModelClassification;
@@ -44,17 +56,21 @@ internal sealed class ContactView
 
     public void PlayAnimation(string clipName)
     {
-        if (_animPlayer is not null && _animPlayer.HasAnimation(clipName))
+        StringName name = clipName;
+        if (_animPlayer is not null && _animPlayer.HasAnimation(name))
         {
-            _animPlayer.Play(clipName);
+            _animPlayer.Play(name);
             _currentAnim = clipName;
+            _currentAnimName = name;
         }
     }
 
     private readonly Func<string?>? _hostileFaction;
     private readonly Func<ushort, string?>? _unitIdProvider;
 
-    public ContactView(Func<string?>? hostileFaction = null, Func<ushort, string?>? unitIdProvider = null)
+    public ContactView(
+        Func<string?>? hostileFaction = null,
+        Func<ushort, string?>? unitIdProvider = null)
     {
         _hostileFaction = hostileFaction;
         _unitIdProvider = unitIdProvider;
@@ -95,6 +111,19 @@ internal sealed class ContactView
         Root.AddChild(_selection);
     }
 
+    internal ContactView(VehicleVisual visual, ContactClassification classification = ContactClassification.Tank)
+        : this()
+    {
+        ArgumentNullException.ThrowIfNull(visual);
+        _enemyModel = visual.Root;
+        _visual = visual;
+        _currentModelClassification = classification;
+        _activeLod = visual.ActiveLod;
+        _rigs = new ContactRig?[visual.LodCount];
+        Root.AddChild(_enemyModel);
+        ApplyActiveRig(EnsureRig(_activeLod, classification == ContactClassification.Infantry));
+    }
+
     public void Update(ContactObservation contact, float groundY, bool isSelected) =>
         Update(contact, contact.Position, groundY, isSelected, contact.TurretYaw, contact.HullHeading);
 
@@ -133,32 +162,49 @@ internal sealed class ContactView
                 string? unitId = _unitIdProvider is not null
                     ? _unitIdProvider(contact.Type)
                     : UnitViewSet.GetDefaultUnitId(contact.Type);
-                _enemyModel = ContactVisualCatalog.InstantiateEnemyModel(unitId, contact.Classification, _hostileFaction?.Invoke());
+                ContactVisualCatalog.ContactVisualHandle? handle = ContactVisualCatalog.InstantiateEnemyVisual(
+                    unitId,
+                    contact.Classification,
+                    _hostileFaction?.Invoke(),
+                    _lastCameraSize);
+                _enemyModel = handle?.Root;
+                _visual = handle?.Visual;
                 _currentModelType = contact.Type;
                 _currentModelClassification = contact.Classification;
+                _hasPendingLodWhileHidden = false;
                 if (_enemyModel is not null)
                 {
                     Root.AddChild(_enemyModel);
-                    _turret = _enemyModel.FindChild("TurretYaw", recursive: true, owned: false) as Node3D;
-                    _muzzle = _enemyModel.FindChild("Muzzle", recursive: true, owned: false) as Node3D;
-                    _animPlayer = _enemyModel.FindChild("AnimationPlayer", recursive: true, owned: false) as AnimationPlayer;
-                    if (_muzzle is null && isInfantry)
+                    if (_visual is not null)
                     {
-                        Node3D mNode = new() { Name = "Muzzle", Position = new Vector3(0, 1.35f, -0.6f) };
-                        _enemyModel.AddChild(mNode);
-                        _muzzle = mNode;
+                        _activeLod = _visual.ActiveLod;
+                        _rigs = new ContactRig?[_visual.LodCount];
                     }
+                    else
+                    {
+                        _activeLod = 0;
+                        _rigs = new ContactRig?[1];
+                    }
+                    ApplyActiveRig(EnsureRig(_activeLod, isInfantry));
                 }
             }
 
             if (_enemyModel is not null)
             {
+                bool returningFromHidden = !_enemyModel.Visible;
                 _enemyModel.Visible = true;
-                bool isAiming = _aimingTimer > 0f || MathF.Abs(Mathf.Wrap(turretYaw - hullHeading, -Mathf.Pi, Mathf.Pi)) > 0.05f;
+                _relativeTurretYaw = Mathf.Wrap(turretYaw - hullHeading, -Mathf.Pi, Mathf.Pi);
+                if (returningFromHidden && _hasPendingLodWhileHidden && _lastCameraSize.HasValue)
+                {
+                    int unlimited = int.MaxValue;
+                    ApplyLod(_lastCameraSize.Value, ref unlimited);
+                    _hasPendingLodWhileHidden = false;
+                }
+                bool isAiming = _aimingTimer > 0f || MathF.Abs(_relativeTurretYaw) > 0.05f;
                 float yaw = (isInfantry && isAiming && speed < 0.15f) ? turretYaw : hullHeading;
                 _enemyModel.Rotation = new Vector3(0, yaw, 0);
                 if (_turret is not null)
-                    _turret.Rotation = new Vector3(0, Mathf.Wrap(turretYaw - hullHeading, -Mathf.Pi, Mathf.Pi), 0);
+                    _turret.Rotation = new Vector3(0, _relativeTurretYaw, 0);
 
                 if (_animPlayer is not null)
                 {
@@ -211,6 +257,85 @@ internal sealed class ContactView
         return false;
     }
 
+    internal bool UpdateLod(float cameraSize)
+    {
+        int unlimited = int.MaxValue;
+        return UpdateLod(cameraSize, ref unlimited);
+    }
+
+    internal bool UpdateLod(float cameraSize, ref int remainingInstantiations)
+    {
+        _lastCameraSize = cameraSize;
+        if (_enemyModel is null) return false;
+        if (!_enemyModel.Visible)
+        {
+            _hasPendingLodWhileHidden = true;
+            return false;
+        }
+        _hasPendingLodWhileHidden = false;
+        if (_visual is null || _visual.LodCount <= 1) return false;
+
+        return ApplyLod(cameraSize, ref remainingInstantiations);
+    }
+
+    private bool ApplyLod(float cameraSize, ref int remainingInstantiations)
+    {
+        if (_enemyModel is null || _visual is null || _visual.LodCount <= 1) return false;
+
+        int targetLod = VehicleLod.SelectNextLod(cameraSize, _activeLod, _visual.LodCount);
+        if (targetLod == _activeLod) return false;
+
+        if (!_visual.IsLoaded(targetLod))
+        {
+            if (remainingInstantiations <= 0) return false;
+            remainingInstantiations--;
+        }
+
+        AnimationPlayer? prevPlayer = _animPlayer;
+        float prevSpeed = prevPlayer?.SpeedScale ?? 1.0f;
+        _visual.SwitchLod(targetLod, out _);
+        _activeLod = targetLod;
+        ApplyActiveRig(EnsureRig(targetLod, _currentModelClassification == ContactClassification.Infantry));
+        VehicleLod.TransferAnimationState(prevPlayer, _animPlayer, _currentAnimName, prevSpeed);
+        return true;
+    }
+
+    private ContactRig EnsureRig(int lod, bool isInfantry)
+    {
+        ContactRig? rig = _rigs[lod];
+        if (rig is not null)
+        {
+            if (rig.Turret is not null)
+                rig.Turret.Rotation = new Vector3(0, _relativeTurretYaw, 0);
+            return rig;
+        }
+
+        Node3D lodNode = _visual?.GetOrCreateLod(lod) ?? _enemyModel!;
+        Node3D? turret = lodNode.FindChild("TurretYaw", recursive: true, owned: false) as Node3D;
+        Node3D? muzzle = lodNode.FindChild("Muzzle", recursive: true, owned: false) as Node3D;
+        AnimationPlayer? animPlayer = lodNode.FindChild("AnimationPlayer", recursive: true, owned: false) as AnimationPlayer;
+        if (muzzle is null && isInfantry)
+        {
+            Node3D mNode = new() { Name = "Muzzle", Position = new Vector3(0, 1.35f, -0.6f) };
+            lodNode.AddChild(mNode);
+            muzzle = mNode;
+        }
+        if (turret is not null)
+        {
+            turret.Rotation = new Vector3(0, _relativeTurretYaw, 0);
+        }
+        rig = new ContactRig(turret, muzzle, animPlayer);
+        _rigs[lod] = rig;
+        return rig;
+    }
+
+    private void ApplyActiveRig(ContactRig rig)
+    {
+        _turret = rig.Turret;
+        _muzzle = rig.Muzzle;
+        _animPlayer = rig.AnimPlayer;
+    }
+
     private void ClearEnemyModel()
     {
         if (_enemyModel is not null)
@@ -218,12 +343,17 @@ internal sealed class ContactView
             Root.RemoveChild(_enemyModel);
             _enemyModel.QueueFree();
             _enemyModel = null;
+            _visual = null;
+            _rigs = [];
+            _activeLod = 0;
             _turret = null;
             _muzzle = null;
             _animPlayer = null;
             _currentAnim = "";
             _currentAnimName = null;
             _aimingTimer = 0f;
+            _relativeTurretYaw = 0f;
+            _hasPendingLodWhileHidden = false;
             _hasPrevPos = false;
         }
         _currentModelType = ushort.MaxValue;

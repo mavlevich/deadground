@@ -13,18 +13,20 @@ internal sealed class VehicleVisual
     private readonly PackedScene[] _scenes;
     private readonly Node3D?[] _lods;
 
-    internal VehicleVisual(Node3D root, PackedScene[] scenes, float trackGauge, float trackWrap)
+    internal VehicleVisual(Node3D root, PackedScene[] scenes, float trackGauge, float trackWrap, int initialLod = 0)
     {
         Root = root;
         _scenes = scenes;
         _lods = new Node3D?[scenes.Length];
         TrackGauge = trackGauge;
         TrackWrap = trackWrap;
-        GetOrCreateLod(0);
+        ActiveLod = Math.Clamp(initialLod, 0, scenes.Length - 1);
+        GetOrCreateLod(ActiveLod);
     }
 
     internal Node3D Root { get; }
     internal int LodCount => _scenes.Length;
+    internal int ActiveLod { get; private set; }
 
     // Distance between track centers in model meters, or 0 when the tracks do not animate.
     internal float TrackGauge { get; }
@@ -32,7 +34,9 @@ internal sealed class VehicleVisual
     // Travel period in model meters at which track travel wraps without a visible jump, or 0.
     internal float TrackWrap { get; }
 
-    internal bool IsLoaded(int lod) => _lods[lod] is not null;
+    internal bool IsLoaded(int lod) => lod >= 0 && lod < _lods.Length && _lods[lod] is not null;
+
+    internal Node3D? GetLoadedLod(int lod) => lod >= 0 && lod < _lods.Length ? _lods[lod] : null;
 
     internal Node3D GetOrCreateLod(int lod)
     {
@@ -40,10 +44,26 @@ internal sealed class VehicleVisual
         if (node is not null) return node;
         node = _scenes[lod].Instantiate<Node3D>();
         node.Name = $"LOD{lod}";
-        node.Visible = lod == 0;
+        node.Visible = lod == ActiveLod;
         Root.AddChild(node);
         _lods[lod] = node;
         return node;
+    }
+
+    internal bool SwitchLod(int targetLod, out Node3D nextNode)
+    {
+        targetLod = Math.Clamp(targetLod, 0, _lods.Length - 1);
+        if (targetLod == ActiveLod)
+        {
+            nextNode = GetOrCreateLod(ActiveLod);
+            return false;
+        }
+        Node3D? prev = _lods[ActiveLod];
+        if (prev is not null) prev.Visible = false;
+        ActiveLod = targetLod;
+        nextNode = GetOrCreateLod(targetLod);
+        nextNode.Visible = true;
+        return true;
     }
 }
 
@@ -173,7 +193,7 @@ internal static class VehicleVisualCatalog
         return new PrewarmResult(pathsToLoad.Count, newlyLoaded, elapsedMs);
     }
 
-    internal static VehicleVisual? InstantiateVisual(string? key, string? faction)
+    internal static VehicleVisual? InstantiateVisual(string? key, string? faction, float? initialCameraSize = null)
     {
         if (key is null || !Definitions.Value.TryGetValue(key, out VisualDefinition? definition))
             return null;
@@ -187,7 +207,10 @@ internal static class VehicleVisualCatalog
         PackedScene[] scenes = new PackedScene[1 + (variant.Lods?.Length ?? 0)];
         for (int i = 0; i < scenes.Length; i++)
             scenes[i] = LoadScene(i == 0 ? variant.Scene : variant.Lods![i - 1]);
-        return new VehicleVisual(root, scenes, variant.TrackGauge, variant.TrackWrap);
+        int initialLod = initialCameraSize.HasValue
+            ? VehicleLod.SelectInitialLod(initialCameraSize.Value, scenes.Length)
+            : 0;
+        return new VehicleVisual(root, scenes, variant.TrackGauge, variant.TrackWrap, initialLod);
     }
 
     private static PackedScene LoadScene(string path)

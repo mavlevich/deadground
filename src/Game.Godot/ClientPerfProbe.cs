@@ -296,23 +296,30 @@ internal static class ClientPerfProbe
             }
         }
 
+        async Task<float> StepProbeFrameAsync()
+        {
+            long startNs = Stopwatch.GetTimestamp();
+            AdvanceSimulation();
+            main.FogOfWar?.Update(dt, session.Replica, catalog);
+            main.UpdateViews();
+            int lodBudget = VehicleLod.DefaultMaxInstantiationsPerFrame;
+            main.UnitViews.UpdateLod(main.CameraRig.Size, ref lodBudget);
+            main.ContactViews.UpdateLod(main.CameraRig.Size, ref lodBudget);
+            main.WreckViews.UpdateLod(main.CameraRig.Size, ref lodBudget);
+            main.CombatEffects.Update(dt);
+
+            await main.ToSignal(main.GetTree(), SceneTree.SignalName.ProcessFrame);
+            long endNs = Stopwatch.GetTimestamp();
+            return (float)((endNs - startNs) * 1000.0 / Stopwatch.Frequency);
+        }
+
         // ----------------------------------------------------
         // Phase 1: Stationary Squad after loading (60 frames)
         // ----------------------------------------------------
         FramePacingMetrics stationaryMetrics = new(100);
         for (int f = 0; f < 60; f++)
         {
-            long startNs = Stopwatch.GetTimestamp();
-            AdvanceSimulation();
-            main.FogOfWar?.Update(dt, session.Replica, catalog);
-            main.UpdateViews();
-            main.UnitViews.UpdateLod(main.CameraRig.Size);
-            main.CombatEffects.Update(dt);
-
-            await main.ToSignal(main.GetTree(), SceneTree.SignalName.ProcessFrame);
-            long endNs = Stopwatch.GetTimestamp();
-            float frameMs = (float)((endNs - startNs) * 1000.0 / Stopwatch.Frequency);
-            stationaryMetrics.Record(frameMs);
+            stationaryMetrics.Record(await StepProbeFrameAsync());
         }
         FramePacingMetrics.PercentileResults resStationary = stationaryMetrics.CalculateResults();
         GD.Print($"Phase 1 (Stationary Squad 60f):   p50={resStationary.P50Ms:F2} ms | p95={resStationary.P95Ms:F2} ms | p99={resStationary.P99Ms:F2} ms | max={resStationary.MaxMs:F2} ms");
@@ -330,17 +337,7 @@ internal static class ClientPerfProbe
         FramePacingMetrics moveMetrics = new(100);
         for (int f = 0; f < 50; f++)
         {
-            long startNs = Stopwatch.GetTimestamp();
-            AdvanceSimulation();
-            main.FogOfWar?.Update(dt, session.Replica, catalog);
-            main.UpdateViews();
-            main.UnitViews.UpdateLod(main.CameraRig.Size);
-            main.CombatEffects.Update(dt);
-
-            await main.ToSignal(main.GetTree(), SceneTree.SignalName.ProcessFrame);
-            long endNs = Stopwatch.GetTimestamp();
-            float frameMs = (float)((endNs - startNs) * 1000.0 / Stopwatch.Frequency);
-            moveMetrics.Record(frameMs);
+            moveMetrics.Record(await StepProbeFrameAsync());
         }
         FramePacingMetrics.PercentileResults resMove = moveMetrics.CalculateResults();
         GD.Print($"Phase 2 (Start of Movement 50f): p50={resMove.P50Ms:F2} ms | p95={resMove.P95Ms:F2} ms | p99={resMove.P99Ms:F2} ms | max={resMove.MaxMs:F2} ms");
@@ -358,16 +355,7 @@ internal static class ClientPerfProbe
 
         while (!contactSpotted && searchFrames++ < maxSearchFrames)
         {
-            long startNs = Stopwatch.GetTimestamp();
-            AdvanceSimulation();
-            main.FogOfWar?.Update(dt, session.Replica, catalog);
-            main.UpdateViews();
-            main.UnitViews.UpdateLod(main.CameraRig.Size);
-            main.CombatEffects.Update(dt);
-
-            await main.ToSignal(main.GetTree(), SceneTree.SignalName.ProcessFrame);
-            long endNs = Stopwatch.GetTimestamp();
-            float frameMs = (float)((endNs - startNs) * 1000.0 / Stopwatch.Frequency);
+            float frameMs = await StepProbeFrameAsync();
 
             if (session.Replica.Contacts.Length > 0 && !contactSpotted)
             {
@@ -392,17 +380,7 @@ internal static class ClientPerfProbe
         FramePacingMetrics contactSubsequentMetrics = new(50);
         for (int f = 0; f < 30; f++)
         {
-            long startNs = Stopwatch.GetTimestamp();
-            AdvanceSimulation();
-            main.FogOfWar?.Update(dt, session.Replica, catalog);
-            main.UpdateViews();
-            main.UnitViews.UpdateLod(main.CameraRig.Size);
-            main.CombatEffects.Update(dt);
-
-            await main.ToSignal(main.GetTree(), SceneTree.SignalName.ProcessFrame);
-            long endNs = Stopwatch.GetTimestamp();
-            float frameMs = (float)((endNs - startNs) * 1000.0 / Stopwatch.Frequency);
-            contactSubsequentMetrics.Record(frameMs);
+            contactSubsequentMetrics.Record(await StepProbeFrameAsync());
         }
         FramePacingMetrics.PercentileResults resContact = contactSubsequentMetrics.CalculateResults();
         GD.Print($"Phase 3 Subsequent (30f sustained): p50={resContact.P50Ms:F2} ms | p95={resContact.P95Ms:F2} ms | p99={resContact.P99Ms:F2} ms | max={resContact.MaxMs:F2} ms");
@@ -414,33 +392,14 @@ internal static class ClientPerfProbe
         await main.ToSignal(main.GetTree(), SceneTree.SignalName.ProcessFrame);
 
         // Frame 1: Measure the re-sync frame inside timer
-        long repeatStartNs = Stopwatch.GetTimestamp();
-        main.ContactViews.Sync(session.Replica, session.RenderTick);
-        AdvanceSimulation();
-        main.FogOfWar?.Update(dt, session.Replica, catalog);
-        main.UpdateViews();
-        main.UnitViews.UpdateLod(main.CameraRig.Size);
-        main.CombatEffects.Update(dt);
-        await main.ToSignal(main.GetTree(), SceneTree.SignalName.ProcessFrame);
-        long repeatEndNs = Stopwatch.GetTimestamp();
-        float firstRepeatFrameMs = (float)((repeatEndNs - repeatStartNs) * 1000.0 / Stopwatch.Frequency);
+        float firstRepeatFrameMs = await StepProbeFrameAsync();
         GD.Print($"Phase 4 Initial Event: First Re-sync Frame = {firstRepeatFrameMs:F2} ms");
 
         // Subsequent 30 frames of sustained repeat contact
         FramePacingMetrics repeatSubsequentMetrics = new(50);
         for (int f = 0; f < 30; f++)
         {
-            long startNs = Stopwatch.GetTimestamp();
-            AdvanceSimulation();
-            main.FogOfWar?.Update(dt, session.Replica, catalog);
-            main.UpdateViews();
-            main.UnitViews.UpdateLod(main.CameraRig.Size);
-            main.CombatEffects.Update(dt);
-
-            await main.ToSignal(main.GetTree(), SceneTree.SignalName.ProcessFrame);
-            long endNs = Stopwatch.GetTimestamp();
-            float frameMs = (float)((endNs - startNs) * 1000.0 / Stopwatch.Frequency);
-            repeatSubsequentMetrics.Record(frameMs);
+            repeatSubsequentMetrics.Record(await StepProbeFrameAsync());
         }
         FramePacingMetrics.PercentileResults resRepeat = repeatSubsequentMetrics.CalculateResults();
         GD.Print($"Phase 4 Subsequent (30f sustained): p50={resRepeat.P50Ms:F2} ms | p95={resRepeat.P95Ms:F2} ms | p99={resRepeat.P99Ms:F2} ms | max={resRepeat.MaxMs:F2} ms");
@@ -452,32 +411,16 @@ internal static class ClientPerfProbe
         long lodStartNs = Stopwatch.GetTimestamp();
         main.CameraRig.SetDefaultView(main.CameraRig.Focus, 60f);
         main.CameraRig.ResetToDefault();
-        main.UnitViews.UpdateLod(main.CameraRig.Size);
-        AdvanceSimulation();
-        main.FogOfWar?.Update(dt, session.Replica, catalog);
-        main.UpdateViews();
-        main.UnitViews.UpdateLod(main.CameraRig.Size);
-        main.CombatEffects.Update(dt);
-        await main.ToSignal(main.GetTree(), SceneTree.SignalName.ProcessFrame);
-        long lodEndNs = Stopwatch.GetTimestamp();
-        float firstLodSwitchFrameMs = (float)((lodEndNs - lodStartNs) * 1000.0 / Stopwatch.Frequency);
+        long zoomSetupNs = Stopwatch.GetTimestamp();
+        float zoomFrameMs = await StepProbeFrameAsync();
+        float firstLodSwitchFrameMs = zoomFrameMs + (float)((zoomSetupNs - lodStartNs) * 1000.0 / Stopwatch.Frequency);
         GD.Print($"Phase 5 Initial Event: First LOD Switch Frame = {firstLodSwitchFrameMs:F2} ms");
 
         // Subsequent 30 frames at new LOD
         FramePacingMetrics lodSubsequentMetrics = new(50);
         for (int f = 0; f < 30; f++)
         {
-            long startNs = Stopwatch.GetTimestamp();
-            AdvanceSimulation();
-            main.FogOfWar?.Update(dt, session.Replica, catalog);
-            main.UpdateViews();
-            main.UnitViews.UpdateLod(main.CameraRig.Size);
-            main.CombatEffects.Update(dt);
-
-            await main.ToSignal(main.GetTree(), SceneTree.SignalName.ProcessFrame);
-            long endNs = Stopwatch.GetTimestamp();
-            float frameMs = (float)((endNs - startNs) * 1000.0 / Stopwatch.Frequency);
-            lodSubsequentMetrics.Record(frameMs);
+            lodSubsequentMetrics.Record(await StepProbeFrameAsync());
         }
         FramePacingMetrics.PercentileResults resLod = lodSubsequentMetrics.CalculateResults();
         GD.Print($"Phase 5 Subsequent (30f at LOD1):   p50={resLod.P50Ms:F2} ms | p95={resLod.P95Ms:F2} ms | p99={resLod.P99Ms:F2} ms | max={resLod.MaxMs:F2} ms");
@@ -510,31 +453,16 @@ internal static class ClientPerfProbe
         // Frame 1: Measure combat event processing, particle instantiation and explosion spawning inside timer
         long combatStartNs = Stopwatch.GetTimestamp();
         main.CombatEffects.ProcessEvents([shotEvent, impactEvent], main.UnitViews, session.Tick, main.ContactViews);
-        AdvanceSimulation();
-        main.FogOfWar?.Update(dt, session.Replica, catalog);
-        main.UpdateViews();
-        main.UnitViews.UpdateLod(main.CameraRig.Size);
-        main.CombatEffects.Update(dt);
-        await main.ToSignal(main.GetTree(), SceneTree.SignalName.ProcessFrame);
-        long combatEndNs = Stopwatch.GetTimestamp();
-        float firstCombatFrameMs = (float)((combatEndNs - combatStartNs) * 1000.0 / Stopwatch.Frequency);
+        long processEventsNs = Stopwatch.GetTimestamp();
+        float combatFrameMs = await StepProbeFrameAsync();
+        float firstCombatFrameMs = combatFrameMs + (float)((processEventsNs - combatStartNs) * 1000.0 / Stopwatch.Frequency);
         GD.Print($"Phase 6 Initial Event: First Combat Effects Frame = {firstCombatFrameMs:F2} ms");
 
         // Subsequent 30 frames with particle animations and effects active
         FramePacingMetrics combatSubsequentMetrics = new(50);
         for (int f = 0; f < 30; f++)
         {
-            long startNs = Stopwatch.GetTimestamp();
-            AdvanceSimulation();
-            main.FogOfWar?.Update(dt, session.Replica, catalog);
-            main.UpdateViews();
-            main.UnitViews.UpdateLod(main.CameraRig.Size);
-            main.CombatEffects.Update(dt);
-
-            await main.ToSignal(main.GetTree(), SceneTree.SignalName.ProcessFrame);
-            long endNs = Stopwatch.GetTimestamp();
-            float frameMs = (float)((endNs - startNs) * 1000.0 / Stopwatch.Frequency);
-            combatSubsequentMetrics.Record(frameMs);
+            combatSubsequentMetrics.Record(await StepProbeFrameAsync());
         }
         FramePacingMetrics.PercentileResults resCombat = combatSubsequentMetrics.CalculateResults();
         GD.Print($"Phase 6 Subsequent (30f effects):  p50={resCombat.P50Ms:F2} ms | p95={resCombat.P95Ms:F2} ms | p99={resCombat.P99Ms:F2} ms | max={resCombat.MaxMs:F2} ms");

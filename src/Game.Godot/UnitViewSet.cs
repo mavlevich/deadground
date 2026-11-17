@@ -157,10 +157,10 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
                 UnitCatalog effectiveCatalog = _catalog ?? DefaultCatalog.Value;
                 string? unitId = _unitIdProvider is null ? GetDefaultUnitId(unit.Definition) : _unitIdProvider(unit.Definition);
                 string? classification = unit.Definition < effectiveCatalog.Units.Length ? effectiveCatalog.Units[unit.Definition].Classification : null;
-                view = new UnitView(unitId, _factionProvider?.Invoke(), classification);
+                float? initialSize = _cameraSize > 0f ? _cameraSize : null;
+                view = new UnitView(unitId, _factionProvider?.Invoke(), classification, initialSize);
                 var (sensorRange, weaponRange) = GetRanges(effectiveCatalog, unit.Definition);
                 view.ConfigureRanges(sensorRange, weaponRange, map);
-                view.UpdateLod(_cameraSize);
                 Views.Add(unit.Id, view);
                 parent.AddChild(view.Root);
                 if (_hasHealthBarBasis) view.FaceHealthBar(_healthBarBasis);
@@ -213,11 +213,21 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
         foreach (UnitView view in Views.Values) view.FaceHealthBar(cameraBasis);
     }
 
-    internal void UpdateLod(float cameraSize)
+    internal int UpdateLod(float cameraSize)
+    {
+        int unlimited = int.MaxValue;
+        return UpdateLod(cameraSize, ref unlimited);
+    }
+
+    internal int UpdateLod(float cameraSize, ref int remainingInstantiations)
     {
         _cameraSize = cameraSize;
+        int switches = 0;
         foreach (UnitView view in Views.Values)
-            view.UpdateLod(cameraSize);
+        {
+            if (view.UpdateLod(cameraSize, ref remainingInstantiations)) switches++;
+        }
+        return switches;
     }
 
     internal void UpdateSelectionVisuals()
