@@ -4,14 +4,25 @@ using Godot;
 
 namespace DeadGround.Client;
 
-internal sealed class ContactViewSet(Node3D parent, HeightMap map, Func<string?>? hostileFactionProvider = null, Func<ushort, string?>? unitIdProvider = null, StaticGeometry? geometry = null)
+internal sealed class ContactViewSet(
+    Node3D parent,
+    HeightMap map,
+    Func<string?>? hostileFactionProvider = null,
+    Func<ushort, string?>? unitIdProvider = null,
+    StaticGeometry? geometry = null)
 {
     internal Dictionary<ContactId, ContactView> Views { get; } = new();
     internal HashSet<ContactId> Selected { get; } = new();
     private readonly HashSet<ContactId> _present = new(WireProtocol.MaxContacts);
     private readonly List<ContactId> _removed = new(WireProtocol.MaxContacts);
+    private float _cameraSize;
 
-    public ContactViewSet(Node3D parent, HeightMap map, DeadGround.Rules.Ops.UnitCatalog catalog, Func<string?>? hostileFactionProvider = null, StaticGeometry? geometry = null)
+    public ContactViewSet(
+        Node3D parent,
+        HeightMap map,
+        DeadGround.Rules.Ops.UnitCatalog catalog,
+        Func<string?>? hostileFactionProvider = null,
+        StaticGeometry? geometry = null)
         : this(parent, map, hostileFactionProvider, def => def < catalog.Units.Length ? catalog.Units[def].Id : null, geometry)
     {
     }
@@ -25,6 +36,7 @@ internal sealed class ContactViewSet(Node3D parent, HeightMap map, Func<string?>
             if (!Views.TryGetValue(contact.Id, out ContactView? view))
             {
                 view = new ContactView(hostileFactionProvider, unitIdProvider);
+                if (_cameraSize > 0f) view.UpdateLod(_cameraSize);
                 Views.Add(contact.Id, view);
                 parent.AddChild(view.Root);
             }
@@ -51,6 +63,23 @@ internal sealed class ContactViewSet(Node3D parent, HeightMap map, Func<string?>
             Views.Remove(id);
             Selected.Remove(id);
         }
+    }
+
+    internal int UpdateLod(float cameraSize)
+    {
+        int unlimited = int.MaxValue;
+        return UpdateLod(cameraSize, ref unlimited);
+    }
+
+    internal int UpdateLod(float cameraSize, ref int remainingInstantiations)
+    {
+        _cameraSize = cameraSize;
+        int switches = 0;
+        foreach (ContactView view in Views.Values)
+        {
+            if (view.UpdateLod(cameraSize, ref remainingInstantiations)) switches++;
+        }
+        return switches;
     }
 
     internal void Clear()

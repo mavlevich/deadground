@@ -7,12 +7,27 @@ namespace DeadGround.Client;
 // with procedural fallbacks for types without an authored visual entry.
 internal static class ContactVisualCatalog
 {
+    internal readonly record struct ContactVisualHandle(Node3D Root, VehicleVisual? Visual);
+
     // hostileFaction comes from the public match setup, never from private opponent truth.
-    internal static Node3D? InstantiateEnemyModel(string? unitId, ContactClassification classification, string? hostileFaction = null)
+    internal static Node3D? InstantiateEnemyModel(
+        string? unitId,
+        ContactClassification classification,
+        string? hostileFaction = null,
+        float? initialCameraSize = null)
+    {
+        return InstantiateEnemyVisual(unitId, classification, hostileFaction, initialCameraSize)?.Root;
+    }
+
+    internal static ContactVisualHandle? InstantiateEnemyVisual(
+        string? unitId,
+        ContactClassification classification,
+        string? hostileFaction = null,
+        float? initialCameraSize = null)
     {
         if (unitId is not null)
         {
-            VehicleVisual? visual = VehicleVisualCatalog.InstantiateVisual(unitId, hostileFaction);
+            VehicleVisual? visual = VehicleVisualCatalog.InstantiateVisual(unitId, hostileFaction, initialCameraSize);
             if (visual is not null)
             {
                 visual.Root.Name = classification switch
@@ -25,38 +40,34 @@ internal static class ContactVisualCatalog
                     _ => "EnemyVehicleModel"
                 };
                 AttachHostileAffiliationMarker(visual.Root, classification == ContactClassification.Infantry);
-                return visual.Root;
+                return new ContactVisualHandle(visual.Root, visual);
             }
         }
 
         return classification switch
         {
-            ContactClassification.Tank => CreateEnemyTankModel(hostileFaction),
-            ContactClassification.Recon => CreateEnemyModel("contact_recon", "EnemyReconModel", hostileFaction),
-            ContactClassification.Apc => CreateEnemyModel("contact_apc", "EnemyApcModel", hostileFaction),
-            ContactClassification.CommandVehicle => CreateEnemyCommandVehicleModel(),
-            ContactClassification.Infantry => CreateEnemyModel("contact_infantry", "EnemyInfantryModel", hostileFaction, isInfantry: true),
-            ContactClassification.Vehicle => CreateEnemyGenericVehicleModel(),
+            ContactClassification.Tank => CreateEnemyVisual("contact_tank", "EnemyTankModel", hostileFaction, initialCameraSize),
+            ContactClassification.Recon => CreateEnemyVisual("contact_recon", "EnemyReconModel", hostileFaction, initialCameraSize),
+            ContactClassification.Apc => CreateEnemyVisual("contact_apc", "EnemyApcModel", hostileFaction, initialCameraSize),
+            ContactClassification.CommandVehicle => new ContactVisualHandle(CreateEnemyCommandVehicleModel(), null),
+            ContactClassification.Infantry => CreateEnemyVisual("contact_infantry", "EnemyInfantryModel", hostileFaction, initialCameraSize, isInfantry: true),
+            ContactClassification.Vehicle => new ContactVisualHandle(CreateEnemyGenericVehicleModel(), null),
             _ => null
         };
     }
 
-    private static Node3D CreateEnemyTankModel(string? hostileFaction)
+    private static ContactVisualHandle CreateEnemyVisual(
+        string visualId,
+        string name,
+        string? hostileFaction,
+        float? initialCameraSize,
+        bool isInfantry = false)
     {
-        VehicleVisual visual = VehicleVisualCatalog.InstantiateVisual("contact_tank", hostileFaction)
-            ?? throw new InvalidOperationException("visuals.json has no contact_tank entry for enemy tank presentation.");
-        visual.Root.Name = "EnemyTankModel";
-        AttachHostileAffiliationMarker(visual.Root);
-        return visual.Root;
-    }
-
-    private static Node3D CreateEnemyModel(string visualId, string name, string? hostileFaction, bool isInfantry = false)
-    {
-        VehicleVisual visual = VehicleVisualCatalog.InstantiateVisual(visualId, hostileFaction)
+        VehicleVisual visual = VehicleVisualCatalog.InstantiateVisual(visualId, hostileFaction, initialCameraSize)
             ?? throw new InvalidOperationException($"visuals.json has no {visualId} entry for enemy contact presentation.");
         visual.Root.Name = name;
         AttachHostileAffiliationMarker(visual.Root, isInfantry);
-        return visual.Root;
+        return new ContactVisualHandle(visual.Root, visual);
     }
 
     private static Node3D CreateEnemyCommandVehicleModel()

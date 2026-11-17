@@ -35,17 +35,15 @@ public partial class UstyeMapPreview : Node3D
             Faction = faction;
             Visual = visual;
             GroundPosition = pos;
-            ActiveLod = 0;
+            ActiveLod = visual.ActiveLod;
         }
 
         public void UpdateLod(float cameraSize)
         {
-            int targetLod = cameraSize < UnitView.Lod1CameraSize ? 0 : cameraSize < UnitView.Lod2CameraSize ? 1 : 2;
-            targetLod = Math.Clamp(targetLod, 0, Visual.LodCount - 1);
+            int targetLod = VehicleLod.SelectNextLod(cameraSize, ActiveLod, Visual.LodCount);
             if (targetLod == ActiveLod) return;
 
-            Visual.GetOrCreateLod(ActiveLod).Visible = false;
-            Visual.GetOrCreateLod(targetLod).Visible = true;
+            Visual.SwitchLod(targetLod, out _);
             ActiveLod = targetLod;
         }
     }
@@ -158,7 +156,7 @@ public partial class UstyeMapPreview : Node3D
         SetupEnvironment();
         SetupCamera(plan);
 
-        _mapView = new UstyeMapView(plan, includeScaleVehicles: true);
+        _mapView = new UstyeMapView(plan, includeScaleVehicles: true, initialVehicleCameraSize: _cameraRig.Size);
         AddChild(_mapView);
 
         SetupHud();

@@ -87,13 +87,13 @@ internal sealed class WreckViewSet(
             if (!Views.TryGetValue(wreck.Id, out WreckView? view))
             {
                 string? unitId = unitIdProvider?.Invoke(wreck.Definition) ?? UnitViewSet.GetDefaultUnitId(wreck.Definition);
-                view = new WreckView(unitId, factionProvider?.Invoke())
+                float? initialSize = _cameraSize > 0f ? _cameraSize : null;
+                view = new WreckView(unitId, factionProvider?.Invoke(), initialSize)
                 {
                     Id = wreck.Id
                 };
                 Views.Add(wreck.Id, view);
                 parent.AddChild(view.Root);
-                if (_cameraSize > 0f) view.UpdateLod(_cameraSize);
 
                 for (int i = _pendingCount - 1; i >= 0; i--)
                 {
@@ -387,13 +387,21 @@ internal sealed class WreckViewSet(
         return best;
     }
 
-    internal void UpdateLod(float cameraSize)
+    internal int UpdateLod(float cameraSize)
+    {
+        int unlimited = int.MaxValue;
+        return UpdateLod(cameraSize, ref unlimited);
+    }
+
+    internal int UpdateLod(float cameraSize, ref int remainingInstantiations)
     {
         _cameraSize = cameraSize;
+        int switches = 0;
         foreach (WreckView view in Views.Values)
         {
-            view.UpdateLod(cameraSize);
+            if (view.UpdateLod(cameraSize, ref remainingInstantiations)) switches++;
         }
+        return switches;
     }
 
     internal void Clear()

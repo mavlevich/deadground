@@ -125,6 +125,67 @@ public sealed class FramePacingTests
     }
 
     [Fact]
+    public void FramePacingMetrics_RecordsAndSummarizesPhaseAndRenderCounters()
+    {
+        FramePacingMetrics metrics = new(16);
+        // Unphased frame must be included in frame/GPU stats, not dilute phase averages.
+        metrics.Record(20.0f, 3.0f, 12.0f);
+        metrics.Record(16.0f, 4.0f, 6.0f, new FramePacingMetrics.FramePhaseSample(
+            SessionMs: 1.0f,
+            FogOfWarMs: 0.5f,
+            ViewsMs: 1.2f,
+            OrderPreviewMs: 0.3f,
+            MinimapMs: 0.2f,
+            EffectsAndHudMs: 0.8f,
+            RenderDrawCalls: 420,
+            RenderPrimitives: 180000,
+            ActiveSceneNodes: 350,
+            LodSwitches: 2));
+        metrics.Record(18.0f, 5.0f, 9.0f, new FramePacingMetrics.FramePhaseSample(
+            SessionMs: 3.0f,
+            FogOfWarMs: 0.9f,
+            ViewsMs: 1.8f,
+            OrderPreviewMs: 0.5f,
+            MinimapMs: 0.4f,
+            EffectsAndHudMs: 1.0f,
+            RenderDrawCalls: 460,
+            RenderPrimitives: 220000,
+            ActiveSceneNodes: 355,
+            LodSwitches: 1));
+
+        FramePacingMetrics.PercentileResults res = metrics.CalculateResults();
+        Assert.True(res.HasGpuTiming);
+        Assert.True(MathF.Abs(res.GpuP50Ms - 9.0f) < 0.01f);
+        Assert.True(MathF.Abs(res.GpuP95Ms - 11.7f) < 0.1f);
+
+        FramePacingMetrics.PhaseSummary summary = metrics.CalculatePhaseSummary();
+        Assert.True(summary.HasPhaseData);
+        Assert.True(MathF.Abs(summary.MeanSessionMs - 2.0f) < 0.01f);
+        Assert.True(MathF.Abs(summary.MaxSessionMs - 3.0f) < 0.01f);
+        Assert.True(MathF.Abs(summary.MeanFogOfWarMs - 0.7f) < 0.01f);
+        Assert.True(MathF.Abs(summary.MeanViewsMs - 1.5f) < 0.01f);
+        Assert.True(summary.HasRenderCounters);
+        Assert.True(MathF.Abs(summary.MeanDrawCalls - 440f) < 0.5f);
+        Assert.Equal(460, summary.MaxDrawCalls);
+        Assert.Equal(355, summary.LastActiveSceneNodes);
+        Assert.Equal(3, summary.TotalLodSwitches);
+
+        string report = metrics.FormatReport("phase_test", "Hardware", "1920x1080", vsync: true, maxFps: 60);
+        Assert.Contains("p50=9.00 ms | p95=11.70 ms | mean=9.00 ms", report);
+        Assert.Contains("Bottleneck:         GPU bound", report);
+        Assert.Contains("CPU PHASE BREAKDOWN", report);
+        Assert.Contains("RENDER COUNTERS", report);
+        Assert.Contains("LOD Switches:     3", report);
+        Assert.DoesNotContain("\u2013", report);
+        Assert.DoesNotContain("\u2014", report);
+
+        FramePacingMetrics cpuBoundMetrics = new(16);
+        cpuBoundMetrics.Record(16.0f, 8.0f, 3.0f);
+        string cpuReport = cpuBoundMetrics.FormatReport("cpu_test", "Hardware", "1920x1080", vsync: false, maxFps: 0);
+        Assert.Contains("Bottleneck:         CPU bound", cpuReport);
+    }
+
+    [Fact]
     public void DisplaySettings_UserEdits_DoNotPersistCliOverrides()
     {
         // Saved preferences: VSync on, MaxFps 60

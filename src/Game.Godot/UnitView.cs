@@ -5,8 +5,8 @@ namespace DeadGround.Client;
 internal sealed class UnitView
 {
     // Orthographic camera sizes where the client switches to LOD1 and LOD2.
-    internal const float Lod1CameraSize = 45f;
-    internal const float Lod2CameraSize = 95f;
+    internal const float Lod1CameraSize = VehicleLod.Lod1CameraSize;
+    internal const float Lod2CameraSize = VehicleLod.Lod2CameraSize;
     // A heading snap must not spin the tracks by more than this, in model meters.
     private const float MaxTurnTrackTravel = 0.5f;
     // Hull rock after a shot: a damped spring about the axis across the shot direction.
@@ -19,13 +19,13 @@ internal sealed class UnitView
     internal const float MaxDustStep = 2f;
     private static readonly StringName TrackTravelParameter = "track_travel";
 
-    // Animated nodes of one LOD. Every LOD follows the same turret, gun and recoil state.
+    // Animated nodes of one LOD. Every LOD follows the same turret, recoil and animation state.
     private sealed class Rig
     {
         internal Node3D? Turret;
-        internal Node3D? GunPitch;
         internal Node3D? BarrelRecoil;
         internal Node3D? Muzzle;
+        internal AnimationPlayer? AnimPlayer;
         internal Vector3 BarrelBindPosition;
         internal GeometryInstance3D[] LeftMotion = [];
         internal GeometryInstance3D[] RightMotion = [];
@@ -33,13 +33,14 @@ internal sealed class UnitView
 
     public Node3D Root { get; } = new();
     private readonly MeshInstance3D _selection;
-    private readonly Node3D? _turret;
+    private Node3D? _turret;
     private readonly VehicleVisual? _visual;
     // One rig per LOD, created when that LOD is first shown.
     private readonly Rig?[] _rigs;
     private readonly float _trackGauge;
     private readonly float _trackWrap;
     private int _activeLod;
+    private bool _dustCreated;
     private Vector3 _turretRotation;
     private bool _hasAim;
     private float _leftTrackTravel;
@@ -65,7 +66,6 @@ internal sealed class UnitView
     internal string? UnitId { get; }
     internal bool HasVehicleModel { get; }
     internal bool IsInfantry { get; }
-    private readonly AnimationPlayer? _animPlayer;
     private string _currentAnim = "";
     private StringName? _currentAnimName;
     private float _aimingTimer;
@@ -82,7 +82,7 @@ internal sealed class UnitView
         _distanceSinceEffects = speed * 0.016f;
     }
     internal string CurrentAnimation => _currentAnim;
-    internal AnimationPlayer? AnimationPlayer => _animPlayer;
+    internal AnimationPlayer? AnimationPlayer => ActiveRig.AnimPlayer;
 
     public void SetAiming(bool aiming)
     {
@@ -95,47 +95,53 @@ internal sealed class UnitView
     public void PlayAnimation(string clipName)
     {
         StringName name = clipName;
-        if (_animPlayer is not null && _animPlayer.HasAnimation(name))
+        AnimationPlayer? player = ActiveRig.AnimPlayer;
+        if (player is not null && player.HasAnimation(name))
         {
-            _animPlayer.Play(name);
+            player.Play(name);
             _currentAnim = clipName;
             _currentAnimName = name;
         }
     }
 
-    public UnitView(ushort definition = 0) : this(UnitViewSet.GetDefaultUnitId(definition), classification: UnitViewSet.GetDefaultClassification(definition)) { }
+    public UnitView(ushort definition = 0, float? initialCameraSize = null)
+        : this(UnitViewSet.GetDefaultUnitId(definition), classification: UnitViewSet.GetDefaultClassification(definition), initialCameraSize: initialCameraSize) { }
 
-    public UnitView(string? unitId, string? faction = null, string? classification = null)
+    public UnitView(string? unitId, string? faction = null, string? classification = null, float? initialCameraSize = null)
+        : this(unitId, classification, VehicleVisualCatalog.InstantiateVisual(unitId, faction, initialCameraSize)) { }
+
+    internal UnitView(VehicleVisual visual, string? unitId = null, string? classification = null)
+        : this(unitId, classification, visual ?? throw new ArgumentNullException(nameof(visual))) { }
+
+    private UnitView(string? unitId, string? classification, VehicleVisual? visual)
     {
         UnitId = unitId;
         classification ??= UnitViewSet.GetDefaultClassification(unitId);
         IsInfantry = string.Equals(classification, "infantry", StringComparison.OrdinalIgnoreCase);
-        VehicleVisual? visual = VehicleVisualCatalog.InstantiateVisual(unitId, faction);
         HasVehicleModel = visual is not null;
         Model = visual?.Root ?? new Node3D { Name = "PlaceholderModel" };
         _visual = visual;
-        _animPlayer = Model.FindChild("AnimationPlayer", recursive: true, owned: false) as AnimationPlayer;
+        _activeLod = visual?.ActiveLod ?? 0;
         _trackGauge = visual?.TrackGauge ?? 0f;
         _trackWrap = visual?.TrackWrap ?? 0f;
         Root.AddChild(Model);
         _rigs = new Rig?[visual?.LodCount ?? 1];
-        Rig lod0 = CreateRig(visual?.GetOrCreateLod(0) ?? Model);
-        _rigs[0] = lod0;
-        _turret = lod0.Turret;
-        _gunPitch = lod0.GunPitch;
-        _barrelRecoil = lod0.BarrelRecoil;
-        _muzzle = lod0.Muzzle;
+        Rig initialRig = CreateRig(visual?.GetOrCreateLod(_activeLod) ?? Model);
+        _rigs[_activeLod] = initialRig;
+        _turret = initialRig.Turret;
+        _barrelRecoil = initialRig.BarrelRecoil;
+        _muzzle = initialRig.Muzzle;
         if (_muzzle is null && IsInfantry)
         {
             Node3D mNode = new() { Name = "Muzzle", Position = new Vector3(0, 1.35f, -0.6f) };
             Model.AddChild(mNode);
             _muzzle = mNode;
-            lod0.Muzzle = mNode;
+            initialRig.Muzzle = mNode;
         }
-        _barrelBindPosition = lod0.BarrelBindPosition;
+        _barrelBindPosition = initialRig.BarrelBindPosition;
         _modelBindPosition = Model.Position;
         _modelScale = Model.Scale;
-        CreateDust(lod0);
+        CreateDustIfReady(initialRig);
         if (visual is null)
         {
             Model.AddChild(new MeshInstance3D
@@ -405,10 +411,9 @@ internal sealed class UnitView
         }
         mesh.SurfaceEnd();
     }
-    private readonly Node3D? _gunPitch;
-    private readonly Node3D? _barrelRecoil;
-    private readonly Node3D? _muzzle;
-    private readonly Vector3 _barrelBindPosition;
+    private Node3D? _barrelRecoil;
+    private Node3D? _muzzle;
+    private Vector3 _barrelBindPosition;
     private readonly Vector3 _modelBindPosition;
     private float _recoilAmount;
     private Vector3 _fallbackRecoilOffset = Vector3.Zero;
@@ -422,9 +427,9 @@ internal sealed class UnitView
         Rig rig = new()
         {
             Turret = lod.FindChild("TurretYaw", recursive: true, owned: false) as Node3D,
-            GunPitch = lod.FindChild("GunPitch", recursive: true, owned: false) as Node3D,
             BarrelRecoil = lod.FindChild("BarrelRecoil", recursive: true, owned: false) as Node3D,
             Muzzle = lod.FindChild("Muzzle", recursive: true, owned: false) as Node3D,
+            AnimPlayer = lod.FindChild("AnimationPlayer", recursive: true, owned: false) as AnimationPlayer,
         };
         rig.BarrelBindPosition = rig.BarrelRecoil?.Position ?? Vector3.Zero;
         rig.LeftMotion = FindMotionMeshes(lod.FindChild("LeftTrack", recursive: true, owned: false));
@@ -452,11 +457,19 @@ internal sealed class UnitView
         Rig? rig = _rigs[lod];
         if (rig is not null) return rig;
         rig = CreateRig(LodNode(lod));
+        if (_turret is null && rig.Turret is not null) _turret = rig.Turret;
+        if (_barrelRecoil is null && rig.BarrelRecoil is not null)
+        {
+            _barrelRecoil = rig.BarrelRecoil;
+            _barrelBindPosition = rig.BarrelBindPosition;
+        }
+        if (_muzzle is null && rig.Muzzle is not null) _muzzle = rig.Muzzle;
         if (_hasAim && rig.Turret is not null)
             rig.Turret.Rotation = _turretRotation;
         if (rig.BarrelRecoil is not null)
             rig.BarrelRecoil.Position = rig.BarrelBindPosition + new Vector3(0, 0, _recoilAmount);
         _rigs[lod] = rig;
+        CreateDustIfReady(rig);
         return rig;
     }
 
@@ -484,16 +497,37 @@ internal sealed class UnitView
         return meshes.Length == 0 ? float.NaN : meshes[0].GetInstanceShaderParameter(TrackTravelParameter).AsSingle();
     }
 
-    internal void UpdateLod(float cameraSize)
+    internal bool UpdateLod(float cameraSize)
     {
-        int lod = cameraSize < Lod1CameraSize ? 0 : cameraSize < Lod2CameraSize ? 1 : 2;
-        lod = Math.Min(lod, _rigs.Length - 1);
-        if (lod == _activeLod) return;
-        EnsureRig(lod);
-        LodNode(_activeLod).Visible = false;
-        LodNode(lod).Visible = true;
+        int unlimited = int.MaxValue;
+        return UpdateLod(cameraSize, ref unlimited);
+    }
+
+    internal bool UpdateLod(float cameraSize, ref int remainingInstantiations)
+    {
+        int lod = VehicleLod.SelectNextLod(cameraSize, _activeLod, _rigs.Length);
+        if (lod == _activeLod) return false;
+        if (!IsLodLoaded(lod))
+        {
+            if (remainingInstantiations <= 0) return false;
+            remainingInstantiations--;
+        }
+
+        AnimationPlayer? prevPlayer = _rigs[_activeLod]?.AnimPlayer;
+        Rig nextRig = EnsureRig(lod);
+        if (_visual is not null)
+        {
+            _visual.SwitchLod(lod, out _);
+        }
+        else
+        {
+            LodNode(_activeLod).Visible = false;
+            LodNode(lod).Visible = true;
+        }
         _activeLod = lod;
         PushTrackTravel();
+        VehicleLod.TransferAnimationState(prevPlayer, nextRig.AnimPlayer, _currentAnimName, prevPlayer?.SpeedScale ?? 1.0f);
+        return true;
     }
 
     // Track travel in model meters: forward distance plus the turn difference between the sides.
@@ -591,7 +625,7 @@ internal sealed class UnitView
 
     public void SetTurretYaw(float worldYaw)
     {
-        if (_turret is not null)
+        if (_turret is not null || (_visual is not null && !IsInfantry))
         {
             _turretRotation = new Vector3(0, Mathf.Wrap(worldYaw - _heading, -Mathf.Pi, Mathf.Pi), 0);
             _hasAim = true;
@@ -611,14 +645,14 @@ internal sealed class UnitView
 
     public void AimAt(Vector3 observedPosition)
     {
-        if (_turret is null && !IsInfantry) return;
+        if (_turret is null && _visual is null && !IsInfantry) return;
         Vector3 direction = observedPosition - _previousPosition;
         if (direction.X * direction.X + direction.Z * direction.Z <= 0.000001f) return;
         float worldYaw = Mathf.Atan2(-direction.X, -direction.Z);
         SetTurretYaw(worldYaw);
     }
 
-    internal Vector3 TurretRotation => _turret?.Rotation ?? Vector3.Zero;
+    internal Vector3 TurretRotation => ActiveRig.Turret?.Rotation ?? _turret?.Rotation ?? Vector3.Zero;
 
     public void ApplyRecoil(Vector3 shotDirection)
     {
@@ -706,11 +740,13 @@ internal sealed class UnitView
     }
 
     // One dust emitter per side along the running gear, in world space so the dust stays behind.
-    private void CreateDust(Rig lod0)
+    private void CreateDustIfReady(Rig rig)
     {
+        if (_dustCreated || (rig.LeftMotion.Length == 0 && rig.RightMotion.Length == 0)) return;
+        _dustCreated = true;
         for (int side = 0; side < 2; side++)
         {
-            GeometryInstance3D[] meshes = side == 0 ? lod0.LeftMotion : lod0.RightMotion;
+            GeometryInstance3D[] meshes = side == 0 ? rig.LeftMotion : rig.RightMotion;
             if (meshes.Length == 0) continue;
             Aabb bounds = default;
             bool first = true;
@@ -765,7 +801,8 @@ internal sealed class UnitView
             _aimingTimer = MathF.Max(0f, _aimingTimer - dt);
         }
 
-        if (_animPlayer is not null)
+        AnimationPlayer? animPlayer = ActiveRig.AnimPlayer;
+        if (animPlayer is not null)
         {
             StringName targetAnimName;
             string targetAnimStr;
@@ -793,20 +830,20 @@ internal sealed class UnitView
                 targetAnimStr = "Idle";
             }
 
-            if (_currentAnimName != targetAnimName && _animPlayer.HasAnimation(targetAnimName))
+            if (_currentAnimName != targetAnimName && animPlayer.HasAnimation(targetAnimName))
             {
-                _animPlayer.Play(targetAnimName);
+                animPlayer.Play(targetAnimName);
                 _currentAnimName = targetAnimName;
                 _currentAnim = targetAnimStr;
             }
 
             if (targetAnimName == AnimWalk || targetAnimName == AnimRun)
             {
-                _animPlayer.SpeedScale = MathF.Max(0.1f, _dustSpeed / authoredSpeed);
+                animPlayer.SpeedScale = MathF.Max(0.1f, _dustSpeed / authoredSpeed);
             }
             else
             {
-                _animPlayer.SpeedScale = 1.0f;
+                animPlayer.SpeedScale = 1.0f;
             }
         }
     }

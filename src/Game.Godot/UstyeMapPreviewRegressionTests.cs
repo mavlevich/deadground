@@ -627,6 +627,8 @@ public static class UstyeMapPreviewRegressionTests
         // 3. Verify dynamic vehicle LOD switching
         UstyeMapPreview.ScaleVehicle t62 = vehicles.First(v => v.Id == "t62");
         Require(t62.Visual.LodCount == 3, $"Expected 3 LODs for t62, got {t62.Visual.LodCount}");
+        Require(t62.ActiveLod == 2 && !t62.Visual.IsLoaded(0) && !t62.Visual.IsLoaded(1),
+            "Scale vehicle spawned on wide map preview must start directly on LOD2.");
 
         // Zoom 30 m (< 45 m): LOD0 visible, other LODs hidden
         t62.UpdateLod(30f);
