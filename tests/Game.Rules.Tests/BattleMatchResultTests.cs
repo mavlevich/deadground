@@ -19,7 +19,18 @@ public sealed class BattleMatchResultTests
         }
     }
 
-    private static void WaitFor(Func<bool> condition, SimulationHost host, ClientSession c1, ClientSession c2, int maxAttempts = 150)
+    private static void WaitFor(Func<bool> condition, SimulationHost host, ClientSession c1, int maxAttempts = 200)
+    {
+        for (int i = 0; i < maxAttempts && !condition(); i++)
+        {
+            host.Advance(1d / Simulation.TickRate);
+            c1.Advance(1d / Simulation.TickRate);
+            Thread.Sleep(5);
+        }
+        Assert.True(condition());
+    }
+
+    private static void WaitFor(Func<bool> condition, SimulationHost host, ClientSession c1, ClientSession c2, int maxAttempts = 200)
     {
         for (int i = 0; i < maxAttempts && !condition(); i++)
         {
@@ -293,6 +304,7 @@ public sealed class BattleMatchResultTests
         using SimulationHost host = new(simulation, serverTransport, setup);
 
         using ClientSession client1 = ClientSession.Connect("127.0.0.1", port, setup);
+        WaitFor(() => client1.IsConnected, host, client1);
         using ClientSession client2 = ClientSession.Connect("127.0.0.1", port, setup);
 
         WaitFor(() => client1.IsConnected && client2.IsConnected &&
@@ -340,9 +352,12 @@ public sealed class BattleMatchResultTests
         using SimulationHost host = new(simulation, serverTransport, setup);
 
         using ClientSession client1 = ClientSession.Connect("127.0.0.1", port, setup);
+        WaitFor(() => client1.IsConnected, host, client1);
         using ClientSession client2Initial = ClientSession.Connect("127.0.0.1", port, setup);
 
         WaitFor(() => client1.IsConnected && client2Initial.IsConnected, host, client1, client2Initial);
+        Assert.Equal(1, client1.AssignedPlayerId);
+        Assert.Equal(2, client2Initial.AssignedPlayerId);
 
         // Wipe out player 1 on server
         WorldState world = simulation.World;
@@ -359,28 +374,15 @@ public sealed class BattleMatchResultTests
         int finishedTick = client2Initial.Mission.FinishedTick;
         Assert.True(finishedTick > 0);
 
-        // Disconnect initial client 2
+        // Disconnect initial client 2 and wait until the server releases slot 2
         client2Initial.Dispose();
-        for (int i = 0; i < 20; i++) host.Advance(1d / Simulation.TickRate);
+        WaitFor(() => host.ConnectedPlayerCount == 1, host, client1);
 
-        // Connect a fresh client 2 that never witnessed prior combat
+        // Connect a fresh client 2 that never witnessed prior combat and wait for its first snapshot
         using ClientSession client2Fresh = ClientSession.Connect("127.0.0.1", port, setup);
-        for (int i = 0; i < 150 && !client2Fresh.IsConnected; i++)
-        {
-            host.Advance(1d / Simulation.TickRate);
-            client1.Advance(1d / Simulation.TickRate);
-            client2Fresh.Advance(1d / Simulation.TickRate);
-            Thread.Sleep(5);
-        }
+        WaitFor(() => client2Fresh.IsConnected && client2Fresh.Replica.HasSnapshots, host, client1, client2Fresh);
 
-        for (int i = 0; i < 150 && client2Fresh.Mission.Status == MissionStatus.InProgress; i++)
-        {
-            host.Advance(1d / Simulation.TickRate);
-            client1.Advance(1d / Simulation.TickRate);
-            client2Fresh.Advance(1d / Simulation.TickRate);
-            Thread.Sleep(5);
-        }
-
+        Assert.Equal(2, client2Fresh.AssignedPlayerId);
         Assert.Equal(MissionStatus.Victory, client2Fresh.Mission.Status);
         Assert.Equal(MissionEndReason.AllArmedUnitsDestroyed, client2Fresh.Mission.EndReason);
         Assert.Equal(finishedTick, client2Fresh.Mission.FinishedTick);
