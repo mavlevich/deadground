@@ -756,6 +756,7 @@ public static class UstyeMapPreviewRegressionTests
         Window.ContentScaleAspectEnum origAspect = root.ContentScaleAspect;
         float origScale = root.Scaling3DScale;
         Viewport.Msaa origMsaa = root.Msaa3D;
+        Viewport.ScreenSpaceAAEnum origScreenAa = root.ScreenSpaceAA;
         try
         {
             DeadGround.Sandbox.DisplaySettings autoSettings = new(
@@ -780,6 +781,7 @@ public static class UstyeMapPreviewRegressionTests
         {
             root.Scaling3DScale = origScale;
             root.Msaa3D = origMsaa;
+            root.ScreenSpaceAA = origScreenAa;
             root.ContentScaleAspect = origAspect;
             root.ContentScaleSize = origContentSize;
             root.Size = origSize;

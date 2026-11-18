@@ -11,8 +11,9 @@ namespace DeadGround.Client;
 internal sealed partial class SettingsPanel : CanvasLayer
 {
     public static readonly bool IsHeadlessDisplay = DisplayServer.GetName() == "headless";
+    public static BenchmarkRenderOverrides? ActiveBenchmarkOverrides { get; set; }
 
-    private const string ConfigPath = "user://display_settings.cfg";
+    internal const string ConfigPath = "user://display_settings.cfg";
     private readonly Control _backdrop;
     private readonly PanelContainer _container;
     private readonly CheckButton _vsyncButton;
@@ -125,13 +126,14 @@ internal sealed partial class SettingsPanel : CanvasLayer
         // Anti-aliasing Row
         HBoxContainer aaRow = new();
         aaRow.AddThemeConstantOverride("separation", 12);
-        Label aaLabel = new() { Text = "Anti-aliasing (MSAA):", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        Label aaLabel = new() { Text = "Anti-aliasing:", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         aaLabel.AddThemeColorOverride("font_color", new Color("d5ded0"));
         _antiAliasingOptions = new OptionButton();
-        _antiAliasingOptions.AddItem("Auto", 0);
+        _antiAliasingOptions.AddItem("Auto (MSAA + FXAA)", 0);
         _antiAliasingOptions.AddItem("Off", 1);
-        _antiAliasingOptions.AddItem("2x", 2);
-        _antiAliasingOptions.AddItem("4x", 3);
+        _antiAliasingOptions.AddItem("FXAA", 2);
+        _antiAliasingOptions.AddItem("2x MSAA", 3);
+        _antiAliasingOptions.AddItem("4x MSAA", 4);
         _antiAliasingOptions.ItemSelected += OnAntiAliasingSelected;
         aaRow.AddChild(aaLabel);
         aaRow.AddChild(_antiAliasingOptions);
@@ -255,7 +257,15 @@ internal sealed partial class SettingsPanel : CanvasLayer
         _profileOptions.Selected = _effectiveSettings.EnvironmentProfile == "clear_afternoon" ? 1 : 0;
         _qualityOptions.Selected = (int)_effectiveSettings.Quality;
         _renderScaleOptions.Selected = (int)_effectiveSettings.RenderScale;
-        _antiAliasingOptions.Selected = (int)_effectiveSettings.AntiAliasing;
+        _antiAliasingOptions.Selected = _effectiveSettings.AntiAliasing switch
+        {
+            AntiAliasingPreset.Auto => 0,
+            AntiAliasingPreset.Off => 1,
+            AntiAliasingPreset.Fxaa => 2,
+            AntiAliasingPreset.Msaa2x => 3,
+            AntiAliasingPreset.Msaa4x => 4,
+            _ => 0
+        };
     }
 
     private void OnProfileSelected(long index)
@@ -283,6 +293,9 @@ internal sealed partial class SettingsPanel : CanvasLayer
             "Graphics quality applied and saved");
     }
 
+    internal void SelectRenderScaleOptionForTest(int index) => OnRenderScaleSelected(index);
+    internal void SelectAntiAliasingOptionForTest(int index) => OnAntiAliasingSelected(index);
+
     private void OnRenderScaleSelected(long index)
     {
         RenderScalePreset scale = index switch
@@ -294,6 +307,10 @@ internal sealed partial class SettingsPanel : CanvasLayer
             _ => RenderScalePreset.Auto
         };
         _cliOverridesRenderScale = false;
+        if (ActiveBenchmarkOverrides is { RenderScaleOverride: not null } activeCli)
+        {
+            ActiveBenchmarkOverrides = activeCli with { RenderScaleOverride = null };
+        }
         CommitSettingEdit(
             _savedConfig with { RenderScale = scale },
             _effectiveSettings with { RenderScale = scale },
@@ -305,8 +322,9 @@ internal sealed partial class SettingsPanel : CanvasLayer
         AntiAliasingPreset aa = index switch
         {
             1 => AntiAliasingPreset.Off,
-            2 => AntiAliasingPreset.Msaa2x,
-            3 => AntiAliasingPreset.Msaa4x,
+            2 => AntiAliasingPreset.Fxaa,
+            3 => AntiAliasingPreset.Msaa2x,
+            4 => AntiAliasingPreset.Msaa4x,
             _ => AntiAliasingPreset.Auto
         };
         _cliOverridesAntiAliasing = false;
@@ -435,14 +453,28 @@ internal sealed partial class SettingsPanel : CanvasLayer
         Vector2I? windowSizeOverride = null)
     {
         Vector2I winSize = ResolveWindowPixelSize(viewport, windowSizeOverride);
-        float scale = DisplaySettings.ResolveRenderScaleFactor(settings.RenderScale, winSize.X, winSize.Y);
+        BenchmarkRenderOverrides? cli = ActiveBenchmarkOverrides;
+        float scale = cli?.RenderScaleOverride is >= DisplaySettings.MinDiagnosticRenderScale and <= DisplaySettings.MaxAutoRenderScale
+            ? cli.RenderScaleOverride.Value
+            : DisplaySettings.ResolveRenderScaleFactor(settings.RenderScale, winSize.X, winSize.Y);
         int msaaSamples = DisplaySettings.ResolveMsaaSamples(settings.AntiAliasing, winSize.X, winSize.Y, scale);
+        bool useFxaa = DisplaySettings.ResolveScreenSpaceFxaa(settings.AntiAliasing, msaaSamples);
+        Viewport.Scaling3DModeEnum targetScalingMode = cli?.ScalingMode switch
+        {
+            "bilinear" => Viewport.Scaling3DModeEnum.Bilinear,
+            "fsr2" => Viewport.Scaling3DModeEnum.Fsr2,
+            "fsr" => Viewport.Scaling3DModeEnum.Fsr,
+            _ => DisplaySettings.ResolveUseBilinearScaling(winSize.X, winSize.Y, scale)
+                ? Viewport.Scaling3DModeEnum.Bilinear
+                : Viewport.Scaling3DModeEnum.Fsr
+        };
         if (viewport is not null && GodotObject.IsInstanceValid(viewport))
         {
             viewport.Scaling3DScale = scale;
-            viewport.Scaling3DMode = scale < 0.999f
-                ? Viewport.Scaling3DModeEnum.Fsr
-                : Viewport.Scaling3DModeEnum.Bilinear;
+            viewport.Scaling3DMode = targetScalingMode;
+            viewport.ScreenSpaceAA = useFxaa
+                ? Viewport.ScreenSpaceAAEnum.Fxaa
+                : Viewport.ScreenSpaceAAEnum.Disabled;
             viewport.Msaa3D = msaaSamples switch
             {
                 4 => Viewport.Msaa.Msaa4X,

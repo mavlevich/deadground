@@ -73,53 +73,167 @@ public sealed class FramePacingMetrics
     }
 
     private readonly float[] _frameIntervalsMs;
-    private readonly float[] _cpuTimesMs;
     private readonly float[] _gpuTimesMs;
-    private readonly FramePhaseSample[] _phaseSamples;
-    private readonly bool[] _hasPhaseAt;
-    private int _phaseSampleCount;
     private int _count;
+    private int _totalSamples;
+
+    // Exact streaming accumulators maintained in O(1) without allocations even past percentile capacity
+    private double _sumCpuMs;
+    private double _sumGpuMs;
+    private int _gpuSampleCount;
+    private float _maxMs;
+    private int _over8;
+    private int _over16;
+    private int _over33;
+    private int _histLe8;
+    private int _hist8To16;
+    private int _hist16To25;
+    private int _hist25To33;
+    private int _hist33To42;
+    private int _histGt42;
+
+    private int _phaseSampleCount;
+    private double _sumSessionMs;
+    private float _maxSessionMs;
+    private double _sumFogOfWarMs;
+    private float _maxFogOfWarMs;
+    private double _sumViewsMs;
+    private float _maxViewsMs;
+    private double _sumOrderPreviewMs;
+    private float _maxOrderPreviewMs;
+    private double _sumMinimapMs;
+    private float _maxMinimapMs;
+    private double _sumEffectsAndHudMs;
+    private float _maxEffectsAndHudMs;
+    private CounterAccumulator _drawCalls;
+    private CounterAccumulator _primitives;
+    private CounterAccumulator _visibleDrawCalls;
+    private CounterAccumulator _visiblePrimitives;
+    private CounterAccumulator _shadowDrawCalls;
+    private CounterAccumulator _shadowPrimitives;
+    private int _lastActiveSceneNodes = -1;
+    private int _totalLodSwitches;
 
     public int Capacity => _frameIntervalsMs.Length;
     public int Count => _count;
+    public int TotalCount => _totalSamples;
+    public bool IsBufferSaturated => _totalSamples > _count;
+    public int DroppedPercentileSamples => _totalSamples - _count;
 
     public FramePacingMetrics(int capacity = 2000)
     {
         if (capacity < 16) capacity = 16;
         _frameIntervalsMs = new float[capacity];
-        _cpuTimesMs = new float[capacity];
         _gpuTimesMs = new float[capacity];
-        _phaseSamples = new FramePhaseSample[capacity];
-        _hasPhaseAt = new bool[capacity];
     }
 
     public void Record(float frameIntervalMs, float cpuTimeMs = 0f, float gpuTimeMs = -1f)
     {
-        if (_count >= _frameIntervalsMs.Length) return;
-        _frameIntervalsMs[_count] = frameIntervalMs;
-        _cpuTimesMs[_count] = cpuTimeMs;
-        _gpuTimesMs[_count] = gpuTimeMs;
-        _phaseSamples[_count] = default;
-        _hasPhaseAt[_count] = false;
-        _count++;
+        RecordCore(frameIntervalMs, cpuTimeMs, gpuTimeMs);
     }
 
     public void Record(float frameIntervalMs, float cpuTimeMs, float gpuTimeMs, in FramePhaseSample phases)
     {
-        if (_count >= _frameIntervalsMs.Length) return;
-        _frameIntervalsMs[_count] = frameIntervalMs;
-        _cpuTimesMs[_count] = cpuTimeMs;
-        _gpuTimesMs[_count] = gpuTimeMs;
-        _phaseSamples[_count] = phases;
-        _hasPhaseAt[_count] = true;
+        RecordCore(frameIntervalMs, cpuTimeMs, gpuTimeMs);
+
         _phaseSampleCount++;
-        _count++;
+        _sumSessionMs += phases.SessionMs;
+        if (phases.SessionMs > _maxSessionMs) _maxSessionMs = phases.SessionMs;
+
+        _sumFogOfWarMs += phases.FogOfWarMs;
+        if (phases.FogOfWarMs > _maxFogOfWarMs) _maxFogOfWarMs = phases.FogOfWarMs;
+
+        _sumViewsMs += phases.ViewsMs;
+        if (phases.ViewsMs > _maxViewsMs) _maxViewsMs = phases.ViewsMs;
+
+        _sumOrderPreviewMs += phases.OrderPreviewMs;
+        if (phases.OrderPreviewMs > _maxOrderPreviewMs) _maxOrderPreviewMs = phases.OrderPreviewMs;
+
+        _sumMinimapMs += phases.MinimapMs;
+        if (phases.MinimapMs > _maxMinimapMs) _maxMinimapMs = phases.MinimapMs;
+
+        _sumEffectsAndHudMs += phases.EffectsAndHudMs;
+        if (phases.EffectsAndHudMs > _maxEffectsAndHudMs) _maxEffectsAndHudMs = phases.EffectsAndHudMs;
+
+        _drawCalls.Add(phases.RenderDrawCalls);
+        _primitives.Add(phases.RenderPrimitives);
+        _visibleDrawCalls.Add(phases.VisibleDrawCalls);
+        _visiblePrimitives.Add(phases.VisiblePrimitives);
+        _shadowDrawCalls.Add(phases.ShadowDrawCalls);
+        _shadowPrimitives.Add(phases.ShadowPrimitives);
+
+        if (phases.ActiveSceneNodes >= 0) _lastActiveSceneNodes = phases.ActiveSceneNodes;
+        _totalLodSwitches += phases.LodSwitches;
+    }
+
+    private void RecordCore(float frameIntervalMs, float cpuTimeMs, float gpuTimeMs)
+    {
+        if (_count < _frameIntervalsMs.Length)
+        {
+            _frameIntervalsMs[_count] = frameIntervalMs;
+            _gpuTimesMs[_count] = gpuTimeMs;
+            _count++;
+        }
+
+        _totalSamples++;
+        _sumCpuMs += cpuTimeMs;
+        if (gpuTimeMs >= 0f)
+        {
+            _sumGpuMs += gpuTimeMs;
+            _gpuSampleCount++;
+        }
+        if (frameIntervalMs > _maxMs) _maxMs = frameIntervalMs;
+
+        if (frameIntervalMs > 8.333f) _over8++;
+        if (frameIntervalMs > 16.667f) _over16++;
+        if (frameIntervalMs > 33.333f) _over33++;
+
+        if (frameIntervalMs <= 8.333f) _histLe8++;
+        else if (frameIntervalMs <= 16.667f) _hist8To16++;
+        else if (frameIntervalMs <= 25.0f) _hist16To25++;
+        else if (frameIntervalMs <= 33.333f) _hist25To33++;
+        else if (frameIntervalMs <= 41.667f) _hist33To42++;
+        else _histGt42++;
     }
 
     public void Reset()
     {
         _count = 0;
+        _totalSamples = 0;
+        _sumCpuMs = 0.0;
+        _sumGpuMs = 0.0;
+        _gpuSampleCount = 0;
+        _maxMs = 0f;
+        _over8 = 0;
+        _over16 = 0;
+        _over33 = 0;
+        _histLe8 = 0;
+        _hist8To16 = 0;
+        _hist16To25 = 0;
+        _hist25To33 = 0;
+        _hist33To42 = 0;
+        _histGt42 = 0;
         _phaseSampleCount = 0;
+        _sumSessionMs = 0.0;
+        _maxSessionMs = 0f;
+        _sumFogOfWarMs = 0.0;
+        _maxFogOfWarMs = 0f;
+        _sumViewsMs = 0.0;
+        _maxViewsMs = 0f;
+        _sumOrderPreviewMs = 0.0;
+        _maxOrderPreviewMs = 0f;
+        _sumMinimapMs = 0.0;
+        _maxMinimapMs = 0f;
+        _sumEffectsAndHudMs = 0.0;
+        _maxEffectsAndHudMs = 0f;
+        _drawCalls = default;
+        _primitives = default;
+        _visibleDrawCalls = default;
+        _visiblePrimitives = default;
+        _shadowDrawCalls = default;
+        _shadowPrimitives = default;
+        _lastActiveSceneNodes = -1;
+        _totalLodSwitches = 0;
     }
 
     public readonly record struct PercentileResults(
@@ -135,52 +249,44 @@ public sealed class FramePacingMetrics
         float MeanGpuMs,
         bool HasGpuTiming,
         float GpuP50Ms = 0f,
-        float GpuP95Ms = 0f);
+        float GpuP95Ms = 0f,
+        string Histogram = "",
+        int StoredSampleCount = 0,
+        bool ArePercentilesTruncated = false);
 
     public PercentileResults CalculateResults()
     {
-        if (_count == 0)
+        if (_totalSamples == 0)
         {
             return new PercentileResults(0, 0f, 0f, 0f, 0f, 0, 0, 0, 0f, 0f, false);
         }
 
-        // Copy frame intervals in milliseconds for sorting
+        // Copy stored frame intervals in milliseconds for sorting
         float[] sortedMs = new float[_count];
-        float sumCpu = 0f;
-        float sumGpu = 0f;
-        int gpuCount = 0;
-        int over16 = 0;
-        int over33 = 0;
-        int over8 = 0;
-
+        int gpuStoredCount = 0;
         for (int i = 0; i < _count; i++)
         {
-            float ms = _frameIntervalsMs[i];
-            sortedMs[i] = ms;
-            sumCpu += _cpuTimesMs[i];
+            sortedMs[i] = _frameIntervalsMs[i];
             if (_gpuTimesMs[i] >= 0f)
             {
-                sumGpu += _gpuTimesMs[i];
-                gpuCount++;
+                gpuStoredCount++;
             }
-
-            if (ms > 8.333f) over8++;
-            if (ms > 16.667f) over16++;
-            if (ms > 33.333f) over33++;
         }
+
+        string histSummary = string.Create(CultureInfo.InvariantCulture,
+            $"<=8.3ms:{_histLe8} | 8.3-16.7:{_hist8To16} | 16.7-25:{_hist16To25} | 25-33.3:{_hist25To33} | 33.3-41.7:{_hist33To42} | >41.7:{_histGt42}");
 
         Array.Sort(sortedMs);
 
         float p50 = GetPercentile(sortedMs, 0.50f);
         float p95 = GetPercentile(sortedMs, 0.95f);
         float p99 = GetPercentile(sortedMs, 0.99f);
-        float max = sortedMs[^1];
-        bool hasGpu = gpuCount > 0;
+        bool hasGpu = _gpuSampleCount > 0;
         float gpuP50 = 0f;
         float gpuP95 = 0f;
-        if (hasGpu)
+        if (gpuStoredCount > 0)
         {
-            float[] sortedGpu = new float[gpuCount];
+            float[] sortedGpu = new float[gpuStoredCount];
             int gi = 0;
             for (int i = 0; i < _count; i++)
             {
@@ -195,113 +301,63 @@ public sealed class FramePacingMetrics
         }
 
         return new PercentileResults(
-            _count,
+            _totalSamples,
             p50,
             p95,
             p99,
-            max,
-            over16,
-            over33,
-            over8,
-            sumCpu / _count,
-            hasGpu ? sumGpu / gpuCount : 0f,
+            _maxMs,
+            _over16,
+            _over33,
+            _over8,
+            (float)(_sumCpuMs / _totalSamples),
+            hasGpu ? (float)(_sumGpuMs / _gpuSampleCount) : 0f,
             hasGpu,
             gpuP50,
-            gpuP95);
+            gpuP95,
+            histSummary,
+            _count,
+            _totalSamples > _count);
     }
 
     public PhaseSummary CalculatePhaseSummary()
     {
-        if (_count == 0 || _phaseSampleCount == 0)
+        if (_totalSamples == 0 || _phaseSampleCount == 0)
         {
             return default;
         }
 
-        float sumSession = 0f, maxSession = 0f;
-        float sumFog = 0f, maxFog = 0f;
-        float sumViews = 0f, maxViews = 0f;
-        float sumPreview = 0f, maxPreview = 0f;
-        float sumMinimap = 0f, maxMinimap = 0f;
-        float sumEffectsHud = 0f, maxEffectsHud = 0f;
-
-        CounterAccumulator drawCalls = default;
-        CounterAccumulator primitives = default;
-        CounterAccumulator visibleDrawCalls = default;
-        CounterAccumulator visiblePrimitives = default;
-        CounterAccumulator shadowDrawCalls = default;
-        CounterAccumulator shadowPrimitives = default;
-
-        int lastActiveNodes = -1;
-        int totalLodSwitches = 0;
-
-        for (int i = 0; i < _count; i++)
-        {
-            if (!_hasPhaseAt[i]) continue;
-            ref readonly FramePhaseSample s = ref _phaseSamples[i];
-            sumSession += s.SessionMs;
-            if (s.SessionMs > maxSession) maxSession = s.SessionMs;
-
-            sumFog += s.FogOfWarMs;
-            if (s.FogOfWarMs > maxFog) maxFog = s.FogOfWarMs;
-
-            sumViews += s.ViewsMs;
-            if (s.ViewsMs > maxViews) maxViews = s.ViewsMs;
-
-            sumPreview += s.OrderPreviewMs;
-            if (s.OrderPreviewMs > maxPreview) maxPreview = s.OrderPreviewMs;
-
-            sumMinimap += s.MinimapMs;
-            if (s.MinimapMs > maxMinimap) maxMinimap = s.MinimapMs;
-
-            sumEffectsHud += s.EffectsAndHudMs;
-            if (s.EffectsAndHudMs > maxEffectsHud) maxEffectsHud = s.EffectsAndHudMs;
-
-            drawCalls.Add(s.RenderDrawCalls);
-            primitives.Add(s.RenderPrimitives);
-            visibleDrawCalls.Add(s.VisibleDrawCalls);
-            visiblePrimitives.Add(s.VisiblePrimitives);
-            shadowDrawCalls.Add(s.ShadowDrawCalls);
-            shadowPrimitives.Add(s.ShadowPrimitives);
-            if (s.ActiveSceneNodes >= 0)
-            {
-                lastActiveNodes = s.ActiveSceneNodes;
-            }
-            totalLodSwitches += s.LodSwitches;
-        }
-
-        float invPhaseCount = 1f / _phaseSampleCount;
-        bool hasCounters = drawCalls.HasData || primitives.HasData || lastActiveNodes >= 0;
-        bool hasPassCounters = visibleDrawCalls.HasData || visiblePrimitives.HasData || shadowDrawCalls.HasData || shadowPrimitives.HasData;
+        bool hasCounters = _drawCalls.HasData || _primitives.HasData || _lastActiveSceneNodes >= 0;
+        bool hasPassCounters = _visibleDrawCalls.HasData || _visiblePrimitives.HasData || _shadowDrawCalls.HasData || _shadowPrimitives.HasData;
         return new PhaseSummary(
             HasPhaseData: true,
-            MeanSessionMs: sumSession * invPhaseCount,
-            MaxSessionMs: maxSession,
-            MeanFogOfWarMs: sumFog * invPhaseCount,
-            MaxFogOfWarMs: maxFog,
-            MeanViewsMs: sumViews * invPhaseCount,
-            MaxViewsMs: maxViews,
-            MeanOrderPreviewMs: sumPreview * invPhaseCount,
-            MaxOrderPreviewMs: maxPreview,
-            MeanMinimapMs: sumMinimap * invPhaseCount,
-            MaxMinimapMs: maxMinimap,
-            MeanEffectsAndHudMs: sumEffectsHud * invPhaseCount,
-            MaxEffectsAndHudMs: maxEffectsHud,
+            MeanSessionMs: (float)(_sumSessionMs / _phaseSampleCount),
+            MaxSessionMs: _maxSessionMs,
+            MeanFogOfWarMs: (float)(_sumFogOfWarMs / _phaseSampleCount),
+            MaxFogOfWarMs: _maxFogOfWarMs,
+            MeanViewsMs: (float)(_sumViewsMs / _phaseSampleCount),
+            MaxViewsMs: _maxViewsMs,
+            MeanOrderPreviewMs: (float)(_sumOrderPreviewMs / _phaseSampleCount),
+            MaxOrderPreviewMs: _maxOrderPreviewMs,
+            MeanMinimapMs: (float)(_sumMinimapMs / _phaseSampleCount),
+            MaxMinimapMs: _maxMinimapMs,
+            MeanEffectsAndHudMs: (float)(_sumEffectsAndHudMs / _phaseSampleCount),
+            MaxEffectsAndHudMs: _maxEffectsAndHudMs,
             HasRenderCounters: hasCounters,
-            MeanDrawCalls: drawCalls.Mean,
-            MaxDrawCalls: drawCalls.Max,
-            MeanPrimitives: primitives.Mean,
-            MaxPrimitives: primitives.Max,
-            LastActiveSceneNodes: lastActiveNodes,
-            TotalLodSwitches: totalLodSwitches,
+            MeanDrawCalls: _drawCalls.Mean,
+            MaxDrawCalls: _drawCalls.Max,
+            MeanPrimitives: _primitives.Mean,
+            MaxPrimitives: _primitives.Max,
+            LastActiveSceneNodes: _lastActiveSceneNodes,
+            TotalLodSwitches: _totalLodSwitches,
             HasPassCounters: hasPassCounters,
-            MeanVisibleDrawCalls: visibleDrawCalls.Mean,
-            MaxVisibleDrawCalls: visibleDrawCalls.Max,
-            MeanVisiblePrimitives: visiblePrimitives.Mean,
-            MaxVisiblePrimitives: visiblePrimitives.Max,
-            MeanShadowDrawCalls: shadowDrawCalls.Mean,
-            MaxShadowDrawCalls: shadowDrawCalls.Max,
-            MeanShadowPrimitives: shadowPrimitives.Mean,
-            MaxShadowPrimitives: shadowPrimitives.Max);
+            MeanVisibleDrawCalls: _visibleDrawCalls.Mean,
+            MaxVisibleDrawCalls: _visibleDrawCalls.Max,
+            MeanVisiblePrimitives: _visiblePrimitives.Mean,
+            MaxVisiblePrimitives: _visiblePrimitives.Max,
+            MeanShadowDrawCalls: _shadowDrawCalls.Mean,
+            MaxShadowDrawCalls: _shadowDrawCalls.Max,
+            MeanShadowPrimitives: _shadowPrimitives.Mean,
+            MaxShadowPrimitives: _shadowPrimitives.Max);
     }
 
     private static float GetPercentile(float[] sorted, float percentile)
@@ -335,6 +391,9 @@ public sealed class FramePacingMetrics
             ? "GPU bound"
             : "CPU bound";
         string warmupStr = warmupFrames > 0 ? $"{warmupFrames} initial warmup frames discarded" : "None";
+        string samplesStr = res.ArePercentilesTruncated
+            ? string.Create(CultureInfo.InvariantCulture, $"{res.SampleCount} frames (percentile buffer full: {res.StoredSampleCount}/{res.SampleCount} kept; summary/histogram exact)")
+            : string.Create(CultureInfo.InvariantCulture, $"{res.SampleCount} frames");
 
         string report = string.Create(CultureInfo.InvariantCulture,
             $"------------------------------------------------------------------------\n" +
@@ -348,7 +407,7 @@ public sealed class FramePacingMetrics
             $"Measurement Point:  _Process callback-to-callback (monotonic wall-clock)\n" +
             $"CPU Work Point:     _Process callback duration (subset of total engine CPU)\n" +
             $"------------------------------------------------------------------------\n" +
-            $"Samples:            {res.SampleCount} frames\n" +
+            $"Samples:            {samplesStr}\n" +
             $"------------------------------------------------------------------------\n" +
             $"Frame Interval P50: {res.P50Ms:F2} ms ({1000f / MathF.Max(0.01f, res.P50Ms):F1} FPS)\n" +
             $"Frame Interval P95: {res.P95Ms:F2} ms ({1000f / MathF.Max(0.01f, res.P95Ms):F1} FPS)\n" +
@@ -361,6 +420,7 @@ public sealed class FramePacingMetrics
             $"Frames >  8.33 ms:  {res.LongFramesOver8Ms} ({(float)res.LongFramesOver8Ms / Math.Max(1, res.SampleCount) * 100f:F1}%)\n" +
             $"Frames > 16.67 ms:  {res.LongFramesOver16Ms} ({(float)res.LongFramesOver16Ms / Math.Max(1, res.SampleCount) * 100f:F1}%)\n" +
             $"Frames > 33.33 ms:  {res.LongFramesOver33Ms} ({(float)res.LongFramesOver33Ms / Math.Max(1, res.SampleCount) * 100f:F1}%)\n" +
+            $"Frame Histogram:    {res.Histogram}\n" +
             $"------------------------------------------------------------------------\n");
 
         if (phases.HasPhaseData)

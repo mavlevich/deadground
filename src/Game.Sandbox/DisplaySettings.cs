@@ -21,7 +21,8 @@ public enum AntiAliasingPreset : byte
     Auto = 0,
     Off = 1,
     Msaa2x = 2,
-    Msaa4x = 3
+    Msaa4x = 3,
+    Fxaa = 4
 }
 
 /// <summary>
@@ -42,7 +43,9 @@ public sealed record DisplaySettings(
     public const float AutoRenderTargetPixels = 2560f * 1440f;
     public const float MsaaAutoCutoffPixels = 3_700_000f;
     public const float MinAutoRenderScale = 0.50f;
+    public const float MinDiagnosticRenderScale = 0.25f;
     public const float MaxAutoRenderScale = 1.0f;
+    public const long LargeOutputBilinearCutoffPixels = 6_000_000L;
     public static readonly int[] ValidFpsLimits = [0, 30, 60, 120, 144, 165, 240];
 
     public static int SanitizeMaxFps(int fps)
@@ -122,6 +125,7 @@ public sealed record DisplaySettings(
         {
             "auto" => AntiAliasingPreset.Auto,
             "off" or "0" or "none" or "disabled" => AntiAliasingPreset.Off,
+            "fxaa" => AntiAliasingPreset.Fxaa,
             "2x" or "2" or "msaa2x" => AntiAliasingPreset.Msaa2x,
             "4x" or "4" or "msaa4x" => AntiAliasingPreset.Msaa4x,
             _ => defaultPreset
@@ -132,16 +136,28 @@ public sealed record DisplaySettings(
     {
         switch (preset)
         {
-            case AntiAliasingPreset.Off: return 0;
+            case AntiAliasingPreset.Off:
+            case AntiAliasingPreset.Fxaa:
+                return 0;
             case AntiAliasingPreset.Msaa2x: return 2;
             case AntiAliasingPreset.Msaa4x: return 4;
             case AntiAliasingPreset.Auto:
             default:
                 if (windowWidth <= 0 || windowHeight <= 0) return 2;
-                float scale = Math.Clamp(effectiveRenderScale, MinAutoRenderScale, MaxAutoRenderScale);
+                float scale = Math.Clamp(effectiveRenderScale, MinDiagnosticRenderScale, MaxAutoRenderScale);
                 float internalPixels = (windowWidth * scale) * (windowHeight * scale);
                 return internalPixels > MsaaAutoCutoffPixels ? 0 : 2;
         }
+    }
+
+    public static bool ResolveScreenSpaceFxaa(AntiAliasingPreset preset, int resolvedMsaaSamples) =>
+        preset == AntiAliasingPreset.Fxaa || (preset == AntiAliasingPreset.Auto && resolvedMsaaSamples == 0);
+
+    public static bool ResolveUseBilinearScaling(int windowWidth, int windowHeight, float effectiveRenderScale)
+    {
+        if (effectiveRenderScale >= 0.999f) return true;
+        long outputPixels = (long)Math.Max(0, windowWidth) * Math.Max(0, windowHeight);
+        return outputPixels >= LargeOutputBilinearCutoffPixels;
     }
 
     public static DisplaySettings CreateDefault() => new();
@@ -357,4 +373,141 @@ public sealed record DisplaySettings(
             AntiAliasing = antiAliasing
         };
     }
+
+    public static BenchmarkRenderOverrides ParseBenchmarkOverrides(string[]? args)
+    {
+        if (args is null || args.Length == 0) return new BenchmarkRenderOverrides();
+
+        float? renderScaleOverride = null;
+        string? scalingMode = null;
+        string? ssaoMode = null;
+        int? shadowSize = null;
+        string? shadowFilter = null;
+        bool? glowEnabled = null;
+        string? terrainShader = null;
+        float warmupSeconds = 0f;
+        float benchmarkSeconds = 0f;
+        int? screenIndex = null;
+        bool benchmarkPan = false;
+
+        static bool TryParseArgValue(string[] all, ref int idx, string prefixEq, string exactName, out string value)
+        {
+            string cur = all[idx];
+            if (cur.Equals(exactName, StringComparison.OrdinalIgnoreCase) && idx + 1 < all.Length)
+            {
+                value = all[++idx];
+                return true;
+            }
+            if (cur.StartsWith(prefixEq, StringComparison.OrdinalIgnoreCase))
+            {
+                value = cur[prefixEq.Length..];
+                return true;
+            }
+            value = string.Empty;
+            return false;
+        }
+
+        const RenderScalePreset UnmatchedPreset = (RenderScalePreset)255;
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            string arg = args[i];
+            if (TryParseArgValue(args, ref i, "--render-scale=", "--render-scale", out string rsVal))
+            {
+                if (ParseRenderScale(rsVal, UnmatchedPreset) != UnmatchedPreset)
+                {
+                    // Presets (including auto, 50, 75, 85, 100) clear any prior numeric override so last CLI arg wins
+                    renderScaleOverride = null;
+                }
+                else if (float.TryParse(rsVal, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float f) &&
+                         f >= MinDiagnosticRenderScale && f <= MaxAutoRenderScale)
+                {
+                    renderScaleOverride = f;
+                }
+            }
+            else if (TryParseArgValue(args, ref i, "--scaling-mode=", "--scaling-mode", out string smVal))
+            {
+                string norm = smVal.Trim().ToLowerInvariant();
+                if (norm is "fsr" or "fsr2" or "bilinear") scalingMode = norm;
+                else if (norm == "auto") scalingMode = null;
+            }
+            else if (TryParseArgValue(args, ref i, "--ssao=", "--ssao", out string ssaoVal))
+            {
+                string norm = ssaoVal.Trim().ToLowerInvariant();
+                if (norm is "off" or "half" or "full") ssaoMode = norm;
+            }
+            else if (TryParseArgValue(args, ref i, "--shadow-size=", "--shadow-size", out string szVal))
+            {
+                if (int.TryParse(szVal, out int sz) && sz >= 512 && sz <= 8192) shadowSize = sz;
+            }
+            else if (TryParseArgValue(args, ref i, "--shadow-filter=", "--shadow-filter", out string sfVal))
+            {
+                string norm = sfVal.Trim().ToLowerInvariant();
+                if (norm is "hard" or "very_low" or "low" or "medium" or "high") shadowFilter = norm;
+            }
+            else if (TryParseArgValue(args, ref i, "--glow=", "--glow", out string gVal))
+            {
+                string norm = gVal.Trim().ToLowerInvariant();
+                if (norm is "on" or "true" or "1") glowEnabled = true;
+                else if (norm is "off" or "false" or "0") glowEnabled = false;
+            }
+            else if (TryParseArgValue(args, ref i, "--terrain-shader=", "--terrain-shader", out string tsVal))
+            {
+                string norm = tsVal.Trim().ToLowerInvariant();
+                if (norm is "burley" or "lambert") terrainShader = norm;
+            }
+            else if (TryParseArgValue(args, ref i, "--warmup-seconds=", "--warmup-seconds", out string wsVal))
+            {
+                if (float.TryParse(wsVal, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float ws) && ws >= 0f)
+                {
+                    warmupSeconds = ws;
+                }
+            }
+            else if (TryParseArgValue(args, ref i, "--benchmark-seconds=", "--benchmark-seconds", out string bsVal))
+            {
+                if (float.TryParse(bsVal, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float bs) && bs >= 0f)
+                {
+                    benchmarkSeconds = bs;
+                }
+            }
+            else if (TryParseArgValue(args, ref i, "--screen=", "--screen", out string scVal))
+            {
+                if (int.TryParse(scVal, out int sc) && sc >= 0) screenIndex = sc;
+            }
+            else if (arg.Equals("--benchmark-pan", StringComparison.OrdinalIgnoreCase))
+            {
+                benchmarkPan = true;
+            }
+        }
+
+        return new BenchmarkRenderOverrides(
+            renderScaleOverride,
+            scalingMode,
+            ssaoMode,
+            shadowSize,
+            shadowFilter,
+            glowEnabled,
+            terrainShader,
+            warmupSeconds,
+            benchmarkSeconds,
+            screenIndex,
+            benchmarkPan);
+    }
 }
+
+/// <summary>
+/// CLI-only diagnostic overrides for reproducible GPU and AA benchmarking.
+/// Not persisted to config or exposed in the UI settings panel.
+/// </summary>
+public sealed record BenchmarkRenderOverrides(
+    float? RenderScaleOverride = null,
+    string? ScalingMode = null,
+    string? SsaoMode = null,
+    int? ShadowSize = null,
+    string? ShadowFilter = null,
+    bool? GlowEnabled = null,
+    string? TerrainShader = null,
+    float WarmupSeconds = 0f,
+    float BenchmarkSeconds = 0f,
+    int? ScreenIndex = null,
+    bool BenchmarkPan = false);

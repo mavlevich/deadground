@@ -29,10 +29,11 @@ internal static class EnvironmentProfileRegressionTests
         CheckShadowZoomTiersAndFlatLayerShadows(scene);
         CheckShadowTargetLifecycleAcrossMapSwitch(scene);
         CheckRenderScaleViewportMapping(scene);
+        CheckBenchmarkLifecycleFixes(scene);
         CheckChunkedTerrainSharedEdgesAndLod(scene);
         CheckRegressionFailurePropagation();
 
-        GD.Print("ENVIRONMENT_PROFILE_REGRESSIONS_OK 17/17 passed: load_profiles validation required_fields apply_light runtime_switching haze_scaling haze_mode hashes_unaffected zero_allocations quality_levels preview_saved_quality road_normals render_budget shadow_zoom_tiers map_switch_lifecycle render_scale_msaa chunked_terrain_lod");
+        GD.Print("ENVIRONMENT_PROFILE_REGRESSIONS_OK 18/18 passed: load_profiles validation required_fields apply_light runtime_switching haze_scaling haze_mode hashes_unaffected zero_allocations quality_levels preview_saved_quality road_normals render_budget shadow_zoom_tiers map_switch_lifecycle render_scale_msaa benchmark_lifecycle chunked_terrain_lod");
     }
 
     private static void Require(bool condition, string message)
@@ -644,39 +645,191 @@ internal static class EnvironmentProfileRegressionTests
         float origScale = vp!.Scaling3DScale;
         Viewport.Scaling3DModeEnum origMode = vp.Scaling3DMode;
         Viewport.Msaa origMsaa = vp.Msaa3D;
+        Viewport.ScreenSpaceAAEnum origScreenAa = vp.ScreenSpaceAA;
+        BenchmarkRenderOverrides? origCli = SettingsPanel.ActiveBenchmarkOverrides;
+        bool hadConfig = Godot.FileAccess.FileExists(SettingsPanel.ConfigPath);
+        string? origConfigText = hadConfig ? Godot.FileAccess.GetFileAsString(SettingsPanel.ConfigPath) : null;
+        Main? main = scene as Main;
+        DisplaySettings origSaved = main is not null ? main.SettingsPanel.SavedConfig : DisplaySettings.CreateDefault();
+        DisplaySettings origEffective = main is not null ? main.SettingsPanel.CurrentSettings : DisplaySettings.CreateDefault();
         try
         {
+            SettingsPanel.ActiveBenchmarkOverrides = null;
             // Verify Native100 is default when DisplaySettings has default or omitted render_scale
             DisplaySettings defaults = DisplaySettings.CreateDefault();
             Require(defaults.RenderScale == RenderScalePreset.Native100, "Default RenderScale must be Native100.");
 
+            // Large/HiDPI output (6880x2880 >= 6M pixels) uses Bilinear scaling + Auto FXAA fallback when MSAA disabled
             (float s6880, int aa6880) = SettingsPanel.ApplyRenderSettingsToViewport(
                 vp, new DisplaySettings(RenderScale: RenderScalePreset.Auto, AntiAliasing: AntiAliasingPreset.Auto), new Vector2I(6880, 2880));
             Require(Mathf.IsEqualApprox(s6880, 0.50f), $"6880x2880 Auto scale expected 0.50, got {s6880}");
-            Require(aa6880 == 0 && vp.Msaa3D == Viewport.Msaa.Disabled, "6880x2880 Auto AA expected Disabled.");
-            Require(vp.Scaling3DMode == Viewport.Scaling3DModeEnum.Fsr, "0.50 scale must use FSR.");
+            Require(aa6880 == 0 && vp.Msaa3D == Viewport.Msaa.Disabled, "6880x2880 Auto AA expected MSAA Disabled.");
+            Require(vp.ScreenSpaceAA == Viewport.ScreenSpaceAAEnum.Fxaa, "6880x2880 Auto AA expected FXAA fallback.");
+            Require(vp.Scaling3DMode == Viewport.Scaling3DModeEnum.Bilinear, "6880x2880 Auto must use Bilinear scaling.");
+
+            // Explicit diagnostic scale 0.43 on 6880x2880 yields 3.66M internal pixels <= 3.7M -> Auto MSAA 2x enabled
+            SettingsPanel.ActiveBenchmarkOverrides = new BenchmarkRenderOverrides(RenderScaleOverride: 0.43f);
+            (float s043, int aa043) = SettingsPanel.ApplyRenderSettingsToViewport(
+                vp, new DisplaySettings(RenderScale: RenderScalePreset.Auto, AntiAliasing: AntiAliasingPreset.Auto), new Vector2I(6880, 2880));
+            Require(MathF.Abs(s043 - 0.43f) < 0.001f, $"CLI override 0.43 expected ~0.43, got {s043}");
+            Require(aa043 == 2 && vp.Msaa3D == Viewport.Msaa.Msaa2X && vp.ScreenSpaceAA == Viewport.ScreenSpaceAAEnum.Disabled,
+                $"6880x2880 @ 0.43 Auto AA expected MSAA 2x without FXAA, got {aa043}x / {vp.ScreenSpaceAA}.");
+            SettingsPanel.ActiveBenchmarkOverrides = null;
 
             (float s2560, int aa2560) = SettingsPanel.ApplyRenderSettingsToViewport(
                 vp, new DisplaySettings(RenderScale: RenderScalePreset.Auto, AntiAliasing: AntiAliasingPreset.Auto), new Vector2I(2560, 1600));
             Require(Mathf.Abs(s2560 - 0.9487f) < 0.01f, $"2560x1600 Auto scale expected ~0.95, got {s2560}");
-            Require(aa2560 == 2 && vp.Msaa3D == Viewport.Msaa.Msaa2X, "2560x1600 Auto AA expected 2x.");
+            Require(aa2560 == 2 && vp.Msaa3D == Viewport.Msaa.Msaa2X && vp.ScreenSpaceAA == Viewport.ScreenSpaceAAEnum.Disabled,
+                "2560x1600 Auto AA expected MSAA 2x without FXAA.");
 
             (float s1440, int aa1440) = SettingsPanel.ApplyRenderSettingsToViewport(
                 vp, new DisplaySettings(RenderScale: RenderScalePreset.Auto, AntiAliasing: AntiAliasingPreset.Auto), new Vector2I(1440, 900));
             Require(Mathf.IsEqualApprox(s1440, 1.0f), $"1440x900 Auto scale expected 1.0, got {s1440}");
-            Require(aa1440 == 2 && vp.Msaa3D == Viewport.Msaa.Msaa2X, "1440x900 Auto AA expected 2x.");
+            Require(aa1440 == 2 && vp.Msaa3D == Viewport.Msaa.Msaa2X && vp.ScreenSpaceAA == Viewport.ScreenSpaceAAEnum.Disabled,
+                "1440x900 Auto AA expected MSAA 2x.");
             Require(vp.Scaling3DMode == Viewport.Scaling3DModeEnum.Bilinear, "1.0 scale must use Bilinear.");
+
+            // Small output (< 6M pixels) below 1.0 scale keeps FSR
+            (float s1080, int aa1080Fxaa) = SettingsPanel.ApplyRenderSettingsToViewport(
+                vp, new DisplaySettings(RenderScale: RenderScalePreset.Scale75, AntiAliasing: AntiAliasingPreset.Fxaa), new Vector2I(1920, 1080));
+            Require(Mathf.IsEqualApprox(s1080, 0.75f), $"1080p 75% expected 0.75, got {s1080}");
+            Require(vp.Scaling3DMode == Viewport.Scaling3DModeEnum.Fsr, "1920x1080 @ 0.75 must keep FSR.");
+            Require(aa1080Fxaa == 0 && vp.Msaa3D == Viewport.Msaa.Disabled && vp.ScreenSpaceAA == Viewport.ScreenSpaceAAEnum.Fxaa,
+                "Explicit FXAA preset must enable ScreenSpaceAA.Fxaa with Msaa.Disabled.");
 
             (float s75, int aa4) = SettingsPanel.ApplyRenderSettingsToViewport(
                 vp, new DisplaySettings(RenderScale: RenderScalePreset.Scale75, AntiAliasing: AntiAliasingPreset.Msaa4x), new Vector2I(1440, 900));
             Require(Mathf.IsEqualApprox(s75, 0.75f), $"75% preset expected 0.75, got {s75}");
-            Require(aa4 == 4 && vp.Msaa3D == Viewport.Msaa.Msaa4X, "4x preset expected Msaa4X.");
+            Require(aa4 == 4 && vp.Msaa3D == Viewport.Msaa.Msaa4X && vp.ScreenSpaceAA == Viewport.ScreenSpaceAAEnum.Disabled,
+                "4x preset expected Msaa4X without FXAA.");
+
+            // Verify Main UI settings interactions: clearing CLI render-scale override + AA cycling + config persistence
+            if (main is not null)
+            {
+                SettingsPanel.ActiveBenchmarkOverrides = new BenchmarkRenderOverrides(RenderScaleOverride: 0.75f);
+                main.SettingsPanel.Initialize(origSaved, origEffective, false, false, false, false, true, false);
+                SettingsPanel.ApplyRenderSettingsToViewport(vp, main.SettingsPanel.CurrentSettings, new Vector2I(1440, 900));
+                Require(Mathf.IsEqualApprox(vp.Scaling3DScale, 0.75f), "CLI 0.75 override must apply before UI edit.");
+
+                main.SettingsPanel.SelectRenderScaleOptionForTest(1); // Native100
+                Require(SettingsPanel.ActiveBenchmarkOverrides?.RenderScaleOverride is null,
+                    "Selecting RenderScale in SettingsPanel must clear active CLI RenderScaleOverride.");
+                Require(main.SettingsPanel.CurrentSettings.RenderScale == RenderScalePreset.Native100 && Mathf.IsEqualApprox(vp.Scaling3DScale, 1.0f),
+                    $"UI Native100 selection must apply 1.0 scale, got {vp.Scaling3DScale}.");
+
+                // Cycle AA presets: Auto -> Off -> FXAA -> 2x -> 4x -> Auto
+                int[] aaCycleIndices = [0, 1, 2, 3, 4, 0];
+                AntiAliasingPreset[] expectedPresets =
+                [
+                    AntiAliasingPreset.Auto,
+                    AntiAliasingPreset.Off,
+                    AntiAliasingPreset.Fxaa,
+                    AntiAliasingPreset.Msaa2x,
+                    AntiAliasingPreset.Msaa4x,
+                    AntiAliasingPreset.Auto
+                ];
+                for (int i = 0; i < aaCycleIndices.Length; i++)
+                {
+                    main.SettingsPanel.SelectAntiAliasingOptionForTest(aaCycleIndices[i]);
+                    Require(main.SettingsPanel.CurrentSettings.AntiAliasing == expectedPresets[i],
+                        $"AA UI index {aaCycleIndices[i]} expected {expectedPresets[i]}, got {main.SettingsPanel.CurrentSettings.AntiAliasing}.");
+                }
+
+                // Verify FXAA persists across SaveConfig -> LoadConfig roundtrip
+                main.SettingsPanel.SelectAntiAliasingOptionForTest(2); // Fxaa
+                DisplaySettings reloaded = SettingsPanel.LoadConfig();
+                Require(reloaded.AntiAliasing == AntiAliasingPreset.Fxaa && reloaded.RenderScale == RenderScalePreset.Native100,
+                    $"Config reload expected Native100/Fxaa, got {reloaded.RenderScale}/{reloaded.AntiAliasing}.");
+            }
         }
         finally
         {
+            SettingsPanel.ActiveBenchmarkOverrides = origCli;
+            if (hadConfig && origConfigText is not null)
+            {
+                using Godot.FileAccess f = Godot.FileAccess.Open(SettingsPanel.ConfigPath, Godot.FileAccess.ModeFlags.Write);
+                f?.StoreString(origConfigText);
+            }
+            else if (!hadConfig && Godot.FileAccess.FileExists(SettingsPanel.ConfigPath))
+            {
+                DirAccess.RemoveAbsolute(ProjectSettings.GlobalizePath(SettingsPanel.ConfigPath));
+            }
+            main?.SettingsPanel.Initialize(origSaved, origEffective, false, false, false, false, false, false);
             vp.Scaling3DScale = origScale;
             vp.Scaling3DMode = origMode;
             vp.Msaa3D = origMsaa;
+            vp.ScreenSpaceAA = origScreenAa;
+        }
+    }
+
+    private static void CheckBenchmarkLifecycleFixes(Node3D scene)
+    {
+        if (scene is not Main main)
+        {
+            return;
+        }
+
+        float origZoom = main.CameraRig.Size;
+        try
+        {
+            // Timed warmup (1.0s) outlasts frame warmup (5 frames): zoomToSize must apply cleanly at time expiry
+            main.ConfigureBenchmarkLifecycleForTest(
+                warmupFrames: 5,
+                warmupSeconds: 1.0f,
+                zoomToSize: 95f,
+                benchmarkSeconds: 2.0f,
+                targetFrames: 0,
+                initialCapacity: 64);
+
+            Require(main.IsBenchmarkInputBlocked, "Benchmark must block player input while active.");
+            for (int f = 0; f < 6; f++)
+            {
+                main.StepBenchmarkLifecycleForTest(0.05f, 50f);
+            }
+            Require(!main.IsBenchmarkWarmupCompleted,
+                "Warmup must remain active after 6 frames (0.30s) when warmupSeconds=1.0.");
+
+            // Complete remaining 0.70s warmup (6 + 14 = 20 steps = 1.00s)
+            for (int f = 0; f < 14; f++)
+            {
+                main.StepBenchmarkLifecycleForTest(0.05f, 50f);
+            }
+            Require(main.IsBenchmarkWarmupCompleted, "Warmup must complete once both frames and seconds reach zero.");
+            Require(MathF.Abs(main.CameraRig.Size - 95f) < 0.01f,
+                $"Scheduled --benchmark-zoom-to=95 must apply on warmup completion even after frame warmup finished early, got {main.CameraRig.Size}.");
+
+            // Preallocated timed benchmark records all 40 samples (with zero overflow) and unlocks input on finish
+            for (int s = 0; s < 39; s++)
+            {
+                main.StepBenchmarkLifecycleForTest(0.05f, 50f);
+                Require(main.IsBenchmarkInputBlocked, $"Timed benchmark ended prematurely at sample {s + 1} (elapsed {(s + 1) * 0.05f:F2}s < 2.0s).");
+            }
+            main.StepBenchmarkLifecycleForTest(0.05f, 50f); // sample #40 -> 2.00s
+            Require(main.BenchmarkSampleCount == 40 && main.BenchmarkStoredSampleCount == 40,
+                $"Preallocated timed benchmark expected 40/40 samples, got {main.BenchmarkStoredSampleCount}/{main.BenchmarkSampleCount}.");
+            Require(!main.IsBenchmarkInputBlocked,
+                "Player input must unlock immediately after benchmark completes without --benchmark-quit.");
+
+            // Even if capacity (16) is exceeded in high-FPS timed runs, total sample count is preserved without early cutoff
+            main.ConfigureBenchmarkLifecycleForTest(
+                warmupFrames: 0,
+                warmupSeconds: 0f,
+                zoomToSize: null,
+                benchmarkSeconds: 1.5f,
+                targetFrames: 0,
+                initialCapacity: 16);
+            main.StepBenchmarkLifecycleForTest(0.05f, 50f); // Complete zero-frame warmup transition
+            for (int s = 0; s < 30; s++)
+            {
+                main.StepBenchmarkLifecycleForTest(0.05f, 50f);
+            }
+            Require(main.BenchmarkSampleCount == 30 && main.BenchmarkStoredSampleCount == 16 && !main.IsBenchmarkInputBlocked,
+                $"Saturated timed benchmark expected 16 stored / 30 total and unlocked input, got {main.BenchmarkStoredSampleCount}/{main.BenchmarkSampleCount}, blocked={main.IsBenchmarkInputBlocked}.");
+        }
+        finally
+        {
+            main.CameraRig.Model.CurrentSize = origZoom;
+            main.CameraRig.Model.SetZoom(origZoom);
         }
     }
 
