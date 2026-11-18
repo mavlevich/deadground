@@ -22,6 +22,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
     private readonly OptionButton _qualityOptions;
     private readonly OptionButton _renderScaleOptions;
     private readonly OptionButton _antiAliasingOptions;
+    private readonly OptionButton _ssaoOptions;
     private readonly Label _statusLabel;
     private DisplaySettings _savedConfig = DisplaySettings.CreateDefault();
     private DisplaySettings _effectiveSettings = DisplaySettings.CreateDefault();
@@ -31,6 +32,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
     private bool _cliOverridesQuality;
     private bool _cliOverridesRenderScale;
     private bool _cliOverridesAntiAliasing;
+    private bool _cliOverridesSsao;
 
     public event Action<DisplaySettings>? SettingsChanged;
 
@@ -139,6 +141,20 @@ internal sealed partial class SettingsPanel : CanvasLayer
         aaRow.AddChild(_antiAliasingOptions);
         stack.AddChild(aaRow);
 
+        // Ambient Occlusion (SSAO) Row
+        HBoxContainer ssaoRow = new();
+        ssaoRow.AddThemeConstantOverride("separation", 12);
+        Label ssaoLabel = new() { Text = "Ambient Occlusion (SSAO):", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        ssaoLabel.AddThemeColorOverride("font_color", new Color("d5ded0"));
+        _ssaoOptions = new OptionButton();
+        _ssaoOptions.AddItem("Auto (Off on HiDPI)", 0);
+        _ssaoOptions.AddItem("Off", 1);
+        _ssaoOptions.AddItem("On", 2);
+        _ssaoOptions.ItemSelected += OnAmbientOcclusionSelected;
+        ssaoRow.AddChild(ssaoLabel);
+        ssaoRow.AddChild(_ssaoOptions);
+        stack.AddChild(ssaoRow);
+
         // VSync Row
         HBoxContainer vsyncRow = new();
         vsyncRow.AddThemeConstantOverride("separation", 12);
@@ -194,7 +210,8 @@ internal sealed partial class SettingsPanel : CanvasLayer
         bool cliOverridesProfile = false,
         bool cliOverridesQuality = false,
         bool cliOverridesRenderScale = false,
-        bool cliOverridesAntiAliasing = false)
+        bool cliOverridesAntiAliasing = false,
+        bool cliOverridesSsao = false)
     {
         _savedConfig = savedConfig.WithSanitizedValues();
         _effectiveSettings = effectiveSettings.WithSanitizedValues();
@@ -204,11 +221,12 @@ internal sealed partial class SettingsPanel : CanvasLayer
         _cliOverridesQuality = cliOverridesQuality;
         _cliOverridesRenderScale = cliOverridesRenderScale;
         _cliOverridesAntiAliasing = cliOverridesAntiAliasing;
+        _cliOverridesSsao = cliOverridesSsao;
 
         ApplyToEngine(_effectiveSettings);
         UpdateUiFromSettings();
 
-        if (cliOverridesVsync || cliOverridesMaxFps || cliOverridesProfile || cliOverridesQuality || cliOverridesRenderScale || cliOverridesAntiAliasing)
+        if (cliOverridesVsync || cliOverridesMaxFps || cliOverridesProfile || cliOverridesQuality || cliOverridesRenderScale || cliOverridesAntiAliasing || cliOverridesSsao)
         {
             _statusLabel.Text = "Some settings are overridden via command-line arguments";
             _statusLabel.AddThemeColorOverride("font_color", new Color("edc76b"));
@@ -216,7 +234,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
     }
 
     public void Initialize(DisplaySettings initialSettings, bool wasOverriddenByCli = false) =>
-        Initialize(initialSettings, initialSettings, wasOverriddenByCli, wasOverriddenByCli, wasOverriddenByCli, wasOverriddenByCli, wasOverriddenByCli, wasOverriddenByCli);
+        Initialize(initialSettings, initialSettings, wasOverriddenByCli, wasOverriddenByCli, wasOverriddenByCli, wasOverriddenByCli, wasOverriddenByCli, wasOverriddenByCli, wasOverriddenByCli);
 
     public void Open()
     {
@@ -266,6 +284,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
             AntiAliasingPreset.Msaa4x => 4,
             _ => 0
         };
+        _ssaoOptions.Selected = (int)_effectiveSettings.AmbientOcclusion;
     }
 
     private void OnProfileSelected(long index)
@@ -295,6 +314,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
 
     internal void SelectRenderScaleOptionForTest(int index) => OnRenderScaleSelected(index);
     internal void SelectAntiAliasingOptionForTest(int index) => OnAntiAliasingSelected(index);
+    internal void SelectAmbientOcclusionOptionForTest(int index) => OnAmbientOcclusionSelected(index);
 
     private void OnRenderScaleSelected(long index)
     {
@@ -334,6 +354,25 @@ internal sealed partial class SettingsPanel : CanvasLayer
             "Anti-aliasing applied and saved");
     }
 
+    private void OnAmbientOcclusionSelected(long index)
+    {
+        AmbientOcclusionPreset ssao = index switch
+        {
+            1 => AmbientOcclusionPreset.Off,
+            2 => AmbientOcclusionPreset.On,
+            _ => AmbientOcclusionPreset.Auto
+        };
+        _cliOverridesSsao = false;
+        if (ActiveBenchmarkOverrides is { SsaoMode: not null } activeCli)
+        {
+            ActiveBenchmarkOverrides = activeCli with { SsaoMode = null };
+        }
+        CommitSettingEdit(
+            _savedConfig with { AmbientOcclusion = ssao },
+            _effectiveSettings with { AmbientOcclusion = ssao },
+            "Ambient occlusion applied and saved");
+    }
+
     private void OnVsyncToggled(bool toggled)
     {
         _cliOverridesVsync = false;
@@ -369,7 +408,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
         _effectiveSettings = effective;
         SaveConfig(_savedConfig);
         SettingsChanged?.Invoke(_effectiveSettings);
-        bool hasAnyOverride = _cliOverridesVsync || _cliOverridesMaxFps || _cliOverridesProfile || _cliOverridesQuality || _cliOverridesRenderScale || _cliOverridesAntiAliasing;
+        bool hasAnyOverride = _cliOverridesVsync || _cliOverridesMaxFps || _cliOverridesProfile || _cliOverridesQuality || _cliOverridesRenderScale || _cliOverridesAntiAliasing || _cliOverridesSsao;
         _statusLabel.Text = hasAnyOverride ? $"{message} (other CLI overrides active)" : message;
         _statusLabel.AddThemeColorOverride("font_color", hasAnyOverride ? new Color("edc76b") : new Color("889988"));
     }
@@ -536,6 +575,8 @@ internal sealed partial class SettingsPanel : CanvasLayer
             RenderScalePreset renderScale = DisplaySettings.ParseRenderScale(renderScaleStr, RenderScalePreset.Native100);
             string msaaStr = (string)config.GetValue("display", "msaa", "Auto");
             AntiAliasingPreset antiAliasing = DisplaySettings.ParseAntiAliasing(msaaStr, AntiAliasingPreset.Auto);
+            string ssaoStr = (string)config.GetValue("display", "ssao", "Auto");
+            AmbientOcclusionPreset ambientOcclusion = DisplaySettings.ParseAmbientOcclusion(ssaoStr, AmbientOcclusionPreset.Auto);
             return new DisplaySettings(
                 vsync,
                 DisplaySettings.SanitizeMaxFps(maxFps),
@@ -543,7 +584,8 @@ internal sealed partial class SettingsPanel : CanvasLayer
                 DisplaySettings.SanitizeProfile(profile),
                 quality,
                 RenderScale: renderScale,
-                AntiAliasing: antiAliasing);
+                AntiAliasing: antiAliasing,
+                AmbientOcclusion: ambientOcclusion);
         }
         catch
         {
@@ -562,6 +604,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
             config.SetValue("display", "environment_quality", settings.Quality.ToString());
             config.SetValue("display", "render_scale", settings.RenderScale.ToString());
             config.SetValue("display", "msaa", settings.AntiAliasing.ToString());
+            config.SetValue("display", "ssao", settings.AmbientOcclusion.ToString());
             config.Save(ConfigPath);
         }
         catch (Exception ex)

@@ -22,6 +22,8 @@ public sealed partial class EnvironmentView : Node3D
     private readonly ProceduralSkyMaterial _skyMaterial;
     private EnvironmentProfile _activeProfile = null!;
     private EnvironmentQuality _activeQuality = EnvironmentQuality.High;
+    private AmbientOcclusionPreset _ambientOcclusionPreset = AmbientOcclusionPreset.Auto;
+    private Vector2I _outputPixelSize = new(1440, 900);
     private float _lastCameraSize = -999f;
     private float _lastCameraPitch = -999f;
     private ShadowZoomTier? _activeShadowTier;
@@ -186,7 +188,6 @@ public sealed partial class EnvironmentView : Node3D
             case EnvironmentQuality.Low:
                 _sun.DirectionalShadowMode = DirectionalLight3D.ShadowMode.Orthogonal;
                 _sun.DirectionalShadowMaxDistance = 1200f;
-                env.SsaoEnabled = false;
                 env.GlowEnabled = false;
                 env.FogAerialPerspective = 0f;
                 break;
@@ -194,7 +195,6 @@ public sealed partial class EnvironmentView : Node3D
             case EnvironmentQuality.Medium:
                 _sun.DirectionalShadowMode = DirectionalLight3D.ShadowMode.Parallel2Splits;
                 _sun.DirectionalShadowMaxDistance = 1600f;
-                env.SsaoEnabled = _activeProfile.Ssao?.Enabled ?? false;
                 env.GlowEnabled = _activeProfile.Glow?.Enabled ?? false;
                 env.FogAerialPerspective = _activeProfile.Haze.AerialPerspective * 0.75f;
                 break;
@@ -203,16 +203,41 @@ public sealed partial class EnvironmentView : Node3D
             default:
                 _sun.DirectionalShadowMode = DirectionalLight3D.ShadowMode.Parallel4Splits;
                 _sun.DirectionalShadowMaxDistance = _activeProfile.Sun.ShadowMaxDistance;
-                env.SsaoEnabled = _activeProfile.Ssao?.Enabled ?? false;
                 env.GlowEnabled = _activeProfile.Glow?.Enabled ?? false;
                 env.FogAerialPerspective = _activeProfile.Haze.AerialPerspective;
                 break;
         }
 
+        env.SsaoEnabled = DisplaySettings.ResolveSsaoEnabled(
+            _ambientOcclusionPreset,
+            quality,
+            _activeProfile.Ssao?.Enabled ?? false,
+            _outputPixelSize.X,
+            _outputPixelSize.Y);
+
         _shadowTierApplied = false;
         if (_activeShadowTier.HasValue)
         {
             ApplyShadowTier(_activeShadowTier.Value, GetAliveTarget(_lastShadowTarget), allowFade: false);
+        }
+        ApplyBenchmarkOverridesToEngine();
+    }
+
+    public void SetDisplayOutputAndSsao(AmbientOcclusionPreset preset, Vector2I outputPixelSize)
+    {
+        _ambientOcclusionPreset = preset;
+        if (outputPixelSize is { X: > 0, Y: > 0 })
+        {
+            _outputPixelSize = outputPixelSize;
+        }
+        if (_activeProfile is not null)
+        {
+            _worldEnvironment.Environment.SsaoEnabled = DisplaySettings.ResolveSsaoEnabled(
+                _ambientOcclusionPreset,
+                _activeQuality,
+                _activeProfile.Ssao?.Enabled ?? false,
+                _outputPixelSize.X,
+                _outputPixelSize.Y);
         }
         ApplyBenchmarkOverridesToEngine();
     }

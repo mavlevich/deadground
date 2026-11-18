@@ -519,6 +519,92 @@ internal static class EnvironmentProfileRegressionTests
                         $"Water '{waterChild.Name}' must have CastShadow=Off.");
                 }
             }
+            Require(mapView.TerrainShadowRoot.GetChildCount() > 0, "Riparian Ustye chunks must create decoupled coarse shadow proxies.");
+            foreach (Node proxyChild in mapView.TerrainShadowRoot.GetChildren())
+            {
+                if (proxyChild is MeshInstance3D proxyMi)
+                {
+                    Require(proxyMi.CastShadow == GeometryInstance3D.ShadowCastingSetting.ShadowsOnly && proxyMi.Visible == mapView.TerrainShadowsEnabled,
+                        $"Ustye shadow proxy '{proxyMi.Name}' must cast ShadowsOnly with Visible={mapView.TerrainShadowsEnabled} initially.");
+                }
+            }
+
+            // Conservative drop check: every visible vertex in every riparian chunk must stay above or on its proxy surface (no false self-shadow protrusions)
+            const int chunkCols = 10;
+            const int chunkRows = 10;
+            const int proxyGridSize = 21;
+            const float proxyCellSize = 25f;
+            bool verifiedCounterexample = false;
+            for (int cz = 0; cz < chunkRows; cz++)
+            {
+                for (int cx = 0; cx < chunkCols; cx++)
+                {
+                    if (mapView.TerrainShadowRoot.FindChild($"TerrainShadowProxy_{cx}_{cz}", false, false) is not MeshInstance3D proxyMi)
+                    {
+                        continue;
+                    }
+
+                    MeshInstance3D? chunkMi = mapView.TerrainRoot.FindChild($"TerrainChunk_{cx}_{cz}", false, false) as MeshInstance3D;
+                    Require(chunkMi is not null, $"Missing visible chunk TerrainChunk_{cx}_{cz} for riparian shadow proxy.");
+                    Vector3[] proxyVerts = ((ArrayMesh)proxyMi.Mesh).SurfaceGetArrays(0)[(int)Mesh.ArrayType.Vertex].AsVector3Array();
+                    Vector3[] fineVerts = ((ArrayMesh)chunkMi!.Mesh).SurfaceGetArrays(0)[(int)Mesh.ArrayType.Vertex].AsVector3Array();
+                    float originX = proxyVerts[0].X;
+                    float originZ = proxyVerts[0].Z;
+
+                    foreach (Vector3 v in fineVerts)
+                    {
+                        float fx = (v.X - originX) / proxyCellSize;
+                        float fz = (v.Z - originZ) / proxyCellSize;
+                        int ix = Math.Clamp((int)fx, 0, proxyGridSize - 2);
+                        int iz = Math.Clamp((int)fz, 0, proxyGridSize - 2);
+                        float u = Math.Clamp(fx - ix, 0f, 1f);
+                        float w = Math.Clamp(fz - iz, 0f, 1f);
+
+                        int a = iz * proxyGridSize + ix;
+                        int b = a + 1;
+                        int c = (iz + 1) * proxyGridSize + ix;
+                        int d = c + 1;
+                        float proxyY = u + w <= 1f
+                            ? proxyVerts[a].Y + u * (proxyVerts[b].Y - proxyVerts[a].Y) + w * (proxyVerts[c].Y - proxyVerts[a].Y)
+                            : (1f - w) * proxyVerts[b].Y + (1f - u) * proxyVerts[c].Y + (u + w - 1f) * proxyVerts[d].Y;
+
+                        Require(proxyY <= v.Y + 0.001f,
+                            $"Riparian proxy TerrainShadowProxy_{cx}_{cz} protrudes above terrain at ({v.X:F1}, {v.Z:F1}): ground={v.Y:F3}m, proxy={proxyY:F3}m.");
+
+                        if (MathF.Abs(v.X - 2312.5f) < 0.05f && MathF.Abs(v.Z - 1450f) < 0.05f)
+                        {
+                            verifiedCounterexample = true;
+                            Require(v.Y < 2.5f && proxyY <= v.Y + 0.001f,
+                                $"Counterexample (2312.5, 1450) must drop proxy below riverbank ground (ground={v.Y:F3}m, proxy={proxyY:F3}m).");
+                        }
+                    }
+
+                    // Reconcile check: shared edges with neighboring proxies must match without seams
+                    if (mapView.TerrainShadowRoot.FindChild($"TerrainShadowProxy_{cx + 1}_{cz}", false, false) is MeshInstance3D rightProxy)
+                    {
+                        Vector3[] rightVerts = ((ArrayMesh)rightProxy.Mesh).SurfaceGetArrays(0)[(int)Mesh.ArrayType.Vertex].AsVector3Array();
+                        for (int r = 0; r < proxyGridSize; r++)
+                        {
+                            float yL = proxyVerts[r * proxyGridSize + (proxyGridSize - 1)].Y;
+                            float yR = rightVerts[r * proxyGridSize].Y;
+                            Require(MathF.Abs(yL - yR) < 0.001f,
+                                $"Horizontal proxy seam mismatch between ({cx},{cz}) and ({cx + 1},{cz}) row {r}: {yL:F3} vs {yR:F3}.");
+                        }
+                    }
+                    if (mapView.TerrainShadowRoot.FindChild($"TerrainShadowProxy_{cx}_{cz + 1}", false, false) is MeshInstance3D bottomProxy)
+                    {
+                        Vector3[] bottomVerts = ((ArrayMesh)bottomProxy.Mesh).SurfaceGetArrays(0)[(int)Mesh.ArrayType.Vertex].AsVector3Array();
+                        for (int col = 0; col < proxyGridSize; col++)
+                        {
+                            float yT = proxyVerts[(proxyGridSize - 1) * proxyGridSize + col].Y;
+                            float yB = bottomVerts[col].Y;
+                            Require(MathF.Abs(yT - yB) < 0.001f,
+                                $"Vertical proxy seam mismatch between ({cx},{cz}) and ({cx},{cz + 1}) col {col}: {yT:F3} vs {yB:F3}.");
+                        }
+                    }
+                }
+            }
+            Require(verifiedCounterexample, "Expected riverbank regression vertex (2312.5, 1450) in riparian Ustye terrain chunks.");
             foreach (Node roadChild in mapView.RoadsRoot.GetChildren())
             {
                 if (roadChild is MeshInstance3D roadMi && roadMi.Name.ToString().StartsWith("Road_", StringComparison.Ordinal))
@@ -589,6 +675,29 @@ internal static class EnvironmentProfileRegressionTests
             Require(!envView.Sun.ShadowEnabled, "Wide tier must disable directional shadows once fade finishes.");
             Require(!mapView.VegetationShadowsEnabled, "Wide tier must keep vegetation shadows disabled.");
             Require(!mapView.TerrainShadowsEnabled, "Wide tier must disable terrain shadows.");
+            foreach (Node proxyChild in mapView.TerrainShadowRoot.GetChildren())
+            {
+                if (proxyChild is MeshInstance3D proxyMi)
+                {
+                    Require(proxyMi.CastShadow == GeometryInstance3D.ShadowCastingSetting.ShadowsOnly && !proxyMi.Visible,
+                        $"Wide tier must hide Ustye shadow proxy '{proxyMi.Name}' while keeping CastShadow=ShadowsOnly.");
+                }
+            }
+
+            // Transition Wide -> Close must restore proxy visibility while keeping CastShadow=ShadowsOnly
+            Require(envView.UpdateShadowTierForCamera(35f, mapView), "Close tier transition from Wide must apply.");
+            envView.UpdateShadowFade(0.35);
+            Require(envView.Sun.ShadowEnabled, "Close tier return must re-enable directional shadows.");
+            Require(mapView.VegetationShadowsEnabled, "Close tier return must re-enable vegetation shadows.");
+            Require(mapView.TerrainShadowsEnabled, "Close tier return must re-enable terrain shadows.");
+            foreach (Node proxyChild in mapView.TerrainShadowRoot.GetChildren())
+            {
+                if (proxyChild is MeshInstance3D proxyMi)
+                {
+                    Require(proxyMi.CastShadow == GeometryInstance3D.ShadowCastingSetting.ShadowsOnly && proxyMi.Visible,
+                        $"Returning to Close tier must show Ustye shadow proxy '{proxyMi.Name}' with CastShadow=ShadowsOnly.");
+                }
+            }
         }
         finally
         {
@@ -659,13 +768,20 @@ internal static class EnvironmentProfileRegressionTests
             DisplaySettings defaults = DisplaySettings.CreateDefault();
             Require(defaults.RenderScale == RenderScalePreset.Native100, "Default RenderScale must be Native100.");
 
-            // Large/HiDPI output (6880x2880 >= 6M pixels) uses Bilinear scaling + Auto FXAA fallback when MSAA disabled
+            // Large/HiDPI output (6880x2880 >= 6M pixels) computes ~0.431 Auto scale (3.685M <= 3.7M -> MSAA 2x) with Bilinear upscaling
             (float s6880, int aa6880) = SettingsPanel.ApplyRenderSettingsToViewport(
                 vp, new DisplaySettings(RenderScale: RenderScalePreset.Auto, AntiAliasing: AntiAliasingPreset.Auto), new Vector2I(6880, 2880));
-            Require(Mathf.IsEqualApprox(s6880, 0.50f), $"6880x2880 Auto scale expected 0.50, got {s6880}");
-            Require(aa6880 == 0 && vp.Msaa3D == Viewport.Msaa.Disabled, "6880x2880 Auto AA expected MSAA Disabled.");
-            Require(vp.ScreenSpaceAA == Viewport.ScreenSpaceAAEnum.Fxaa, "6880x2880 Auto AA expected FXAA fallback.");
+            Require(MathF.Abs(s6880 - 0.4313f) < 0.002f, $"6880x2880 Auto scale expected ~0.431, got {s6880}");
+            Require(aa6880 == 2 && vp.Msaa3D == Viewport.Msaa.Msaa2X && vp.ScreenSpaceAA == Viewport.ScreenSpaceAAEnum.Disabled,
+                "6880x2880 Auto (~3.685M <= 3.7M) expected MSAA 2x without FXAA.");
             Require(vp.Scaling3DMode == Viewport.Scaling3DModeEnum.Bilinear, "6880x2880 Auto must use Bilinear scaling.");
+
+            // Explicit Scale50 on 6880x2880 yields 4.95M > 3.7M internal pixels -> Auto FXAA fallback
+            (float s6880Half, int aa6880Half) = SettingsPanel.ApplyRenderSettingsToViewport(
+                vp, new DisplaySettings(RenderScale: RenderScalePreset.Scale50, AntiAliasing: AntiAliasingPreset.Auto), new Vector2I(6880, 2880));
+            Require(Mathf.IsEqualApprox(s6880Half, 0.50f), $"6880x2880 50% scale expected 0.50, got {s6880Half}");
+            Require(aa6880Half == 0 && vp.Msaa3D == Viewport.Msaa.Disabled && vp.ScreenSpaceAA == Viewport.ScreenSpaceAAEnum.Fxaa,
+                "6880x2880 @ 0.50 Auto AA expected FXAA fallback.");
 
             // Explicit diagnostic scale 0.43 on 6880x2880 yields 3.66M internal pixels <= 3.7M -> Auto MSAA 2x enabled
             SettingsPanel.ActiveBenchmarkOverrides = new BenchmarkRenderOverrides(RenderScaleOverride: 0.43f);
@@ -735,16 +851,71 @@ internal static class EnvironmentProfileRegressionTests
                         $"AA UI index {aaCycleIndices[i]} expected {expectedPresets[i]}, got {main.SettingsPanel.CurrentSettings.AntiAliasing}.");
                 }
 
-                // Verify FXAA persists across SaveConfig -> LoadConfig roundtrip
+                // Verify FXAA and AmbientOcclusion persist across SaveConfig -> LoadConfig roundtrip
                 main.SettingsPanel.SelectAntiAliasingOptionForTest(2); // Fxaa
+                main.SettingsPanel.SelectAmbientOcclusionOptionForTest(1); // Off
                 DisplaySettings reloaded = SettingsPanel.LoadConfig();
-                Require(reloaded.AntiAliasing == AntiAliasingPreset.Fxaa && reloaded.RenderScale == RenderScalePreset.Native100,
-                    $"Config reload expected Native100/Fxaa, got {reloaded.RenderScale}/{reloaded.AntiAliasing}.");
+                Require(reloaded.AntiAliasing == AntiAliasingPreset.Fxaa &&
+                        reloaded.RenderScale == RenderScalePreset.Native100 &&
+                        reloaded.AmbientOcclusion == AmbientOcclusionPreset.Off,
+                    $"Config reload expected Native100/Fxaa/Off, got {reloaded.RenderScale}/{reloaded.AntiAliasing}/{reloaded.AmbientOcclusion}.");
+
+                // Selecting SSAO in UI must clear CLI SsaoMode override on BOTH SettingsPanel and EnvironmentView so actual SsaoEnabled toggles cleanly
+                DisplaySettings highBase = origEffective with { Quality = EnvironmentQuality.High };
+                main.SettingsPanel.Initialize(origSaved, highBase, false, false, false, false, false, false, true);
+
+                BenchmarkRenderOverrides ssaoOffCli = new(SsaoMode: "off");
+                SettingsPanel.ActiveBenchmarkOverrides = ssaoOffCli;
+                main.EnvironmentView.ApplyBenchmarkOverrides(ssaoOffCli);
+                main.EnvironmentView.SetDisplayOutputAndSsao(AmbientOcclusionPreset.Auto, new Vector2I(1440, 900));
+                main.EnvironmentView.ApplyProfile(EnvironmentProfile.Load(highBase.EnvironmentProfile), EnvironmentQuality.High);
+                Require(!main.EnvironmentView.GodotEnvironment.SsaoEnabled,
+                    "CLI --ssao off must disable SsaoEnabled before UI edit.");
+
+                main.SettingsPanel.SelectAmbientOcclusionOptionForTest(2); // On
+                Require(SettingsPanel.ActiveBenchmarkOverrides?.SsaoMode is null,
+                    "Selecting Ambient Occlusion On in SettingsPanel must clear active CLI SsaoMode override.");
+                Require(main.EnvironmentView.GodotEnvironment.SsaoEnabled,
+                    "Selecting Ambient Occlusion On after --ssao off must immediately enable GodotEnvironment.SsaoEnabled.");
+                main.EnvironmentView.SetDisplayOutputAndSsao(main.SettingsPanel.CurrentSettings.AmbientOcclusion, new Vector2I(1440, 900));
+                Require(main.EnvironmentView.GodotEnvironment.SsaoEnabled,
+                    "Window/DPI refresh after selecting On must keep GodotEnvironment.SsaoEnabled enabled.");
+
+                BenchmarkRenderOverrides ssaoHalfCli = new(SsaoMode: "half");
+                SettingsPanel.ActiveBenchmarkOverrides = ssaoHalfCli;
+                main.EnvironmentView.ApplyBenchmarkOverrides(ssaoHalfCli);
+                main.EnvironmentView.ApplyProfile(EnvironmentProfile.Load(highBase.EnvironmentProfile), EnvironmentQuality.High);
+                Require(main.EnvironmentView.GodotEnvironment.SsaoEnabled,
+                    "CLI --ssao half must enable SsaoEnabled before UI edit.");
+
+                main.SettingsPanel.SelectAmbientOcclusionOptionForTest(1); // Off
+                Require(SettingsPanel.ActiveBenchmarkOverrides?.SsaoMode is null,
+                    "Selecting Ambient Occlusion Off in SettingsPanel must clear active CLI SsaoMode override.");
+                Require(!main.EnvironmentView.GodotEnvironment.SsaoEnabled,
+                    "Selecting Ambient Occlusion Off after --ssao half must immediately disable GodotEnvironment.SsaoEnabled.");
+                main.EnvironmentView.SetDisplayOutputAndSsao(main.SettingsPanel.CurrentSettings.AmbientOcclusion, new Vector2I(1440, 900));
+                Require(!main.EnvironmentView.GodotEnvironment.SsaoEnabled,
+                    "Window/DPI refresh after selecting Off must keep GodotEnvironment.SsaoEnabled disabled.");
+
+                // Auto SSAO policy disables screen-space SSAO on >= 4.5M outputs and re-enables on < 4.5M outputs
+                main.SettingsPanel.SelectAmbientOcclusionOptionForTest(0); // Auto
+                main.EnvironmentView.SetDisplayOutputAndSsao(AmbientOcclusionPreset.Auto, new Vector2I(3360, 2100));
+                Require(!main.EnvironmentView.GodotEnvironment.SsaoEnabled,
+                    "EnvironmentView Auto SSAO must disable screen-space SSAO on >= 4.5M HiDPI outputs.");
+                main.EnvironmentView.SetDisplayOutputAndSsao(AmbientOcclusionPreset.Auto, new Vector2I(1440, 900));
+                Require(main.EnvironmentView.GodotEnvironment.SsaoEnabled || main.SettingsPanel.CurrentSettings.Quality == EnvironmentQuality.Low,
+                    "EnvironmentView Auto SSAO must re-enable SSAO on standard < 4.5M outputs.");
             }
         }
         finally
         {
             SettingsPanel.ActiveBenchmarkOverrides = origCli;
+            if (main is not null)
+            {
+                main.EnvironmentView.ApplyBenchmarkOverrides(origCli);
+                main.EnvironmentView.SetDisplayOutputAndSsao(origEffective.AmbientOcclusion, SettingsPanel.ResolveWindowPixelSize(vp));
+                main.EnvironmentView.ApplyProfile(EnvironmentProfile.Load(origEffective.EnvironmentProfile), origEffective.Quality);
+            }
             if (hadConfig && origConfigText is not null)
             {
                 using Godot.FileAccess f = Godot.FileAccess.Open(SettingsPanel.ConfigPath, Godot.FileAccess.ModeFlags.Write);

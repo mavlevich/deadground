@@ -1213,10 +1213,12 @@ Planned controls (client only unless a section is named):
 ### 18.2 Display settings and frame pacing
 
 - Anti-aliasing defaults to `Auto` (`2x` MSAA at or below ~3.7M internal 3D pixels, screen-space `FXAA` fallback above ~3.7M), with explicit `Off`, `FXAA`, `2x`, and `4x` overrides.
-- 3D Render Scale defaults to `100%` (`Native100`), with optional `Auto` pixel-budget scaling (`clamp(sqrt(3,686,400 / windowPixels), 0.5, 1.0)`), `85%`, `75%`, and `50%` modes (`Bilinear` scaling for large/HiDPI output buffers `>= 6M` output pixels or `1.0` scale, `FSR` for smaller `< 1.0` outputs); 2D HUD, minimap, and role badges stay at native resolution.
+- Ambient occlusion (SSAO) defaults to `Auto` (enabled on `< 4.5M` output windows when profile SSAO is enabled and quality is above `Low`; disabled automatically on `>= 4.5M` UWQHD/HiDPI output buffers), with explicit `Off` and `On` overrides.
+- Terrain, road, foliage, and matte structure surfaces default to `diffuse_lambert` without specular highlights.
+- 3D Render Scale defaults to `100%` (`Native100`), with optional `Auto` pixel-budget scaling (`clamp(sqrt(3,686,400 / windowPixels), 0.35, 1.0)`), `85%`, `75%`, and `50%` modes (`Bilinear` scaling for large/HiDPI output buffers `>= 4.5M` output pixels or `1.0` scale, `FSR` for smaller `< 1.0` outputs); 2D HUD, minimap, and role badges stay at native resolution.
 - VSync toggle (On/Off) and Max FPS cap (0 = Unlimited, 30, 60, 120, 144, 165, 240 FPS).
 - Display settings persisted to `user://display_settings.cfg`.
-- Command line overrides: `--vsync <on|off>`, `--max-fps <fps>`, `--render-scale <auto|100|85|75|50>`, `--msaa <auto|off|fxaa|2x|4x>` (aliases `--anti-aliasing`, `--aa`), `--fullscreen`, `--benchmark-frames <N>`, `--benchmark-seconds <S>`.
+- Command line overrides: `--vsync <on|off>`, `--max-fps <fps>`, `--render-scale <auto|100|85|75|50>`, `--msaa <auto|off|fxaa|2x|4x>` (aliases `--anti-aliasing`, `--aa`), `--ssao <auto|off|on|half|full>`, `--fullscreen`, `--benchmark-frames <N>`, `--benchmark-seconds <S>`.
 - In-game settings overlay panel (F10 / O / HUD button), with Escape key closing the panel first before clearing unit selections.
 - Unfocused window throttling to 30 FPS, restoring saved settings when window focus returns.
 - Clamped delta (max 0.1 s) on window focus return and long frame hitches to prevent camera teleportation.

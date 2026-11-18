@@ -107,7 +107,7 @@ void fragment() {
     // Units swept in the last completed cycle; stationary units are not counted.
     internal int SweepsInLastCycle { get; private set; }
 
-    public FogOfWarView(HeightMap map, StaticGeometry? geometry = null, float? customCellSize = null, bool useLambertDiffuse = false)
+    public FogOfWarView(HeightMap map, StaticGeometry? geometry = null, float? customCellSize = null, bool useLambertDiffuse = true)
     {
         _map = map;
         _geometry = geometry;

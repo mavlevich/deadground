@@ -1,5 +1,6 @@
 using System.IO;
 using DeadGround.Rules.Ops;
+using DeadGround.Sandbox;
 using Godot;
 using NumericsVector2 = System.Numerics.Vector2;
 
@@ -751,17 +752,29 @@ public static class UstyeMapPreviewRegressionTests
     {
         Window root = preview.GetWindow();
         Require(root is not null, "UstyeMapPreview must have a root Window.");
+        EnvironmentView? envView = preview.EnvironmentView;
+        Require(envView is not null, "UstyeMapPreview must expose EnvironmentView.");
         Vector2I origSize = root!.Size;
         Vector2I origContentSize = root.ContentScaleSize;
         Window.ContentScaleAspectEnum origAspect = root.ContentScaleAspect;
         float origScale = root.Scaling3DScale;
         Viewport.Msaa origMsaa = root.Msaa3D;
         Viewport.ScreenSpaceAAEnum origScreenAa = root.ScreenSpaceAA;
+        DisplaySettings origDisplaySettings = preview.ActiveDisplaySettings;
+        BenchmarkRenderOverrides? origCli = SettingsPanel.ActiveBenchmarkOverrides;
         try
         {
-            DeadGround.Sandbox.DisplaySettings autoSettings = new(
-                RenderScale: DeadGround.Sandbox.RenderScalePreset.Auto,
-                AntiAliasing: DeadGround.Sandbox.AntiAliasingPreset.Auto);
+            DisplaySettings autoSettings = new(
+                RenderScale: RenderScalePreset.Auto,
+                AntiAliasing: AntiAliasingPreset.Auto,
+                AmbientOcclusion: AmbientOcclusionPreset.Auto,
+                Quality: EnvironmentQuality.High,
+                EnvironmentProfile: origDisplaySettings.EnvironmentProfile);
+
+            preview.ActiveDisplaySettings = autoSettings;
+            SettingsPanel.ActiveBenchmarkOverrides = null;
+            envView!.ApplyBenchmarkOverrides(null);
+            envView.ApplyProfile(EnvironmentProfile.Load(autoSettings.EnvironmentProfile), EnvironmentQuality.High);
 
             // Applying window policy at 5120x1440 (32:9) must cap viewport at 21:9 (Keep) and use 3442x1440 active pixels
             root.Size = new Vector2I(5120, 1440);
@@ -771,20 +784,57 @@ public static class UstyeMapPreviewRegressionTests
             Require(MathF.Abs(cappedScale - 0.862f) < 0.01f && cappedMsaa == 2,
                 $"UstyeMapPreview capped 32:9 Auto expected ~0.862 scale and 2x MSAA, got {cappedScale:F3} and {cappedMsaa}x.");
 
-            // Resizing to 5120x1440 via preview handler must maintain the cap cleanly
+            // Resizing to 5120x1440 (capped 3442x1440 = 4.96M >= 4.5M) via preview handler must maintain cap and disable Auto SSAO
             preview.ApplyPreviewWindowPolicy();
             Require(root.ContentScaleAspect == Window.ContentScaleAspectEnum.Keep &&
-                    root.GetVisibleRect().Size.X / root.GetVisibleRect().Size.Y <= DeadGround.Sandbox.ViewportAspectLayout.MaxAspectRatio + 0.02f,
+                    root.GetVisibleRect().Size.X / root.GetVisibleRect().Size.Y <= ViewportAspectLayout.MaxAspectRatio + 0.02f,
                 "UstyeMapPreview ApplyPreviewWindowPolicy must cap 32:9 visible rect at 21:9.");
+            Require(!envView.GodotEnvironment.SsaoEnabled,
+                "UstyeMapPreview ApplyPreviewWindowPolicy with Auto SSAO must disable SSAO on >= 4.5M outputs.");
+
+            // Resizing down to 1440x900 (1.30M < 4.5M) must re-enable Auto SSAO
+            root.Size = new Vector2I(1440, 900);
+            preview.ApplyPreviewWindowPolicy();
+            Require(envView.GodotEnvironment.SsaoEnabled,
+                "UstyeMapPreview ApplyPreviewWindowPolicy with Auto SSAO must enable SSAO on < 4.5M outputs.");
+
+            // Saved AmbientOcclusion=Off must remain disabled even on 1440x900
+            preview.ActiveDisplaySettings = autoSettings with { AmbientOcclusion = AmbientOcclusionPreset.Off };
+            preview.ApplyPreviewWindowPolicy();
+            Require(!envView.GodotEnvironment.SsaoEnabled,
+                "UstyeMapPreview must honor saved AmbientOcclusion=Off on 1440x900.");
+
+            // CLI --ssao off must disable SSAO even with Auto on 1440x900
+            preview.ActiveDisplaySettings = autoSettings;
+            BenchmarkRenderOverrides ssaoOffCli = new(SsaoMode: "off");
+            SettingsPanel.ActiveBenchmarkOverrides = ssaoOffCli;
+            envView.ApplyBenchmarkOverrides(ssaoOffCli);
+            preview.ApplyPreviewWindowPolicy();
+            Require(!envView.GodotEnvironment.SsaoEnabled,
+                "UstyeMapPreview must honor CLI --ssao off override across ApplyPreviewWindowPolicy.");
+
+            // CLI --ssao half must keep SSAO enabled even on >= 4.5M outputs
+            root.Size = new Vector2I(5120, 1440);
+            BenchmarkRenderOverrides ssaoHalfCli = new(SsaoMode: "half");
+            SettingsPanel.ActiveBenchmarkOverrides = ssaoHalfCli;
+            envView.ApplyBenchmarkOverrides(ssaoHalfCli);
+            preview.ApplyPreviewWindowPolicy();
+            Require(envView.GodotEnvironment.SsaoEnabled,
+                "UstyeMapPreview must honor CLI --ssao half override on large outputs.");
         }
         finally
         {
+            SettingsPanel.ActiveBenchmarkOverrides = origCli;
+            preview.ActiveDisplaySettings = origDisplaySettings;
             root.Scaling3DScale = origScale;
             root.Msaa3D = origMsaa;
             root.ScreenSpaceAA = origScreenAa;
             root.ContentScaleAspect = origAspect;
             root.ContentScaleSize = origContentSize;
             root.Size = origSize;
+            envView?.ApplyBenchmarkOverrides(origCli);
+            envView?.ApplyProfile(EnvironmentProfile.Load(origDisplaySettings.EnvironmentProfile), origDisplaySettings.Quality);
+            preview.ApplyPreviewWindowPolicy();
         }
     }
 }

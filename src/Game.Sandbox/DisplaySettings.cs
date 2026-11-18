@@ -25,9 +25,16 @@ public enum AntiAliasingPreset : byte
     Fxaa = 4
 }
 
+public enum AmbientOcclusionPreset : byte
+{
+    Auto = 0,
+    Off = 1,
+    On = 2
+}
+
 /// <summary>
 /// Display configuration data model with VSync, frame capping, environment profile,
-/// render scale, anti-aliasing, and command-line override support. Free of any Godot dependencies.
+/// render scale, anti-aliasing, ambient occlusion, and command-line override support. Free of any Godot dependencies.
 /// </summary>
 public sealed record DisplaySettings(
     bool VSyncEnabled = true,
@@ -38,14 +45,15 @@ public sealed record DisplaySettings(
     bool BenchmarkQuit = false,
     string? CaptureViewsDir = null,
     RenderScalePreset RenderScale = RenderScalePreset.Native100,
-    AntiAliasingPreset AntiAliasing = AntiAliasingPreset.Auto)
+    AntiAliasingPreset AntiAliasing = AntiAliasingPreset.Auto,
+    AmbientOcclusionPreset AmbientOcclusion = AmbientOcclusionPreset.Auto)
 {
     public const float AutoRenderTargetPixels = 2560f * 1440f;
     public const float MsaaAutoCutoffPixels = 3_700_000f;
-    public const float MinAutoRenderScale = 0.50f;
+    public const float MinAutoRenderScale = 0.35f;
     public const float MinDiagnosticRenderScale = 0.25f;
     public const float MaxAutoRenderScale = 1.0f;
-    public const long LargeOutputBilinearCutoffPixels = 6_000_000L;
+    public const long LargeOutputBilinearCutoffPixels = 4_500_000L;
     public static readonly int[] ValidFpsLimits = [0, 30, 60, 120, 144, 165, 240];
 
     public static int SanitizeMaxFps(int fps)
@@ -160,6 +168,46 @@ public sealed record DisplaySettings(
         return outputPixels >= LargeOutputBilinearCutoffPixels;
     }
 
+    public static AmbientOcclusionPreset ParseAmbientOcclusion(string? val, AmbientOcclusionPreset defaultPreset = AmbientOcclusionPreset.Auto)
+    {
+        if (string.IsNullOrWhiteSpace(val)) return defaultPreset;
+        string lower = val.Trim().ToLowerInvariant();
+        return lower switch
+        {
+            "auto" => AmbientOcclusionPreset.Auto,
+            "off" or "0" or "false" or "disabled" => AmbientOcclusionPreset.Off,
+            "on" or "1" or "true" or "half" or "full" or "enabled" => AmbientOcclusionPreset.On,
+            _ => defaultPreset
+        };
+    }
+
+    public static bool ResolveSsaoEnabled(
+        AmbientOcclusionPreset preset,
+        EnvironmentQuality quality,
+        bool profileSsaoEnabled,
+        int windowWidth,
+        int windowHeight)
+    {
+        if (!profileSsaoEnabled || quality == EnvironmentQuality.Low)
+        {
+            return false;
+        }
+
+        if (preset == AmbientOcclusionPreset.Off)
+        {
+            return false;
+        }
+
+        if (preset == AmbientOcclusionPreset.On)
+        {
+            return true;
+        }
+
+        // Auto disables expensive screen-space SSAO on large/HiDPI outputs (>= 4.5M output pixels)
+        long outputPixels = (long)Math.Max(0, windowWidth) * Math.Max(0, windowHeight);
+        return outputPixels < LargeOutputBilinearCutoffPixels;
+    }
+
     public static DisplaySettings CreateDefault() => new();
 
     public DisplaySettings WithSanitizedValues() =>
@@ -184,6 +232,7 @@ public sealed record DisplaySettings(
         string? captureViewsDir = result.CaptureViewsDir;
         RenderScalePreset renderScale = result.RenderScale;
         AntiAliasingPreset antiAliasing = result.AntiAliasing;
+        AmbientOcclusionPreset ambientOcclusion = result.AmbientOcclusion;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -315,9 +364,18 @@ public sealed record DisplaySettings(
             {
                 antiAliasing = ParseAntiAliasing(arg["--aa=".Length..], antiAliasing);
             }
+            else if (arg.Equals("--ssao", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                ambientOcclusion = ParseAmbientOcclusion(args[i + 1], ambientOcclusion);
+                i++;
+            }
+            else if (arg.StartsWith("--ssao=", StringComparison.OrdinalIgnoreCase))
+            {
+                ambientOcclusion = ParseAmbientOcclusion(arg["--ssao=".Length..], ambientOcclusion);
+            }
         }
 
-        return new DisplaySettings(vsync, maxFps, benchmarkFrames, profile, quality, benchmarkQuit, captureViewsDir, renderScale, antiAliasing);
+        return new DisplaySettings(vsync, maxFps, benchmarkFrames, profile, quality, benchmarkQuit, captureViewsDir, renderScale, antiAliasing, ambientOcclusion);
     }
 
     private static bool HasOptionOverride(string[]? args, params string[] names)
@@ -347,6 +405,7 @@ public sealed record DisplaySettings(
     public static bool HasQualityOverride(string[]? args) => HasOptionOverride(args, "--quality");
     public static bool HasRenderScaleOverride(string[]? args) => HasOptionOverride(args, "--render-scale");
     public static bool HasAntiAliasingOverride(string[]? args) => HasOptionOverride(args, "--msaa", "--anti-aliasing", "--aa");
+    public static bool HasSsaoOverride(string[]? args) => HasOptionOverride(args, "--ssao");
 
     public static DisplaySettings ApplyUserEdit(
         DisplaySettings savedConfig,
@@ -355,7 +414,8 @@ public sealed record DisplaySettings(
         string? newProfile = null,
         EnvironmentQuality? newQuality = null,
         RenderScalePreset? newRenderScale = null,
-        AntiAliasingPreset? newAntiAliasing = null)
+        AntiAliasingPreset? newAntiAliasing = null,
+        AmbientOcclusionPreset? newAmbientOcclusion = null)
     {
         bool vsync = newVsync ?? savedConfig.VSyncEnabled;
         int maxFps = newMaxFps.HasValue ? SanitizeMaxFps(newMaxFps.Value) : savedConfig.MaxFps;
@@ -363,6 +423,7 @@ public sealed record DisplaySettings(
         EnvironmentQuality quality = newQuality ?? savedConfig.Quality;
         RenderScalePreset renderScale = newRenderScale ?? savedConfig.RenderScale;
         AntiAliasingPreset antiAliasing = newAntiAliasing ?? savedConfig.AntiAliasing;
+        AmbientOcclusionPreset ambientOcclusion = newAmbientOcclusion ?? savedConfig.AmbientOcclusion;
         return savedConfig with
         {
             VSyncEnabled = vsync,
@@ -370,7 +431,8 @@ public sealed record DisplaySettings(
             EnvironmentProfile = profile,
             Quality = quality,
             RenderScale = renderScale,
-            AntiAliasing = antiAliasing
+            AntiAliasing = antiAliasing,
+            AmbientOcclusion = ambientOcclusion
         };
     }
 
@@ -435,6 +497,7 @@ public sealed record DisplaySettings(
             {
                 string norm = ssaoVal.Trim().ToLowerInvariant();
                 if (norm is "off" or "half" or "full") ssaoMode = norm;
+                else if (norm is "auto" or "on") ssaoMode = null;
             }
             else if (TryParseArgValue(args, ref i, "--shadow-size=", "--shadow-size", out string szVal))
             {

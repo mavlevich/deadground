@@ -116,6 +116,7 @@ internal sealed partial class TerrainView : Node3D, IMapShadowLayers
             : new StandardMaterial3D
             {
                 ShadingMode = BaseMaterial3D.ShadingModeEnum.PerPixel,
+                DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
                 VertexColorUseAsAlbedo = true,
                 Roughness = 0.95f,
                 SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled
@@ -786,6 +787,57 @@ internal sealed partial class TerrainView : Node3D, IMapShadowLayers
         return MeasureSurfaceErrorAndDrops(verts0, startX, startZ, cols0, rows0, xs, zs, drops: null);
     }
 
+    internal static float[] ComputeConservativeShadowProxyDrops(
+        Vector3[] fineVertices,
+        int fineCols,
+        int fineRows,
+        int stride)
+    {
+        int[] xs = BuildSampleIndices(0, fineCols - 1, stride);
+        int[] zs = BuildSampleIndices(0, fineRows - 1, stride);
+        float[] drops = new float[xs.Length * zs.Length];
+        MeasureSurfaceErrorAndDrops(fineVertices, 0, 0, fineCols, fineRows, xs, zs, drops);
+        return drops;
+    }
+
+    internal static void ReconcileHorizontalEdgeShadowDrops(
+        float[] leftDrops,
+        int leftCols,
+        int leftRows,
+        float[] rightDrops,
+        int rightCols,
+        int rightRows)
+    {
+        int rows = Math.Min(leftRows, rightRows);
+        for (int r = 0; r < rows; r++)
+        {
+            int li = r * leftCols + (leftCols - 1);
+            int ri = r * rightCols;
+            float merged = Math.Max(leftDrops[li], rightDrops[ri]);
+            leftDrops[li] = merged;
+            rightDrops[ri] = merged;
+        }
+    }
+
+    internal static void ReconcileVerticalEdgeShadowDrops(
+        float[] topDrops,
+        int topCols,
+        int topRows,
+        float[] bottomDrops,
+        int bottomCols)
+    {
+        int cols = Math.Min(topCols, bottomCols);
+        int topRowOff = (topRows - 1) * topCols;
+        for (int c = 0; c < cols; c++)
+        {
+            int ti = topRowOff + c;
+            int bi = c;
+            float merged = Math.Max(topDrops[ti], bottomDrops[bi]);
+            topDrops[ti] = merged;
+            bottomDrops[bi] = merged;
+        }
+    }
+
     private static float MeasureSurfaceErrorAndDrops(
         Vector3[] verts0,
         int startX,
@@ -925,15 +977,9 @@ internal sealed partial class TerrainView : Node3D, IMapShadowLayers
                 ChunkBuildData left = chunks[cz * chunkCols + cx];
                 ChunkBuildData right = chunks[cz * chunkCols + (cx + 1)];
                 if (left.ProxyDrops is null || right.ProxyDrops is null) continue;
-                int rows = Math.Min(left.ProxyRows, right.ProxyRows);
-                for (int r = 0; r < rows; r++)
-                {
-                    int li = r * left.ProxyCols + (left.ProxyCols - 1);
-                    int ri = r * right.ProxyCols;
-                    float merged = Math.Max(left.ProxyDrops[li], right.ProxyDrops[ri]);
-                    left.ProxyDrops[li] = merged;
-                    right.ProxyDrops[ri] = merged;
-                }
+                ReconcileHorizontalEdgeShadowDrops(
+                    left.ProxyDrops, left.ProxyCols, left.ProxyRows,
+                    right.ProxyDrops, right.ProxyCols, right.ProxyRows);
             }
         }
 
@@ -945,16 +991,9 @@ internal sealed partial class TerrainView : Node3D, IMapShadowLayers
                 ChunkBuildData top = chunks[cz * chunkCols + cx];
                 ChunkBuildData bottom = chunks[(cz + 1) * chunkCols + cx];
                 if (top.ProxyDrops is null || bottom.ProxyDrops is null) continue;
-                int cols = Math.Min(top.ProxyCols, bottom.ProxyCols);
-                int topRowOff = (top.ProxyRows - 1) * top.ProxyCols;
-                for (int c = 0; c < cols; c++)
-                {
-                    int ti = topRowOff + c;
-                    int bi = c;
-                    float merged = Math.Max(top.ProxyDrops[ti], bottom.ProxyDrops[bi]);
-                    top.ProxyDrops[ti] = merged;
-                    bottom.ProxyDrops[bi] = merged;
-                }
+                ReconcileVerticalEdgeShadowDrops(
+                    top.ProxyDrops, top.ProxyCols, top.ProxyRows,
+                    bottom.ProxyDrops, bottom.ProxyCols);
             }
         }
     }
