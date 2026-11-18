@@ -51,6 +51,7 @@ public partial class UstyeMapPreview : Node3D
     private UstyeMapView _mapView = null!;
     private Camera3D _camera = null!;
     private CameraRig _cameraRig = null!;
+    private DisplaySettings _activeDisplaySettings = DisplaySettings.CreateDefault();
     private EnvironmentView _environmentView = null!;
     public EnvironmentView EnvironmentView => _environmentView;
     public DirectionalLight3D Sun => _environmentView.Sun;
@@ -240,12 +241,23 @@ public partial class UstyeMapPreview : Node3D
 
         EnvironmentProfile profile = EnvironmentProfile.Load(profileId);
         _environmentView.ApplyProfile(profile, quality);
-        SettingsPanel.ApplyRenderSettingsToViewport(GetViewport(), activeSettings);
+        _activeDisplaySettings = activeSettings;
+        ApplyPreviewWindowPolicy();
+        GetViewport().SizeChanged += ApplyPreviewWindowPolicy;
+        if (GetWindow() is Window previewWin)
+        {
+            previewWin.DpiChanged += ApplyPreviewWindowPolicy;
+        }
 
         if (_mapView is not null)
         {
             _mapView.ApplyEnvironmentTints(profile.MaterialTints);
         }
+    }
+
+    internal void ApplyPreviewWindowPolicy()
+    {
+        SettingsPanel.ApplyWindowRenderPolicy(GetWindow(), GetViewport(), _activeDisplaySettings);
     }
 
     private void SetupCamera(UstyePlanData plan)

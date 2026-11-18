@@ -28,6 +28,7 @@ public static class UstyeMapPreviewRegressionTests
             CheckScaleVehicles(preview);
             CheckCameraNavigation(preview);
             CheckCameraInput(preview);
+            CheckUltrawideAnd32By9WindowPolicy(preview);
 
             GD.Print("USTYE_MAP_PREVIEW_SMOKE_OK: All geometry, terrain chunks, crossings, structures, landmarks, vegetation, and camera targets verified.");
             return true;
@@ -743,6 +744,45 @@ public static class UstyeMapPreviewRegressionTests
                 $"Landmark {lm.Name} Z focus ({lm.Focus.Z}) out of bounds");
             Require(lm.Size >= 100f && lm.Size <= 5000f,
                 $"Landmark {lm.Name} size ({lm.Size}) out of bounds");
+        }
+    }
+
+    private static void CheckUltrawideAnd32By9WindowPolicy(UstyeMapPreview preview)
+    {
+        Window root = preview.GetWindow();
+        Require(root is not null, "UstyeMapPreview must have a root Window.");
+        Vector2I origSize = root!.Size;
+        Vector2I origContentSize = root.ContentScaleSize;
+        Window.ContentScaleAspectEnum origAspect = root.ContentScaleAspect;
+        float origScale = root.Scaling3DScale;
+        Viewport.Msaa origMsaa = root.Msaa3D;
+        try
+        {
+            DeadGround.Sandbox.DisplaySettings autoSettings = new(
+                RenderScale: DeadGround.Sandbox.RenderScalePreset.Auto,
+                AntiAliasing: DeadGround.Sandbox.AntiAliasingPreset.Auto);
+
+            // Applying window policy at 5120x1440 (32:9) must cap viewport at 21:9 (Keep) and use 3442x1440 active pixels
+            root.Size = new Vector2I(5120, 1440);
+            (float cappedScale, int cappedMsaa) = SettingsPanel.ApplyWindowRenderPolicy(root, root, autoSettings);
+            Require(root.ContentScaleAspect == Window.ContentScaleAspectEnum.Keep,
+                $"UstyeMapPreview 32:9 window must use Keep 21:9 cap, got {root.ContentScaleAspect}.");
+            Require(MathF.Abs(cappedScale - 0.862f) < 0.01f && cappedMsaa == 2,
+                $"UstyeMapPreview capped 32:9 Auto expected ~0.862 scale and 2x MSAA, got {cappedScale:F3} and {cappedMsaa}x.");
+
+            // Resizing to 5120x1440 via preview handler must maintain the cap cleanly
+            preview.ApplyPreviewWindowPolicy();
+            Require(root.ContentScaleAspect == Window.ContentScaleAspectEnum.Keep &&
+                    root.GetVisibleRect().Size.X / root.GetVisibleRect().Size.Y <= DeadGround.Sandbox.ViewportAspectLayout.MaxAspectRatio + 0.02f,
+                "UstyeMapPreview ApplyPreviewWindowPolicy must cap 32:9 visible rect at 21:9.");
+        }
+        finally
+        {
+            root.Scaling3DScale = origScale;
+            root.Msaa3D = origMsaa;
+            root.ContentScaleAspect = origAspect;
+            root.ContentScaleSize = origContentSize;
+            root.Size = origSize;
         }
     }
 }

@@ -356,9 +356,13 @@ internal sealed partial class SettingsPanel : CanvasLayer
         _statusLabel.AddThemeColorOverride("font_color", hasAnyOverride ? new Color("edc76b") : new Color("889988"));
     }
 
-    public static Vector2I ResolveWindowPixelSize(Viewport? viewport, Vector2I? windowSizeOverride = null)
+    private static Vector2I ResolveRawWindowPixelSize(Viewport? viewport, Vector2I? windowSizeOverride = null)
     {
-        if (windowSizeOverride.HasValue) return windowSizeOverride.Value;
+        if (windowSizeOverride is { X: > 0, Y: > 0 } overrideSize)
+        {
+            return overrideSize;
+        }
+
         try
         {
             if (!IsHeadlessDisplay)
@@ -371,12 +375,58 @@ internal sealed partial class SettingsPanel : CanvasLayer
         {
             // Headless / mock fallback
         }
+
+        if (viewport is Window win && GodotObject.IsInstanceValid(win) && win.Size.X > 0 && win.Size.Y > 0)
+        {
+            return win.Size;
+        }
+
         if (viewport is not null && GodotObject.IsInstanceValid(viewport))
         {
             Vector2 rect = viewport.GetVisibleRect().Size;
             if (rect.X > 0f && rect.Y > 0f) return new Vector2I((int)rect.X, (int)rect.Y);
         }
-        return new Vector2I(1440, 900);
+
+        return new Vector2I(ViewportAspectLayout.BaseViewportWidth, ViewportAspectLayout.BaseViewportHeight);
+    }
+
+    public static Vector2I ResolveWindowPixelSize(Viewport? viewport, Vector2I? windowSizeOverride = null)
+    {
+        Vector2I rawSize = ResolveRawWindowPixelSize(viewport, windowSizeOverride);
+        ViewportStretchSpec spec = ViewportAspectLayout.ComputeStretchSpec(rawSize.X, rawSize.Y);
+        return new Vector2I(spec.ActiveWindowPixelWidth, spec.ActiveWindowPixelHeight);
+    }
+
+    public static ViewportStretchSpec ApplyWindowStretchCap(Window? window, Vector2I? pixelSizeOverride = null)
+    {
+        Vector2I rawSize = ResolveRawWindowPixelSize(window, pixelSizeOverride);
+        ViewportStretchSpec spec = ViewportAspectLayout.ComputeStretchSpec(rawSize.X, rawSize.Y);
+        if (window is not null && GodotObject.IsInstanceValid(window))
+        {
+            Vector2I targetContentSize = new(spec.ContentScaleWidth, spec.ContentScaleHeight);
+            Window.ContentScaleAspectEnum targetAspect = spec.UseAspectCapKeep
+                ? Window.ContentScaleAspectEnum.Keep
+                : Window.ContentScaleAspectEnum.Expand;
+            if (window.ContentScaleSize != targetContentSize)
+            {
+                window.ContentScaleSize = targetContentSize;
+            }
+            if (window.ContentScaleAspect != targetAspect)
+            {
+                window.ContentScaleAspect = targetAspect;
+            }
+        }
+        return spec;
+    }
+
+    public static (float RenderScale, int MsaaSamples) ApplyWindowRenderPolicy(
+        Window? window,
+        Viewport? viewport,
+        DisplaySettings settings,
+        Vector2I? windowSizeOverride = null)
+    {
+        ApplyWindowStretchCap(window, windowSizeOverride);
+        return ApplyRenderSettingsToViewport(viewport, settings, windowSizeOverride);
     }
 
     public static (float RenderScale, int MsaaSamples) ApplyRenderSettingsToViewport(

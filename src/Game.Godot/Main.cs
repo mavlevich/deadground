@@ -26,6 +26,7 @@ public partial class Main : Node3D
     private int _benchmarkWarmupFrames = 5;
     private bool _benchmarkQuit;
     private bool _fullscreenCli;
+    private Vector2I? _windowSizeCli;
     private EnvironmentViewCapture? _viewCapture;
     private Label _stats = null!, _status = null!, _subtitle = null!, _title = null!;
     private UnitViewSet _unitViews = null!;
@@ -120,6 +121,10 @@ public partial class Main : Node3D
     private MatchSetup _matchSetup = null!;
     private readonly Node3D _environmentRoot = new() { Name = "EnvironmentRoot" };
 
+    internal float CachedTerrainViewportHeightPx => _cachedTerrainViewportHeightPx;
+    internal PanelContainer TopHud => _topHud;
+    internal PanelContainer BottomHud => _bottomHud;
+    internal Label StatsLabel => _stats;
     internal FogOfWarView? FogOfWar => _fogOfWar;
     internal CameraRig CameraRig => _cameraRig;
     internal Camera3D Camera => _camera;
@@ -387,6 +392,15 @@ public partial class Main : Node3D
                 else if (args[i] == "--fullscreen")
                 {
                     _fullscreenCli = true;
+                }
+                else if (args[i] == "--window-size" && i + 1 < args.Length)
+                {
+                    if (TryParseWindowSize(args[i + 1], out Vector2I parsedSize)) _windowSizeCli = parsedSize;
+                    i++;
+                }
+                else if (args[i].StartsWith("--window-size=", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (TryParseWindowSize(args[i]["--window-size=".Length..], out Vector2I parsedSize)) _windowSizeCli = parsedSize;
                 }
                 else if (args[i] == "--camera-focus" && i + 1 < args.Length)
                 {
@@ -659,7 +673,7 @@ public partial class Main : Node3D
 
         _settingsPanel.SettingsChanged += newSettings =>
         {
-            SettingsPanel.ApplyRenderSettingsToViewport(GetViewport(), newSettings);
+            SettingsPanel.ApplyWindowRenderPolicy(GetWindow(), GetViewport(), newSettings);
             RefreshCachedTerrainViewportHeight(GetViewport());
             EnvironmentProfile profile = EnvironmentProfile.Load(newSettings.EnvironmentProfile);
             _environmentView.ApplyProfile(profile, newSettings.Quality);
@@ -670,22 +684,22 @@ public partial class Main : Node3D
             }
         };
 
+        if (_windowSizeCli.HasValue && !SettingsPanel.IsHeadlessDisplay)
+        {
+            DisplayServer.WindowSetMode(DisplayServer.WindowMode.Windowed);
+            DisplayServer.WindowSetSize(_windowSizeCli.Value);
+        }
         if (_fullscreenCli && !SettingsPanel.IsHeadlessDisplay)
         {
             DisplayServer.WindowSetMode(DisplayServer.WindowMode.Fullscreen);
         }
 
-        SettingsPanel.ApplyRenderSettingsToViewport(GetViewport(), activeSettings);
-        RefreshCachedTerrainViewportHeight(GetViewport());
-        GetViewport().SizeChanged += () =>
+        OnWindowMetricsChanged();
+        GetViewport().SizeChanged += OnWindowMetricsChanged;
+        if (GetWindow() is Window rootWin)
         {
-            DisplaySettings? cur = _settingsPanel?.CurrentSettings;
-            if (cur is not null && (cur.RenderScale == RenderScalePreset.Auto || cur.AntiAliasing == AntiAliasingPreset.Auto))
-            {
-                SettingsPanel.ApplyRenderSettingsToViewport(GetViewport(), cur);
-            }
-            RefreshCachedTerrainViewportHeight(GetViewport());
-        };
+            rootWin.DpiChanged += OnWindowMetricsChanged;
+        }
 
         if (activeSettings.BenchmarkFrames > 0)
         {
@@ -1036,6 +1050,31 @@ public partial class Main : Node3D
         _cachedTerrainViewportHeightPx = TerrainView.GetEffectiveViewportPixelHeight(viewport ?? GetViewport());
     }
 
+    internal void OnWindowMetricsChanged()
+    {
+        Window? win = GetWindow();
+        Viewport? vp = GetViewport();
+        DisplaySettings cur = _settingsPanel?.CurrentSettings ?? DisplaySettings.CreateDefault();
+        SettingsPanel.ApplyWindowRenderPolicy(win, vp, cur);
+        RefreshCachedTerrainViewportHeight(vp);
+    }
+
+    private static bool TryParseWindowSize(string raw, out Vector2I size)
+    {
+        size = default;
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        int sep = raw.IndexOf('x', StringComparison.OrdinalIgnoreCase);
+        if (sep <= 0 || sep >= raw.Length - 1) return false;
+        if (int.TryParse(raw.AsSpan(0, sep), out int w) &&
+            int.TryParse(raw.AsSpan(sep + 1), out int h) &&
+            w >= 320 && h >= 200)
+        {
+            size = new Vector2I(w, h);
+            return true;
+        }
+        return false;
+    }
+
     internal static void UpdateTerrainLodStep(TerrainView? terrain, Camera3D? camera, float cachedViewportHeightPx)
     {
         terrain?.UpdateLod(camera, cachedViewportHeightPx);
@@ -1353,7 +1392,11 @@ public partial class Main : Node3D
                     Vector2 viewSize = GetViewport().GetVisibleRect().Size;
                     Vector2I winSize = !SettingsPanel.IsHeadlessDisplay
                         ? DisplayServer.WindowGetSize()
-                        : new Vector2I((int)viewSize.X, (int)viewSize.Y);
+                        : GetWindow() is Window hw && hw.Size.X > 0
+                            ? hw.Size
+                            : new Vector2I((int)viewSize.X, (int)viewSize.Y);
+                    int dpi = !SettingsPanel.IsHeadlessDisplay ? DisplayServer.ScreenGetDpi() : 96;
+                    float screenScale = !SettingsPanel.IsHeadlessDisplay ? DisplayServer.ScreenGetScale() : 1.0f;
                     float scale3D = GetViewport().Scaling3DScale;
                     string msaaLabel = GetViewport().Msaa3D switch
                     {
@@ -1363,7 +1406,7 @@ public partial class Main : Node3D
                     };
                     string resolution = string.Create(
                         System.Globalization.CultureInfo.InvariantCulture,
-                        $"{viewSize.X:F0}x{viewSize.Y:F0} (window {winSize.X}x{winSize.Y}, renderScale={scale3D:F2}, msaa={msaaLabel})");
+                        $"{viewSize.X:F0}x{viewSize.Y:F0} (window {winSize.X}x{winSize.Y}, dpi={dpi}, screenScale={screenScale:F2}, renderScale={scale3D:F2}, msaa={msaaLabel})");
                     string report = _benchmarkMetrics.FormatReport(
                         _scenario, hardware, resolution, _settingsPanel.CurrentSettings.VSyncEnabled, _settingsPanel.CurrentSettings.MaxFps, warmupFrames: 5);
                     GD.Print(report);
@@ -2536,6 +2579,10 @@ public partial class Main : Node3D
             return;
 
         Rect2 topRect = _topHud.GetGlobalRect();
+        if (_missionPanel is not null)
+        {
+            _missionPanel.SetBriefingTopOffset(topRect.End.Y + 10f);
+        }
         Rect2 bottomRect = _bottomHud.GetGlobalRect();
         Rect2 cardRect = _selectionCard.GetGlobalRect();
         Rect2 settingsRect = _settingsPanel.IsOpen ? _settingsPanel.GetContainerRect() : default;
@@ -3212,24 +3259,44 @@ public partial class Main : Node3D
 
         if (_scenario == "recon-raid" || _scenario == "ustye-raid" || _scenario == "battle")
         {
+            ConfigureMissionPanel(_scenario);
+        }
+    }
+
+    internal MissionPanel ConfigureMissionPanel(string scenario)
+    {
+        if (_missionPanel is null)
+        {
             _missionPanel = new MissionPanel(this, _map);
-            _missionPanel.SetScenario(_scenario);
-            if (_scenario == "ustye-raid")
-            {
-                _missionPanel.SetBriefing(
-                    "OPERATION: USTYE RAID",
-                    "Primary: Destroy enemy command vehicle. Preserve recon vehicle.",
-                    "Roster: 1x BRDM-2 (3000m sensor), 2x T-62 (115mm gun)");
-            }
-            else if (_scenario == "battle")
-            {
-                _missionPanel.SetShowBriefing(false);
-            }
-            canvas.AddChild(_missionPanel);
-            _missionPanel.SetLocalMode(_session is LocalSession);
+            _hudCanvas.AddChild(_missionPanel);
             _missionPanel.RetryRequested += OnRetryMission;
             _missionPanel.LeaveRequested += LeaveCurrentMatch;
         }
+
+        _missionPanel.SetScenario(scenario);
+        if (scenario == "ustye-raid")
+        {
+            _missionPanel.SetBriefing(
+                "OPERATION: USTYE RAID",
+                "Primary: Destroy enemy command vehicle. Preserve recon vehicle.",
+                "Roster: 1x BRDM-2 (3000m sensor), 2x T-62 (115mm gun)");
+        }
+        else if (scenario == "battle")
+        {
+            _missionPanel.SetShowBriefing(false);
+        }
+
+        _missionPanel.SetLocalMode(_session is LocalSession);
+        return _missionPanel;
+    }
+
+    internal void ClearMissionPanel()
+    {
+        if (_missionPanel is null) return;
+        _hudCanvas.RemoveChild(_missionPanel);
+        _missionPanel.Cleanup();
+        _missionPanel.QueueFree();
+        _missionPanel = null;
     }
 
     private void OnRetryMission()
