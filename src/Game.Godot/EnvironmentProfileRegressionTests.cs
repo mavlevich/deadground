@@ -367,6 +367,7 @@ internal static class EnvironmentProfileRegressionTests
             }
             finally
             {
+                if (previewWithoutOverride.GetParent() == scene) scene.RemoveChild(previewWithoutOverride);
                 previewWithoutOverride.QueueFree();
             }
 
@@ -381,6 +382,7 @@ internal static class EnvironmentProfileRegressionTests
             }
             finally
             {
+                if (previewWithOverride.GetParent() == scene) scene.RemoveChild(previewWithOverride);
                 previewWithOverride.QueueFree();
             }
         }

@@ -43,11 +43,11 @@ internal sealed partial class MissionPanel : Control
         MouseFilter = MouseFilterEnum.Ignore;
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
 
-        // 1. Briefing and objective HUD card (top left, below title)
+        // 1. Briefing and objective HUD card (top left, positioned dynamically via SetBriefingTopOffset)
         _briefingCard = new PanelContainer
         {
             Position = new Vector2(24, 156),
-            MouseFilter = MouseFilterEnum.Stop
+            MouseFilter = Control.MouseFilterEnum.Stop
         };
         _briefingCard.AddThemeStyleboxOverride("panel", HudCardStyle());
 
@@ -418,6 +418,15 @@ internal sealed partial class MissionPanel : Control
         ArrayMesh mesh = new();
         mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
         _searchAreaRing.Mesh = mesh;
+    }
+
+    public void SetBriefingTopOffset(float topY)
+    {
+        float targetY = MathF.Max(156f, topY);
+        if (MathF.Abs(_briefingCard.Position.Y - targetY) > 0.5f)
+        {
+            _briefingCard.Position = new Vector2(_briefingCard.Position.X, targetY);
+        }
     }
 
     public void SetBriefing(string title, string objective, string roster)
