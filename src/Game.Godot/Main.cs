@@ -24,7 +24,23 @@ public partial class Main : Node3D
     private float _cachedTerrainViewportHeightPx = 900f;
     private long _lastFrameTimestamp;
     private int _benchmarkWarmupFrames = 5;
+    private BenchmarkRenderOverrides _benchmarkOverrides = new();
+    private float _benchmarkWarmupRemainingSec;
+    private double _benchmarkElapsedSec;
+    private bool _benchmarkActive;
+    private bool _benchmarkWarmupCompleted;
+    private bool _isTimedBenchmark;
+    private FramePacingMetrics? _minuteWindowMetrics;
+    private int _minuteIndex = 1;
+    private double _minuteElapsedSec;
+    private Vector3? _panAnchor;
+    private double _panElapsed;
     private bool _benchmarkQuit;
+
+    internal bool IsBenchmarkInputBlocked => _benchmarkActive;
+    internal bool IsBenchmarkWarmupCompleted => _benchmarkWarmupCompleted;
+    internal int BenchmarkSampleCount => _benchmarkMetrics?.TotalCount ?? 0;
+    internal int BenchmarkStoredSampleCount => _benchmarkMetrics?.Count ?? 0;
     private bool _fullscreenCli;
     private Vector2I? _windowSizeCli;
     private EnvironmentViewCapture? _viewCapture;
@@ -620,12 +636,18 @@ public partial class Main : Node3D
         }
 
 
+        string[] combinedArgs = allArgs.Concat(userArgs).ToArray();
+        _benchmarkOverrides = DisplaySettings.ParseBenchmarkOverrides(combinedArgs);
+        SettingsPanel.ActiveBenchmarkOverrides = _benchmarkOverrides;
+
         AddChild(_environmentRoot);
-        _fogOfWar = new FogOfWarView(_map, scenarioGeometry);
+        _fogOfWar = new FogOfWarView(
+            _map,
+            scenarioGeometry,
+            useLambertDiffuse: _benchmarkOverrides.TerrainShader == "lambert");
         BuildEnvironment(scenarioGeometry);
 
         DisplaySettings loadedConfig = SettingsPanel.LoadConfig();
-        string[] combinedArgs = allArgs.Concat(userArgs).ToArray();
         bool cliOverridesVsync = DisplaySettings.HasVsyncOverride(combinedArgs);
         bool cliOverridesMaxFps = DisplaySettings.HasMaxFpsOverride(combinedArgs);
         bool cliOverridesProfile = DisplaySettings.HasEnvironmentOverride(combinedArgs);
@@ -653,6 +675,7 @@ public partial class Main : Node3D
         }
         EnvironmentProfile activeProfile = EnvironmentProfile.Load(profileName);
         _environmentView.ApplyProfile(activeProfile, activeSettings.Quality);
+        _environmentView.ApplyBenchmarkOverrides(_benchmarkOverrides);
 
         if (_ustyeMapView is not null)
         {
@@ -684,6 +707,12 @@ public partial class Main : Node3D
             }
         };
 
+        if (_benchmarkOverrides.ScreenIndex.HasValue && !SettingsPanel.IsHeadlessDisplay)
+        {
+            int screenCount = Math.Max(1, DisplayServer.GetScreenCount());
+            DisplayServer.WindowSetCurrentScreen(Math.Clamp(_benchmarkOverrides.ScreenIndex.Value, 0, screenCount - 1));
+        }
+
         if (_windowSizeCli.HasValue && !SettingsPanel.IsHeadlessDisplay)
         {
             DisplayServer.WindowSetMode(DisplayServer.WindowMode.Windowed);
@@ -701,10 +730,22 @@ public partial class Main : Node3D
             rootWin.DpiChanged += OnWindowMetricsChanged;
         }
 
-        if (activeSettings.BenchmarkFrames > 0)
+        if (activeSettings.BenchmarkFrames > 0 || _benchmarkOverrides.BenchmarkSeconds > 0f)
         {
-            _benchmarkMetrics = new FramePacingMetrics(activeSettings.BenchmarkFrames + 16);
-            _benchmarkTargetFrames = activeSettings.BenchmarkFrames;
+            _isTimedBenchmark = _benchmarkOverrides.BenchmarkSeconds > 0f;
+            _benchmarkActive = true;
+            _benchmarkWarmupCompleted = false;
+            _benchmarkWarmupRemainingSec = _benchmarkOverrides.WarmupSeconds;
+            _benchmarkElapsedSec = 0f;
+            int initialCapacity = _isTimedBenchmark
+                ? Math.Clamp((int)Math.Ceiling(_benchmarkOverrides.BenchmarkSeconds * 600f), 2048, 300_000)
+                : activeSettings.BenchmarkFrames + 16;
+            _benchmarkTargetFrames = _isTimedBenchmark ? 0 : activeSettings.BenchmarkFrames;
+            _benchmarkMetrics = new FramePacingMetrics(initialCapacity);
+            if (_benchmarkOverrides.BenchmarkSeconds >= 120f)
+            {
+                _minuteWindowMetrics = new FramePacingMetrics(65536);
+            }
             RenderingServer.ViewportSetMeasureRenderTime(GetViewport().GetViewportRid(), true);
         }
 
@@ -1332,7 +1373,15 @@ public partial class Main : Node3D
         }
 
         long previewEnd = collectBench ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
-        _cameraRig.Update(delta, allowInput: !_settingsPanel.IsOpen && !_pauseMenu.IsOpen);
+        if (_benchmarkActive && _benchmarkOverrides.BenchmarkPan)
+        {
+            _panAnchor ??= _cameraRig.Focus;
+            _panElapsed += delta;
+            float offsetX = (float)Math.Sin(_panElapsed * 0.7) * 35f;
+            float offsetZ = (float)Math.Cos(_panElapsed * 0.5) * 18f;
+            _cameraRig.CenterOn(_panAnchor.Value + new Vector3(offsetX, 0f, offsetZ));
+        }
+        _cameraRig.Update(delta, allowInput: !_benchmarkActive && !_settingsPanel.IsOpen && !_pauseMenu.IsOpen);
         _environmentView?.UpdateHazeForCamera(_cameraRig.Size, _cameraRig.Focus, _cameraRig.ViewPitch);
         _environmentView?.UpdateShadowTierForCamera(_cameraRig.Size, _activeShadowMapLayers);
         _environmentView?.UpdateShadowFade(delta);
@@ -1349,22 +1398,22 @@ public partial class Main : Node3D
         long frameEndTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
         float cpuWorkMs = (float)((frameEndTimestamp - frameStartTimestamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
 
-        if (_benchmarkMetrics is not null)
+        if (_benchmarkActive && _benchmarkMetrics is not null)
         {
-            if (_benchmarkWarmupFrames > 0)
+            if (!_benchmarkWarmupCompleted)
             {
-                _benchmarkWarmupFrames--;
-                if (_benchmarkWarmupFrames == 0 && _benchmarkZoomToSize.HasValue)
+                if (AdvanceBenchmarkWarmup((float)delta))
                 {
-                    float targetZoom = _benchmarkZoomToSize.Value;
-                    _benchmarkZoomToSize = null;
-                    _cameraRig.Model.SetSizeLimits(MathF.Min(30f, targetZoom), MathF.Max(5500f, targetZoom));
-                    _cameraRig.Model.CurrentSize = targetZoom;
-                    _cameraRig.Model.SetZoom(targetZoom);
+                    _panElapsed = 0.0;
+                    if (_panAnchor.HasValue)
+                    {
+                        _cameraRig.CenterOn(_panAnchor.Value);
+                    }
                 }
             }
-            else if (_benchmarkMetrics.Count < _benchmarkTargetFrames && wallClockIntervalMs > 0f)
+            else if (wallClockIntervalMs > 0f && !IsBenchmarkSampleLimitReached())
             {
+                _benchmarkElapsedSec += wallClockIntervalMs * 0.001;
                 double toMs = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
                 Rid vpRid = GetViewport().GetViewportRid();
                 double measuredGpu = RenderingServer.ViewportGetMeasuredRenderTimeGpu(vpRid);
@@ -1385,9 +1434,37 @@ public partial class Main : Node3D
                     ShadowDrawCalls: RenderingServer.ViewportGetRenderInfo(vpRid, RenderingServer.ViewportRenderInfoType.Shadow, RenderingServer.ViewportRenderInfo.DrawCallsInFrame),
                     ShadowPrimitives: RenderingServer.ViewportGetRenderInfo(vpRid, RenderingServer.ViewportRenderInfoType.Shadow, RenderingServer.ViewportRenderInfo.PrimitivesInFrame));
                 _benchmarkMetrics.Record(wallClockIntervalMs, cpuWorkMs, gpuMs, in phaseSample);
-
-                if (_benchmarkMetrics.Count >= _benchmarkTargetFrames)
+                if (_minuteWindowMetrics is not null)
                 {
+                    _minuteWindowMetrics.Record(wallClockIntervalMs, cpuWorkMs, gpuMs);
+                    _minuteElapsedSec += wallClockIntervalMs * 0.001;
+                    if (_minuteElapsedSec >= 60.0)
+                    {
+                        Vector2I mWin = !SettingsPanel.IsHeadlessDisplay
+                            ? DisplayServer.WindowGetSize()
+                            : (GetWindow() is Window mw ? mw.Size : default);
+                        FramePacingMetrics.PercentileResults mr = _minuteWindowMetrics.CalculateResults();
+                        GD.Print(string.Create(
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            $"[BENCH_MINUTE {_minuteIndex}] frames={mr.SampleCount} win={mWin.X}x{mWin.Y} P50={mr.P50Ms:F2} ms ({1000f / MathF.Max(0.01f, mr.P50Ms):F1} FPS) P95={mr.P95Ms:F2} ms ({1000f / MathF.Max(0.01f, mr.P95Ms):F1} FPS) MeanCPU={mr.MeanCpuMs:F2} ms"));
+                        _minuteWindowMetrics.Reset();
+                        _minuteElapsedSec = 0.0;
+                        _minuteIndex++;
+                    }
+                }
+
+                if (IsBenchmarkFinished())
+                {
+                    if (_minuteWindowMetrics is not null && _minuteWindowMetrics.Count > 0)
+                    {
+                        Vector2I mWin = !SettingsPanel.IsHeadlessDisplay
+                            ? DisplayServer.WindowGetSize()
+                            : (GetWindow() is Window mw ? mw.Size : default);
+                        FramePacingMetrics.PercentileResults mr = _minuteWindowMetrics.CalculateResults();
+                        GD.Print(string.Create(
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            $"[BENCH_MINUTE {_minuteIndex}] frames={mr.SampleCount} win={mWin.X}x{mWin.Y} P50={mr.P50Ms:F2} ms ({1000f / MathF.Max(0.01f, mr.P50Ms):F1} FPS) P95={mr.P95Ms:F2} ms ({1000f / MathF.Max(0.01f, mr.P95Ms):F1} FPS) MeanCPU={mr.MeanCpuMs:F2} ms"));
+                    }
                     string hardware = $"{OS.GetName()} / {OS.GetProcessorName()} / Cores: {OS.GetProcessorCount()}";
                     Vector2 viewSize = GetViewport().GetVisibleRect().Size;
                     Vector2I winSize = !SettingsPanel.IsHeadlessDisplay
@@ -1397,19 +1474,37 @@ public partial class Main : Node3D
                             : new Vector2I((int)viewSize.X, (int)viewSize.Y);
                     int dpi = !SettingsPanel.IsHeadlessDisplay ? DisplayServer.ScreenGetDpi() : 96;
                     float screenScale = !SettingsPanel.IsHeadlessDisplay ? DisplayServer.ScreenGetScale() : 1.0f;
+                    int curScreen = !SettingsPanel.IsHeadlessDisplay ? DisplayServer.WindowGetCurrentScreen() : 0;
+                    Vector2I screenRes = !SettingsPanel.IsHeadlessDisplay ? DisplayServer.ScreenGetSize(curScreen) : winSize;
                     float scale3D = GetViewport().Scaling3DScale;
+                    Vector2I activeWinPx = SettingsPanel.ResolveWindowPixelSize(GetViewport());
+                    int internalW = (int)MathF.Round(activeWinPx.X * scale3D);
+                    int internalH = (int)MathF.Round(activeWinPx.Y * scale3D);
                     string msaaLabel = GetViewport().Msaa3D switch
                     {
                         Viewport.Msaa.Msaa4X => "4x",
                         Viewport.Msaa.Msaa2X => "2x",
                         _ => "off"
                     };
+                    string aaSummary = GetViewport().ScreenSpaceAA == Viewport.ScreenSpaceAAEnum.Fxaa
+                        ? "fxaa"
+                        : msaaLabel;
+                    bool ssaoOn = _environmentView?.GodotEnvironment?.SsaoEnabled == true;
+                    string ssaoSummary = ssaoOn
+                        ? (_benchmarkOverrides.SsaoMode ?? "half")
+                        : "off";
+                    bool glowOn = _environmentView?.GodotEnvironment?.GlowEnabled == true;
+                    string shadowSplits = _environmentView?.Sun.DirectionalShadowMode.ToString() ?? "Unknown";
+                    string shadowSize = _benchmarkOverrides.ShadowSize?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "4096";
+                    string shadowFilter = _benchmarkOverrides.ShadowFilter ?? "default";
+                    string terrainDiffuse = _benchmarkOverrides.TerrainShader ?? "burley";
                     string resolution = string.Create(
                         System.Globalization.CultureInfo.InvariantCulture,
-                        $"{viewSize.X:F0}x{viewSize.Y:F0} (window {winSize.X}x{winSize.Y}, dpi={dpi}, screenScale={screenScale:F2}, renderScale={scale3D:F2}, msaa={msaaLabel})");
+                        $"{viewSize.X:F0}x{viewSize.Y:F0} (screen[{curScreen}]={screenRes.X}x{screenRes.Y}, window={winSize.X}x{winSize.Y}, internal={internalW}x{internalH}, dpi={dpi}, screenScale={screenScale:F2}, renderScale={scale3D:F2}, scaling={GetViewport().Scaling3DMode}, aa={aaSummary}, ssao={ssaoSummary}, shadow={shadowSplits}@{shadowSize}/{shadowFilter}, glow={glowOn}, diffuse={terrainDiffuse}, pan={_benchmarkOverrides.BenchmarkPan})");
                     string report = _benchmarkMetrics.FormatReport(
                         _scenario, hardware, resolution, _settingsPanel.CurrentSettings.VSyncEnabled, _settingsPanel.CurrentSettings.MaxFps, warmupFrames: 5);
                     GD.Print(report);
+                    _benchmarkActive = false;
                     if (_benchmarkQuit)
                     {
                         GetTree().Quit(0);
@@ -1885,6 +1980,11 @@ public partial class Main : Node3D
 
     public override void _Input(InputEvent @event)
     {
+        if (_benchmarkActive)
+        {
+            return;
+        }
+
         if (_settingsPanel?.IsOpen == true || _sessionMenu?.IsOpen == true || _pauseMenu?.IsOpen == true)
         {
             CancelActiveDrag();
@@ -1931,6 +2031,11 @@ public partial class Main : Node3D
 
     public override void _UnhandledInput(InputEvent @event)
     {
+        if (_benchmarkActive)
+        {
+            return;
+        }
+
         if (_settingsPanel?.IsOpen == true)
         {
             CancelActiveDrag();
@@ -3934,8 +4039,81 @@ public partial class Main : Node3D
 
     public string TitleText => _title?.Text ?? string.Empty;
 
+    private bool AdvanceBenchmarkWarmup(float deltaSec)
+    {
+        if (_benchmarkWarmupRemainingSec > 0f)
+        {
+            _benchmarkWarmupRemainingSec = MathF.Max(0f, _benchmarkWarmupRemainingSec - deltaSec);
+        }
+        if (_benchmarkWarmupFrames > 0)
+        {
+            _benchmarkWarmupFrames--;
+        }
+        if (_benchmarkWarmupFrames > 0 || _benchmarkWarmupRemainingSec > 0f)
+        {
+            return false;
+        }
+
+        _benchmarkWarmupCompleted = true;
+        if (_benchmarkZoomToSize.HasValue)
+        {
+            float targetZoom = _benchmarkZoomToSize.Value;
+            _benchmarkZoomToSize = null;
+            _cameraRig.Model.SetSizeLimits(MathF.Min(30f, targetZoom), MathF.Max(5500f, targetZoom));
+            _cameraRig.Model.CurrentSize = targetZoom;
+            _cameraRig.Model.SetZoom(targetZoom);
+        }
+        return true;
+    }
+
+    private bool IsBenchmarkSampleLimitReached() =>
+        !_isTimedBenchmark && _benchmarkMetrics is not null && _benchmarkMetrics.TotalCount >= _benchmarkTargetFrames;
+
+    private bool IsBenchmarkFinished() =>
+        _isTimedBenchmark
+            ? _benchmarkElapsedSec >= _benchmarkOverrides.BenchmarkSeconds - 1e-6
+            : _benchmarkMetrics is not null && _benchmarkMetrics.TotalCount >= _benchmarkTargetFrames;
+
+    internal void ConfigureBenchmarkLifecycleForTest(int warmupFrames, float warmupSeconds, float? zoomToSize, float benchmarkSeconds, int targetFrames, int initialCapacity)
+    {
+        _benchmarkWarmupFrames = warmupFrames;
+        _benchmarkWarmupRemainingSec = warmupSeconds;
+        _benchmarkZoomToSize = zoomToSize;
+        _benchmarkOverrides = _benchmarkOverrides with { WarmupSeconds = warmupSeconds, BenchmarkSeconds = benchmarkSeconds };
+        _isTimedBenchmark = benchmarkSeconds > 0f;
+        _benchmarkTargetFrames = _isTimedBenchmark ? 0 : targetFrames;
+        _benchmarkElapsedSec = 0f;
+        _benchmarkWarmupCompleted = false;
+        _benchmarkActive = true;
+        _benchmarkQuit = false;
+        _benchmarkMetrics = new FramePacingMetrics(initialCapacity);
+    }
+
+    internal void StepBenchmarkLifecycleForTest(float deltaSec, float wallClockMs)
+    {
+        if (!_benchmarkActive || _benchmarkMetrics is null) return;
+        if (!_benchmarkWarmupCompleted)
+        {
+            AdvanceBenchmarkWarmup(deltaSec);
+            return;
+        }
+        if (!IsBenchmarkSampleLimitReached())
+        {
+            _benchmarkElapsedSec += wallClockMs * 0.001;
+            _benchmarkMetrics.Record(wallClockMs, 0.2f, -1f);
+            if (IsBenchmarkFinished())
+            {
+                _benchmarkActive = false;
+            }
+        }
+    }
+
     public override void _ExitTree()
     {
+        if (ReferenceEquals(SettingsPanel.ActiveBenchmarkOverrides, _benchmarkOverrides))
+        {
+            SettingsPanel.ActiveBenchmarkOverrides = null;
+        }
         _combatEffects?.Clear();
         _fogOfWar?.Dispose();
         _missionPanel?.Cleanup();

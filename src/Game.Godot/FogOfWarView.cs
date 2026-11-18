@@ -107,7 +107,7 @@ void fragment() {
     // Units swept in the last completed cycle; stationary units are not counted.
     internal int SweepsInLastCycle { get; private set; }
 
-    public FogOfWarView(HeightMap map, StaticGeometry? geometry = null, float? customCellSize = null)
+    public FogOfWarView(HeightMap map, StaticGeometry? geometry = null, float? customCellSize = null, bool useLambertDiffuse = false)
     {
         _map = map;
         _geometry = geometry;
@@ -176,7 +176,10 @@ void fragment() {
         _image = Image.CreateEmpty(Columns, Rows, false, Image.Format.R8);
         _texture = ImageTexture.CreateFromImage(_image);
 
-        _shader = new Shader { Code = TerrainShaderCode };
+        string shaderCode = useLambertDiffuse
+            ? TerrainShaderCode.Replace("diffuse_burley", "diffuse_lambert", StringComparison.Ordinal)
+            : TerrainShaderCode;
+        _shader = new Shader { Code = shaderCode };
         _material = new ShaderMaterial { Shader = _shader };
         _material.SetShaderParameter("fog_texture", _texture);
         _material.SetShaderParameter("map_size", new Vector2(map.Width, map.Depth));

@@ -31,6 +31,7 @@ public sealed partial class EnvironmentView : Node3D
     private int _shadowTierApplyCount;
     private IMapShadowLayers? _lastShadowTarget;
     private RenderBudget _renderBudget;
+    private BenchmarkRenderOverrides? _benchmarkOverrides;
     private float _shadowFadeOpacity = 1f;
     private float _targetShadowFadeOpacity = 1f;
     private const float ShadowFadeDurationSeconds = 0.3f;
@@ -213,6 +214,68 @@ public sealed partial class EnvironmentView : Node3D
         {
             ApplyShadowTier(_activeShadowTier.Value, GetAliveTarget(_lastShadowTarget), allowFade: false);
         }
+        ApplyBenchmarkOverridesToEngine();
+    }
+
+    public void ApplyBenchmarkOverrides(BenchmarkRenderOverrides? overrides)
+    {
+        _benchmarkOverrides = overrides;
+        if (_activeProfile is not null)
+        {
+            SetQuality(_activeQuality);
+        }
+        else
+        {
+            ApplyBenchmarkOverridesToEngine();
+        }
+    }
+
+    private void ApplyBenchmarkOverridesToEngine()
+    {
+        BenchmarkRenderOverrides? cli = _benchmarkOverrides;
+        if (cli is null) return;
+
+        Godot.Environment env = _worldEnvironment.Environment;
+        if (cli.SsaoMode is not null)
+        {
+            switch (cli.SsaoMode)
+            {
+                case "off":
+                    env.SsaoEnabled = false;
+                    break;
+                case "half":
+                    env.SsaoEnabled = true;
+                    RenderingServer.EnvironmentSetSsaoQuality(RenderingServer.EnvironmentSsaoQuality.Medium, true, 0.5f, 2, 50f, 300f);
+                    break;
+                case "full":
+                    env.SsaoEnabled = true;
+                    RenderingServer.EnvironmentSetSsaoQuality(RenderingServer.EnvironmentSsaoQuality.Medium, false, 0.5f, 2, 50f, 300f);
+                    break;
+            }
+        }
+
+        if (cli.GlowEnabled.HasValue)
+        {
+            env.GlowEnabled = cli.GlowEnabled.Value;
+        }
+
+        if (cli.ShadowSize.HasValue)
+        {
+            RenderingServer.DirectionalShadowAtlasSetSize(cli.ShadowSize.Value, true);
+        }
+
+        if (cli.ShadowFilter is not null)
+        {
+            RenderingServer.ShadowQuality q = cli.ShadowFilter switch
+            {
+                "hard" => RenderingServer.ShadowQuality.Hard,
+                "very_low" => RenderingServer.ShadowQuality.SoftVeryLow,
+                "low" => RenderingServer.ShadowQuality.SoftLow,
+                "high" => RenderingServer.ShadowQuality.SoftHigh,
+                _ => RenderingServer.ShadowQuality.SoftMedium
+            };
+            RenderingServer.DirectionalSoftShadowFilterSetQuality(q);
+        }
     }
 
     public void SetRenderBudget(RenderBudget renderBudget)
@@ -223,6 +286,7 @@ public sealed partial class EnvironmentView : Node3D
         {
             ApplyShadowTier(_activeShadowTier.Value, GetAliveTarget(_lastShadowTarget), allowFade: false);
         }
+        ApplyBenchmarkOverridesToEngine();
     }
 
     public void SetShadowTarget(IMapShadowLayers? mapLayers)

@@ -49,6 +49,7 @@ internal static partial class ViewportAspectRegressionTests
         float origScale = root.Scaling3DScale;
         Viewport.Scaling3DModeEnum origMode = root.Scaling3DMode;
         Viewport.Msaa origMsaa = root.Msaa3D;
+        Viewport.ScreenSpaceAAEnum origScreenAa = root.ScreenSpaceAA;
         try
         {
             // Verify ResolveWindowPixelSize uses capped active 21:9 pixels (3442x1440 -> 0.862 scale, 2x MSAA) for 32:9 windows
@@ -111,6 +112,7 @@ internal static partial class ViewportAspectRegressionTests
             root.Scaling3DScale = origScale;
             root.Scaling3DMode = origMode;
             root.Msaa3D = origMsaa;
+            root.ScreenSpaceAA = origScreenAa;
             root.ContentScaleAspect = origAspect;
             root.ContentScaleSize = origContentSize;
             root.Size = origSize;
@@ -505,6 +507,7 @@ internal static partial class ViewportAspectRegressionTests
         float origScale = root.Scaling3DScale;
         Viewport.Scaling3DModeEnum origMode = root.Scaling3DMode;
         Viewport.Msaa origMsaa = root.Msaa3D;
+        Viewport.ScreenSpaceAAEnum origScreenAa = root.ScreenSpaceAA;
         DisplaySettings origSavedSettings = main.SettingsPanel.SavedConfig;
         DisplaySettings origEffectiveSettings = main.SettingsPanel.CurrentSettings;
         try
@@ -549,6 +552,7 @@ internal static partial class ViewportAspectRegressionTests
             root.Scaling3DScale = origScale;
             root.Scaling3DMode = origMode;
             root.Msaa3D = origMsaa;
+            root.ScreenSpaceAA = origScreenAa;
             root.ContentScaleAspect = origAspect;
             root.ContentScaleSize = origContentSize;
             root.Size = origRootSize;

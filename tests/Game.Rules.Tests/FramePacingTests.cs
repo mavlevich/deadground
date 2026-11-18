@@ -466,4 +466,100 @@ public sealed class FramePacingTests
             posAfterBurst.X >= 37.0f,
             $"Position after burst should be >= 37.0, but was {posAfterBurst.X}");
     }
+
+    [Fact]
+    public void DisplaySettings_Stage2BilinearFxaaAndCliOverrides_BehaveConsistently()
+    {
+        // Last CLI argument wins: numeric override then "auto" clears numeric override
+        BenchmarkRenderOverrides cleared = DisplaySettings.ParseBenchmarkOverrides(
+            ["--render-scale", "0.43", "--render-scale", "auto", "--aa", "fxaa", "--scaling-mode", "bilinear"]);
+        Assert.Null(cleared.RenderScaleOverride);
+        Assert.Equal("bilinear", cleared.ScalingMode);
+
+        // Reverse order: "auto" then numeric override preserves numeric override
+        BenchmarkRenderOverrides active = DisplaySettings.ParseBenchmarkOverrides(
+            ["--render-scale", "auto", "--render-scale", "0.43"]);
+        Assert.NotNull(active.RenderScaleOverride);
+        Assert.True(MathF.Abs(active.RenderScaleOverride!.Value - 0.43f) < 0.001f);
+
+        // Auto AA computes against actual effectiveRenderScale (< 0.50 not clamped up to 0.50)
+        // 6880*0.43 * 2880*0.43 ~= 3.665M <= 3.7M -> MSAA 2x enabled
+        Assert.Equal(2, DisplaySettings.ResolveMsaaSamples(AntiAliasingPreset.Auto, 6880, 2880, 0.43f));
+        Assert.Equal(0, DisplaySettings.ResolveMsaaSamples(AntiAliasingPreset.Auto, 6880, 2880, 0.50f));
+        Assert.Equal(0, DisplaySettings.ResolveMsaaSamples(AntiAliasingPreset.Fxaa, 1440, 900, 1.0f));
+
+        // Screen-space FXAA activates for explicit FXAA preset and Auto fallback when MSAA == 0
+        Assert.True(DisplaySettings.ResolveScreenSpaceFxaa(AntiAliasingPreset.Fxaa, 0));
+        Assert.True(DisplaySettings.ResolveScreenSpaceFxaa(AntiAliasingPreset.Auto, 0));
+        Assert.False(DisplaySettings.ResolveScreenSpaceFxaa(AntiAliasingPreset.Auto, 2));
+        Assert.False(DisplaySettings.ResolveScreenSpaceFxaa(AntiAliasingPreset.Off, 0));
+        Assert.False(DisplaySettings.ResolveScreenSpaceFxaa(AntiAliasingPreset.Msaa2x, 2));
+        Assert.False(DisplaySettings.ResolveScreenSpaceFxaa(AntiAliasingPreset.Msaa4x, 4));
+        Assert.Equal(AntiAliasingPreset.Fxaa, DisplaySettings.ParseAntiAliasing("fxaa"));
+        Assert.Equal(AntiAliasingPreset.Fxaa, DisplaySettings.ParseAntiAliasing("FXAA"));
+
+        // Bilinear scaling replaces FSR on large/HiDPI outputs (>= 6M pixels) and native 1.0
+        Assert.True(DisplaySettings.ResolveUseBilinearScaling(6880, 2880, 0.50f));
+        Assert.True(DisplaySettings.ResolveUseBilinearScaling(3360, 2100, 0.72f));
+        Assert.True(DisplaySettings.ResolveUseBilinearScaling(1920, 1080, 1.0f));
+        Assert.False(DisplaySettings.ResolveUseBilinearScaling(1920, 1080, 0.75f));
+        Assert.False(DisplaySettings.ResolveUseBilinearScaling(1440, 900, 0.75f));
+    }
+
+    [Fact]
+    public void FramePacingMetrics_Record_IsZeroAllocation_AndTracksOverflowExplicitly()
+    {
+        FramePacingMetrics metrics = new(capacity: 64);
+        FramePacingMetrics.FramePhaseSample phase = new(SessionMs: 1.0f, RenderDrawCalls: 100, VisibleDrawCalls: 60, ShadowDrawCalls: 40);
+
+        // Warm up JIT paths before measuring allocations
+        metrics.Record(12.0f, 1.0f, 5.0f);
+        metrics.Record(12.0f, 1.0f, 5.0f, in phase);
+        metrics.Reset();
+
+        long allocBefore = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 1000; i++)
+        {
+            float ms = i == 999 ? 45.0f : (i % 2 == 0 ? 12.0f : 24.0f);
+            metrics.Record(ms, 2.0f, 6.0f, in phase);
+        }
+        long allocAfter = GC.GetAllocatedBytesForCurrentThread();
+        Assert.Equal(0L, allocAfter - allocBefore);
+
+        // Buffer stores exact capacity for percentiles while streaming stats never drop samples silently
+        Assert.Equal(64, metrics.Capacity);
+        Assert.Equal(64, metrics.Count);
+        Assert.Equal(1000, metrics.TotalCount);
+        Assert.True(metrics.IsBufferSaturated);
+        Assert.Equal(936, metrics.DroppedPercentileSamples);
+
+        FramePacingMetrics.PercentileResults res = metrics.CalculateResults();
+        Assert.Equal(1000, res.SampleCount);
+        Assert.Equal(64, res.StoredSampleCount);
+        Assert.True(res.ArePercentilesTruncated);
+        Assert.True(MathF.Abs(res.MaxMs - 45.0f) < 0.01f, $"MaxMs should preserve post-capacity spike 45.0, got {res.MaxMs}");
+        Assert.Equal(500, res.LongFramesOver16Ms);
+        Assert.Equal(1, res.LongFramesOver33Ms);
+        Assert.True(MathF.Abs(res.MeanCpuMs - 2.0f) < 0.001f);
+        Assert.True(MathF.Abs(res.MeanGpuMs - 6.0f) < 0.001f);
+        Assert.Equal("<=8.3ms:0 | 8.3-16.7:500 | 16.7-25:499 | 25-33.3:0 | 33.3-41.7:0 | >41.7:1", res.Histogram);
+
+        string report = metrics.FormatReport("battle", "Metal", "3440x1440", vsync: true, maxFps: 0);
+        Assert.Contains("percentile buffer full: 64/1000 kept", report);
+        Assert.Contains("Frame Histogram:", report);
+
+        // Large preallocated sustained buffer also records with zero heap allocations
+        FramePacingMetrics sustained = new(capacity: 36_000);
+        sustained.Record(16.0f, 1.0f, 5.0f, in phase);
+        sustained.Reset();
+        long sustainedBefore = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 36_000; i++)
+        {
+            sustained.Record(16.0f, 1.0f, 5.0f, in phase);
+        }
+        long sustainedAfter = GC.GetAllocatedBytesForCurrentThread();
+        Assert.Equal(0L, sustainedAfter - sustainedBefore);
+        Assert.False(sustained.IsBufferSaturated);
+        Assert.Equal(36_000, sustained.TotalCount);
+    }
 }
