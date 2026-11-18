@@ -644,7 +644,7 @@ public partial class Main : Node3D
         _fogOfWar = new FogOfWarView(
             _map,
             scenarioGeometry,
-            useLambertDiffuse: _benchmarkOverrides.TerrainShader == "lambert");
+            useLambertDiffuse: _benchmarkOverrides.TerrainShader != "burley");
         BuildEnvironment(scenarioGeometry);
 
         DisplaySettings loadedConfig = SettingsPanel.LoadConfig();
@@ -654,6 +654,7 @@ public partial class Main : Node3D
         bool cliOverridesQuality = DisplaySettings.HasQualityOverride(combinedArgs);
         bool cliOverridesRenderScale = DisplaySettings.HasRenderScaleOverride(combinedArgs);
         bool cliOverridesAntiAliasing = DisplaySettings.HasAntiAliasingOverride(combinedArgs);
+        bool cliOverridesSsao = DisplaySettings.HasSsaoOverride(combinedArgs);
         DisplaySettings activeSettings = DisplaySettings.ParseCommandLine(combinedArgs, loadedConfig);
         _benchmarkQuit = activeSettings.BenchmarkQuit;
 
@@ -675,6 +676,7 @@ public partial class Main : Node3D
         }
         EnvironmentProfile activeProfile = EnvironmentProfile.Load(profileName);
         _environmentView.ApplyProfile(activeProfile, activeSettings.Quality);
+        _environmentView.SetDisplayOutputAndSsao(activeSettings.AmbientOcclusion, SettingsPanel.ResolveWindowPixelSize(GetViewport()));
         _environmentView.ApplyBenchmarkOverrides(_benchmarkOverrides);
 
         if (_ustyeMapView is not null)
@@ -692,13 +694,17 @@ public partial class Main : Node3D
             cliOverridesProfile,
             cliOverridesQuality,
             cliOverridesRenderScale,
-            cliOverridesAntiAliasing);
+            cliOverridesAntiAliasing,
+            cliOverridesSsao);
 
         _settingsPanel.SettingsChanged += newSettings =>
         {
+            _benchmarkOverrides = SettingsPanel.ActiveBenchmarkOverrides ?? _benchmarkOverrides;
+            _environmentView.ApplyBenchmarkOverrides(SettingsPanel.ActiveBenchmarkOverrides);
             SettingsPanel.ApplyWindowRenderPolicy(GetWindow(), GetViewport(), newSettings);
             RefreshCachedTerrainViewportHeight(GetViewport());
             EnvironmentProfile profile = EnvironmentProfile.Load(newSettings.EnvironmentProfile);
+            _environmentView.SetDisplayOutputAndSsao(newSettings.AmbientOcclusion, SettingsPanel.ResolveWindowPixelSize(GetViewport()));
             _environmentView.ApplyProfile(profile, newSettings.Quality);
             _environmentView.UpdateShadowTierForCamera(_cameraRig.Size, _activeShadowMapLayers);
             if (_ustyeMapView is not null)
@@ -1097,6 +1103,7 @@ public partial class Main : Node3D
         Viewport? vp = GetViewport();
         DisplaySettings cur = _settingsPanel?.CurrentSettings ?? DisplaySettings.CreateDefault();
         SettingsPanel.ApplyWindowRenderPolicy(win, vp, cur);
+        _environmentView?.SetDisplayOutputAndSsao(cur.AmbientOcclusion, SettingsPanel.ResolveWindowPixelSize(vp));
         RefreshCachedTerrainViewportHeight(vp);
     }
 
@@ -1497,7 +1504,7 @@ public partial class Main : Node3D
                     string shadowSplits = _environmentView?.Sun.DirectionalShadowMode.ToString() ?? "Unknown";
                     string shadowSize = _benchmarkOverrides.ShadowSize?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "4096";
                     string shadowFilter = _benchmarkOverrides.ShadowFilter ?? "default";
-                    string terrainDiffuse = _benchmarkOverrides.TerrainShader ?? "burley";
+                    string terrainDiffuse = _benchmarkOverrides.TerrainShader ?? "lambert";
                     string resolution = string.Create(
                         System.Globalization.CultureInfo.InvariantCulture,
                         $"{viewSize.X:F0}x{viewSize.Y:F0} (screen[{curScreen}]={screenRes.X}x{screenRes.Y}, window={winSize.X}x{winSize.Y}, internal={internalW}x{internalH}, dpi={dpi}, screenScale={screenScale:F2}, renderScale={scale3D:F2}, scaling={GetViewport().Scaling3DMode}, aa={aaSummary}, ssao={ssaoSummary}, shadow={shadowSplits}@{shadowSize}/{shadowFilter}, glow={glowOn}, diffuse={terrainDiffuse}, pan={_benchmarkOverrides.BenchmarkPan})");

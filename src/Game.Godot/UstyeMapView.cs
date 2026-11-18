@@ -20,6 +20,7 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
     private FogOfWarView? _fogOverlay;
 
     private Node3D _terrainRoot = null!;
+    private Node3D _terrainShadowRoot = null!;
     private Node3D _waterRoot = null!;
     private Node3D _roadsRoot = null!;
     private Node3D _structuresRoot = null!;
@@ -33,6 +34,8 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
     private readonly List<MultiMeshInstance3D> _coniferMultiMeshes = [];
     private readonly List<MultiMeshInstance3D> _deciduousMultiMeshes = [];
     private readonly List<MeshInstance3D> _terrainChunks = [];
+    private readonly List<MeshInstance3D> _coarseTerrainShadowCasters = [];
+    private readonly List<MeshInstance3D> _terrainShadowProxies = [];
     private readonly List<ScaleVehicle> _scaleVehicles = [];
 
     private ShaderMaterial? _waterMaterial;
@@ -47,6 +50,7 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
 
     public UstyePlanData Plan => _plan;
     public Node3D TerrainRoot => _terrainRoot;
+    public Node3D TerrainShadowRoot => _terrainShadowRoot;
     public Node3D WaterRoot => _waterRoot;
     public Node3D RoadsRoot => _roadsRoot;
     public Node3D StructuresRoot => _structuresRoot;
@@ -215,6 +219,8 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
     {
         _terrainRoot = new Node3D { Name = "TerrainRoot" };
         AddChild(_terrainRoot);
+        _terrainShadowRoot = new Node3D { Name = "TerrainShadowRoot" };
+        AddChild(_terrainShadowRoot);
 
         const float chunkSize = 500f;
         int chunkCols = (int)(_plan.ExtentX / chunkSize);
@@ -225,12 +231,18 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
             : new StandardMaterial3D
             {
                 ShadingMode = BaseMaterial3D.ShadingModeEnum.PerPixel,
+                DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
                 VertexColorUseAsAlbedo = true,
                 Roughness = 0.95f,
                 SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled
             };
 
         Vector3 lightDir = new Vector3(-0.55f, 0.75f, -0.35f).Normalized();
+
+        const int proxyStride = 4;
+        const int proxyGridSize = 21; // 500m / 25m + 1
+        Vector3[]?[] proxyVertsByChunk = new Vector3[]?[chunkCols * chunkRows];
+        float[]?[] proxyDropsByChunk = new float[]?[chunkCols * chunkRows];
 
         for (int cz = 0; cz < chunkRows; cz++)
         {
@@ -367,12 +379,98 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
                     Name = $"TerrainChunk_{cx}_{cz}",
                     Mesh = chunkMesh,
                     MaterialOverride = _terrainMaterial,
-                    CastShadow = _terrainShadowsEnabled
-                        ? GeometryInstance3D.ShadowCastingSetting.On
-                        : GeometryInstance3D.ShadowCastingSetting.Off
+                    CastShadow = isFine
+                        ? GeometryInstance3D.ShadowCastingSetting.Off
+                        : (_terrainShadowsEnabled
+                            ? GeometryInstance3D.ShadowCastingSetting.On
+                            : GeometryInstance3D.ShadowCastingSetting.Off)
                 };
                 _terrainRoot.AddChild(chunkInstance);
                 _terrainChunks.Add(chunkInstance);
+
+                if (isFine)
+                {
+                    int idx = cz * chunkCols + cx;
+                    Vector3[] proxyVerts = new Vector3[proxyGridSize * proxyGridSize];
+                    for (int pz = 0; pz < proxyGridSize; pz++)
+                    {
+                        int fz = pz * proxyStride;
+                        for (int px = 0; px < proxyGridSize; px++)
+                        {
+                            int fx = px * proxyStride;
+                            proxyVerts[pz * proxyGridSize + px] = vertices[fz * vCols + fx];
+                        }
+                    }
+                    proxyVertsByChunk[idx] = proxyVerts;
+                    proxyDropsByChunk[idx] = TerrainView.ComputeConservativeShadowProxyDrops(vertices, vCols, vRows, proxyStride);
+                }
+                else
+                {
+                    _coarseTerrainShadowCasters.Add(chunkInstance);
+                }
+            }
+        }
+
+        // Synchronize drop compensations across shared edges between adjacent riparian shadow proxies
+        for (int cz = 0; cz < chunkRows; cz++)
+        {
+            for (int cx = 0; cx < chunkCols - 1; cx++)
+            {
+                float[]? left = proxyDropsByChunk[cz * chunkCols + cx];
+                float[]? right = proxyDropsByChunk[cz * chunkCols + (cx + 1)];
+                if (left is null || right is null) continue;
+                TerrainView.ReconcileHorizontalEdgeShadowDrops(left, proxyGridSize, proxyGridSize, right, proxyGridSize, proxyGridSize);
+            }
+        }
+        for (int cz = 0; cz < chunkRows - 1; cz++)
+        {
+            for (int cx = 0; cx < chunkCols; cx++)
+            {
+                float[]? top = proxyDropsByChunk[cz * chunkCols + cx];
+                float[]? bottom = proxyDropsByChunk[(cz + 1) * chunkCols + cx];
+                if (top is null || bottom is null) continue;
+                TerrainView.ReconcileVerticalEdgeShadowDrops(top, proxyGridSize, proxyGridSize, bottom, proxyGridSize);
+            }
+        }
+
+        int[] proxyIndices = BuildQuadIndices(proxyGridSize, proxyGridSize);
+        Vector3[] proxyNormals = new Vector3[proxyGridSize * proxyGridSize];
+        Array.Fill(proxyNormals, Vector3.Up);
+        using Godot.Collections.Array proxyArrays = new();
+        proxyArrays.Resize((int)Mesh.ArrayType.Max);
+
+        for (int cz = 0; cz < chunkRows; cz++)
+        {
+            for (int cx = 0; cx < chunkCols; cx++)
+            {
+                int idx = cz * chunkCols + cx;
+                Vector3[]? pVerts = proxyVertsByChunk[idx];
+                float[]? pDrops = proxyDropsByChunk[idx];
+                if (pVerts is null || pDrops is null) continue;
+
+                for (int i = 0; i < pVerts.Length; i++)
+                {
+                    if (pDrops[i] > 0f)
+                    {
+                        pVerts[i] = new Vector3(pVerts[i].X, pVerts[i].Y - pDrops[i], pVerts[i].Z);
+                    }
+                }
+
+                proxyArrays[(int)Mesh.ArrayType.Vertex] = pVerts;
+                proxyArrays[(int)Mesh.ArrayType.Normal] = proxyNormals;
+                proxyArrays[(int)Mesh.ArrayType.Index] = proxyIndices;
+
+                ArrayMesh proxyMesh = new();
+                proxyMesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, proxyArrays);
+                MeshInstance3D proxy = new()
+                {
+                    Name = $"TerrainShadowProxy_{cx}_{cz}",
+                    Mesh = proxyMesh,
+                    CastShadow = GeometryInstance3D.ShadowCastingSetting.ShadowsOnly,
+                    Visible = _terrainShadowsEnabled
+                };
+                _terrainShadowRoot.AddChild(proxy);
+                _terrainShadowProxies.Add(proxy);
             }
         }
     }
@@ -519,6 +617,8 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
         _asphaltMaterial = new StandardMaterial3D
         {
             AlbedoColor = new Color("353638"),
+            DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
+            SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled,
             Roughness = 0.88f,
             CullMode = BaseMaterial3D.CullModeEnum.Disabled
         };
@@ -526,6 +626,8 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
         _gravelMaterial = new StandardMaterial3D
         {
             AlbedoColor = new Color("585246"),
+            DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
+            SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled,
             Roughness = 0.94f,
             CullMode = BaseMaterial3D.CullModeEnum.Disabled
         };
@@ -533,6 +635,8 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
         _dirtPathMaterial = new StandardMaterial3D
         {
             AlbedoColor = new Color("655b4b"),
+            DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
+            SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled,
             Roughness = 0.98f,
             CullMode = BaseMaterial3D.CullModeEnum.Disabled
         };
@@ -832,6 +936,8 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
         StandardMaterial3D panelBlockMat = new()
         {
             AlbedoColor = new Color("ababa7"),
+            DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
+            SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled,
             Roughness = 0.90f
         };
 
@@ -845,24 +951,32 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
         StandardMaterial3D warehouseWallMat = new()
         {
             AlbedoColor = new Color("656e6d"),
+            DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
+            SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled,
             Roughness = 0.88f
         };
 
         StandardMaterial3D warehouseRoofMat = new()
         {
             AlbedoColor = new Color("4a5252"),
+            DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
+            SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled,
             Roughness = 0.80f
         };
 
         StandardMaterial3D logMat = new()
         {
             AlbedoColor = new Color("785838"),
+            DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
+            SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled,
             Roughness = 0.95f
         };
 
         StandardMaterial3D waterTowerMat = new()
         {
             AlbedoColor = new Color("888e92"),
+            DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
+            SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled,
             Roughness = 0.85f
         };
 
@@ -1294,6 +1408,8 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
         _coniferMat = new StandardMaterial3D
         {
             AlbedoColor = new Color("234226"),
+            DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
+            SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled,
             Roughness = 0.95f
         };
 
@@ -1301,6 +1417,8 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
         _deciduousMat = new StandardMaterial3D
         {
             AlbedoColor = new Color("42562c"),
+            DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
+            SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled,
             Roughness = 0.95f
         };
 
@@ -1442,10 +1560,43 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
         }
 
         _terrainShadowsEnabled = enabled;
-        GeometryInstance3D.ShadowCastingSetting setting = enabled
+        GeometryInstance3D.ShadowCastingSetting coarseSetting = enabled
             ? GeometryInstance3D.ShadowCastingSetting.On
             : GeometryInstance3D.ShadowCastingSetting.Off;
-        SetListShadowCasting(_terrainChunks, setting);
+        SetListShadowCasting(_coarseTerrainShadowCasters, coarseSetting);
+
+        for (int i = 0; i < _terrainShadowProxies.Count; i++)
+        {
+            MeshInstance3D proxy = _terrainShadowProxies[i];
+            if (!GodotObject.IsInstanceValid(proxy)) continue;
+            proxy.CastShadow = GeometryInstance3D.ShadowCastingSetting.ShadowsOnly;
+            proxy.Visible = enabled;
+        }
+    }
+
+    private static int[] BuildQuadIndices(int vCols, int vRows)
+    {
+        int[] indices = new int[(vCols - 1) * (vRows - 1) * 6];
+        int iOffset = 0;
+        for (int lz = 0; lz < vRows - 1; lz++)
+        {
+            for (int lx = 0; lx < vCols - 1; lx++)
+            {
+                int a = lz * vCols + lx;
+                int b = a + 1;
+                int c = (lz + 1) * vCols + lx;
+                int d = c + 1;
+
+                indices[iOffset++] = a;
+                indices[iOffset++] = b;
+                indices[iOffset++] = c;
+
+                indices[iOffset++] = b;
+                indices[iOffset++] = d;
+                indices[iOffset++] = c;
+            }
+        }
+        return indices;
     }
 
     private static void SetListShadowCasting<T>(List<T> instances, GeometryInstance3D.ShadowCastingSetting setting)

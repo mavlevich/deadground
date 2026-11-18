@@ -44,7 +44,8 @@ public sealed class ViewportAspectLayoutTests
     [Theory]
     [InlineData(3440, 1440, 0.8626f, 2)]
     [InlineData(3840, 2160, 0.6667f, 2)]
-    [InlineData(6880, 2880, 0.5000f, 0)]
+    [InlineData(6880, 2880, 0.4313f, 2)]
+    [InlineData(10240, 4320, 0.3500f, 0)]
     public void AutoRenderScaleAndMsaa_MatchPixelBudgetFormulaAndClamp(
         int width,
         int height,

@@ -125,6 +125,7 @@ public partial class UstyeMapPreview : Node3D
 
     public Camera3D Camera => _camera;
     internal CameraRig Rig => _cameraRig;
+    internal DisplaySettings ActiveDisplaySettings { get => _activeDisplaySettings; set => _activeDisplaySettings = value; }
     public CameraLandmark[] Landmarks => _landmarks;
 
     private readonly string[]? _customArgs;
@@ -228,6 +229,8 @@ public partial class UstyeMapPreview : Node3D
         DisplaySettings loadedConfig = SettingsPanel.LoadConfig();
         string[] combinedArgs = EffectiveArgs;
         DisplaySettings activeSettings = DisplaySettings.ParseCommandLine(combinedArgs, loadedConfig);
+        BenchmarkRenderOverrides cliOverrides = DisplaySettings.ParseBenchmarkOverrides(combinedArgs);
+        SettingsPanel.ActiveBenchmarkOverrides = cliOverrides;
 
         string profileId = "overcast";
         if (SettingsPanel.TryLoadSavedEnvironmentProfile(out string savedProfile))
@@ -242,6 +245,7 @@ public partial class UstyeMapPreview : Node3D
         EnvironmentQuality quality = activeSettings.Quality;
 
         EnvironmentProfile profile = EnvironmentProfile.Load(profileId);
+        _environmentView.ApplyBenchmarkOverrides(cliOverrides);
         _environmentView.ApplyProfile(profile, quality);
         _activeDisplaySettings = activeSettings;
         ApplyPreviewWindowPolicy();
@@ -265,6 +269,7 @@ public partial class UstyeMapPreview : Node3D
 
     public override void _ExitTree()
     {
+        SettingsPanel.ActiveBenchmarkOverrides = null;
         UnsubscribeWindowMetrics();
         base._ExitTree();
     }
@@ -287,7 +292,11 @@ public partial class UstyeMapPreview : Node3D
     internal void ApplyPreviewWindowPolicy()
     {
         if (!IsInsideTree()) return;
-        SettingsPanel.ApplyWindowRenderPolicy(GetWindow(), GetViewport(), _activeDisplaySettings);
+        Viewport? vp = GetViewport();
+        SettingsPanel.ApplyWindowRenderPolicy(GetWindow(), vp, _activeDisplaySettings);
+        _environmentView?.SetDisplayOutputAndSsao(
+            _activeDisplaySettings.AmbientOcclusion,
+            SettingsPanel.ResolveWindowPixelSize(vp));
     }
 
     private void SetupCamera(UstyePlanData plan)

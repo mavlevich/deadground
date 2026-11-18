@@ -244,9 +244,9 @@ public sealed class FramePacingTests
         Assert.Equal(RenderScalePreset.Scale50, DisplaySettings.ParseRenderScale("50%"));
         Assert.Equal(RenderScalePreset.Native100, DisplaySettings.ParseRenderScale("bogus", RenderScalePreset.Native100));
 
-        // Pixel-budget Auto scaling: clamp(sqrt(TargetPixels / windowPixels), 0.5, 1.0)
+        // Pixel-budget Auto scaling: clamp(sqrt(TargetPixels / windowPixels), 0.35, 1.0)
         float scale6880 = DisplaySettings.ResolveRenderScaleFactor(RenderScalePreset.Auto, 6880, 2880);
-        Assert.True(MathF.Abs(scale6880 - 0.50f) < 0.001f, $"Expected 0.50 on 6880x2880, got {scale6880}");
+        Assert.True(MathF.Abs(scale6880 - 0.4313f) < 0.002f, $"Expected ~0.431 on 6880x2880, got {scale6880}");
         float scale2560 = DisplaySettings.ResolveRenderScaleFactor(RenderScalePreset.Auto, 2560, 1600);
         Assert.True(MathF.Abs(scale2560 - 0.9487f) < 0.01f, $"Expected ~0.95 on 2560x1600, got {scale2560}");
         float scale1440 = DisplaySettings.ResolveRenderScaleFactor(RenderScalePreset.Auto, 1440, 900);
@@ -264,10 +264,25 @@ public sealed class FramePacingTests
         Assert.Equal(AntiAliasingPreset.Msaa4x, DisplaySettings.ParseAntiAliasing("4x"));
         Assert.Equal(2, DisplaySettings.ResolveMsaaSamples(AntiAliasingPreset.Auto, 1440, 900, scale1440));
         Assert.Equal(2, DisplaySettings.ResolveMsaaSamples(AntiAliasingPreset.Auto, 2560, 1600, scale2560));
-        Assert.Equal(0, DisplaySettings.ResolveMsaaSamples(AntiAliasingPreset.Auto, 6880, 2880, scale6880));
+        Assert.Equal(2, DisplaySettings.ResolveMsaaSamples(AntiAliasingPreset.Auto, 6880, 2880, scale6880));
+        Assert.Equal(0, DisplaySettings.ResolveMsaaSamples(AntiAliasingPreset.Auto, 6880, 2880, 0.50f));
         Assert.Equal(0, DisplaySettings.ResolveMsaaSamples(AntiAliasingPreset.Off, 1440, 900, 1.0f));
         Assert.Equal(2, DisplaySettings.ResolveMsaaSamples(AntiAliasingPreset.Msaa2x, 6880, 2880, 1.0f));
         Assert.Equal(4, DisplaySettings.ResolveMsaaSamples(AntiAliasingPreset.Msaa4x, 6880, 2880, 1.0f));
+
+        // Ambient occlusion (SSAO) Auto policy: ON below 4.5M output pixels (except Low), OFF on >= 4.5M UWQHD/HiDPI outputs
+        Assert.True(DisplaySettings.ResolveSsaoEnabled(AmbientOcclusionPreset.Auto, EnvironmentQuality.High, true, 1920, 1080));
+        Assert.True(DisplaySettings.ResolveSsaoEnabled(AmbientOcclusionPreset.Auto, EnvironmentQuality.Medium, true, 2560, 1600));
+        Assert.False(DisplaySettings.ResolveSsaoEnabled(AmbientOcclusionPreset.Auto, EnvironmentQuality.Medium, true, 3440, 1440));
+        Assert.False(DisplaySettings.ResolveSsaoEnabled(AmbientOcclusionPreset.Auto, EnvironmentQuality.High, true, 3360, 2100));
+        Assert.False(DisplaySettings.ResolveSsaoEnabled(AmbientOcclusionPreset.Auto, EnvironmentQuality.High, true, 6880, 2880));
+        Assert.True(DisplaySettings.ResolveSsaoEnabled(AmbientOcclusionPreset.On, EnvironmentQuality.High, true, 6880, 2880));
+        Assert.False(DisplaySettings.ResolveSsaoEnabled(AmbientOcclusionPreset.Off, EnvironmentQuality.High, true, 1920, 1080));
+        Assert.False(DisplaySettings.ResolveSsaoEnabled(AmbientOcclusionPreset.Auto, EnvironmentQuality.Low, true, 1920, 1080));
+        Assert.Equal(AmbientOcclusionPreset.Off, DisplaySettings.ParseAmbientOcclusion("off"));
+        Assert.Equal(AmbientOcclusionPreset.On, DisplaySettings.ParseAmbientOcclusion("half"));
+        Assert.True(DisplaySettings.HasSsaoOverride(["--ssao", "off"]));
+        Assert.Null(DisplaySettings.ParseBenchmarkOverrides(["--ssao", "half", "--ssao", "auto"]).SsaoMode);
 
         Assert.True(DisplaySettings.HasRenderScaleOverride(["--render-scale", "75"]));
         Assert.False(DisplaySettings.HasRenderScaleOverride(["--max-fps", "60"]));
@@ -498,10 +513,12 @@ public sealed class FramePacingTests
         Assert.Equal(AntiAliasingPreset.Fxaa, DisplaySettings.ParseAntiAliasing("fxaa"));
         Assert.Equal(AntiAliasingPreset.Fxaa, DisplaySettings.ParseAntiAliasing("FXAA"));
 
-        // Bilinear scaling replaces FSR on large/HiDPI outputs (>= 6M pixels) and native 1.0
+        // Bilinear scaling replaces FSR on large/HiDPI outputs (>= 4.5M pixels) and native 1.0
         Assert.True(DisplaySettings.ResolveUseBilinearScaling(6880, 2880, 0.50f));
+        Assert.True(DisplaySettings.ResolveUseBilinearScaling(3440, 1440, 0.86f));
         Assert.True(DisplaySettings.ResolveUseBilinearScaling(3360, 2100, 0.72f));
         Assert.True(DisplaySettings.ResolveUseBilinearScaling(1920, 1080, 1.0f));
+        Assert.False(DisplaySettings.ResolveUseBilinearScaling(2560, 1600, 0.95f));
         Assert.False(DisplaySettings.ResolveUseBilinearScaling(1920, 1080, 0.75f));
         Assert.False(DisplaySettings.ResolveUseBilinearScaling(1440, 900, 0.75f));
     }
