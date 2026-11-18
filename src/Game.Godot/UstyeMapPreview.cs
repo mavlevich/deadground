@@ -52,6 +52,8 @@ public partial class UstyeMapPreview : Node3D
     private Camera3D _camera = null!;
     private CameraRig _cameraRig = null!;
     private DisplaySettings _activeDisplaySettings = DisplaySettings.CreateDefault();
+    private Viewport? _subscribedViewport;
+    private Window? _subscribedWindow;
     private EnvironmentView _environmentView = null!;
     public EnvironmentView EnvironmentView => _environmentView;
     public DirectionalLight3D Sun => _environmentView.Sun;
@@ -243,10 +245,16 @@ public partial class UstyeMapPreview : Node3D
         _environmentView.ApplyProfile(profile, quality);
         _activeDisplaySettings = activeSettings;
         ApplyPreviewWindowPolicy();
-        GetViewport().SizeChanged += ApplyPreviewWindowPolicy;
+        UnsubscribeWindowMetrics();
+        _subscribedViewport = GetViewport();
+        if (_subscribedViewport is not null)
+        {
+            _subscribedViewport.SizeChanged += ApplyPreviewWindowPolicy;
+        }
         if (GetWindow() is Window previewWin)
         {
-            previewWin.DpiChanged += ApplyPreviewWindowPolicy;
+            _subscribedWindow = previewWin;
+            _subscribedWindow.DpiChanged += ApplyPreviewWindowPolicy;
         }
 
         if (_mapView is not null)
@@ -255,8 +263,30 @@ public partial class UstyeMapPreview : Node3D
         }
     }
 
+    public override void _ExitTree()
+    {
+        UnsubscribeWindowMetrics();
+        base._ExitTree();
+    }
+
+    private void UnsubscribeWindowMetrics()
+    {
+        if (_subscribedViewport is not null && GodotObject.IsInstanceValid(_subscribedViewport))
+        {
+            _subscribedViewport.SizeChanged -= ApplyPreviewWindowPolicy;
+        }
+        _subscribedViewport = null;
+
+        if (_subscribedWindow is not null && GodotObject.IsInstanceValid(_subscribedWindow))
+        {
+            _subscribedWindow.DpiChanged -= ApplyPreviewWindowPolicy;
+        }
+        _subscribedWindow = null;
+    }
+
     internal void ApplyPreviewWindowPolicy()
     {
+        if (!IsInsideTree()) return;
         SettingsPanel.ApplyWindowRenderPolicy(GetWindow(), GetViewport(), _activeDisplaySettings);
     }
 
