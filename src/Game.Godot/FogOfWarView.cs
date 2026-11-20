@@ -90,6 +90,13 @@ void fragment() {
     private readonly Shader _shader;
     private readonly ShaderMaterial _material;
     private readonly LineOfSightContext _losContext = new();
+    private readonly SmokeVolume[] _smokeVolumes = new SmokeVolume[WorldState.MaxSmokeClouds];
+    private readonly SmokeVolume[] _unitSmokeVolumes = new SmokeVolume[WorldState.MaxSmokeClouds];
+    private int _smokeVolumeCount;
+    private int _unitSmokeCount;
+    private float _unitSmokeMinDistSq;
+    private ulong _unitSmokeSectorMask;
+    private ulong _lastSmokeSignature;
 
     private float _timeSinceCycleStart;
     private int _unitIndexInCycle;
@@ -239,6 +246,7 @@ void fragment() {
         }
 
         ReadOnlySpan<OwnUnitObservation> ownUnits = replica.OwnUnits;
+        SyncSmokeVolumes(replica);
         _timeSinceCycleStart += delta;
 
         if (!_cycleInProgress)
@@ -271,6 +279,7 @@ void fragment() {
 
     public void UpdateAllNow(ClientReplica replica, UnitCatalog catalog)
     {
+        SyncSmokeVolumes(replica);
         ReadOnlySpan<OwnUnitObservation> ownUnits = replica.OwnUnits;
         BeginCycle(ownUnits);
         for (int i = 0; i < ownUnits.Length; i++)
@@ -278,6 +287,67 @@ void fragment() {
             ProcessUnit(ownUnits[i], catalog);
         }
         EndCycle();
+    }
+
+    private bool SyncSmokeVolumes(ClientReplica replica)
+    {
+        ReadOnlySpan<SmokeCloudObservation> clouds = replica.SmokeClouds;
+        int tick = replica.LatestTick;
+        int outCount = 0;
+        ulong sig = 14695981039346656037UL;
+
+        for (int i = 0; i < clouds.Length && outCount < _smokeVolumes.Length; i++)
+        {
+            ref readonly SmokeCloudObservation c = ref clouds[i];
+            c.EvaluateAtTick(tick, out float effectiveRadius, out float effectiveDensity);
+            if (effectiveRadius <= 0f || effectiveDensity <= 0f)
+            {
+                continue;
+            }
+
+            float baseY = _geometry is not null
+                ? _geometry.GetSurfaceHeight(c.Position, c.SupportSurface)
+                : _map.GetHeight(c.Position.X, c.Position.Y);
+
+            _smokeVolumes[outCount++] = new SmokeVolume(
+                c.Position.X,
+                c.Position.Y,
+                baseY - 0.25f,
+                baseY + c.Height,
+                effectiveRadius,
+                effectiveDensity,
+                c.Id);
+
+            float diameterTau = 2.0f * effectiveRadius * effectiveDensity;
+            ulong opaqueBit = diameterTau >= SmokeLos.BlockingOpticalDepth ? 1UL : 0UL;
+
+            sig ^= c.Id.Value;
+            sig *= 1099511628211UL;
+            sig ^= (ulong)(int)MathF.Floor(effectiveRadius);
+            sig *= 1099511628211UL;
+            sig ^= (ulong)(int)MathF.Floor(effectiveDensity * 100.0f);
+            sig *= 1099511628211UL;
+            sig ^= (ulong)(int)MathF.Floor(diameterTau * 4.0f);
+            sig *= 1099511628211UL;
+            sig ^= opaqueBit;
+            sig *= 1099511628211UL;
+        }
+
+        _smokeVolumeCount = outCount;
+        sig ^= (ulong)outCount;
+        sig *= 1099511628211UL;
+
+        if (sig != _lastSmokeSignature)
+        {
+            _lastSmokeSignature = sig;
+            foreach (UnitViewshed viewshed in _viewsheds.Values)
+            {
+                viewshed.Swept = false;
+            }
+            return true;
+        }
+
+        return false;
     }
 
     // Test helper: the view of a single observer, replacing everything seen before.
@@ -415,6 +485,8 @@ void fragment() {
         float groundY0 = _map.GetHeight(x0, z0);
         float y0 = groundY0 + eyeHeight;
 
+        PrepareUnitSmokeFilter(x0, z0, sensorRange);
+
         int cx0 = (int)MathF.Floor(x0 / CellSize);
         int cz0 = (int)MathF.Floor(z0 / CellSize);
 
@@ -522,14 +594,137 @@ void fragment() {
         float tVisible = Math.Max(tGround, tBlock);
         if (tVisible >= hInterp - 1e-4f)
         {
-            if (_geometry is null || _geometry.VegetationZones.Count == 0 ||
-                _geometry.IsVegetationClear(new NumericsVector3(x0, y0, z0), new NumericsVector3(_cellCenterX[cx], yGround, _cellCenterZ[cz]), _losContext))
+            NumericsVector3 eyePt = new(x0, y0, z0);
+            bool vegClear = _geometry is null || _geometry.VegetationZones.Count == 0 ||
+                _geometry.IsVegetationClear(eyePt, new NumericsVector3(_cellCenterX[cx], yGround, _cellCenterZ[cz]), _losContext);
+            bool smokeClear = true;
+            if (vegClear && _unitSmokeCount > 0 && distSq >= _unitSmokeMinDistSq)
+            {
+                if (_unitSmokeSectorMask == ulong.MaxValue ||
+                    (_unitSmokeSectorMask & (1UL << FastSector64(diffX, diffZ))) != 0)
+                {
+                    smokeClear = SmokeLos.IsSmokeClear(
+                        eyePt,
+                        new NumericsVector3(_cellCenterX[cx], yGround + 0.5f, _cellCenterZ[cz]),
+                        _unitSmokeVolumes.AsSpan(0, _unitSmokeCount));
+                }
+            }
+            if (vegClear && smokeClear)
             {
                 MarkSeen(cellIdx);
             }
         }
 
         _horizonBuffer[cellIdx] = Math.Max(hInterp, tBlock);
+    }
+
+    private void PrepareUnitSmokeFilter(float x0, float z0, float sensorRange)
+    {
+        _unitSmokeCount = 0;
+        _unitSmokeMinDistSq = float.MaxValue;
+        _unitSmokeSectorMask = 0UL;
+
+        if (_smokeVolumeCount == 0)
+        {
+            return;
+        }
+
+        for (int i = 0; i < _smokeVolumeCount; i++)
+        {
+            ref readonly SmokeVolume v = ref _smokeVolumes[i];
+            float dx = v.CenterX - x0;
+            float dz = v.CenterZ - z0;
+            float distSq = dx * dx + dz * dz;
+            float maxReach = sensorRange + v.Radius;
+            if (distSq > maxReach * maxReach)
+            {
+                continue;
+            }
+
+            _unitSmokeVolumes[_unitSmokeCount++] = v;
+
+            float dist = MathF.Sqrt(distSq);
+            float paddedRadius = v.Radius + 0.25f;
+            if (dist <= paddedRadius)
+            {
+                _unitSmokeMinDistSq = 0f;
+                _unitSmokeSectorMask = ulong.MaxValue;
+                continue;
+            }
+
+            float nearDist = dist - paddedRadius;
+            float nearDistSq = nearDist * nearDist;
+            if (nearDistSq < _unitSmokeMinDistSq)
+            {
+                _unitSmokeMinDistSq = nearDistSq;
+            }
+
+            if (_unitSmokeSectorMask == ulong.MaxValue)
+            {
+                continue;
+            }
+
+            float centerAngle = MathF.Atan2(dz, dx);
+            float sinHalf = Math.Clamp(paddedRadius / dist, 0f, 1f);
+            float halfAngle = MathF.Asin(sinHalf);
+            float a1 = centerAngle - halfAngle;
+            float a2 = centerAngle + halfAngle;
+
+            int s1 = (FastSector64(MathF.Cos(a1), MathF.Sin(a1)) - 1) & 63;
+            int s2 = (FastSector64(MathF.Cos(a2), MathF.Sin(a2)) + 1) & 63;
+            int s = s1;
+            for (int step = 0; step < 64; step++)
+            {
+                _unitSmokeSectorMask |= 1UL << s;
+                if (s == s2)
+                {
+                    break;
+                }
+                s = (s + 1) & 63;
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int FastSector64(float dx, float dz)
+    {
+        // Strictly monotonic 64-sector octant mapping in [0, 63] without Atan2.
+        float sector;
+        if (dx >= 0f)
+        {
+            if (dz >= 0f)
+            {
+                sector = dx >= dz
+                    ? (dz / MathF.Max(dx, 1e-6f)) * 8f
+                    : 16f - (dx / MathF.Max(dz, 1e-6f)) * 8f;
+            }
+            else
+            {
+                float adz = -dz;
+                sector = adz >= dx
+                    ? 48f + (dx / MathF.Max(adz, 1e-6f)) * 8f
+                    : 64f - (adz / MathF.Max(dx, 1e-6f)) * 8f;
+            }
+        }
+        else
+        {
+            float adx = -dx;
+            if (dz >= 0f)
+            {
+                sector = dz >= adx
+                    ? 16f + (adx / MathF.Max(dz, 1e-6f)) * 8f
+                    : 32f - (dz / MathF.Max(adx, 1e-6f)) * 8f;
+            }
+            else
+            {
+                float adz = -dz;
+                sector = adx >= adz
+                    ? 32f + (adz / MathF.Max(adx, 1e-6f)) * 8f
+                    : 48f - (adx / MathF.Max(adz, 1e-6f)) * 8f;
+            }
+        }
+
+        return ((int)sector) & 63;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -590,6 +785,8 @@ void fragment() {
         _timeSinceCycleStart = 0f;
         _unitIndexInCycle = 0;
         _cycleInProgress = false;
+        _smokeVolumeCount = 0;
+        _lastSmokeSignature = 0;
 
         Array.Clear(_blurBuffer);
         Array.Clear(_textureBuffer);

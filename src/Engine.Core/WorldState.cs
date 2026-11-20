@@ -68,6 +68,80 @@ public sealed class WorldState : IDisposable
         _nextWreckId = 1;
     }
 
+    public const int MaxSmokeClouds = 64;
+    private readonly SmokeCloudState[] _smokeClouds = new SmokeCloudState[MaxSmokeClouds];
+    private int _smokeCloudCount;
+    private uint _nextSmokeCloudId = 1;
+
+    public int SmokeCloudCount => _smokeCloudCount;
+    public ReadOnlySpan<SmokeCloudState> SmokeClouds => _smokeClouds.AsSpan(0, _smokeCloudCount);
+
+    public SmokeCloudState AddSmokeCloud(
+        int owner,
+        Vector2 position,
+        uint supportSurface,
+        float radius,
+        float height,
+        int createdTick,
+        int expiresTick,
+        ushort bloomTicks,
+        ushort fadeTicks,
+        float opticalDensity)
+    {
+        uint idVal = _nextSmokeCloudId++;
+        if (_nextSmokeCloudId == 0) _nextSmokeCloudId = 1;
+        SmokeCloudState cloud = new(
+            new SmokeCloudId(idVal),
+            owner,
+            position,
+            supportSurface,
+            radius,
+            height,
+            createdTick,
+            expiresTick,
+            bloomTicks,
+            fadeTicks,
+            opticalDensity);
+
+        if (_smokeCloudCount < _smokeClouds.Length)
+        {
+            _smokeClouds[_smokeCloudCount++] = cloud;
+        }
+        else
+        {
+            // Evict oldest cloud to stay bounded
+            Array.Copy(_smokeClouds, 1, _smokeClouds, 0, _smokeClouds.Length - 1);
+            _smokeClouds[^1] = cloud;
+        }
+
+        return cloud;
+    }
+
+    public int RemoveExpiredSmokeClouds(int tick)
+    {
+        int removed = 0;
+        int write = 0;
+        for (int i = 0; i < _smokeCloudCount; i++)
+        {
+            if (_smokeClouds[i].IsExpired(tick))
+            {
+                removed++;
+            }
+            else
+            {
+                _smokeClouds[write++] = _smokeClouds[i];
+            }
+        }
+        _smokeCloudCount = write;
+        return removed;
+    }
+
+    public void ClearSmokeClouds()
+    {
+        _smokeCloudCount = 0;
+        _nextSmokeCloudId = 1;
+    }
+
     private record struct Identity(EntityId Id, int Owner, ushort Definition);
 
     public sealed class ContainerData
@@ -141,6 +215,17 @@ public sealed class WorldState : IDisposable
         int LastMovedTick = -1,
         bool HasSwitchedTargetThisReload = false);
 
+    public record struct UnitSmokeState(
+        bool Initialized,
+        bool HasCapability,
+        int ChargesRemaining,
+        int CooldownTicksRemaining,
+        int ActiveEmitTicksRemaining,
+        int EmitIntervalRemaining,
+        bool HasLastCloud,
+        Vector2 LastCloudPosition,
+        int LastCloudTick);
+
     public EntityId CreateUnit(
         int owner,
         ushort definition,
@@ -175,7 +260,7 @@ public sealed class WorldState : IDisposable
             initialTurretYaw,
             initialTurretYaw);
         Entity entity = _storage.Create(new Identity(id, owner, definition),
-            new Position(position), new Motion(position, speed, false, initialSupportSurface), combat);
+            new Position(position), new Motion(position, speed, false, initialSupportSurface), combat, default(UnitSmokeState));
         _entities[Count] = entity;
         _indices.Add(id, Count++);
 
@@ -476,6 +561,24 @@ public sealed class WorldState : IDisposable
     {
         if (!_indices.TryGetValue(id, out int index)) return false;
         _storage.Get<CombatState>(_entities[index]) = combat;
+        return true;
+    }
+
+    public bool TryGetSmokeState(EntityId id, out UnitSmokeState smoke)
+    {
+        if (_indices.TryGetValue(id, out int index))
+        {
+            smoke = _storage.Get<UnitSmokeState>(_entities[index]);
+            return true;
+        }
+        smoke = default;
+        return false;
+    }
+
+    public bool SetSmokeState(EntityId id, in UnitSmokeState smoke)
+    {
+        if (!_indices.TryGetValue(id, out int index)) return false;
+        _storage.Get<UnitSmokeState>(_entities[index]) = smoke;
         return true;
     }
 

@@ -570,6 +570,7 @@ internal static class TacticalMinimapRegressionTests
         public bool SetFireStance(EntityId unit, FireStance stance) => true;
         public bool BoardTransport(EntityId unit, EntityId transport) => true;
         public bool Disembark(EntityId transport, NumericsVector2 target, uint targetSurface = 0) => true;
+        public bool DeploySmoke(EntityId unit, bool hasTarget = false, NumericsVector2 target = default, uint targetSurface = 0) => true;
         public void Advance(double elapsedSeconds) { }
         public void Disconnect() { }
         public void Dispose() { }

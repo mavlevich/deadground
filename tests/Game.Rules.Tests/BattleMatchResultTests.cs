@@ -393,8 +393,8 @@ public sealed class BattleMatchResultTests
     {
         StaticGeometry geometry = BattleScenario.CreateStaticGeometry();
         MatchSetup serverSetup = BattleScenario.CreateMatchSetup(geometry);
-        Assert.Equal(25, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(25, serverSetup.ProtocolVersion);
+        Assert.Equal(26, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(26, serverSetup.ProtocolVersion);
 
         using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
         int port = serverTransport.Port;
@@ -422,8 +422,8 @@ public sealed class BattleMatchResultTests
     {
         StaticGeometry geometry = BattleScenario.CreateStaticGeometry();
         MatchSetup serverSetup = BattleScenario.CreateMatchSetup(geometry);
-        Assert.Equal(25, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(25, serverSetup.ProtocolVersion);
+        Assert.Equal(26, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(26, serverSetup.ProtocolVersion);
 
         using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
         int port = serverTransport.Port;
@@ -436,6 +436,35 @@ public sealed class BattleMatchResultTests
         using ClientSession client = ClientSession.Connect("127.0.0.1", port, v24ClientSetup);
 
         for (int i = 0; i < 150 && client.State != SessionConnectionState.Failed; i++)
+        {
+            host.Advance(1d / Simulation.TickRate);
+            client.Advance(1d / Simulation.TickRate);
+            Thread.Sleep(5);
+        }
+
+        Assert.Equal(SessionConnectionState.Failed, client.State);
+        Assert.Contains("ProtocolVersionMismatch", client.StatusDescription);
+    }
+
+    [Fact]
+    public void LegacyVersion25Client_ConnectingToCurrentServer_IsRejectedWithProtocolMismatch()
+    {
+        StaticGeometry geometry = BattleScenario.CreateStaticGeometry();
+        MatchSetup serverSetup = BattleScenario.CreateMatchSetup(geometry);
+        Assert.Equal(26, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(26, serverSetup.ProtocolVersion);
+
+        using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
+        int port = serverTransport.Port;
+
+        Simulation simulation = BattleScenario.CreateSimulation(geometry);
+        using SimulationHost host = new(simulation, serverTransport, serverSetup);
+
+        // Client configured with legacy protocol version 25 (before tactical smoke was added)
+        MatchSetup v25ClientSetup = serverSetup with { ProtocolVersion = 25 };
+        using ClientSession client = ClientSession.Connect("127.0.0.1", port, v25ClientSetup);
+
+        for (int i = 0; i < 200 && client.State != SessionConnectionState.Failed; i++)
         {
             host.Advance(1d / Simulation.TickRate);
             client.Advance(1d / Simulation.TickRate);
@@ -480,7 +509,7 @@ public sealed class BattleMatchResultTests
 
         // Legacy v22 client snapshot validator checked statusByte <= (byte)MissionStatus.Defeat (3).
         // Since statusByte for Draw is 4, legacy client rejected the entire snapshot frame.
-        ReadOnlySpan<byte> missionRecord = buffer.AsSpan(18, WireProtocol.MissionSize);
+        ReadOnlySpan<byte> missionRecord = buffer.AsSpan(20, WireProtocol.MissionSize);
         byte statusByte = missionRecord[2];
         Assert.Equal((byte)MissionStatus.Draw, statusByte);
         Assert.True(statusByte > (byte)MissionStatus.Defeat, "Draw status byte must exceed legacy Defeat upper bound (3).");

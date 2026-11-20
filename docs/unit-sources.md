@@ -157,6 +157,11 @@ Balance, revisit after play.
   M113A1: 11 troops (crew 2 + 11 dismounts, sourced from HistoryNet [9] and Wikipedia [10]).
   BTR-70: 7 or 8 troops (crew 2 + 8 dismounts in standard vehicle design sourced from Wikipedia [7] and FAS [8]; 7 dismounts in typical Soviet motorized rifle squad; game value 8).
   Prototype APC: 8 troops (gameplay estimate).
+- Tactical smoke systems (TDD section 12.4):
+  T-62 (1972 model): onboard TDA (Termicheskaya Dymovaya Apparatura) injects diesel fuel into the hot V-55V exhaust manifold [1] [2] [15].
+  Historical figures: roughly 10 L/min fuel burn, laying a 200 to 400 m white screen while moving that persists 2 to 4 minutes depending on wind, with 5 to 15 s residual trail after shutoff.
+  Game values (balance, revisit after play until M2 fuel logistics land): `kind = engine_screen`, `charges = 2` bursts, `emit_duration_seconds = 20.0` (lays ~166 m off-road at 8.3 m/s or ~278 m on road at 13.9 m/s), `emit_interval_seconds = 1.0`, `min_cloud_spacing = 10.0 m`, `cloud_radius = 16.0 m` (32 m width, estimate), `cloud_height = 7.0 m` (estimate, covers tank turrets while ridges can see over), `bloom_seconds = 3.0`, `fade_seconds = 15.0`, `cloud_duration_seconds = 105.0` (90 s opaque sustain + 15 s fade, tuned near the 2-minute historical lower bound), `optical_density = 0.25 m^-1`, `cooldown_seconds = 45.0`, `exhaust_offset = 3.5 m`.
+  Early M60A1: no smoke dischargers or engine smoke system in this period [4] [6]; `smoke` omitted.
 
 ## Sources
 

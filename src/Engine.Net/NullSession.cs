@@ -27,6 +27,7 @@ public sealed class NullSession : IGameSession
     public bool SetFireStance(EntityId unit, FireStance stance) => false;
     public bool BoardTransport(EntityId unit, EntityId transport) => false;
     public bool Disembark(EntityId transport, Vector2 target, uint targetSurface = 0) => false;
+    public bool DeploySmoke(EntityId unit, bool hasTarget = false, Vector2 target = default, uint targetSurface = 0) => false;
     public void Advance(double elapsedSeconds) { }
     public void Dispose() { }
 }

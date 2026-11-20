@@ -157,7 +157,11 @@ public readonly record struct OwnUnitObservation(
     uint NavOrderSequence = 0,
     EntityId ContainerId = default,
     byte PassengerCount = 0,
-    byte PassengerCapacity = 0);
+    byte PassengerCapacity = 0,
+    byte SmokeCharges = 0,
+    ushort SmokeCooldownTicks = 0,
+    bool HasSmokeCapability = false,
+    bool SmokeActive = false);
 
 public interface ISimulationRules
 {

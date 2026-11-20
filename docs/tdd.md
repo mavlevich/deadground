@@ -916,13 +916,15 @@ Status: armor by side, penetration falloff, deflection, and static direct fire a
 
 ### 12.4 Smoke
 
-Status: planned, part of the M1 scope.
+Status: implemented (vertical slice for T-62 TDA; data-driven contract ready for future dischargers, grenades, and artillery smoke).
 
-- Smoke is an observed area effect (section 7.2) with position, extent and lifetime, and a dynamic
-  blocker for line of sight (section 10).
-- Sources from data: the T-62 engine smoke system lays a screen while driving; early M60A1 tanks had
-  no smoke dischargers. Grenade launchers and artillery smoke come with the units that carry them.
-- Smoke blocks sight both ways, so it hides the layer as well as the target.
+- Smoke is an observed area effect (section 7.2) with position, support surface, extent, bloom/fade timings, optical density, and lifetime, acting as a dynamic blocker for line of sight (section 10, `ObstructionKind.Smoke = 4`).
+- Sources from data: any unit type may declare a `"smoke"` block in `content/coldwar/units.json`. The T-62 engine smoke system (`engine_screen`, TDA) lays overlapping clouds from its rear exhaust while driving or stationary (2 charges x 20 s emission, 16 m radius, 7 m height, 3 s bloom, 90 s opaque sustain + 15 s fade = 105 s lifetime, 45 s cooldown). Early M60A1 tanks had no smoke dischargers and omit the block. Grenade launchers and artillery smoke reuse the same `DeploySmokeCommand` and `SmokeSystem` once those units carry them.
+- Symmetric two-way blocking: `SmokeLos` integrates exact 3D ray-cylinder optical depth (`tau >= 1.0`) symmetrically in both directions, so smoke hides the layer as well as the target. Elevated observers can still look over the 7 m cloud top.
+- Sight vs ballistics: smoke blocks `CheckLineOfSight` / `IsLineOfSightClear` (`DetectionSystem`, `LastKnown` empty-position recheck, `SideWreckTracker`, `CombatSystem.HasLineOfSightToTarget`, and client `FogOfWarView`), while `CheckLineOfFire` ignores smoke so projectiles are not physically stopped by fog.
+- Fog of war and information isolation: `SmokeCloudObservation` carries only `SmokeCloudId`, geometry, and timing (never owner or source `EntityId`). Friendly smoke is known immediately; hostile smoke enters a player's snapshot only while observed with unobstructed line of sight.
+- Wire protocol v26 (`MatchSetup.CurrentProtocolVersion = 26`): adds `DeploySmokeCommand` (`DeploySmokeKind = 14`, 27 bytes), extends `OwnUnitObservation` to 49 bytes (`SmokeCharges`, `SmokeCooldownTicks`, `SmokeFlags`), adds `SmokeCount` to `SnapshotHeaderSize` (52 bytes), and replicates up to `MaxSmokeClouds = 64` `SmokeCloudObservation` records (40 bytes each).
+- Client presentation and controls: `SmokeView` renders all active clouds in a single shadow-free pooled `MultiMeshInstance3D` (1 draw call, zero steady-state allocations). `ContextActionPanel` shows a data-driven `SMOKE [G]` button driven by `OwnUnitObservation`, and pressing `G` activates smoke for ready selected units without cancelling movement or attack orders.
 
 ### 12.5 Weapon slots
 
