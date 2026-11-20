@@ -113,11 +113,19 @@ internal static class SmokeRegressionTests
         int writtenFadeOpaque = WireProtocol.WriteSnapshot(snapBuf, 3, 1990, units, smokeClouds: clouds);
         Require(replica.TryApply(snapBuf.AsSpan(0, writtenFadeOpaque)), "Fade opaque FoW snapshot must apply.");
         fow.Update(0.30f, replica, catalog);
+        while (fow.IsCycleInProgress)
+        {
+            fow.Update(0.016f, replica, catalog);
+        }
         Require(!fow.IsWorldPointSeen(180f, 128f), "Smoke at tick 1990 (tau=3.2) must still occlude FoW.");
 
         int writtenFadeThin = WireProtocol.WriteSnapshot(snapBuf, 4, 2080, units, smokeClouds: clouds);
         Require(replica.TryApply(snapBuf.AsSpan(0, writtenFadeThin)), "Fade thin FoW snapshot must apply.");
         fow.Update(0.30f, replica, catalog);
+        while (fow.IsCycleInProgress)
+        {
+            fow.Update(0.016f, replica, catalog);
+        }
         Require(fow.SweepsInLastCycle >= 1,
             "Stationary observer viewshed must be invalidated and re-swept as smoke fades below blocking density.");
         Require(fow.IsWorldPointSeen(180f, 128f),

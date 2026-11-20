@@ -201,6 +201,9 @@ internal sealed class SelectionController
         Rect2 box = MakeScreenRect(startScreen, endScreen);
         foreach ((EntityId id, UnitView view) in unitViews.Views)
         {
+            if (!view.Root.Visible)
+                continue;
+
             Vector3 center = view.Root.Position + Vector3.Up;
             if (!TryProjectWorldPoint(camera, center, out Vector2 screenPos))
                 continue;
@@ -242,6 +245,9 @@ internal sealed class SelectionController
         Rect2 screenBounds = new(Vector2.Zero, viewportSize);
         foreach ((EntityId id, UnitView view) in unitViews.Views)
         {
+            if (!view.Root.Visible)
+                continue;
+
             if (!string.Equals(view.UnitId, targetType, StringComparison.Ordinal))
                 continue;
 
@@ -281,6 +287,9 @@ internal sealed class SelectionController
             float nearestUnitDistance = ClickPickRadiusPixels * ClickPickRadiusPixels;
             foreach ((EntityId id, UnitView view) in unitViews.Views)
             {
+                if (!view.Root.Visible)
+                    continue;
+
                 Vector3 center = view.Root.Position + Vector3.Up;
                 if (!TryProjectWorldPoint(camera, center, out Vector2 projected))
                     continue;
