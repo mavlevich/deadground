@@ -892,4 +892,31 @@ internal sealed class UnitView
             DrapeRings();
         }
     }
+
+    internal void SetContainedHidden()
+    {
+        Root.Visible = false;
+        if (_isSelected)
+        {
+            SetSelected(false);
+        }
+        _hasPosition = false;
+        _distanceSinceEffects = 0f;
+        _dustSpeed = 0f;
+        foreach (GpuParticles3D? dust in _dust)
+        {
+            if (dust is not null && dust.Emitting)
+            {
+                dust.Emitting = false;
+            }
+        }
+        AnimationPlayer? animPlayer = ActiveRig.AnimPlayer;
+        if (animPlayer is not null && _currentAnimName != AnimIdle && animPlayer.HasAnimation(AnimIdle))
+        {
+            animPlayer.Play(AnimIdle);
+            animPlayer.SpeedScale = 1.0f;
+            _currentAnimName = AnimIdle;
+            _currentAnim = "Idle";
+        }
+    }
 }
