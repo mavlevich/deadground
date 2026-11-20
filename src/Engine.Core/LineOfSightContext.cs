@@ -14,6 +14,19 @@ public sealed class LineOfSightContext
     internal VegetationInterval[]? VegetationIntervalsBuffer;
     internal Vector2[]? ZoneIntervalsBuffer;
     internal int[]? ClearingsBuffer;
+    internal SmokeVolume[]? SmokeVolumes;
+    internal int SmokeVolumeCount;
+
+    public ReadOnlySpan<SmokeVolume> ActiveSmoke =>
+        SmokeVolumes is not null && SmokeVolumeCount > 0
+            ? SmokeVolumes.AsSpan(0, SmokeVolumeCount)
+            : [];
+
+    public void SetSmokeVolumes(SmokeVolume[]? volumes, int count)
+    {
+        SmokeVolumes = volumes;
+        SmokeVolumeCount = volumes is null || count <= 0 ? 0 : Math.Min(count, volumes.Length);
+    }
 
     public LineOfSightContext(int initialCapacity = 64)
     {

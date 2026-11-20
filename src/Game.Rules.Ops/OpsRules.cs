@@ -30,12 +30,13 @@ public sealed class OpsRules : RuleSet
         NavigationTuning? navTuning = null,
         DetectionTuning? detTuning = null,
         DeterministicRandom? combatRandom = null,
-        NavigationBuildLimits? buildLimits = null)
-        : base(CreateSystems(geometry, perceptionCatalog, movementCatalog, combatCatalog, navTuning, detTuning, combatRandom, buildLimits))
+        NavigationBuildLimits? buildLimits = null,
+        IUnitSmokeCatalog? smokeCatalog = null)
+        : base(CreateSystems(geometry, perceptionCatalog, movementCatalog, combatCatalog, navTuning, detTuning, combatRandom, buildLimits, mission: null, smokeCatalog: smokeCatalog))
     { }
 
     public OpsRules(StaticGeometry geometry, UnitCatalog catalog, DeterministicRandom? combatRandom = null)
-        : this(geometry, new OpsPerceptionCatalog(catalog), new OpsMovementCatalog(catalog), new OpsCombatCatalog(catalog), null, PrototypeScenario.CreateDetectionTuning(catalog), combatRandom) { }
+        : this(geometry, new OpsPerceptionCatalog(catalog), new OpsMovementCatalog(catalog), new OpsCombatCatalog(catalog), null, PrototypeScenario.CreateDetectionTuning(catalog), combatRandom, null, new OpsSmokeCatalog(catalog)) { }
 
     public OpsRules(StaticGeometry geometry, UnitCatalog catalog, NavigationTuning? navTuning, DetectionTuning? detTuning = null, DeterministicRandom? combatRandom = null, NavigationBuildLimits? buildLimits = null)
         : this(
@@ -46,7 +47,8 @@ public sealed class OpsRules : RuleSet
             navTuning,
             detTuning ?? PrototypeScenario.CreateDetectionTuning(catalog),
             combatRandom,
-            buildLimits)
+            buildLimits,
+            new OpsSmokeCatalog(catalog))
     { }
 
     public static OpsRules CreateWithMission(
@@ -58,6 +60,7 @@ public sealed class OpsRules : RuleSet
         OpsPerceptionCatalog perceptionCatalog = new(catalog);
         OpsMovementCatalog movementCatalog = new(catalog);
         OpsCombatCatalog combatCatalog = new(catalog);
+        OpsSmokeCatalog smokeCatalog = new(catalog);
         DetectionTuning detTuning = PrototypeScenario.CreateDetectionTuning(catalog);
         ISimulationSystem[] systems = CreateSystems(
             geometry,
@@ -68,7 +71,8 @@ public sealed class OpsRules : RuleSet
             detTuning: detTuning,
             combatRandom: combatRandom,
             buildLimits: null,
-            mission: mission);
+            mission: mission,
+            smokeCatalog: smokeCatalog);
         return new OpsRules(systems);
     }
 
@@ -81,15 +85,25 @@ public sealed class OpsRules : RuleSet
         DetectionTuning? detTuning,
         DeterministicRandom? combatRandom = null,
         NavigationBuildLimits? buildLimits = null,
-        IMissionSystem? mission = null)
+        IMissionSystem? mission = null,
+        IUnitSmokeCatalog? smokeCatalog = null)
     {
         NavigationSystem nav = new(new NavigationGrid(geometry, navTuning?.CellSize ?? NavigationTuning.DefaultCellSize, enableHierarchical: true, buildLimits: buildLimits, sectorSize: navTuning?.SectorSize ?? NavigationTuning.DefaultSectorSize), movementCatalog, navTuning);
         ContainerSystem container = new(nav);
-        DetectionSystem det = new(geometry, perceptionCatalog, detTuning);
+        SmokeSystem? smoke = smokeCatalog is not null ? new SmokeSystem(geometry, smokeCatalog) : null;
+        DetectionSystem det = new(geometry, perceptionCatalog, detTuning, smokeSystem: smoke);
         if (combatCatalog is not null)
         {
             CombatSystem combat = new(geometry, combatCatalog, perceptionCatalog, det, nav, combatRandom: combatRandom);
+            if (smoke is not null)
+            {
+                return mission is not null ? [nav, container, smoke, det, combat, mission] : [nav, container, smoke, det, combat];
+            }
             return mission is not null ? [nav, container, det, combat, mission] : [nav, container, det, combat];
+        }
+        if (smoke is not null)
+        {
+            return mission is not null ? [nav, container, smoke, det, mission] : [nav, container, smoke, det];
         }
         return mission is not null ? [nav, container, det, mission] : [nav, container, det];
     }
@@ -126,6 +140,28 @@ public sealed record WeaponData(
     float RangingBonus = 0.08f,
     float MaxRangingBonus = 0.24f);
 
+public sealed record SmokeData(
+    string Kind,
+    int Charges,
+    float CooldownSeconds = 0f,
+    int CooldownTicks = 0,
+    float EmitDurationSeconds = 0f,
+    int EmitDurationTicks = 0,
+    float EmitIntervalSeconds = 0f,
+    int EmitIntervalTicks = 0,
+    float MinCloudSpacing = 10.0f,
+    float CloudRadius = 16.0f,
+    float CloudHeight = 7.0f,
+    float CloudDurationSeconds = 105.0f,
+    int CloudDurationTicks = 0,
+    float BloomSeconds = 3.0f,
+    int BloomTicks = 0,
+    float FadeSeconds = 15.0f,
+    int FadeTicks = 0,
+    float OpticalDensity = 0.25f,
+    float ExhaustOffset = 3.5f,
+    float Range = 0f);
+
 public sealed record UnitDefinition(
     string Id,
     float Speed,
@@ -159,7 +195,8 @@ public sealed record UnitDefinition(
     float CollisionRadius = 0f,
     float Height = 0f,
     int PassengerCapacity = 0,
-    int ContainerDestructionDamage = 50);
+    int ContainerDestructionDamage = 50,
+    SmokeData? Smoke = null);
 
 public sealed record FactionData(string Id, string? Name = null);
 
@@ -422,10 +459,94 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
     }
 }
 
+public sealed class OpsSmokeCatalog : IUnitSmokeCatalog
+{
+    private readonly SmokeProfile[] _profiles;
+    private readonly bool[] _hasProfile;
+
+    public OpsSmokeCatalog(UnitCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        _profiles = new SmokeProfile[catalog.Units.Length];
+        _hasProfile = new bool[catalog.Units.Length];
+
+        for (int i = 0; i < catalog.Units.Length; i++)
+        {
+            SmokeData? s = catalog.Units[i].Smoke;
+            if (s is null)
+            {
+                continue;
+            }
+
+            SmokeDeliveryKind kind = ParseDeliveryKind(s.Kind);
+            if (kind == SmokeDeliveryKind.None)
+            {
+                continue;
+            }
+
+            int cooldownTicks = ResolveTicks(s.CooldownTicks, s.CooldownSeconds);
+            int emitDurationTicks = ResolveTicks(s.EmitDurationTicks, s.EmitDurationSeconds);
+            int emitIntervalTicks = ResolveTicks(s.EmitIntervalTicks, s.EmitIntervalSeconds);
+            int cloudDurationTicks = ResolveTicks(s.CloudDurationTicks, s.CloudDurationSeconds);
+            int bloomTicks = ResolveTicks(s.BloomTicks, s.BloomSeconds);
+            int fadeTicks = ResolveTicks(s.FadeTicks, s.FadeSeconds);
+
+            SmokeProfile profile = new(
+                kind,
+                s.Charges,
+                cooldownTicks,
+                emitDurationTicks,
+                emitIntervalTicks,
+                s.MinCloudSpacing,
+                s.CloudRadius,
+                s.CloudHeight,
+                cloudDurationTicks,
+                bloomTicks,
+                fadeTicks,
+                s.OpticalDensity,
+                s.ExhaustOffset,
+                s.Range);
+
+            if (profile.IsValid)
+            {
+                _profiles[i] = profile;
+                _hasProfile[i] = true;
+            }
+        }
+    }
+
+    internal static SmokeDeliveryKind ParseDeliveryKind(string? kind)
+    {
+        if (string.IsNullOrWhiteSpace(kind)) return SmokeDeliveryKind.None;
+        return kind.ToLowerInvariant() switch
+        {
+            "engine_screen" => SmokeDeliveryKind.EngineScreen,
+            "discharger" => SmokeDeliveryKind.Discharger,
+            "grenade" => SmokeDeliveryKind.Grenade,
+            _ => SmokeDeliveryKind.None
+        };
+    }
+
+    internal static int ResolveTicks(int explicitTicks, float seconds) =>
+        explicitTicks > 0 ? explicitTicks : (seconds > 0f ? (int)MathF.Round(seconds * Simulation.TickRate) : 0);
+
+    public bool TryGetSmokeProfile(ushort definition, out SmokeProfile profile)
+    {
+        if (definition < _profiles.Length && _hasProfile[definition])
+        {
+            profile = _profiles[definition];
+            return true;
+        }
+        profile = default;
+        return false;
+    }
+}
+
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
     ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true)]
 [JsonSerializable(typeof(UnitCatalog))]
 [JsonSerializable(typeof(UnitDefinition))]
+[JsonSerializable(typeof(SmokeData))]
 [JsonSerializable(typeof(DetectionSettings))]
 [JsonSerializable(typeof(WeaponData))]
 [JsonSerializable(typeof(WeaponData[]))]
@@ -625,6 +746,46 @@ public static class PrototypeScenario
                 !float.IsFinite(unit.RearSectorAngle) || unit.RearSectorAngle < 0 || unit.RearSectorAngle > 360f)
             {
                 throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid armor sector angle.");
+            }
+            if (unit.Smoke is not null)
+            {
+                SmokeData s = unit.Smoke;
+                SmokeDeliveryKind kind = OpsSmokeCatalog.ParseDeliveryKind(s.Kind);
+                if (kind == SmokeDeliveryKind.None)
+                    throw new InvalidOperationException($"Unit '{unit.Id}' has an unsupported smoke kind '{s.Kind}'.");
+                if (s.Charges <= 0 || s.Charges > byte.MaxValue)
+                    throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid smoke charges count.");
+                if (!float.IsFinite(s.CooldownSeconds) || s.CooldownSeconds < 0f || s.CooldownTicks < 0 ||
+                    !float.IsFinite(s.EmitDurationSeconds) || s.EmitDurationSeconds < 0f || s.EmitDurationTicks < 0 ||
+                    !float.IsFinite(s.EmitIntervalSeconds) || s.EmitIntervalSeconds < 0f || s.EmitIntervalTicks < 0 ||
+                    !float.IsFinite(s.MinCloudSpacing) || s.MinCloudSpacing < 0f ||
+                    !float.IsFinite(s.CloudRadius) || s.CloudRadius <= 0f ||
+                    !float.IsFinite(s.CloudHeight) || s.CloudHeight <= 0f ||
+                    !float.IsFinite(s.CloudDurationSeconds) || s.CloudDurationSeconds < 0f || s.CloudDurationTicks < 0 ||
+                    !float.IsFinite(s.BloomSeconds) || s.BloomSeconds < 0f || s.BloomTicks < 0 ||
+                    !float.IsFinite(s.FadeSeconds) || s.FadeSeconds < 0f || s.FadeTicks < 0 ||
+                    !float.IsFinite(s.OpticalDensity) || s.OpticalDensity <= 0f ||
+                    !float.IsFinite(s.ExhaustOffset) || s.ExhaustOffset < 0f ||
+                    !float.IsFinite(s.Range) || s.Range < 0f)
+                {
+                    throw new InvalidOperationException($"Unit '{unit.Id}' has invalid smoke parameters.");
+                }
+
+                int cooldownTicks = OpsSmokeCatalog.ResolveTicks(s.CooldownTicks, s.CooldownSeconds);
+                int emitDurationTicks = OpsSmokeCatalog.ResolveTicks(s.EmitDurationTicks, s.EmitDurationSeconds);
+                int emitIntervalTicks = OpsSmokeCatalog.ResolveTicks(s.EmitIntervalTicks, s.EmitIntervalSeconds);
+                int cloudDurationTicks = OpsSmokeCatalog.ResolveTicks(s.CloudDurationTicks, s.CloudDurationSeconds);
+                int bloomTicks = OpsSmokeCatalog.ResolveTicks(s.BloomTicks, s.BloomSeconds);
+                int fadeTicks = OpsSmokeCatalog.ResolveTicks(s.FadeTicks, s.FadeSeconds);
+
+                if (cooldownTicks > ushort.MaxValue || bloomTicks > ushort.MaxValue || fadeTicks > ushort.MaxValue)
+                    throw new InvalidOperationException($"Unit '{unit.Id}' smoke tick parameters exceed wire protocol bounds.");
+                if (cloudDurationTicks <= 0 || bloomTicks + fadeTicks > cloudDurationTicks)
+                    throw new InvalidOperationException($"Unit '{unit.Id}' smoke cloud duration must exceed bloom + fade.");
+                if (kind == SmokeDeliveryKind.EngineScreen && (emitDurationTicks <= 0 || emitIntervalTicks <= 0))
+                    throw new InvalidOperationException($"Unit '{unit.Id}' engine_screen smoke requires positive emit duration and interval.");
+                if (kind != SmokeDeliveryKind.EngineScreen && s.Range <= 0f)
+                    throw new InvalidOperationException($"Unit '{unit.Id}' targeted smoke requires positive range.");
             }
         }
         return data;

@@ -549,6 +549,8 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         if (!world.TryGetUnit(targetEntityId, out UnitState targetUnit) || !world.AreHostile(player, targetUnit.Owner) || world.IsContained(targetEntityId))
             return false;
 
+        SyncSmokeContext();
+
         // Attack orders out of range are accepted.
         // If already within weapon range and has clear line of sight: stop moving immediately.
         // Otherwise: drive toward target position.
@@ -582,10 +584,23 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         return false;
     }
 
+    private void SyncSmokeContext()
+    {
+        if (_detection.SmokeSystem is not null)
+        {
+            _detection.SmokeSystem.CopyActiveVolumesTo(_losContext);
+        }
+        else
+        {
+            _losContext.SetSmokeVolumes(null, 0);
+        }
+    }
+
     public void Update(WorldState world, int tick)
     {
         ActiveAttackersCount = 0;
         _destroyedCount = 0;
+        SyncSmokeContext();
 
         int unitCount = world.Count;
 

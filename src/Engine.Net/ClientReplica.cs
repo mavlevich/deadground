@@ -21,6 +21,8 @@ public sealed class ClientReplica
     public ReadOnlySpan<ContactObservation> Contacts => _count == 0 ? [] : Latest.Contacts.AsSpan(0, Latest.ContactCount);
     public ReadOnlySpan<WreckObservation> Wrecks => _count == 0 ? [] : Latest.Wrecks.AsSpan(0, Latest.WreckCount);
     public int WreckCount => _count == 0 ? 0 : Latest.WreckCount;
+    public ReadOnlySpan<SmokeCloudObservation> SmokeClouds => _count == 0 ? [] : Latest.SmokeClouds.AsSpan(0, Latest.SmokeCount);
+    public int SmokeCloudCount => _count == 0 ? 0 : Latest.SmokeCount;
     public ReadOnlySpan<CombatEventObservation> Events
     {
         get
@@ -67,6 +69,17 @@ public sealed class ClientReplica
             return false;
         }
         wreck = Latest.Wrecks[index];
+        return true;
+    }
+
+    public bool TryGetSmokeCloud(SmokeCloudId id, out SmokeCloudObservation cloud)
+    {
+        if (_count == 0 || !Latest.SmokeIndices.TryGetValue(id, out int index))
+        {
+            cloud = default;
+            return false;
+        }
+        cloud = Latest.SmokeClouds[index];
         return true;
     }
 

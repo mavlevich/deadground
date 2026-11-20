@@ -194,7 +194,23 @@
       "deceleration": 4.0,
       "armor_front": 200.0,
       "armor_side": 80.0,
-      "armor_rear": 45.0
+      "armor_rear": 45.0,
+      "smoke": {
+        "kind": "engine_screen",
+        "charges": 2,
+        "cooldown_seconds": 45.0,
+        "emit_duration_seconds": 20.0,
+        "emit_interval_seconds": 1.0,
+        "min_cloud_spacing": 10.0,
+        "cloud_radius": 16.0,
+        "cloud_height": 7.0,
+        "cloud_duration_seconds": 105.0,
+        "bloom_seconds": 3.0,
+        "fade_seconds": 15.0,
+        "optical_density": 0.25,
+        "exhaust_offset": 3.5,
+        "range": 0.0
+      }
     },
     {
       "id": "m60a1",
