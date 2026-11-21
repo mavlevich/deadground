@@ -61,6 +61,7 @@ public partial class Main : Node3D
     private uint _lastCommandResult;
     private string _scenario = "prototype";
     private CombatEffects _combatEffects = null!;
+    private HelicopterAudioController? _helicopterAudio;
     private SmokeView? _smokeView;
     private MissionPanel? _missionPanel;
     private StaticGeometry? _scenarioGeometry;
@@ -847,6 +848,8 @@ public partial class Main : Node3D
         _wreckViews.UpdateLod(_cameraRig.Size);
         _combatEffects = new CombatEffects(_map, _scenarioGeometry);
         AddChild(_combatEffects);
+        bool enableAudio = !_smokeTest && !string.Equals(DisplayServer.GetName(), "headless", StringComparison.OrdinalIgnoreCase);
+        _helicopterAudio = new HelicopterAudioController(this, enabled: enableAudio);
         _smokeView = new SmokeView(_map, _scenarioGeometry);
         if (_environmentView?.ActiveProfile is not null)
         {
@@ -1301,6 +1304,7 @@ public partial class Main : Node3D
         _wreckViews.ProcessEvents(_session.Replica.Events, _session.Tick);
         _smokeView?.Update((float)delta, _session.Replica, _session.RenderTick);
         _combatEffects.UpdateListener(_cameraRig.Focus);
+        _helicopterAudio?.Update(_session.Replica, _cameraRig.Focus, _cameraRig.Size, delta);
         _missionPanel?.UpdateMission(_session.Mission, _session.Tick);
 
         if (!string.Equals(_subtitle.Text, _session.StatusDescription, StringComparison.Ordinal))
@@ -1345,6 +1349,7 @@ public partial class Main : Node3D
 
             if (_contextActionPanel?.TargetingMode == ContextTargetingMode.BoardTransport)
             {
+                _destination.HideZoneCircle();
                 if (TryGetOwnUnitUnderMouse(mousePos, out EntityId hoverTransportId) &&
                     _session.Replica.TryGetOwnUnit(hoverTransportId, out OwnUnitObservation hoverTrans))
                 {
@@ -1374,6 +1379,7 @@ public partial class Main : Node3D
             }
             else if (_contextActionPanel?.TargetingMode == ContextTargetingMode.Disembark)
             {
+                _destination.HideZoneCircle();
                 if (TryGetGroundPositionUnderMouse(mousePos, out NumericsVector2 groundPos))
                 {
                     _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Valid, $"Unload at ({groundPos.X:0.0}, {groundPos.Y:0.0}) [LMB] [Esc to cancel]");
@@ -1386,30 +1392,110 @@ public partial class Main : Node3D
             }
             else if (_contextActionPanel?.TargetingMode == ContextTargetingMode.LandAt)
             {
-                if (TryGetGroundPositionUnderMouse(mousePos, out NumericsVector2 groundPos))
+                if (TryGetGroundPositionUnderMouse(mousePos, out NumericsVector2 groundPos) && _scenarioGeometry is not null)
                 {
-                    _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Valid, $"Land at ({groundPos.X:0.0}, {groundPos.Y:0.0}) [LMB] [Esc to cancel]");
+                    float lzRadius = GetSelectedHelicopterLandingRadius();
+                    float maxSlope = GetSelectedHelicopterMaxSlope();
+                    LandingZoneStatus lzStatus = FlightSystem.EvaluateLandingZone(_scenarioGeometry, null, groundPos, lzRadius, maxSlope);
+                    bool lzValid = lzStatus == LandingZoneStatus.Valid;
+                    _destination.ShowZoneCircle(_map, groundPos.X, groundPos.Y, lzRadius, lzValid);
+                    string lzTip = lzValid
+                        ? $"Clear LZ ({groundPos.X:0.0}, {groundPos.Y:0.0}) [LMB]"
+                        : $"LZ Blocked: {FormatLzBlockReason(lzStatus)} [Esc to cancel]";
+                    _orderCursorOverlay?.SetCustomTooltip(true, lzValid ? DestinationValidity.Valid : DestinationValidity.Blocked, lzTip);
                 }
                 else
                 {
+                    _destination.HideZoneCircle();
                     _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Blocked, "Invalid landing location [Esc to cancel]");
+                }
+                _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
+            }
+            else if (_contextActionPanel?.TargetingMode == ContextTargetingMode.FastRope)
+            {
+                if (TryGetGroundPositionUnderMouse(mousePos, out NumericsVector2 groundPos) && _scenarioGeometry is not null)
+                {
+                    FastRopeZoneStatus frStatus = FlightSystem.EvaluateFastRopeZone(_scenarioGeometry, groundPos);
+                    bool frValid = frStatus == FastRopeZoneStatus.Valid;
+                    _destination.ShowZoneCircle(_map, groundPos.X, groundPos.Y, 3.5f, frValid);
+                    string frTip = frValid
+                        ? $"Fast-Rope Insertion ({groundPos.X:0.0}, {groundPos.Y:0.0}) [LMB]"
+                        : $"Fast-Rope Blocked: {FormatFastRopeBlockReason(frStatus)} [Esc to cancel]";
+                    _orderCursorOverlay?.SetCustomTooltip(true, frValid ? DestinationValidity.Valid : DestinationValidity.Blocked, frTip);
+                }
+                else
+                {
+                    _destination.HideZoneCircle();
+                    _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Blocked, "Invalid fast-rope location [Esc to cancel]");
+                }
+                _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
+            }
+            else if (_contextActionPanel?.TargetingMode == ContextTargetingMode.SlingPickup)
+            {
+                _destination.HideZoneCircle();
+                float maxSlingKg = GetSelectedHelicopterMaxSlingKg();
+                if (TryGetOwnUnitUnderMouse(mousePos, out EntityId hoverCargoId) &&
+                    _session.Replica.TryGetOwnUnit(hoverCargoId, out OwnUnitObservation hoverCargo))
+                {
+                    UnitDefinition? cDef = hoverCargo.Definition < _catalog.Units.Length ? _catalog.Units[hoverCargo.Definition] : null;
+                    string cargoName = GetUnitDisplayName(hoverCargo.Definition);
+                    if (cDef is not null && cDef.CanSlingLoad && cDef.CargoWeightKg > 0f && cDef.CargoWeightKg <= maxSlingKg && hoverCargo.SlungById == default)
+                    {
+                        _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Valid,
+                            $"Sling Pickup: {cargoName} ({cDef.CargoWeightKg / 1000f:0.1}t / {maxSlingKg / 1000f:0.1}t) [LMB]");
+                    }
+                    else if (cDef is not null && cDef.CargoWeightKg > maxSlingKg)
+                    {
+                        _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Blocked,
+                            $"Too heavy for sling: {cargoName} ({cDef.CargoWeightKg / 1000f:0.1}t > {maxSlingKg / 1000f:0.1}t)");
+                    }
+                    else
+                    {
+                        _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Blocked,
+                            $"{cargoName} cannot be sling-loaded");
+                    }
+                }
+                else
+                {
+                    _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Adjusted, "Click friendly light/APC vehicle to sling-load [Esc to cancel]");
+                }
+                _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
+            }
+            else if (_contextActionPanel?.TargetingMode == ContextTargetingMode.SlingDrop)
+            {
+                if (TryGetGroundPositionUnderMouse(mousePos, out NumericsVector2 groundPos) && _scenarioGeometry is not null)
+                {
+                    SlingDropZoneStatus sdStatus = FlightSystem.EvaluateSlingDropZone(_scenarioGeometry, null, groundPos, 3.0f);
+                    bool sdValid = sdStatus == SlingDropZoneStatus.Valid;
+                    _destination.ShowZoneCircle(_map, groundPos.X, groundPos.Y, 3.5f, sdValid);
+                    string sdTip = sdValid
+                        ? $"Release Sling Cargo ({groundPos.X:0.0}, {groundPos.Y:0.0}) [LMB]"
+                        : $"Sling Drop Blocked: {FormatSlingDropBlockReason(sdStatus)} [Esc to cancel]";
+                    _orderCursorOverlay?.SetCustomTooltip(true, sdValid ? DestinationValidity.Valid : DestinationValidity.Blocked, sdTip);
+                }
+                else
+                {
+                    _destination.HideZoneCircle();
+                    _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Blocked, "Invalid sling drop location [Esc to cancel]");
                 }
                 _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
             }
             else
             {
+                _destination.HideZoneCircle();
                 bool hasEnemyContact = TryGetTargetContactUnderMouse(mousePos, out _);
                 if (!hasEnemyContact &&
-                    HasSelectedInfantry() &&
+                    HasSelectedBoardableUnits() &&
                     TryGetOwnUnitUnderMouse(mousePos, out EntityId hoverTransportId) &&
                     _session.Replica.TryGetOwnUnit(hoverTransportId, out OwnUnitObservation hoverTrans) &&
-                    hoverTrans.PassengerCapacity > 0)
+                    hoverTrans.PassengerCapacity > 0 &&
+                    CanSelectedUnitsBoardTransport(hoverTrans))
                 {
                     string transName = GetUnitDisplayName(hoverTrans.Definition);
                     int seats = hoverTrans.PassengerCapacity - hoverTrans.PassengerCount;
                     if (seats > 0)
                     {
-                        _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Valid, $"Board {transName} ({seats} seats open) [RMB]");
+                        _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Valid, $"Load into {transName} ({seats} seats open) [RMB]");
                     }
                     else
                     {
@@ -1425,6 +1511,7 @@ public partial class Main : Node3D
         }
         else
         {
+            _destination.HideZoneCircle();
             _orderCursorOverlay?.HideTooltip();
         }
 
@@ -2415,6 +2502,32 @@ public partial class Main : Node3D
                 GetViewport().SetInputAsHandled();
                 return;
             }
+
+            if ((key.Keycode == Key.F || key.PhysicalKeycode == Key.F) && _unitViews.Selected.Count > 0 && _contextActionPanel?.FastRopeButton.Visible == true && !_contextActionPanel.FastRopeButton.Disabled)
+            {
+                _contextActionPanel.SetTargetingMode(_contextActionPanel.TargetingMode == ContextTargetingMode.FastRope
+                    ? ContextTargetingMode.None
+                    : ContextTargetingMode.FastRope);
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if ((key.Keycode == Key.K || key.PhysicalKeycode == Key.K) && _unitViews.Selected.Count > 0 && _contextActionPanel?.SlingButton.Visible == true && !_contextActionPanel.SlingButton.Disabled)
+            {
+                bool hasLoad = false;
+                foreach (EntityId id in _unitViews.Selected)
+                {
+                    if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) && obs.SlingLoadId != default)
+                    {
+                        hasLoad = true;
+                        break;
+                    }
+                }
+                ContextTargetingMode nextMode = hasLoad ? ContextTargetingMode.SlingDrop : ContextTargetingMode.SlingPickup;
+                _contextActionPanel.SetTargetingMode(_contextActionPanel.TargetingMode == nextMode ? ContextTargetingMode.None : nextMode);
+                GetViewport().SetInputAsHandled();
+                return;
+            }
             return;
         }
 
@@ -2546,6 +2659,129 @@ public partial class Main : Node3D
                         _status.Text = msg;
                     }
                     _contextActionPanel.CancelTargeting();
+                    _destination.HideZoneCircle();
+                    _orderCursorOverlay?.HideTooltip();
+                }
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if (_contextActionPanel?.TargetingMode == ContextTargetingMode.FastRope)
+            {
+                if (TryGetGroundPositionUnderMouse(mouse.Position, out NumericsVector2 groundPos))
+                {
+                    int ordered = 0;
+                    foreach (EntityId unitId in _unitViews.Selected)
+                    {
+                        if (_session.Replica.TryGetOwnUnit(unitId, out OwnUnitObservation obs) &&
+                            obs.HasFlightCapability &&
+                            obs.FlightPhase != FlightPhase.Crashing)
+                        {
+                            if (_session.OrderHelicopter(unitId, HelicopterOrderKind.FastRope, obs.AltitudeBand, hasTarget: true, target: groundPos))
+                                ordered++;
+                        }
+                    }
+                    if (ordered > 0)
+                    {
+                        string msg = ordered == 1
+                            ? "Fast-rope insertion ordered (1 helicopter)"
+                            : $"Fast-rope insertion ordered ({ordered} helicopters)";
+                        _orderNotification?.ShowNotification(msg);
+                        _status.Text = msg;
+                    }
+                    else
+                    {
+                        _orderNotification?.ShowNotification("Fast-rope requires embarked infantry and clear land/forest");
+                        _status.Text = "Fast-rope requires embarked infantry and clear land/forest";
+                    }
+                    _contextActionPanel.CancelTargeting();
+                    _destination.HideZoneCircle();
+                    _orderCursorOverlay?.HideTooltip();
+                }
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if (_contextActionPanel?.TargetingMode == ContextTargetingMode.SlingPickup)
+            {
+                if (TryGetOwnUnitUnderMouse(mouse.Position, out EntityId targetCargoId) &&
+                    _session.Replica.TryGetOwnUnit(targetCargoId, out OwnUnitObservation cargoObs))
+                {
+                    float maxSlingKg = GetSelectedHelicopterMaxSlingKg();
+                    UnitDefinition? cDef = cargoObs.Definition < _catalog.Units.Length ? _catalog.Units[cargoObs.Definition] : null;
+                    string cargoName = GetUnitDisplayName(cargoObs.Definition);
+                    if (cDef is null || !cDef.CanSlingLoad || cDef.CargoWeightKg <= 0f)
+                    {
+                        string msg = $"{cargoName} cannot be sling-loaded";
+                        _orderNotification?.ShowNotification(msg);
+                        _status.Text = msg;
+                    }
+                    else if (cDef.CargoWeightKg > maxSlingKg)
+                    {
+                        string msg = $"{cargoName} is too heavy for sling ({cDef.CargoWeightKg / 1000f:0.1}t > {maxSlingKg / 1000f:0.1}t)";
+                        _orderNotification?.ShowNotification(msg);
+                        _status.Text = msg;
+                    }
+                    else
+                    {
+                        int ordered = 0;
+                        foreach (EntityId unitId in _unitViews.Selected)
+                        {
+                            if (_session.Replica.TryGetOwnUnit(unitId, out OwnUnitObservation obs) &&
+                                obs.HasFlightCapability &&
+                                obs.FlightPhase != FlightPhase.Crashing &&
+                                obs.SlingLoadId == default)
+                            {
+                                if (_session.OrderHelicopter(unitId, HelicopterOrderKind.SlingPickup, obs.AltitudeBand, targetUnit: targetCargoId))
+                                {
+                                    ordered++;
+                                    break; // One helicopter picks up one target vehicle
+                                }
+                            }
+                        }
+                        if (ordered > 0)
+                        {
+                            string msg = $"Sling pickup ordered for {cargoName} ({cDef.CargoWeightKg / 1000f:0.1}t)";
+                            _orderNotification?.ShowNotification(msg);
+                            _status.Text = msg;
+                            _contextActionPanel.CancelTargeting();
+                            _orderCursorOverlay?.HideTooltip();
+                        }
+                    }
+                }
+                else
+                {
+                    _orderNotification?.ShowNotification("Click a friendly light or APC vehicle to sling-load");
+                    _status.Text = "Click a friendly light or APC vehicle to sling-load";
+                }
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if (_contextActionPanel?.TargetingMode == ContextTargetingMode.SlingDrop)
+            {
+                if (TryGetGroundPositionUnderMouse(mouse.Position, out NumericsVector2 groundPos))
+                {
+                    int ordered = 0;
+                    foreach (EntityId unitId in _unitViews.Selected)
+                    {
+                        if (_session.Replica.TryGetOwnUnit(unitId, out OwnUnitObservation obs) &&
+                            obs.HasFlightCapability &&
+                            obs.FlightPhase != FlightPhase.Crashing &&
+                            obs.SlingLoadId != default)
+                        {
+                            if (_session.OrderHelicopter(unitId, HelicopterOrderKind.SlingDrop, obs.AltitudeBand, hasTarget: true, target: groundPos))
+                                ordered++;
+                        }
+                    }
+                    if (ordered > 0)
+                    {
+                        string msg = "Sling cargo drop ordered";
+                        _orderNotification?.ShowNotification(msg);
+                        _status.Text = msg;
+                    }
+                    _contextActionPanel.CancelTargeting();
+                    _destination.HideZoneCircle();
                     _orderCursorOverlay?.HideTooltip();
                 }
                 GetViewport().SetInputAsHandled();
@@ -2596,10 +2832,11 @@ public partial class Main : Node3D
                     return;
                 }
 
-                if (HasSelectedInfantry() &&
+                if (HasSelectedBoardableUnits() &&
                     TryGetOwnUnitUnderMouse(mouse.Position, out EntityId targetTransportId) &&
                     _session.Replica.TryGetOwnUnit(targetTransportId, out OwnUnitObservation transObs) &&
-                    transObs.PassengerCapacity > 0)
+                    transObs.PassengerCapacity > 0 &&
+                    CanSelectedUnitsBoardTransport(transObs))
                 {
                     int available = transObs.PassengerCapacity - transObs.PassengerCount;
                     if (available <= 0)
@@ -2612,14 +2849,20 @@ public partial class Main : Node3D
 
                     int sent = 0;
                     int total = 0;
+                    UnitDefinition? transDef = transObs.Definition < _catalog.Units.Length ? _catalog.Units[transObs.Definition] : null;
+                    bool transAcceptsVehicles = transDef?.Flight?.CanLoadInternalVehicles == true;
                     foreach (EntityId unitId in _unitViews.Selected)
                     {
                         if (_session.Replica.TryGetOwnUnit(unitId, out OwnUnitObservation obs) &&
-                            _catalog.Units[obs.Definition].Classification == "infantry")
+                            obs.Definition < _catalog.Units.Length &&
+                            obs.SlungById == default)
                         {
-                            total++;
-                            if (sent < available)
+                            UnitDefinition uDef = _catalog.Units[obs.Definition];
+                            bool isInf = string.Equals(uDef.Classification, "infantry", StringComparison.OrdinalIgnoreCase);
+                            bool canBoard = isInf || (uDef.CanInternalLoad && transAcceptsVehicles);
+                            if (canBoard)
                             {
+                                total++;
                                 if (_session.BoardTransport(unitId, targetTransportId))
                                     sent++;
                             }
@@ -2629,8 +2872,8 @@ public partial class Main : Node3D
                     if (sent > 0)
                     {
                         string msg = sent < total
-                            ? $"Boarding transport #{targetTransportId.Value}: {sent} ordered to board ({total - sent} capacity exceeded)"
-                            : $"Boarding transport #{targetTransportId.Value}: {sent} infantry ordered to board";
+                            ? $"Loading transport #{targetTransportId.Value}: {sent} ordered ({total - sent} capacity exceeded)"
+                            : $"Loading transport #{targetTransportId.Value}: {sent} ordered to board";
                         _orderNotification?.ShowNotification(msg);
                         _status.Text = msg;
                         GetViewport().SetInputAsHandled();
@@ -2995,18 +3238,115 @@ public partial class Main : Node3D
         return false;
     }
 
-    private bool HasSelectedInfantry()
+    private bool HasSelectedBoardableUnits()
     {
         foreach (EntityId id in _unitViews.Selected)
         {
             if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) &&
-                _catalog.Units[obs.Definition].Classification == "infantry")
+                obs.Definition < _catalog.Units.Length &&
+                obs.SlungById == default)
             {
-                return true;
+                UnitDefinition def = _catalog.Units[obs.Definition];
+                if (string.Equals(def.Classification, "infantry", StringComparison.OrdinalIgnoreCase) || def.CanInternalLoad)
+                {
+                    return true;
+                }
             }
         }
         return false;
     }
+
+    private bool CanSelectedUnitsBoardTransport(in OwnUnitObservation transObs)
+    {
+        UnitDefinition? transDef = transObs.Definition < _catalog.Units.Length ? _catalog.Units[transObs.Definition] : null;
+        bool acceptsVehicles = transDef?.Flight?.CanLoadInternalVehicles == true;
+        foreach (EntityId id in _unitViews.Selected)
+        {
+            if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) &&
+                obs.Definition < _catalog.Units.Length &&
+                obs.SlungById == default)
+            {
+                UnitDefinition def = _catalog.Units[obs.Definition];
+                bool isInf = string.Equals(def.Classification, "infantry", StringComparison.OrdinalIgnoreCase);
+                if (isInf || (def.CanInternalLoad && acceptsVehicles))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private float GetSelectedHelicopterLandingRadius()
+    {
+        foreach (EntityId id in _unitViews.Selected)
+        {
+            if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) &&
+                obs.Definition < _catalog.Units.Length &&
+                _catalog.Units[obs.Definition].Flight is { } flight)
+            {
+                return flight.LandingClearanceRadius;
+            }
+        }
+        return 10.0f;
+    }
+
+    private float GetSelectedHelicopterMaxSlope()
+    {
+        foreach (EntityId id in _unitViews.Selected)
+        {
+            if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) &&
+                obs.Definition < _catalog.Units.Length &&
+                _catalog.Units[obs.Definition].Flight is { } flight)
+            {
+                return flight.MaxLandingSlopeDegrees;
+            }
+        }
+        return 12.0f;
+    }
+
+    private float GetSelectedHelicopterMaxSlingKg()
+    {
+        foreach (EntityId id in _unitViews.Selected)
+        {
+            if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) &&
+                obs.Definition < _catalog.Units.Length &&
+                _catalog.Units[obs.Definition].Flight is { } flight)
+            {
+                return flight.MaxSlingWeightKg;
+            }
+        }
+        return 0f;
+    }
+
+    private static string FormatLzBlockReason(LandingZoneStatus status) => status switch
+    {
+        LandingZoneStatus.BlockedByWater => "Water",
+        LandingZoneStatus.BlockedByStructure => "Structure",
+        LandingZoneStatus.BlockedByForest => "Dense Forest",
+        LandingZoneStatus.SlopeTooSteep => "Slope Too Steep",
+        LandingZoneStatus.BlockedByUnit => "Occupied by Unit",
+        LandingZoneStatus.BlockedByWreck => "Blocked by Wreck",
+        _ => "Out of Bounds"
+    };
+
+    private static string FormatFastRopeBlockReason(FastRopeZoneStatus status) => status switch
+    {
+        FastRopeZoneStatus.BlockedByWater => "Water",
+        FastRopeZoneStatus.BlockedByStructure => "Structure",
+        FastRopeZoneStatus.NoInfantryAboard => "No Infantry Aboard",
+        _ => "Out of Bounds"
+    };
+
+    private static string FormatSlingDropBlockReason(SlingDropZoneStatus status) => status switch
+    {
+        SlingDropZoneStatus.BlockedByWater => "Water",
+        SlingDropZoneStatus.BlockedByStructure => "Structure",
+        SlingDropZoneStatus.BlockedByForest => "Dense Forest",
+        SlingDropZoneStatus.BlockedByUnit => "Occupied by Unit",
+        SlingDropZoneStatus.BlockedByWreck => "Blocked by Wreck",
+        _ => "Out of Bounds"
+    };
 
     private string GetUnitDisplayName(ushort definition)
     {
@@ -3802,6 +4142,7 @@ public partial class Main : Node3D
             return;
         }
 
+        _helicopterAudio?.Stop();
         ResetGameplayState();
 
         _scenario = "battle";
@@ -3874,6 +4215,7 @@ public partial class Main : Node3D
 
     internal void SetScenarioForTest(string scenarioName)
     {
+        _helicopterAudio?.Stop();
         ResetGameplayState();
         _scenario = scenarioName;
         StaticGeometry? scenarioGeometry = null;
@@ -4101,6 +4443,7 @@ public partial class Main : Node3D
         _isMenuMode = false;
         _sessionMenu.HideMenu();
         _pauseMenu.Close();
+        _helicopterAudio?.Stop();
         ResetGameplayState();
 
         _hudCanvas.Visible = true;
@@ -4135,6 +4478,7 @@ public partial class Main : Node3D
             _session.Dispose();
             _session = new NullSession();
         }
+        _helicopterAudio?.Stop();
         ResetGameplayState();
         _isMenuMode = true;
         _hudCanvas.Visible = false;
@@ -4149,6 +4493,7 @@ public partial class Main : Node3D
             _session.Dispose();
             _session = new NullSession();
         }
+        _helicopterAudio?.Stop();
         ResetGameplayState();
         _isMenuMode = true;
         _hudCanvas.Visible = false;

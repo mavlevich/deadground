@@ -38,8 +38,8 @@ public sealed class ContainerSystem : ISimulationSystem
                 continue;
             }
 
-            // If transport began moving or took off while soldier was approaching, cancel boarding
-            if (transport.Moving || world.IsAirborne(transport.Id))
+            // If transport began moving, took off, or became slung while unit was approaching, cancel boarding
+            if (transport.Moving || world.IsAirborne(transport.Id) || world.IsSlung(transport.Id) || world.IsSlung(unit.Id))
             {
                 world.ClearBoardingOrder(unit.Id);
                 _navigation?.ClearUnit(unit.Id);
@@ -71,7 +71,8 @@ public sealed class ContainerSystem : ISimulationSystem
             float dist = Vector2.Distance(unit.Position, transport.Position);
             if (dist <= maxBoardDist)
             {
-                world.Board(transport.Id, unit.Id);
+                int slots = world.GetBoardingSlots(unit.Id);
+                world.Board(transport.Id, unit.Id, slots);
                 _navigation?.ClearUnit(unit.Id);
                 world.ClearAttackOrder(unit.Id);
             }

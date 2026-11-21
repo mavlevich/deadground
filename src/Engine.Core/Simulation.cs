@@ -153,7 +153,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         if (player < 1 || player > _lastAccepted.Length || command.Sequence == 0 ||
             command.Sequence <= _lastAccepted[player - 1] || _commandCount == _commands.Length ||
             !_world.Map.Contains(command.Target) || !_world.TryGetUnit(command.Unit, out UnitState unit) ||
-            unit.Owner != player || _world.IsContained(command.Unit) || _world.IsCrashing(command.Unit)) return false;
+            unit.Owner != player || _world.IsContained(command.Unit) || _world.IsCrashing(command.Unit) || _world.IsSlung(command.Unit)) return false;
 
         if (command.FinalFacing.HasValue && !float.IsFinite(command.FinalFacing.Value)) return false;
 
@@ -169,7 +169,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         if (player < 1 || player > _lastAccepted.Length || command.Sequence == 0 ||
             command.Sequence <= _lastAccepted[player - 1] || _commandCount == _commands.Length ||
             command.Target.Value == 0 || !_world.TryGetUnit(command.Unit, out UnitState unit) ||
-            unit.Owner != player || _world.IsContained(command.Unit) || _world.IsCrashing(command.Unit)) return false;
+            unit.Owner != player || _world.IsContained(command.Unit) || _world.IsCrashing(command.Unit) || _world.IsSlung(command.Unit)) return false;
 
         // Contact validation: target ContactId must be in sender's current contact knowledge
         if (_detection is not null)
@@ -195,7 +195,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
             command.Sequence <= _lastAccepted[player - 1] || _commandCount == _commands.Length ||
             command.Stance > FireStance.HoldFire ||
             !_world.TryGetUnit(command.Unit, out UnitState unit) ||
-            unit.Owner != player || _world.IsContained(command.Unit) || _world.IsCrashing(command.Unit)) return false;
+            unit.Owner != player || _world.IsContained(command.Unit) || _world.IsCrashing(command.Unit) || _world.IsSlung(command.Unit)) return false;
 
         _commands[_commandCount++] = QueuedCommand.CreateSetFireStance(player, command);
         _lastAccepted[player - 1] = command.Sequence;
@@ -210,12 +210,17 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
             return false;
 
         if (!_world.TryGetUnit(command.Unit, out UnitState unit) || unit.Owner != player ||
-            _world.IsContained(command.Unit) || _world.IsAircraft(command.Unit) || _world.IsCrashing(command.Unit))
+            _world.IsContained(command.Unit) || _world.IsAircraft(command.Unit) ||
+            _world.IsCrashing(command.Unit) || _world.IsSlung(command.Unit))
             return false;
         if (!_world.TryGetUnit(command.Transport, out UnitState transport) || transport.Owner != player)
             return false;
         if (!_world.IsContainer(command.Transport) || transport.Moving ||
-            _world.IsAirborne(command.Transport) || _world.IsCrashing(command.Transport))
+            _world.IsAirborne(command.Transport) || _world.IsCrashing(command.Transport) || _world.IsSlung(command.Transport))
+            return false;
+
+        int requiredSlots = ResolveInternalCargoSlots(unit.Definition, transport.Definition);
+        if (requiredSlots <= 0)
             return false;
 
         int queuedSeats = 0;
@@ -223,18 +228,35 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         {
             if (_commands[i].Kind == CommandKind.BoardTransport &&
                 _commands[i].BoardTransport.Transport == command.Transport &&
-                _commands[i].BoardTransport.Unit != command.Unit)
+                _commands[i].BoardTransport.Unit != command.Unit &&
+                _world.TryGetUnit(_commands[i].BoardTransport.Unit, out UnitState qUnit))
             {
-                queuedSeats++;
+                queuedSeats += Math.Max(1, ResolveInternalCargoSlots(qUnit.Definition, transport.Definition));
             }
         }
 
-        if (_world.GetAvailableSeats(command.Transport) - queuedSeats <= 0)
+        if (_world.GetAvailableSeats(command.Transport) - queuedSeats < requiredSlots)
             return false;
 
         _commands[_commandCount++] = QueuedCommand.CreateBoardTransport(player, command);
         _lastAccepted[player - 1] = command.Sequence;
         return true;
+    }
+
+    private int ResolveInternalCargoSlots(ushort unitDef, ushort transportDef)
+    {
+        if (_flight is not null && _flight.TryGetCargoProfile(unitDef, out CargoProfile cargo))
+        {
+            if (!cargo.CanInternalLoad)
+                return 0;
+            if (!cargo.IsInfantry)
+            {
+                if (!_flight.TryGetProfile(transportDef, out FlightProfile fp) || !fp.CanLoadInternalVehicles)
+                    return 0;
+            }
+            return Math.Max(1, cargo.InternalCargoSlots);
+        }
+        return 1;
     }
 
     public bool TryEnqueue(int player, DisembarkCommand command)
@@ -245,7 +267,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
             return false;
 
         if (!_world.TryGetUnit(command.Transport, out UnitState transport) || transport.Owner != player ||
-            _world.IsCrashing(command.Transport))
+            _world.IsCrashing(command.Transport) || _world.IsSlung(command.Transport))
             return false;
         if (!_world.IsContainer(command.Transport) || _world.GetPassengerCount(command.Transport) == 0)
             return false;
@@ -267,7 +289,8 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         if (command.HasTarget && !_world.Map.Contains(command.Target))
             return false;
 
-        if (_smoke is null || !_smoke.CanDeploySmoke(player, command.Unit, _world) || _world.IsCrashing(command.Unit))
+        if (_smoke is null || !_smoke.CanDeploySmoke(player, command.Unit, _world) ||
+            _world.IsCrashing(command.Unit) || _world.IsSlung(command.Unit))
             return false;
 
         // Prevent duplicate smoke activation in the same tick for the same unit
@@ -292,7 +315,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
             return false;
 
         if (_flight is null) return false;
-        if (command.Kind > HelicopterOrderKind.SetAltitudeBand) return false;
+        if (command.Kind > HelicopterOrderKind.SlingDrop) return false;
         if (command.Kind == HelicopterOrderKind.SetAltitudeBand && command.AltitudeBand > AltitudeBand.High) return false;
         if (command.HasTarget && !_world.Map.Contains(command.Target)) return false;
 
@@ -303,6 +326,29 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
             !_flight.IsAircraftDefinition(unit.Definition))
         {
             return false;
+        }
+
+        if (command.Kind == HelicopterOrderKind.SlingPickup)
+        {
+            if (!_flight.TryGetProfile(unit.Definition, out FlightProfile fp) ||
+                !_flight.CanSlingTarget(_world, command.Unit, player, in fp, command.TargetUnit, out _))
+            {
+                return false;
+            }
+        }
+        else if (command.Kind == HelicopterOrderKind.SlingDrop)
+        {
+            if (_world.GetSlingLoad(command.Unit) == default)
+                return false;
+        }
+        else if (command.Kind == HelicopterOrderKind.FastRope)
+        {
+            if (!_flight.TryGetProfile(unit.Definition, out FlightProfile fp) ||
+                !fp.CanFastRope ||
+                !_flight.HasInfantryPassenger(_world, command.Unit))
+            {
+                return false;
+            }
         }
 
         _commands[_commandCount++] = QueuedCommand.CreateHelicopter(player, command);
@@ -331,7 +377,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
             {
                 EntityId u = units[i];
                 if (u.Value == 0 || !seen.Add(u.Value)) return false;
-                if (!_world.TryGetUnit(u, out UnitState unit) || unit.Owner != player || _world.IsContained(u) || _world.IsCrashing(u)) return false;
+                if (!_world.TryGetUnit(u, out UnitState unit) || unit.Owner != player || _world.IsContained(u) || _world.IsCrashing(u) || _world.IsSlung(u)) return false;
             }
         }
         else
@@ -344,7 +390,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
                 {
                     if (units[j].Value == u.Value) return false;
                 }
-                if (!_world.TryGetUnit(u, out UnitState unit) || unit.Owner != player || _world.IsContained(u) || _world.IsCrashing(u)) return false;
+                if (!_world.TryGetUnit(u, out UnitState unit) || unit.Owner != player || _world.IsContained(u) || _world.IsCrashing(u) || _world.IsSlung(u)) return false;
             }
         }
 
@@ -455,21 +501,28 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
             {
                 if (!_world.TryGetUnit(queued.BoardTransport.Transport, out UnitState targetTransport) ||
                     targetTransport.Owner != queued.Player || targetTransport.Moving ||
-                    _world.IsAirborne(targetTransport.Id) || _world.IsCrashing(targetTransport.Id) ||
+                    _world.IsAirborne(targetTransport.Id) || _world.IsCrashing(targetTransport.Id) || _world.IsSlung(targetTransport.Id) ||
                     !_world.TryGetUnit(queued.BoardTransport.Unit, out UnitState soldier) ||
-                    soldier.Owner != queued.Player || _world.IsContained(soldier.Id) || _world.IsAircraft(soldier.Id))
+                    soldier.Owner != queued.Player || _world.IsContained(soldier.Id) || _world.IsAircraft(soldier.Id) || _world.IsSlung(soldier.Id))
+                {
+                    _world.ClearBoardingOrder(queued.BoardTransport.Unit);
+                    continue;
+                }
+
+                int requiredSlots = ResolveInternalCargoSlots(soldier.Definition, targetTransport.Definition);
+                if (requiredSlots <= 0)
                 {
                     _world.ClearBoardingOrder(queued.BoardTransport.Unit);
                     continue;
                 }
 
                 _world.ClearBoardingOrder(soldier.Id);
-                if (!_world.TryReserveSeat(targetTransport.Id))
+                if (!_world.TryReserveSeat(targetTransport.Id, requiredSlots))
                 {
                     continue;
                 }
 
-                _world.SetBoardingOrder(soldier.Id, targetTransport.Id);
+                _world.SetBoardingOrder(soldier.Id, targetTransport.Id, requiredSlots);
                 _world.ClearAttackOrder(soldier.Id);
 
                 Vector2 diff = soldier.Position - targetTransport.Position;
@@ -556,11 +609,15 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
             }
             else if (queued.Kind == CommandKind.Helicopter)
             {
-                if (queued.Helicopter.Kind == HelicopterOrderKind.TakeOff ||
+                if (queued.Helicopter.Kind is HelicopterOrderKind.TakeOff or HelicopterOrderKind.FastRope or HelicopterOrderKind.SlingPickup or HelicopterOrderKind.SlingDrop ||
                     (queued.Helicopter.Kind == HelicopterOrderKind.Land && queued.Helicopter.HasTarget))
                 {
                     _world.ClearPendingDisembark(queued.Helicopter.Unit);
                     _world.ClearAttackOrder(queued.Helicopter.Unit);
+                }
+                if (queued.Helicopter.Kind == HelicopterOrderKind.SlingPickup && queued.Helicopter.TargetUnit != default)
+                {
+                    _navigation?.ClearUnit(queued.Helicopter.TargetUnit);
                 }
                 _flight?.OrderHelicopter(_world, queued.Helicopter, Tick);
             }

@@ -50,7 +50,7 @@ public sealed class HelicopterScenarioTests
         for (int i = 0; i < 20; i++)
             session.Advance(1d / Simulation.TickRate);
 
-        Assert.Equal(6, session.Replica.OwnUnits.Length);
+        Assert.Equal(9, session.Replica.OwnUnits.Length);
         OwnUnitObservation alpha = session.Replica.OwnUnits[0];
         Assert.True(alpha.HasFlightCapability);
         Assert.Equal(FlightPhase.Ground, alpha.FlightPhase);
@@ -183,5 +183,96 @@ public sealed class HelicopterScenarioTests
         long after = GC.GetAllocatedBytesForCurrentThread();
 
         Assert.Equal(0L, after - before);
+    }
+
+    [Fact]
+    public void HelicopterPlayground_ColdWarCargo_RampJeep_FastRopeForest_SlingM113_RejectM60()
+    {
+        StaticGeometry geometry = HelicopterPlaygroundScenario.CreateStaticGeometry();
+        UnitCatalog catalog = ColdWarContent.LoadCatalog();
+        using Simulation sim = HelicopterPlaygroundScenario.CreateSimulation(geometry, catalog, matchSeed: 2024UL);
+        using LocalSession session = new(sim, player: 1);
+
+        for (int i = 0; i < 10; i++)
+            session.Advance(1d / Simulation.TickRate);
+
+        ushort ch47Idx = catalog.RequireDefinitionIndex("ch47d");
+        ushort jeepIdx = catalog.RequireDefinitionIndex("m151a2");
+        ushort m113Idx = catalog.RequireDefinitionIndex("m113a1");
+        ushort m60Idx = catalog.RequireDefinitionIndex("m60a1");
+
+        EntityId alpha = default;
+        EntityId bravo = default;
+        EntityId jeep = default;
+        EntityId m113 = default;
+        EntityId m60 = default;
+        foreach (OwnUnitObservation obs in session.Replica.OwnUnits)
+        {
+            if (obs.Definition == ch47Idx)
+            {
+                if (alpha == default) alpha = obs.Id;
+                else bravo = obs.Id;
+            }
+            else if (obs.Definition == jeepIdx) jeep = obs.Id;
+            else if (obs.Definition == m113Idx) m113 = obs.Id;
+            else if (obs.Definition == m60Idx) m60 = obs.Id;
+        }
+
+        Assert.NotEqual(default, alpha);
+        Assert.NotEqual(default, bravo);
+        Assert.NotEqual(default, jeep);
+        Assert.NotEqual(default, m113);
+        Assert.NotEqual(default, m60);
+
+        // 1. M151A2 drives up Chinook Alpha rear ramp (2 infantry + 1 jeep = 3 passengers, 10/24 slots)
+        Assert.True(session.BoardTransport(jeep, alpha));
+        for (int i = 0; i < 200; i++)
+            session.Advance(1d / Simulation.TickRate);
+
+        Assert.True(session.Replica.TryGetOwnUnit(alpha, out OwnUnitObservation alphaWithJeep));
+        Assert.Equal(3, alphaWithJeep.PassengerCount);
+        Assert.True(session.Replica.TryGetOwnUnit(jeep, out OwnUnitObservation jeepInAlpha));
+        Assert.Equal(alpha, jeepInAlpha.ContainerId);
+
+        // 2. Chinook Alpha fast-ropes its 2 riflemen into the dense forest while keeping M151A2 aboard
+        Vector2 forestDrop = new(250f, 690f);
+        Assert.True(session.OrderHelicopter(alpha, HelicopterOrderKind.FastRope, AltitudeBand.Low, hasTarget: true, target: forestDrop));
+        for (int i = 0; i < 420; i++)
+            session.Advance(1d / Simulation.TickRate);
+
+        Assert.True(session.Replica.TryGetOwnUnit(alpha, out OwnUnitObservation alphaAfterRope));
+        Assert.Equal(FlightPhase.Airborne, alphaAfterRope.FlightPhase);
+        Assert.Equal(1, alphaAfterRope.PassengerCount); // Only M151A2 remains inside
+        Assert.True(session.Replica.TryGetOwnUnit(jeep, out OwnUnitObservation jeepStillInAlpha));
+        Assert.Equal(alpha, jeepStillInAlpha.ContainerId);
+
+        // 3. Chinook Bravo rejects M60A1 (49t > 12.7t), but sling-lifts M113A1 (11.2t) and drops it across the river
+        Assert.True(session.OrderHelicopter(bravo, HelicopterOrderKind.SlingPickup, AltitudeBand.High, targetUnit: m60));
+        for (int i = 0; i < 20; i++)
+            session.Advance(1d / Simulation.TickRate);
+        Assert.True(session.Replica.TryGetOwnUnit(bravo, out OwnUnitObservation bravoRejectedM60));
+        Assert.Equal(FlightPhase.Ground, bravoRejectedM60.FlightPhase);
+        Assert.Equal(default, bravoRejectedM60.SlingLoadId);
+
+        Assert.True(session.OrderHelicopter(bravo, HelicopterOrderKind.SlingPickup, AltitudeBand.High, targetUnit: m113));
+        for (int i = 0; i < 220; i++)
+            session.Advance(1d / Simulation.TickRate);
+
+        Assert.True(session.Replica.TryGetOwnUnit(bravo, out OwnUnitObservation bravoWithM113));
+        Assert.Equal(m113, bravoWithM113.SlingLoadId);
+        Assert.True(session.Replica.TryGetOwnUnit(m113, out OwnUnitObservation slungM113));
+        Assert.Equal(bravo, slungM113.SlungById);
+        Assert.True(slungM113.Altitude > 5f);
+
+        Assert.True(session.OrderHelicopter(bravo, HelicopterOrderKind.SlingDrop, AltitudeBand.High, hasTarget: true, target: HelicopterPlaygroundScenario.SouthLandingZone));
+        for (int i = 0; i < 520; i++)
+            session.Advance(1d / Simulation.TickRate);
+
+        Assert.True(session.Replica.TryGetOwnUnit(bravo, out OwnUnitObservation bravoDropped));
+        Assert.Equal(default, bravoDropped.SlingLoadId);
+        Assert.True(session.Replica.TryGetOwnUnit(m113, out OwnUnitObservation landedM113));
+        Assert.Equal(default, landedM113.SlungById);
+        Assert.Equal(0f, landedM113.Altitude);
+        Assert.True(Vector2.Distance(landedM113.Position, HelicopterPlaygroundScenario.SouthLandingZone) < 5f);
     }
 }

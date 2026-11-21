@@ -45,6 +45,9 @@ public static class HelicopterPlaygroundScenario
     public static readonly Vector2 ChinookBravoPos = new(200.0f, 120.0f);
     public static readonly Vector2 RiflemanEscort1Pos = new(120.0f, 138.0f);
     public static readonly Vector2 RiflemanEscort2Pos = new(128.0f, 138.0f);
+    public static readonly Vector2 JeepCargoPos = new(140.0f, 154.0f);
+    public static readonly Vector2 ApcSlingPos = new(200.0f, 154.0f);
+    public static readonly Vector2 TankHeavyPos = new(244.0f, 154.0f);
 
     // Clear landing zone on the southern bank, screened from eastern Soviet units by the dense forest
     public static readonly Vector2 SouthLandingZone = new(110.0f, 690.0f);
@@ -174,6 +177,18 @@ public static class HelicopterPlaygroundScenario
         ushort rifleIdx = catalog.RequireDefinitionIndex("us_rifleman");
         int rifleAmmo = catalog.GetAmmoCapacity(rifleDef);
 
+        UnitDefinition jeepDef = catalog.RequireDefinition("m151a2");
+        ushort jeepIdx = catalog.RequireDefinitionIndex("m151a2");
+        int jeepAmmo = catalog.GetAmmoCapacity(jeepDef);
+
+        UnitDefinition m113Def = catalog.RequireDefinition("m113a1");
+        ushort m113Idx = catalog.RequireDefinitionIndex("m113a1");
+        int m113Ammo = catalog.GetAmmoCapacity(m113Def);
+
+        UnitDefinition m60Def = catalog.RequireDefinition("m60a1");
+        ushort m60Idx = catalog.RequireDefinitionIndex("m60a1");
+        int m60Ammo = catalog.GetAmmoCapacity(m60Def);
+
         UnitDefinition btrDef = catalog.RequireDefinition("btr70");
         ushort btrIdx = catalog.RequireDefinitionIndex("btr70");
         int btrAmmo = catalog.GetAmmoCapacity(btrDef);
@@ -187,6 +202,7 @@ public static class HelicopterPlaygroundScenario
         int brdmAmmo = catalog.GetAmmoCapacity(brdmDef);
 
         // Side 1 (Player, US): 2 CH-47D Chinooks + 4 US Riflemen (2 embarked in Alpha, 2 outside)
+        // + 1 M151A2 jeep (internal ramp or light sling) + 1 M113A1 APC (heavy sling) + 1 M60A1 tank (too heavy to sling)
         const float facingSouth = MathF.PI;
         EntityId alphaId = world.CreateUnit(1, ch47Idx, ChinookAlphaPos, ch47Def.Speed, ch47Def.MaxHealth, ch47Ammo, facingSouth, passengerCapacity: ch47Def.PassengerCapacity);
         world.CreateUnit(1, ch47Idx, ChinookBravoPos, ch47Def.Speed, ch47Def.MaxHealth, ch47Ammo, facingSouth, passengerCapacity: ch47Def.PassengerCapacity);
@@ -198,6 +214,9 @@ public static class HelicopterPlaygroundScenario
 
         world.CreateUnit(1, rifleIdx, RiflemanEscort1Pos, rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingSouth);
         world.CreateUnit(1, rifleIdx, RiflemanEscort2Pos, rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingSouth);
+        world.CreateUnit(1, jeepIdx, JeepCargoPos, jeepDef.Speed, jeepDef.MaxHealth, jeepAmmo, 0f);
+        world.CreateUnit(1, m113Idx, ApcSlingPos, m113Def.Speed, m113Def.MaxHealth, m113Ammo, facingSouth, passengerCapacity: m113Def.PassengerCapacity);
+        world.CreateUnit(1, m60Idx, TankHeavyPos, m60Def.Speed, m60Def.MaxHealth, m60Ammo, facingSouth);
 
         // Side 2 (Opponent, Soviet): BTR-70 (AA threat), T-62 (ground only), BRDM-2 (AA threat)
         const float facingNorth = 0f;

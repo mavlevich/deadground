@@ -163,7 +163,14 @@ public sealed record FlightData(
     float CrashSpinRate = 180.0f,
     float CrashSplashRadius = 12.0f,
     int CrashSplashDamage = 60,
-    bool StartAirborne = false);
+    bool StartAirborne = false,
+    bool CanLoadInternalVehicles = false,
+    bool CanFastRope = false,
+    float FastRopeAltitude = 18.0f,
+    int FastRopeIntervalTicks = 10,
+    float MaxSlingWeightKg = 0.0f,
+    float SlingCableLength = 10.0f,
+    float SlingSpeedPenaltyAtMax = 0.45f);
 
 public sealed record SmokeData(
     string Kind,
@@ -222,7 +229,11 @@ public sealed record UnitDefinition(
     int PassengerCapacity = 0,
     int ContainerDestructionDamage = 50,
     SmokeData? Smoke = null,
-    FlightData? Flight = null);
+    FlightData? Flight = null,
+    float CargoWeightKg = 0f,
+    int InternalCargoSlots = 0,
+    bool CanInternalLoad = false,
+    bool CanSlingLoad = false);
 
 public sealed record FactionData(string Id, string? Name = null);
 
@@ -575,16 +586,39 @@ public sealed class OpsFlightCatalog : IUnitFlightCatalog
 {
     private readonly FlightProfile[] _profiles;
     private readonly bool[] _hasProfile;
+    private readonly CargoProfile[] _cargoProfiles;
 
     public OpsFlightCatalog(UnitCatalog catalog)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         _profiles = new FlightProfile[catalog.Units.Length];
         _hasProfile = new bool[catalog.Units.Length];
+        _cargoProfiles = new CargoProfile[catalog.Units.Length];
 
         for (int i = 0; i < catalog.Units.Length; i++)
         {
-            FlightData? f = catalog.Units[i].Flight;
+            UnitDefinition u = catalog.Units[i];
+            bool isInfantry = string.Equals(u.Classification, "infantry", StringComparison.OrdinalIgnoreCase);
+            if (isInfantry)
+            {
+                _cargoProfiles[i] = new CargoProfile(
+                    u.CargoWeightKg > 0f ? u.CargoWeightKg : 100f,
+                    u.InternalCargoSlots > 0 ? u.InternalCargoSlots : 1,
+                    CanInternalLoad: true,
+                    CanSlingLoad: u.CanSlingLoad,
+                    IsInfantry: true);
+            }
+            else
+            {
+                _cargoProfiles[i] = new CargoProfile(
+                    u.CargoWeightKg,
+                    u.InternalCargoSlots,
+                    u.CanInternalLoad,
+                    u.CanSlingLoad,
+                    IsInfantry: false);
+            }
+
+            FlightData? f = u.Flight;
             if (f is null)
                 continue;
 
@@ -604,7 +638,14 @@ public sealed class OpsFlightCatalog : IUnitFlightCatalog
                 f.CrashSpinRate,
                 f.CrashSplashRadius,
                 f.CrashSplashDamage,
-                f.StartAirborne);
+                f.StartAirborne,
+                f.CanLoadInternalVehicles,
+                f.CanFastRope,
+                f.FastRopeAltitude,
+                f.FastRopeIntervalTicks,
+                f.MaxSlingWeightKg,
+                f.SlingCableLength,
+                f.SlingSpeedPenaltyAtMax);
 
             if (profile.IsValid)
             {
@@ -622,6 +663,17 @@ public sealed class OpsFlightCatalog : IUnitFlightCatalog
             return true;
         }
         profile = default;
+        return false;
+    }
+
+    public bool TryGetCargoProfile(ushort definition, out CargoProfile cargo)
+    {
+        if (definition < _cargoProfiles.Length)
+        {
+            cargo = _cargoProfiles[definition];
+            return true;
+        }
+        cargo = CargoProfile.NonTransportable;
         return false;
     }
 }
@@ -876,6 +928,18 @@ public static class PrototypeScenario
                 if (kind != SmokeDeliveryKind.EngineScreen && s.Range <= 0f)
                     throw new InvalidOperationException($"Unit '{unit.Id}' targeted smoke requires positive range.");
             }
+            if (!float.IsFinite(unit.CargoWeightKg) || unit.CargoWeightKg < 0f || unit.InternalCargoSlots < 0)
+            {
+                throw new InvalidOperationException($"Unit '{unit.Id}' has invalid cargo parameters.");
+            }
+            if (unit.CanInternalLoad && !string.Equals(unit.Classification, "infantry", StringComparison.OrdinalIgnoreCase) && unit.InternalCargoSlots <= 0)
+            {
+                throw new InvalidOperationException($"Unit '{unit.Id}' with can_internal_load requires positive internal_cargo_slots.");
+            }
+            if (unit.CanSlingLoad && unit.CargoWeightKg <= 0f)
+            {
+                throw new InvalidOperationException($"Unit '{unit.Id}' with can_sling_load requires positive cargo_weight_kg.");
+            }
             if (unit.Flight is not null)
             {
                 FlightData f = unit.Flight;
@@ -894,7 +958,12 @@ public static class PrototypeScenario
                     !float.IsFinite(f.CrashDescentRate) || f.CrashDescentRate <= 0f ||
                     !float.IsFinite(f.CrashSpinRate) || f.CrashSpinRate <= 0f ||
                     !float.IsFinite(f.CrashSplashRadius) || f.CrashSplashRadius < 0f ||
-                    f.CrashSplashDamage < 0)
+                    f.CrashSplashDamage < 0 ||
+                    !float.IsFinite(f.FastRopeAltitude) || f.FastRopeAltitude <= 0f ||
+                    f.FastRopeIntervalTicks < 1 ||
+                    !float.IsFinite(f.MaxSlingWeightKg) || f.MaxSlingWeightKg < 0f ||
+                    !float.IsFinite(f.SlingCableLength) || f.SlingCableLength <= 0f ||
+                    !float.IsFinite(f.SlingSpeedPenaltyAtMax) || f.SlingSpeedPenaltyAtMax < 0f || f.SlingSpeedPenaltyAtMax > 0.85f)
                 {
                     throw new InvalidOperationException($"Unit '{unit.Id}' has invalid flight parameters.");
                 }

@@ -575,5 +575,10 @@ internal static class TacticalMinimapRegressionTests
         public void Advance(double elapsedSeconds) { }
         public void Disconnect() { }
         public void Dispose() { }
+
+        public bool OrderHelicopter(EntityId unit, HelicopterOrderKind kind, AltitudeBand altitudeBand = AltitudeBand.High, bool hasTarget = false, NumericsVector2 target = default, EntityId targetUnit = default)
+        {
+            throw new NotImplementedException();
+        }
     }
 }

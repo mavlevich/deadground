@@ -10,11 +10,14 @@ public enum ContextTargetingMode
     None = 0,
     BoardTransport = 1,
     Disembark = 2,
-    LandAt = 3
+    LandAt = 3,
+    FastRope = 4,
+    SlingPickup = 5,
+    SlingDrop = 6
 }
 
 /// <summary>
-/// Contextual action panel displaying boarding, disembarking, smoke, and rotorcraft flight controls.
+/// Contextual action panel displaying boarding, disembarking, smoke, and rotorcraft flight/cargo controls.
 /// Zero heap allocations in steady-state frames with unchanged selection and unit state.
 /// </summary>
 internal sealed partial class ContextActionPanel : PanelContainer
@@ -26,6 +29,8 @@ internal sealed partial class ContextActionPanel : PanelContainer
     private readonly Button _flightToggleButton;
     private readonly Button _landAtButton;
     private readonly Button _altitudeBandButton;
+    private readonly Button _fastRopeButton;
+    private readonly Button _slingButton;
     private readonly Label _passengerLabel;
     private readonly Label _statusLabel;
     private UnitCatalog _catalog;
@@ -45,6 +50,8 @@ internal sealed partial class ContextActionPanel : PanelContainer
     internal Button FlightToggleButton => _flightToggleButton;
     internal Button LandAtButton => _landAtButton;
     internal Button AltitudeBandButton => _altitudeBandButton;
+    internal Button FastRopeButton => _fastRopeButton;
+    internal Button SlingButton => _slingButton;
     internal Label PassengerLabel => _passengerLabel;
     internal Label StatusLabel => _statusLabel;
 
@@ -70,6 +77,11 @@ internal sealed partial class ContextActionPanel : PanelContainer
     private int _cachedHeliAirborneCount = -1;
     private int _cachedHeliLowBandCount = -1;
     private int _cachedHeliCrashingCount = -1;
+    private int _cachedHeliFastRopeCapable = -1;
+    private int _cachedHeliFastRopeActive = -1;
+    private int _cachedHeliSlingCapable = -1;
+    private int _cachedHeliSlingLoaded = -1;
+    private bool _cachedAllBoardable;
 
     public ContextActionPanel(UnitCatalog catalog)
     {
@@ -180,6 +192,28 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _altitudeBandButton.Pressed += () => HelicopterToggleAltitudeRequested?.Invoke();
         hbox.AddChild(_altitudeBandButton);
 
+        _fastRopeButton = new Button
+        {
+            Text = "FAST-ROPE [F]",
+            MouseFilter = MouseFilterEnum.Stop,
+            FocusMode = FocusModeEnum.None,
+            CustomMinimumSize = new Vector2(115, 32)
+        };
+        _fastRopeButton.AddThemeFontSizeOverride("font_size", 11);
+        _fastRopeButton.Pressed += OnFastRopeButtonPressed;
+        hbox.AddChild(_fastRopeButton);
+
+        _slingButton = new Button
+        {
+            Text = "SLING PICKUP [K]",
+            MouseFilter = MouseFilterEnum.Stop,
+            FocusMode = FocusModeEnum.None,
+            CustomMinimumSize = new Vector2(125, 32)
+        };
+        _slingButton.AddThemeFontSizeOverride("font_size", 11);
+        _slingButton.Pressed += OnSlingButtonPressed;
+        hbox.AddChild(_slingButton);
+
         _passengerLabel = new Label
         {
             MouseFilter = MouseFilterEnum.Ignore,
@@ -206,6 +240,8 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _flightToggleButton.Visible = false;
         _landAtButton.Visible = false;
         _altitudeBandButton.Visible = false;
+        _fastRopeButton.Visible = false;
+        _slingButton.Visible = false;
         _passengerLabel.Visible = false;
         _statusLabel.Visible = false;
     }
@@ -229,6 +265,21 @@ internal sealed partial class ContextActionPanel : PanelContainer
         SetTargetingMode(TargetingMode == ContextTargetingMode.LandAt
             ? ContextTargetingMode.None
             : ContextTargetingMode.LandAt);
+    }
+
+    private void OnFastRopeButtonPressed()
+    {
+        SetTargetingMode(TargetingMode == ContextTargetingMode.FastRope
+            ? ContextTargetingMode.None
+            : ContextTargetingMode.FastRope);
+    }
+
+    private void OnSlingButtonPressed()
+    {
+        ContextTargetingMode desired = _cachedHeliSlingLoaded > 0
+            ? ContextTargetingMode.SlingDrop
+            : ContextTargetingMode.SlingPickup;
+        SetTargetingMode(TargetingMode == desired ? ContextTargetingMode.None : desired);
     }
 
     public void SetTargetingMode(ContextTargetingMode mode)
@@ -271,12 +322,18 @@ internal sealed partial class ContextActionPanel : PanelContainer
                 _cachedHeliAirborneCount = -1;
                 _cachedHeliLowBandCount = -1;
                 _cachedHeliCrashingCount = -1;
+                _cachedHeliFastRopeCapable = -1;
+                _cachedHeliFastRopeActive = -1;
+                _cachedHeliSlingCapable = -1;
+                _cachedHeliSlingLoaded = -1;
+                _cachedAllBoardable = false;
                 Visible = false;
             }
             return;
         }
 
         uint hash = 17;
+        bool allBoardable = true;
         bool allInfantry = true;
         bool hasTransport = false;
         OwnUnitObservation singleTransport = default;
@@ -289,6 +346,10 @@ internal sealed partial class ContextActionPanel : PanelContainer
         int heliAirborneCount = 0;
         int heliLowBandCount = 0;
         int heliCrashingCount = 0;
+        int heliFastRopeCapable = 0;
+        int heliFastRopeActive = 0;
+        int heliSlingCapable = 0;
+        int heliSlingLoaded = 0;
 
         foreach (EntityId id in selectedUnits)
         {
@@ -296,16 +357,23 @@ internal sealed partial class ContextActionPanel : PanelContainer
             if (!replica.TryGetOwnUnit(id, out OwnUnitObservation obs))
             {
                 allInfantry = false;
+                allBoardable = false;
                 continue;
             }
 
-            string? classification = obs.Definition < _catalog.Units.Length
-                ? _catalog.Units[obs.Definition].Classification
+            UnitDefinition? def = obs.Definition < _catalog.Units.Length
+                ? _catalog.Units[obs.Definition]
                 : null;
-
-            if (!string.Equals(classification, "infantry", StringComparison.OrdinalIgnoreCase))
+            string? classification = def?.Classification;
+            bool isInfantry = string.Equals(classification, "infantry", StringComparison.OrdinalIgnoreCase);
+            bool canBoard = isInfantry || (def?.CanInternalLoad == true);
+            if (!isInfantry)
             {
                 allInfantry = false;
+            }
+            if (!canBoard || obs.SlungById != default)
+            {
+                allBoardable = false;
             }
 
             if (obs.PassengerCapacity > 0)
@@ -331,6 +399,22 @@ internal sealed partial class ContextActionPanel : PanelContainer
                 if (obs.AltitudeBand == AltitudeBand.Low)
                 {
                     heliLowBandCount++;
+                }
+                if (def?.Flight?.CanFastRope == true)
+                {
+                    heliFastRopeCapable++;
+                }
+                if ((obs.FlightFlags & FlightStateFlags.FastRopeActive) != 0)
+                {
+                    heliFastRopeActive++;
+                }
+                if (def?.Flight?.MaxSlingWeightKg > 0f)
+                {
+                    heliSlingCapable++;
+                }
+                if (obs.SlingLoadId != default)
+                {
+                    heliSlingLoaded++;
                 }
             }
 
@@ -375,7 +459,12 @@ internal sealed partial class ContextActionPanel : PanelContainer
             _cachedHeliCount == heliCount &&
             _cachedHeliAirborneCount == heliAirborneCount &&
             _cachedHeliLowBandCount == heliLowBandCount &&
-            _cachedHeliCrashingCount == heliCrashingCount)
+            _cachedHeliCrashingCount == heliCrashingCount &&
+            _cachedHeliFastRopeCapable == heliFastRopeCapable &&
+            _cachedHeliFastRopeActive == heliFastRopeActive &&
+            _cachedHeliSlingCapable == heliSlingCapable &&
+            _cachedHeliSlingLoaded == heliSlingLoaded &&
+            _cachedAllBoardable == allBoardable)
         {
             return;
         }
@@ -395,6 +484,11 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _cachedHeliAirborneCount = heliAirborneCount;
         _cachedHeliLowBandCount = heliLowBandCount;
         _cachedHeliCrashingCount = heliCrashingCount;
+        _cachedHeliFastRopeCapable = heliFastRopeCapable;
+        _cachedHeliFastRopeActive = heliFastRopeActive;
+        _cachedHeliSlingCapable = heliSlingCapable;
+        _cachedHeliSlingLoaded = heliSlingLoaded;
+        _cachedAllBoardable = allBoardable;
 
         bool hasSmokeUi = smokeCapableCount > 0;
         _smokeButton.Visible = hasSmokeUi;
@@ -427,6 +521,10 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _flightToggleButton.Visible = hasHeliUi;
         _landAtButton.Visible = hasHeliUi;
         _altitudeBandButton.Visible = hasHeliUi;
+        bool showFastRope = hasHeliUi && heliFastRopeCapable > 0 && (passengerCount > 0 || count > 1);
+        bool showSling = hasHeliUi && heliSlingCapable > 0;
+        _fastRopeButton.Visible = showFastRope;
+        _slingButton.Visible = showSling;
         if (hasHeliUi)
         {
             _flightToggleButton.Disabled = allCrashing;
@@ -435,22 +533,45 @@ internal sealed partial class ContextActionPanel : PanelContainer
             _flightToggleButton.Text = heliAirborneCount > 0 ? "LAND HERE [L]" : "TAKE OFF [L]";
             _landAtButton.Text = TargetingMode == ContextTargetingMode.LandAt ? "CANCEL LAND" : "LAND AT...";
             _altitudeBandButton.Text = heliLowBandCount > 0 ? "ALT: LOW [H]" : "ALT: HIGH [H]";
+            if (showFastRope)
+            {
+                _fastRopeButton.Disabled = allCrashing;
+                _fastRopeButton.Text = TargetingMode == ContextTargetingMode.FastRope
+                    ? "CANCEL ROPE"
+                    : (heliFastRopeActive > 0 ? "ROPING..." : "FAST-ROPE [F]");
+            }
+            if (showSling)
+            {
+                _slingButton.Disabled = allCrashing;
+                if (heliSlingLoaded > 0)
+                {
+                    _slingButton.Text = TargetingMode == ContextTargetingMode.SlingDrop ? "CANCEL DROP" : "DROP SLING [K]";
+                }
+                else
+                {
+                    _slingButton.Text = TargetingMode == ContextTargetingMode.SlingPickup ? "CANCEL SLING" : "SLING PICKUP [K]";
+                }
+            }
         }
 
-        if (allInfantry && count > 0)
+        if (allBoardable && count > 0)
         {
             Visible = true;
             _boardButton.Visible = true;
             _boardButton.Text = TargetingMode == ContextTargetingMode.BoardTransport
                 ? "CANCEL BOARDING"
-                : "BOARD TRANSPORT";
+                : (allInfantry ? "BOARD TRANSPORT" : "LOAD RAMP");
             _disembarkHereButton.Visible = false;
             _disembarkButton.Visible = false;
             _passengerLabel.Visible = false;
             _statusLabel.Visible = true;
             _statusLabel.Text = TargetingMode == ContextTargetingMode.BoardTransport
-                ? "Click friendly transport to board (Esc to cancel)"
-                : (count == 1 ? "1 infantry selected" : $"{count} infantry selected");
+                ? (allInfantry
+                    ? "Click friendly transport to board (Esc to cancel)"
+                    : "Click landed cargo helicopter to drive up ramp (Esc to cancel)")
+                : (allInfantry
+                    ? (count == 1 ? "1 infantry selected" : $"{count} infantry selected")
+                    : "Light cargo vehicle (can load ramp)");
         }
         else if (hasTransport && count == 1)
         {
@@ -469,11 +590,20 @@ internal sealed partial class ContextActionPanel : PanelContainer
                 _statusLabel.Visible = true;
                 _statusLabel.Text = TargetingMode == ContextTargetingMode.LandAt
                     ? "Click clear terrain to land (Esc to cancel)"
-                    : TargetingMode == ContextTargetingMode.Disembark
-                        ? "Click ground destination to unload at (Esc to cancel)"
-                        : hasHeliUi
-                            ? (allCrashing ? "Mayday - crashing" : (heliAirborneCount > 0 ? "Airborne - land to unload" : "Landed - ready for disembarkation"))
-                            : "Ready for disembarkation";
+                    : TargetingMode == ContextTargetingMode.FastRope
+                        ? "Click drop zone for fast-rope insertion (forests OK, Esc to cancel)"
+                        : TargetingMode == ContextTargetingMode.SlingPickup
+                            ? "Click friendly light/APC vehicle to sling-load (Esc to cancel)"
+                            : TargetingMode == ContextTargetingMode.SlingDrop
+                                ? "Click clear ground to release sling cargo (Esc to cancel)"
+                                : TargetingMode == ContextTargetingMode.Disembark
+                                    ? "Click ground destination to unload at (Esc to cancel)"
+                                    : hasHeliUi
+                                        ? (allCrashing ? "Mayday - crashing"
+                                            : heliFastRopeActive > 0 ? "Fast-roping troops"
+                                            : heliSlingLoaded > 0 ? "Carrying sling cargo"
+                                            : (heliAirborneCount > 0 ? "Airborne - land or fast-rope" : "Landed - ready for disembarkation"))
+                                        : "Ready for disembarkation";
             }
             else
             {
@@ -482,14 +612,24 @@ internal sealed partial class ContextActionPanel : PanelContainer
                 _statusLabel.Visible = true;
                 _statusLabel.Text = TargetingMode == ContextTargetingMode.LandAt
                     ? "Click clear terrain to land (Esc to cancel)"
-                    : hasHeliUi
-                        ? (allCrashing ? "Mayday - crashing" : (heliAirborneCount > 0 ? "Airborne hover / transit" : "Landed on LZ"))
-                        : "Empty transport";
+                    : TargetingMode == ContextTargetingMode.SlingPickup
+                        ? "Click friendly light/APC vehicle to sling-load (Esc to cancel)"
+                        : TargetingMode == ContextTargetingMode.SlingDrop
+                            ? "Click clear ground to release sling cargo (Esc to cancel)"
+                            : hasHeliUi
+                                ? (allCrashing ? "Mayday - crashing"
+                                    : heliSlingLoaded > 0 ? "Carrying external sling cargo"
+                                    : (heliAirborneCount > 0 ? "Airborne hover / transit" : "Landed on LZ"))
+                                : "Empty transport";
             }
         }
         else if (hasHeliUi)
         {
-            if (TargetingMode != ContextTargetingMode.None && TargetingMode != ContextTargetingMode.LandAt)
+            if (TargetingMode != ContextTargetingMode.None &&
+                TargetingMode != ContextTargetingMode.LandAt &&
+                TargetingMode != ContextTargetingMode.FastRope &&
+                TargetingMode != ContextTargetingMode.SlingPickup &&
+                TargetingMode != ContextTargetingMode.SlingDrop)
             {
                 CancelTargeting();
             }
@@ -501,11 +641,17 @@ internal sealed partial class ContextActionPanel : PanelContainer
             _statusLabel.Visible = true;
             _statusLabel.Text = TargetingMode == ContextTargetingMode.LandAt
                 ? "Click clear terrain to land (Esc to cancel)"
-                : allCrashing
-                    ? "Mayday - crashing"
-                    : heliAirborneCount > 0
-                        ? "Airborne rotorcraft (L: land, H: altitude)"
-                        : "Landed rotorcraft (L: take off, H: altitude)";
+                : TargetingMode == ContextTargetingMode.FastRope
+                    ? "Click drop zone for fast-rope insertion (forests OK, Esc to cancel)"
+                    : TargetingMode == ContextTargetingMode.SlingPickup
+                        ? "Click friendly vehicle to sling-load (Esc to cancel)"
+                        : TargetingMode == ContextTargetingMode.SlingDrop
+                            ? "Click clear ground to release sling cargo (Esc to cancel)"
+                            : allCrashing
+                                ? "Mayday - crashing"
+                                : heliAirborneCount > 0
+                                    ? "Airborne rotorcraft (L: land, H: alt, F: rope, K: sling)"
+                                    : "Landed rotorcraft (L: take off, H: alt, K: sling)";
         }
         else if (hasSmokeUi)
         {

@@ -55,10 +55,6 @@ public static class PassengerDistribution
         float transportRadius = (hasTransport && catalog is not null && catalog.TryGetProfile(transport.Definition, out UnitMovementProfile tProf) && tProf.EffectiveCollisionRadius > 0f)
             ? tProf.EffectiveCollisionRadius
             : 1.4f;
-        float soldierRadius = (catalog is not null && passengers.Length > 0 && world.TryGetUnit(passengers[0], out UnitState p0) && catalog.TryGetProfile(p0.Definition, out UnitMovementProfile sProf) && sProf.EffectiveCollisionRadius > 0f)
-            ? sProf.EffectiveCollisionRadius
-            : SoldierRadius;
-        float minTransportDist = transportRadius + soldierRadius + ClearanceMargin;
 
         Vector2 center = hasTransport ? transportPos : targetLocation;
 
@@ -77,21 +73,33 @@ public static class PassengerDistribution
         float sin = rotate ? MathF.Sin(baseAngle) : 0f;
 
         Span<Vector2> placed = stackalloc Vector2[passengers.Length];
+        Span<float> placedRadii = stackalloc float[passengers.Length];
         int currentPlaced = 0;
 
         for (int p = 0; p < passengers.Length; p++)
         {
             outPlaced[p] = false;
             EntityId passengerId = passengers[p];
-            float pRad = (catalog is not null && world.TryGetUnit(passengerId, out UnitState passUnit) && catalog.TryGetProfile(passUnit.Definition, out UnitMovementProfile passProf) && passProf.EffectiveCollisionRadius > 0f)
-                ? passProf.EffectiveCollisionRadius
-                : SoldierRadius;
+            float pRad = SoldierRadius;
+            TraversabilityCapabilities pCaps = TraversabilityCapabilities.Foot;
+            if (catalog is not null &&
+                world.TryGetUnit(passengerId, out UnitState passUnit) &&
+                catalog.TryGetProfile(passUnit.Definition, out UnitMovementProfile passProf))
+            {
+                if (passProf.EffectiveCollisionRadius > 0f)
+                    pRad = passProf.EffectiveCollisionRadius;
+                if (passProf.Capabilities != TraversabilityCapabilities.None)
+                    pCaps = passProf.Capabilities;
+            }
+            float minTransportDist = transportRadius + pRad + ClearanceMargin;
 
-            if (!hasTransport && IsValidPosition(center, transportPos, hasTransport, minTransportDist, evaluator, targetSurface, placed.Slice(0, currentPlaced), world, passengerId, pRad))
+            if (!hasTransport && IsValidPosition(center, transportPos, hasTransport, minTransportDist, evaluator, targetSurface, placed.Slice(0, currentPlaced), placedRadii.Slice(0, currentPlaced), world, passengerId, pRad, pCaps, catalog))
             {
                 outPositions[p] = center;
                 outPlaced[p] = true;
-                placed[currentPlaced++] = center;
+                placed[currentPlaced] = center;
+                placedRadii[currentPlaced] = pRad;
+                currentPlaced++;
                 placedCount++;
                 continue;
             }
@@ -103,11 +111,13 @@ public static class PassengerDistribution
                     ? center + new Vector2(offset.X * cos - offset.Y * sin, offset.X * sin + offset.Y * cos)
                     : center + offset;
 
-                if (IsValidPosition(candidate, transportPos, hasTransport, minTransportDist, evaluator, targetSurface, placed.Slice(0, currentPlaced), world, passengerId, pRad))
+                if (IsValidPosition(candidate, transportPos, hasTransport, minTransportDist, evaluator, targetSurface, placed.Slice(0, currentPlaced), placedRadii.Slice(0, currentPlaced), world, passengerId, pRad, pCaps, catalog))
                 {
                     outPositions[p] = candidate;
                     outPlaced[p] = true;
-                    placed[currentPlaced++] = candidate;
+                    placed[currentPlaced] = candidate;
+                    placedRadii[currentPlaced] = pRad;
+                    currentPlaced++;
                     placedCount++;
                     break;
                 }
@@ -115,6 +125,66 @@ public static class PassengerDistribution
         }
 
         return placedCount;
+    }
+
+    /// <summary>
+    /// Finds an allocation-free valid ground position beneath a hovering helicopter for fast-rope infantry insertion.
+    /// Allows dense forests and steep hills (Foot traversability), while rejecting water, buildings, and occupied spots.
+    /// </summary>
+    public static bool TryFindFastRopeSpot(
+        WorldState world,
+        DestinationEvaluator evaluator,
+        Vector2 hoverPosition,
+        uint targetSurface,
+        EntityId passengerId,
+        out Vector2 spot)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        ArgumentNullException.ThrowIfNull(evaluator);
+
+        if (IsFastRopePointValid(hoverPosition, evaluator, targetSurface, world, passengerId))
+        {
+            spot = hoverPosition;
+            return true;
+        }
+
+        for (int c = 0; c < s_candidateOffsets.Length; c++)
+        {
+            Vector2 offset = s_candidateOffsets[c];
+            if (offset.LengthSquared() > 36f)
+                break;
+            Vector2 candidate = hoverPosition + offset;
+            if (IsFastRopePointValid(candidate, evaluator, targetSurface, world, passengerId))
+            {
+                spot = candidate;
+                return true;
+            }
+        }
+
+        spot = default;
+        return false;
+    }
+
+    private static bool IsFastRopePointValid(
+        Vector2 pos,
+        DestinationEvaluator evaluator,
+        uint targetSurface,
+        WorldState world,
+        EntityId passengerId)
+    {
+        if (!world.Map.Contains(pos)) return false;
+        if (!evaluator.IsPointClear(pos, SoldierRadius, TraversabilityCapabilities.Foot, targetSurface))
+            return false;
+
+        for (int i = 0; i < world.Count; i++)
+        {
+            UnitState other = world.GetUnitAt(i);
+            if (other.Id == passengerId) continue;
+            if (world.IsContained(other.Id) || world.IsAirborne(other.Id) || world.IsSlung(other.Id)) continue;
+            if (Vector2.DistanceSquared(pos, other.Position) < MinInfantryDistance * MinInfantryDistance)
+                return false;
+        }
+        return true;
     }
 
     private static bool IsValidPosition(
@@ -125,13 +195,16 @@ public static class PassengerDistribution
         DestinationEvaluator evaluator,
         uint targetSurface,
         ReadOnlySpan<Vector2> previouslyPlaced,
+        ReadOnlySpan<float> previouslyPlacedRadii,
         WorldState world,
         EntityId passengerId,
-        float soldierRadius)
+        float passengerRadius,
+        TraversabilityCapabilities capabilities,
+        IUnitMovementCatalog? catalog)
     {
         if (!world.Map.Contains(pos)) return false;
 
-        if (!evaluator.IsPointClear(pos, soldierRadius, TraversabilityCapabilities.Foot, targetSurface))
+        if (!evaluator.IsPointClear(pos, passengerRadius, capabilities, targetSurface))
             return false;
 
         if (hasTransport && Vector2.Distance(pos, transportPos) < minTransportDist)
@@ -139,18 +212,25 @@ public static class PassengerDistribution
 
         for (int i = 0; i < previouslyPlaced.Length; i++)
         {
-            if (Vector2.Distance(pos, previouslyPlaced[i]) < MinInfantryDistance)
+            float minPair = MathF.Max(MinInfantryDistance, passengerRadius + previouslyPlacedRadii[i] + 0.35f);
+            if (Vector2.Distance(pos, previouslyPlaced[i]) < minPair)
                 return false;
         }
 
+        EntityId transportId = transportPosId(world, passengerId);
         for (int i = 0; i < world.Count; i++)
         {
             UnitState other = world.GetUnitAt(i);
             if (other.Id == passengerId) continue;
-            if (hasTransport && other.Id == transportPosId(world, passengerId)) continue;
-            if (world.IsContained(other.Id) || world.IsAirborne(other.Id)) continue;
+            if (hasTransport && other.Id == transportId) continue;
+            if (world.IsContained(other.Id) || world.IsAirborne(other.Id) || world.IsSlung(other.Id)) continue;
 
-            const float minOtherDist = 1.2f;
+            float otherRadius = (catalog is not null && catalog.TryGetProfile(other.Definition, out UnitMovementProfile oProf) && oProf.EffectiveCollisionRadius > 0f)
+                ? oProf.EffectiveCollisionRadius
+                : 0.8f;
+            float minOtherDist = passengerRadius <= 0.6f
+                ? 1.2f
+                : MathF.Max(1.2f, passengerRadius + otherRadius + 0.35f);
             if (Vector2.Distance(pos, other.Position) < minOtherDist)
                 return false;
         }

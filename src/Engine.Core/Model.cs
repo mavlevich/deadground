@@ -167,7 +167,10 @@ public readonly record struct OwnUnitObservation(
     AltitudeBand AltitudeBand = AltitudeBand.High,
     float PitchRad = 0f,
     float RollRad = 0f,
-    bool HasFlightCapability = false);
+    bool HasFlightCapability = false,
+    EntityId SlingLoadId = default,
+    EntityId SlungById = default,
+    FlightStateFlags FlightFlags = FlightStateFlags.None);
 
 public interface ISimulationRules
 {

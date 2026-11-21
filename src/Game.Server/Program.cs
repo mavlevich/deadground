@@ -368,8 +368,8 @@ if (smokeTest)
     if (scenario == "helicopter-playground")
     {
         for (int i = 0; i < 20; i++) session.Advance(1d / Simulation.TickRate);
-        if (session.Replica.OwnUnits.Length != 6)
-            throw new InvalidOperationException($"Helicopter-playground smoke test: expected 6 own units, got {session.Replica.OwnUnits.Length}.");
+        if (session.Replica.OwnUnits.Length != 9)
+            throw new InvalidOperationException($"Helicopter-playground smoke test: expected 9 own units, got {session.Replica.OwnUnits.Length}.");
 
         EntityId heliId = session.Replica.OwnUnits[0].Id;
         session.Move(heliId, HelicopterPlaygroundScenario.SouthLandingZone);

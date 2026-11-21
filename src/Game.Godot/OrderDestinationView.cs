@@ -33,6 +33,17 @@ internal sealed partial class OrderDestinationView : Node3D
     private readonly StandardMaterial3D _matFailed;
     private readonly StandardMaterial3D _matPartial;
     private readonly StandardMaterial3D _matGhost;
+    private readonly ImmediateMesh _zoneCircleMesh = new();
+    private readonly MeshInstance3D _zoneCircle;
+    private readonly StandardMaterial3D _matZoneValid;
+    private readonly StandardMaterial3D _matZoneBlocked;
+    private float _cachedZoneX = float.NaN;
+    private float _cachedZoneZ = float.NaN;
+    private float _cachedZoneRadius = -1f;
+    private bool _cachedZoneValid;
+
+    internal bool IsZoneCircleVisible => _zoneCircle.Visible;
+    internal bool IsZoneCircleValid => _cachedZoneValid;
 
     private OrderMarkerVisualState _state = OrderMarkerVisualState.Hidden;
     private double _timeInState;
@@ -167,6 +178,33 @@ internal sealed partial class OrderDestinationView : Node3D
             CullMode = BaseMaterial3D.CullModeEnum.Disabled,
             DisableFog = true
         };
+
+        _matZoneValid = new StandardMaterial3D
+        {
+            AlbedoColor = new Color(0.28f, 0.92f, 0.46f, 0.85f),
+            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+            CullMode = BaseMaterial3D.CullModeEnum.Disabled,
+            DisableFog = true
+        };
+
+        _matZoneBlocked = new StandardMaterial3D
+        {
+            AlbedoColor = new Color(0.96f, 0.28f, 0.24f, 0.85f),
+            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+            CullMode = BaseMaterial3D.CullModeEnum.Disabled,
+            DisableFog = true
+        };
+
+        _zoneCircle = new MeshInstance3D
+        {
+            Name = "ZonePreviewCircle",
+            Mesh = _zoneCircleMesh,
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+            Visible = false
+        };
+        AddChild(_zoneCircle);
 
         TorusMesh ringMesh = new()
         {
@@ -644,11 +682,62 @@ internal sealed partial class OrderDestinationView : Node3D
         HideFacingArrow();
     }
 
+    public void ShowZoneCircle(DeadGround.Engine.HeightMap map, float centerX, float centerZ, float radius, bool valid)
+    {
+        if (_zoneCircle.Visible &&
+            MathF.Abs(centerX - _cachedZoneX) < 0.15f &&
+            MathF.Abs(centerZ - _cachedZoneZ) < 0.15f &&
+            MathF.Abs(radius - _cachedZoneRadius) < 0.05f &&
+            valid == _cachedZoneValid)
+        {
+            return;
+        }
+
+        _cachedZoneX = centerX;
+        _cachedZoneZ = centerZ;
+        _cachedZoneRadius = radius;
+        _cachedZoneValid = valid;
+
+        _zoneCircleMesh.ClearSurfaces();
+        const int segments = 48;
+        const float step = Mathf.Tau / segments;
+        float innerR = MathF.Max(0.25f, radius - 0.35f);
+        float outerR = radius + 0.35f;
+        StandardMaterial3D mat = valid ? _matZoneValid : _matZoneBlocked;
+
+        _zoneCircleMesh.SurfaceBegin(Mesh.PrimitiveType.TriangleStrip, mat);
+        for (int i = 0; i <= segments; i++)
+        {
+            float ang = i * step;
+            float cos = MathF.Cos(ang);
+            float sin = MathF.Sin(ang);
+            float ix = Math.Clamp(centerX + cos * innerR, 0f, map.Width);
+            float iz = Math.Clamp(centerZ + sin * innerR, 0f, map.Depth);
+            float ox = Math.Clamp(centerX + cos * outerR, 0f, map.Width);
+            float oz = Math.Clamp(centerZ + sin * outerR, 0f, map.Depth);
+            float iy = map.GetHeight(ix, iz) + 0.25f;
+            float oy = map.GetHeight(ox, oz) + 0.25f;
+            _zoneCircleMesh.SurfaceAddVertex(new Vector3(ix, iy, iz));
+            _zoneCircleMesh.SurfaceAddVertex(new Vector3(ox, oy, oz));
+        }
+        _zoneCircleMesh.SurfaceEnd();
+        _zoneCircle.Visible = true;
+    }
+
+    public void HideZoneCircle()
+    {
+        if (_zoneCircle.Visible)
+        {
+            _zoneCircle.Visible = false;
+        }
+    }
+
     public void Clear()
     {
         ClearSubmittedMarker();
         HideGhost();
         HideFacingArrow();
+        HideZoneCircle();
         ClearGroupSlots();
         ClearGroupPreviewSlots();
     }
