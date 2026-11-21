@@ -580,5 +580,7 @@ internal static class TacticalMinimapRegressionTests
         {
             throw new NotImplementedException();
         }
+
+        public bool FireMission(EntityId unit, NumericsVector2 target, bool cancel = false) => true;
     }
 }

@@ -153,5 +153,22 @@
       "res://Assets/Vehicles/CH47/ch47_lod2.glb"
     ],
     "scale": 1.0
+  },
+  "bm21": {
+    "scene": "res://Assets/Vehicles/BM21/bm21.glb",
+    "lods": [
+      "res://Assets/Vehicles/BM21/bm21_lod1.glb",
+      "res://Assets/Vehicles/BM21/bm21_lod2.glb"
+    ],
+    "scale": 1.0,
+    "track_gauge": 2.0,
+    "track_wrap": 999.2777912538415
+  },
+  "contact_artillery": {
+    "scene": "res://Assets/Vehicles/BM21/bm21_lod1.glb",
+    "lods": [
+      "res://Assets/Vehicles/BM21/bm21_lod2.glb"
+    ],
+    "scale": 1.0
   }
 }

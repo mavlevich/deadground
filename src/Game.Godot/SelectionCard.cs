@@ -429,6 +429,7 @@ internal sealed partial class SelectionCard : PanelContainer
         ContactClassification.CommandVehicle => "Command Vehicle",
         ContactClassification.Infantry => "Infantry",
         ContactClassification.Helicopter => "Helicopter",
+        ContactClassification.Artillery => "Artillery",
         ContactClassification.Vehicle => "Vehicle",
         _ => "Unknown"
     };

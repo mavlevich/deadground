@@ -15,6 +15,8 @@ internal sealed class CameraRig
     private readonly OrbitCameraPose _orbit = new();
     private Vector3 _defaultFocus;
     private float _defaultSize;
+    private float _shakeTrauma;
+    private float _shakePhase;
 
     public CameraModel Model => _model;
     public Vector3 Focus => new(_model.Focus.X, _model.Focus.Y, _model.Focus.Z);
@@ -93,6 +95,7 @@ internal sealed class CameraRig
 
     public void ResetToDefault()
     {
+        _shakeTrauma = 0f;
         _orbit.Reset();
         _model.Reset(new NumericsVector3(_defaultFocus.X, _defaultFocus.Y, _defaultFocus.Z), _defaultSize);
         SyncCamera();
@@ -100,10 +103,25 @@ internal sealed class CameraRig
 
     public void CenterOn(Vector3 focus)
     {
+        _shakeTrauma = 0f;
         float x = Mathf.Clamp(focus.X, _model.MinX, _model.MaxX);
         float z = Mathf.Clamp(focus.Z, _model.MinZ, _model.MaxZ);
         _model.Focus = new NumericsVector3(x, focus.Y, z);
         SyncCamera();
+    }
+
+    // Subtle distance-attenuated camera shockwave impulse for nearby artillery impacts and vehicle explosions.
+    public void AddBlastShake(Vector3 worldPos, float strength)
+    {
+        if (strength <= 0f) return;
+        float dx = worldPos.X - _model.Focus.X;
+        float dz = worldPos.Z - _model.Focus.Z;
+        float dist = MathF.Sqrt(dx * dx + dz * dz);
+        float maxRadius = MathF.Max(220f, _model.CurrentSize * 1.45f);
+        if (dist >= maxRadius) return;
+        float falloff = 1f - dist / maxRadius;
+        float impulse = strength * falloff * falloff;
+        _shakeTrauma = MathF.Min(1.0f, _shakeTrauma + impulse * 0.62f);
     }
 
     public void ClearInput()
@@ -146,6 +164,11 @@ internal sealed class CameraRig
         }
 
         _model.Update(clampedDelta);
+        if (_shakeTrauma > 0f)
+        {
+            _shakeTrauma = MathF.Max(0f, _shakeTrauma - clampedDelta * 2.6f);
+            _shakePhase += clampedDelta * 58f;
+        }
         SyncCamera();
     }
 
@@ -159,6 +182,14 @@ internal sealed class CameraRig
             : OrbitCameraPose.Distance(size, _orbit.Pitch);
         _camera.Size = size;
         Vector3 focus = new(_model.Focus.X, _model.Focus.Y, _model.Focus.Z);
+        if (_shakeTrauma > 0.001f)
+        {
+            float amp = _shakeTrauma * _shakeTrauma * Math.Clamp(size * 0.0085f, 0.25f, 1.35f);
+            float sx = MathF.Sin(_shakePhase) * 0.72f + MathF.Sin(_shakePhase * 2.31f + 1.1f) * 0.28f;
+            float sy = MathF.Cos(_shakePhase * 1.47f + 0.4f) * 0.65f + MathF.Sin(_shakePhase * 2.93f) * 0.35f;
+            float sz = MathF.Cos(_shakePhase * 1.13f + 2.2f) * 0.72f + MathF.Cos(_shakePhase * 2.17f) * 0.28f;
+            focus += new Vector3(sx * amp, sy * amp * 0.45f, sz * amp);
+        }
         System.Numerics.Vector3 offset = _orbit.OffsetDirection;
         Vector3 position = focus + new Vector3(offset.X, offset.Y, offset.Z) * distance;
         if (GroundHeight is not null)

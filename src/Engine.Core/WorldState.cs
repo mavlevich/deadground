@@ -142,6 +142,39 @@ public sealed class WorldState : IDisposable
         _nextSmokeCloudId = 1;
     }
 
+    public const int MaxArtilleryProjectiles = 128;
+    private readonly RocketProjectileState[] _artilleryProjectiles = new RocketProjectileState[MaxArtilleryProjectiles];
+    private int _artilleryProjectileCount;
+
+    public int ArtilleryProjectileCount => _artilleryProjectileCount;
+    public ReadOnlySpan<RocketProjectileState> ArtilleryProjectiles => _artilleryProjectiles.AsSpan(0, _artilleryProjectileCount);
+
+    public bool TryAddArtilleryProjectile(in RocketProjectileState projectile)
+    {
+        if (_artilleryProjectileCount >= _artilleryProjectiles.Length)
+            return false;
+        _artilleryProjectiles[_artilleryProjectileCount++] = projectile;
+        return true;
+    }
+
+    public void RemoveArtilleryProjectileAt(int index)
+    {
+        if ((uint)index >= (uint)_artilleryProjectileCount)
+            return;
+        int remaining = _artilleryProjectileCount - index - 1;
+        if (remaining > 0)
+        {
+            Array.Copy(_artilleryProjectiles, index + 1, _artilleryProjectiles, index, remaining);
+        }
+        _artilleryProjectileCount--;
+        _artilleryProjectiles[_artilleryProjectileCount] = default;
+    }
+
+    public void ClearArtilleryProjectiles()
+    {
+        _artilleryProjectileCount = 0;
+    }
+
     private record struct Identity(EntityId Id, int Owner, ushort Definition);
 
     public sealed class ContainerData
@@ -259,6 +292,15 @@ public sealed class WorldState : IDisposable
         EntityId SlungById = default,
         float SlungAltitude = 0f);
 
+    public record struct UnitArtilleryState(
+        bool HasFireMission,
+        Vector2 Target,
+        int SetupTicksRemaining,
+        int SalvoRemaining,
+        int SalvoIntervalRemaining,
+        float GunPitchRad,
+        int NextTubeIndex);
+
     public EntityId CreateUnit(
         int owner,
         ushort definition,
@@ -293,7 +335,7 @@ public sealed class WorldState : IDisposable
             initialTurretYaw,
             initialTurretYaw);
         Entity entity = _storage.Create(new Identity(id, owner, definition),
-            new Position(position), new Motion(position, speed, false, initialSupportSurface), combat, default(UnitSmokeState), default(UnitFlightState));
+            new Position(position), new Motion(position, speed, false, initialSupportSurface), combat, default(UnitSmokeState), default(UnitFlightState), default(UnitArtilleryState));
         _entities[Count] = entity;
         _indices.Add(id, Count++);
 
@@ -688,6 +730,51 @@ public sealed class WorldState : IDisposable
         if (!_indices.TryGetValue(id, out int index)) return false;
         _storage.Get<UnitFlightState>(_entities[index]) = flight;
         return true;
+    }
+
+    public bool TryGetArtilleryState(EntityId id, out UnitArtilleryState artillery)
+    {
+        if (_indices.TryGetValue(id, out int index))
+        {
+            artillery = _storage.Get<UnitArtilleryState>(_entities[index]);
+            return true;
+        }
+        artillery = default;
+        return false;
+    }
+
+    public bool SetArtilleryState(EntityId id, in UnitArtilleryState artillery)
+    {
+        if (!_indices.TryGetValue(id, out int index)) return false;
+        _storage.Get<UnitArtilleryState>(_entities[index]) = artillery;
+        return true;
+    }
+
+    public bool ClearFireMission(EntityId id)
+    {
+        if (!_indices.TryGetValue(id, out int index)) return false;
+        ref UnitArtilleryState art = ref _storage.Get<UnitArtilleryState>(_entities[index]);
+        if (!art.HasFireMission)
+            return false;
+        art.HasFireMission = false;
+        art.SetupTicksRemaining = 0;
+        art.SalvoRemaining = 0;
+        art.SalvoIntervalRemaining = 0;
+        ref CombatState cs = ref _storage.Get<CombatState>(_entities[index]);
+        if (cs.Status == AttackExecutionStatus.Aiming)
+        {
+            cs.Status = AttackExecutionStatus.None;
+        }
+        return true;
+    }
+
+    public ArtilleryFlags GetArtilleryFlags(EntityId id)
+    {
+        if (!TryGetArtilleryState(id, out UnitArtilleryState art) || !art.HasFireMission)
+            return ArtilleryFlags.None;
+        if (art.SetupTicksRemaining > 0)
+            return ArtilleryFlags.SettingUp;
+        return ArtilleryFlags.Firing;
     }
 
     public bool IsAircraft(EntityId id) =>

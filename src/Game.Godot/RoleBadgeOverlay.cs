@@ -225,6 +225,7 @@ internal sealed partial class RoleBadgeOverlay : Control
                     "command_vehicle" => "CMD",
                     "infantry" => "INF",
                     "helicopter" => "HELI",
+                    "artillery" or "mlrs" => "ARTY",
                     _ => def.Classification.ToUpperInvariant()
                 };
             }
@@ -241,6 +242,7 @@ internal sealed partial class RoleBadgeOverlay : Control
             ContactClassification.Vehicle => "VEH",
             ContactClassification.Infantry => "INF",
             ContactClassification.Helicopter => "HELI",
+            ContactClassification.Artillery => "ARTY",
             _ => "UNIT"
         };
     }

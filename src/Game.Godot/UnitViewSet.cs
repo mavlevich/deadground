@@ -182,6 +182,7 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
             replica.SampleYaws(unit.Id, renderTick, out float turretYaw, out float hullHeading);
             view.SetHullHeading(hullHeading);
             view.SetTurretYaw(turretYaw);
+            view.SetGunPitch(replica.SampleGunPitch(unit.Id, renderTick));
             if (unit.HasFlightCapability || view.IsHelicopter)
             {
                 replica.SampleFlightPose(unit.Id, renderTick, out float altitude, out float pitchRad, out float rollRad);

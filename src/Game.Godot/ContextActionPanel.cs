@@ -13,7 +13,8 @@ public enum ContextTargetingMode
     LandAt = 3,
     FastRope = 4,
     SlingPickup = 5,
-    SlingDrop = 6
+    SlingDrop = 6,
+    FireMission = 7
 }
 
 /// <summary>
@@ -31,6 +32,7 @@ internal sealed partial class ContextActionPanel : PanelContainer
     private readonly Button _altitudeBandButton;
     private readonly Button _fastRopeButton;
     private readonly Button _slingButton;
+    private readonly Button _fireMissionButton;
     private readonly Label _passengerLabel;
     private readonly Label _statusLabel;
     private UnitCatalog _catalog;
@@ -52,6 +54,7 @@ internal sealed partial class ContextActionPanel : PanelContainer
     internal Button AltitudeBandButton => _altitudeBandButton;
     internal Button FastRopeButton => _fastRopeButton;
     internal Button SlingButton => _slingButton;
+    internal Button FireMissionButton => _fireMissionButton;
     internal Label PassengerLabel => _passengerLabel;
     internal Label StatusLabel => _statusLabel;
 
@@ -60,6 +63,7 @@ internal sealed partial class ContextActionPanel : PanelContainer
     public event Action? DeploySmokeRequested;
     public event Action? HelicopterToggleFlightRequested;
     public event Action? HelicopterToggleAltitudeRequested;
+    public event Action? CancelFireMissionRequested;
 
     // Cached state for zero-allocation steady-state updates
     private int _cachedSelectionCount = -1;
@@ -81,6 +85,11 @@ internal sealed partial class ContextActionPanel : PanelContainer
     private int _cachedHeliFastRopeActive = -1;
     private int _cachedHeliSlingCapable = -1;
     private int _cachedHeliSlingLoaded = -1;
+    private int _cachedArtilleryCount = -1;
+    private int _cachedArtilleryActiveCount = -1;
+    private int _cachedArtillerySettingUpCount = -1;
+    private int _cachedArtilleryAmmoTotal = -1;
+    private int _cachedArtilleryMinReloadSec = -1;
     private bool _cachedAllBoardable;
 
     public ContextActionPanel(UnitCatalog catalog)
@@ -214,6 +223,17 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _slingButton.Pressed += OnSlingButtonPressed;
         hbox.AddChild(_slingButton);
 
+        _fireMissionButton = new Button
+        {
+            Text = "FIRE BARRAGE [B]",
+            MouseFilter = MouseFilterEnum.Stop,
+            FocusMode = FocusModeEnum.None,
+            CustomMinimumSize = new Vector2(138, 32)
+        };
+        _fireMissionButton.AddThemeFontSizeOverride("font_size", 11);
+        _fireMissionButton.Pressed += OnFireMissionButtonPressed;
+        hbox.AddChild(_fireMissionButton);
+
         _passengerLabel = new Label
         {
             MouseFilter = MouseFilterEnum.Ignore,
@@ -242,6 +262,7 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _altitudeBandButton.Visible = false;
         _fastRopeButton.Visible = false;
         _slingButton.Visible = false;
+        _fireMissionButton.Visible = false;
         _passengerLabel.Visible = false;
         _statusLabel.Visible = false;
     }
@@ -280,6 +301,29 @@ internal sealed partial class ContextActionPanel : PanelContainer
             ? ContextTargetingMode.SlingDrop
             : ContextTargetingMode.SlingPickup;
         SetTargetingMode(TargetingMode == desired ? ContextTargetingMode.None : desired);
+    }
+
+    private void OnFireMissionButtonPressed()
+    {
+        if (_cachedArtilleryActiveCount > 0 && TargetingMode != ContextTargetingMode.FireMission)
+        {
+            CancelFireMissionRequested?.Invoke();
+            return;
+        }
+        SetTargetingMode(TargetingMode == ContextTargetingMode.FireMission
+            ? ContextTargetingMode.None
+            : ContextTargetingMode.FireMission);
+    }
+
+    private WeaponData? FindWeaponData(string? weaponId)
+    {
+        if (weaponId is null || _catalog.Weapons is null) return null;
+        for (int i = 0; i < _catalog.Weapons.Length; i++)
+        {
+            if (string.Equals(_catalog.Weapons[i].Id, weaponId, StringComparison.Ordinal))
+                return _catalog.Weapons[i];
+        }
+        return null;
     }
 
     public void SetTargetingMode(ContextTargetingMode mode)
@@ -326,6 +370,11 @@ internal sealed partial class ContextActionPanel : PanelContainer
                 _cachedHeliFastRopeActive = -1;
                 _cachedHeliSlingCapable = -1;
                 _cachedHeliSlingLoaded = -1;
+                _cachedArtilleryCount = -1;
+                _cachedArtilleryActiveCount = -1;
+                _cachedArtillerySettingUpCount = -1;
+                _cachedArtilleryAmmoTotal = -1;
+                _cachedArtilleryMinReloadSec = -1;
                 _cachedAllBoardable = false;
                 Visible = false;
             }
@@ -350,6 +399,11 @@ internal sealed partial class ContextActionPanel : PanelContainer
         int heliFastRopeActive = 0;
         int heliSlingCapable = 0;
         int heliSlingLoaded = 0;
+        int artilleryCount = 0;
+        int artilleryActiveCount = 0;
+        int artillerySettingUpCount = 0;
+        int artilleryAmmoTotal = 0;
+        int artilleryMinReloadTicks = int.MaxValue;
 
         foreach (EntityId id in selectedUnits)
         {
@@ -435,6 +489,23 @@ internal sealed partial class ContextActionPanel : PanelContainer
                     smokeMinCooldownTicks = obs.SmokeCooldownTicks;
                 }
             }
+
+            WeaponData? weaponData = FindWeaponData(def?.Weapon);
+            if (weaponData is not null && weaponData.IsIndirectFire)
+            {
+                artilleryCount++;
+                artilleryAmmoTotal += obs.Ammunition;
+                if (obs.ArtilleryFlags != ArtilleryFlags.None)
+                {
+                    artilleryActiveCount++;
+                    if ((obs.ArtilleryFlags & ArtilleryFlags.SettingUp) != 0)
+                        artillerySettingUpCount++;
+                }
+                if (obs.Ammunition > 0 && obs.ReloadTicksRemaining > 0 && obs.ReloadTicksRemaining < artilleryMinReloadTicks)
+                {
+                    artilleryMinReloadTicks = obs.ReloadTicksRemaining;
+                }
+            }
         }
 
         int passengerCount = hasTransport && count == 1 ? singleTransport.PassengerCount : -1;
@@ -442,6 +513,9 @@ internal sealed partial class ContextActionPanel : PanelContainer
         EntityId transportId = hasTransport && count == 1 ? singleTransport.Id : default;
         int smokeMinCooldownSec = smokeMinCooldownTicks < int.MaxValue
             ? (int)MathF.Ceiling(smokeMinCooldownTicks * Simulation.TickSeconds)
+            : 0;
+        int artilleryMinReloadSec = artilleryMinReloadTicks < int.MaxValue
+            ? (int)MathF.Ceiling(artilleryMinReloadTicks * Simulation.TickSeconds)
             : 0;
 
         // Skip layout/string updates if unchanged
@@ -464,6 +538,11 @@ internal sealed partial class ContextActionPanel : PanelContainer
             _cachedHeliFastRopeActive == heliFastRopeActive &&
             _cachedHeliSlingCapable == heliSlingCapable &&
             _cachedHeliSlingLoaded == heliSlingLoaded &&
+            _cachedArtilleryCount == artilleryCount &&
+            _cachedArtilleryActiveCount == artilleryActiveCount &&
+            _cachedArtillerySettingUpCount == artillerySettingUpCount &&
+            _cachedArtilleryAmmoTotal == artilleryAmmoTotal &&
+            _cachedArtilleryMinReloadSec == artilleryMinReloadSec &&
             _cachedAllBoardable == allBoardable)
         {
             return;
@@ -488,7 +567,38 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _cachedHeliFastRopeActive = heliFastRopeActive;
         _cachedHeliSlingCapable = heliSlingCapable;
         _cachedHeliSlingLoaded = heliSlingLoaded;
+        _cachedArtilleryCount = artilleryCount;
+        _cachedArtilleryActiveCount = artilleryActiveCount;
+        _cachedArtillerySettingUpCount = artillerySettingUpCount;
+        _cachedArtilleryAmmoTotal = artilleryAmmoTotal;
+        _cachedArtilleryMinReloadSec = artilleryMinReloadSec;
         _cachedAllBoardable = allBoardable;
+
+        bool hasArtilleryUi = artilleryCount > 0;
+        _fireMissionButton.Visible = hasArtilleryUi;
+        if (hasArtilleryUi)
+        {
+            if (TargetingMode == ContextTargetingMode.FireMission)
+            {
+                _fireMissionButton.Disabled = false;
+                _fireMissionButton.Text = "CANCEL TARGET [Esc]";
+            }
+            else if (artilleryActiveCount > 0)
+            {
+                _fireMissionButton.Disabled = false;
+                _fireMissionButton.Text = "STOP BARRAGE [B]";
+            }
+            else if (artilleryAmmoTotal <= 0)
+            {
+                _fireMissionButton.Disabled = true;
+                _fireMissionButton.Text = "NO ROCKETS (0)";
+            }
+            else
+            {
+                _fireMissionButton.Disabled = false;
+                _fireMissionButton.Text = $"FIRE BARRAGE [B] ({artilleryAmmoTotal})";
+            }
+        }
 
         bool hasSmokeUi = smokeCapableCount > 0;
         _smokeButton.Visible = hasSmokeUi;
@@ -652,6 +762,31 @@ internal sealed partial class ContextActionPanel : PanelContainer
                                 : heliAirborneCount > 0
                                     ? "Airborne rotorcraft (L: land, H: alt, F: rope, K: sling)"
                                     : "Landed rotorcraft (L: take off, H: alt, K: sling)";
+        }
+        else if (hasArtilleryUi)
+        {
+            if (TargetingMode != ContextTargetingMode.None &&
+                TargetingMode != ContextTargetingMode.FireMission)
+            {
+                CancelTargeting();
+            }
+            Visible = true;
+            _boardButton.Visible = false;
+            _disembarkHereButton.Visible = false;
+            _disembarkButton.Visible = false;
+            _passengerLabel.Visible = false;
+            _statusLabel.Visible = true;
+            _statusLabel.Text = TargetingMode == ContextTargetingMode.FireMission
+                ? "Click target area for rocket barrage (Esc to cancel)"
+                : artillerySettingUpCount > 0
+                    ? "Elevating launcher rack - preparing barrage..."
+                    : artilleryActiveCount > 0
+                        ? $"Firing rocket salvo ({artilleryAmmoTotal} rockets left)"
+                        : artilleryAmmoTotal <= 0
+                            ? "Rockets depleted (0 remaining)"
+                            : artilleryMinReloadSec > 0
+                                ? $"Reloading salvo ({artilleryMinReloadSec}s) - B to queue target"
+                                : "Rocket artillery ready (press B to target barrage)";
         }
         else if (hasSmokeUi)
         {

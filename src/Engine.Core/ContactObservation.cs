@@ -25,7 +25,8 @@ public enum ContactClassification : byte
     Command = 4,
     Apc = 5,
     Infantry = 6,
-    Helicopter = 7
+    Helicopter = 7,
+    Artillery = 8
 }
 
 /// <summary>
@@ -43,7 +44,8 @@ public readonly record struct ContactObservation(
     float HullHeading = 0f,
     uint SupportSurface = 0,
     float Altitude = 0f,
-    FlightPhase FlightPhase = FlightPhase.Ground)
+    FlightPhase FlightPhase = FlightPhase.Ground,
+    float GunPitchRad = 0f)
 {
     public bool IsCurrent => State == ContactState.Current;
     public bool IsLastKnown => State == ContactState.LastKnown;

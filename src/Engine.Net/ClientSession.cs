@@ -252,6 +252,16 @@ public sealed class ClientSession : IGameSession
         return true;
     }
 
+    public bool FireMission(EntityId unit, Vector2 target, bool cancel = false)
+    {
+        if (State != SessionConnectionState.Connected) return false;
+        FireMissionCommand command = new(_nextCommand, Replica.LatestTick, unit, target, cancel);
+        WireProtocol.WriteFireMission(_command, command);
+        if (!_transport.TrySend(_command.AsSpan(0, WireProtocol.FireMissionSize))) return false;
+        _nextCommand = checked(_nextCommand + 1);
+        return true;
+    }
+
     private void Poll()
     {
         _transport.Poll(MaxMessagesPerPoll);
