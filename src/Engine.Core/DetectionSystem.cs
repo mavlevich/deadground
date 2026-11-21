@@ -45,6 +45,7 @@ public sealed class DetectionSystem : ISimulationSystem
     private readonly uint[] _unitSupportSurfaces;
     private readonly float[] _unitAltitudes;
     private readonly FlightPhase[] _unitFlightPhases;
+    private readonly float[] _unitGunPitches;
     private readonly int _maxUnits;
     private readonly int _wordsPerSide;
 
@@ -123,6 +124,7 @@ public sealed class DetectionSystem : ISimulationSystem
         _unitSupportSurfaces = new uint[maxUnits];
         _unitAltitudes = new float[maxUnits];
         _unitFlightPhases = new FlightPhase[maxUnits];
+        _unitGunPitches = new float[maxUnits];
     }
 
     public void Update(WorldState world, int tick)
@@ -168,6 +170,7 @@ public sealed class DetectionSystem : ISimulationSystem
             bool hasCombat = world.TryGetCombatState(u.Id, out WorldState.CombatState cs);
             _unitTurretYaws[i] = hasCombat ? cs.TurretYaw : 0f;
             _unitHullHeadings[i] = hasCombat ? cs.HullHeading : 0f;
+            _unitGunPitches[i] = world.TryGetArtilleryState(u.Id, out WorldState.UnitArtilleryState artState) ? artState.GunPitchRad : 0f;
 
             if (world.IsContained(u.Id))
             {
@@ -327,7 +330,8 @@ public sealed class DetectionSystem : ISimulationSystem
                             _unitHullHeadings[targetUnitIndex],
                             _unitSupportSurfaces[targetUnitIndex],
                             _unitAltitudes[targetUnitIndex],
-                            _unitFlightPhases[targetUnitIndex]);
+                            _unitFlightPhases[targetUnitIndex],
+                            _unitGunPitches[targetUnitIndex]);
                         _observedCounts[sideIndex] = count + 1;
                     }
 

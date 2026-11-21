@@ -176,6 +176,9 @@ Balance, revisit after play.
   Defensive armament (`mg_7_62mm_m60d`): twin 7.62x51mm M60D door guns, 550 m effective range, 5-round burst, 1,200 rounds total, `can_target_air = true`, `max_air_target_altitude = 65.0` m.
   Cargo and insertion capabilities from US Army TM 55-1520-240-10 and FM 55-450-3 [19]: internal cargo bay accepts infantry (`1` slot each, `100` kg) and light utility vehicles (`m151a2`, `1,100` kg, `8` slots via rear ramp); hover fast-rope insertion (`18.0` m AGL, `0.5` s per trooper) inserts infantry into forests and steep terrain where landing is impossible; external center cargo hook rated to `12,700` kg (28,000 lb) carries `m151a2` (`1,100` kg, ~4% speed penalty) and `m113a1` (`11,200` kg, ~40% speed penalty) on a `10.0` m sling cable, while main battle tanks (`t62` 40,000 kg, `m60a1` 49,000 kg) exceed hook capacity and are rejected.
   Anti-air engagement ceilings (`can_target_air` / `max_air_target_altitude`): `mg_14_5mm_kpvt` (80.0 m), `mg_12_7mm_m2hb` (70.0 m), `mg_7_62mm_m60` (40.0 m), `rifle_5_56mm_m16a1` (25.0 m); main tank cannons (`gun_115mm_u5ts`, `gun_105mm_m68`) remain `can_target_air = false`.
+- BM-21 Grad MLRS gameplay parameters (`content/coldwar/units.json`, `bm21` and `rocket_122mm_9m22u`) [20]:
+  Ural-375D 6x6 carrier mobility: road speed 75 km/h (20.8 m/s), off-road speed 35 km/h (9.7 m/s, estimate), reverse 3.3 m/s (estimate), combat weight 13,700 kg (exceeds CH-47D sling limit), unarmored cab and launcher (`armor_front/side/rear = 0.0`, `max_health = 40`).
+  Armament (`rocket_122mm_9m22u`): 40-tube 122 mm launcher firing 9M22U HE-Frag rockets (6.4 kg explosive warhead) at authentic 0.5 s ripple cadence (full 40-rocket rack in 20 s; each fire mission fires a 20-rocket half-salvo with a 30.0 s inter-salvo reload cooldown). Tactical game range 350 m to 4,000 m (real maximum 20.4 km scaled to tactical map distances), circular dispersion radius 55.0 m (gameplay saturation estimate), HE-Frag splash radius 22.0 m, top/fragmentation penetration 25.0 mm RHA equivalent, damage 90.
 
 ## Sources
 
@@ -201,3 +204,4 @@ Balance, revisit after play.
 17. Warrior Maven, M60 Patton: https://warriormaven.com/land/m60-patton-tank (normal sustained firing rate 6 to 8 rounds per minute, giving 8.5 s reload)
 18. FM 23-9, M16A1 Rifle and Rifle Marksmanship (1974), Table 3-1 (qualification course standards and target exposures)
 19. Boeing CH-47D Chinook / US Army TM 55-1520-240-10 (fuselage length 15.54 m, sponson width 3.78 m, rear rotor height 5.77 m, rotor diameter 18.29 m, mast spacing 11.94 m, wheelbase 7.87 m)
+20. FAS / Wikipedia, BM-21 Grad and Ural-375D technical data: https://en.wikipedia.org/wiki/BM-21_Grad (40 x 122 mm tubes, 9M22U 6.4 kg HE-Frag warhead, 0.5 s ripple interval, 75 km/h road speed, 13.7 t combat weight)

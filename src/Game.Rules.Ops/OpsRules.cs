@@ -101,14 +101,18 @@ public sealed class OpsRules : RuleSet
         CombatSystem? combat = combatCatalog is not null
             ? new CombatSystem(geometry, combatCatalog, perceptionCatalog, det, nav, combatRandom: combatRandom, flight: flight)
             : null;
+        ArtillerySystem? artillery = combatCatalog is not null
+            ? new ArtillerySystem(geometry, combatCatalog, nav)
+            : null;
 
-        List<ISimulationSystem> list = new(7);
+        List<ISimulationSystem> list = new(8);
         if (flight is not null) list.Add(flight);
         list.Add(nav);
         list.Add(container);
         if (smoke is not null) list.Add(smoke);
         list.Add(det);
         if (combat is not null) list.Add(combat);
+        if (artillery is not null) list.Add(artillery);
         if (mission is not null) list.Add(mission);
         return list.ToArray();
     }
@@ -145,7 +149,18 @@ public sealed record WeaponData(
     float RangingBonus = 0.08f,
     float MaxRangingBonus = 0.24f,
     bool CanTargetAir = false,
-    float MaxAirTargetAltitude = 0f);
+    float MaxAirTargetAltitude = 0f,
+    bool IsIndirectFire = false,
+    float MinRange = 0f,
+    int SalvoCount = 1,
+    float SalvoIntervalSeconds = 0f,
+    int SalvoIntervalTicks = 0,
+    float DispersionRadius = 0f,
+    float SplashRadius = 0f,
+    float ProjectileSpeed = ArtilleryBallistics.DefaultRocketSpeed,
+    float SetupSeconds = 0f,
+    int SetupTicks = 0,
+    float ElevationDegrees = 0f);
 
 public sealed record FlightData(
     float CruiseSpeed,
@@ -337,6 +352,7 @@ public sealed class OpsPerceptionCatalog : IUnitPerceptionCatalog
                 "apc" => ContactClassification.Apc,
                 "infantry" => ContactClassification.Infantry,
                 "helicopter" or "rotorcraft" => ContactClassification.Helicopter,
+                "artillery" or "mlrs" => ContactClassification.Artillery,
                 "vehicle" => ContactClassification.Vehicle,
                 _ => ContactClassification.Vehicle
             };
@@ -428,7 +444,9 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
                         ? WeaponPresentationKind.Cannon
                         : string.Equals(w.PresentationKind, "rifle", StringComparison.OrdinalIgnoreCase)
                             ? WeaponPresentationKind.Rifle
-                            : throw new InvalidOperationException($"Unsupported presentation_kind '{w.PresentationKind}'.");
+                            : string.Equals(w.PresentationKind, "rocket_artillery", StringComparison.OrdinalIgnoreCase)
+                                ? WeaponPresentationKind.RocketArtillery
+                                : throw new InvalidOperationException($"Unsupported presentation_kind '{w.PresentationKind}'.");
 
                 ushort presId = WeaponPresentation.MakeId(kind, presIdCounter++);
 
@@ -437,6 +455,13 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
                 float penNearRange = w.PenetrationNearRange;
                 float penFarRange = w.PenetrationFarRange > 0f ? w.PenetrationFarRange : w.Range;
                 int burst = Math.Max(1, w.RoundsPerBurst);
+
+                int salvoIntervalTicks = w.SalvoIntervalTicks > 0
+                    ? w.SalvoIntervalTicks
+                    : (w.SalvoIntervalSeconds > 0f ? Math.Max(1, (int)MathF.Round(w.SalvoIntervalSeconds * Simulation.TickRate)) : 1);
+                int setupTicks = w.SetupTicks > 0
+                    ? w.SetupTicks
+                    : (w.SetupSeconds > 0f ? (int)MathF.Round(w.SetupSeconds * Simulation.TickRate) : 0);
 
                 float dispersion = w.DispersionMils > 0f ? w.DispersionMils : (w.Dispersion > 0f ? w.Dispersion : 3.0f);
                 weapons[w.Id] = new WeaponDefinition(
@@ -458,7 +483,16 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
                     w.RangingBonus,
                     w.MaxRangingBonus,
                     w.CanTargetAir,
-                    w.MaxAirTargetAltitude);
+                    w.MaxAirTargetAltitude,
+                    w.IsIndirectFire,
+                    w.MinRange,
+                    Math.Max(1, w.SalvoCount),
+                    salvoIntervalTicks,
+                    w.DispersionRadius,
+                    w.SplashRadius,
+                    w.ProjectileSpeed > 0f ? w.ProjectileSpeed : ArtilleryBallistics.DefaultRocketSpeed,
+                    setupTicks,
+                    w.ElevationDegrees);
             }
         }
 
@@ -758,7 +792,8 @@ public static class PrototypeScenario
                     throw new InvalidOperationException("Missing required weapon presentation_kind.");
                 if (!string.Equals(weapon.PresentationKind, "cannon", StringComparison.OrdinalIgnoreCase) &&
                     !string.Equals(weapon.PresentationKind, "machine_gun", StringComparison.OrdinalIgnoreCase) &&
-                    !string.Equals(weapon.PresentationKind, "rifle", StringComparison.OrdinalIgnoreCase))
+                    !string.Equals(weapon.PresentationKind, "rifle", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(weapon.PresentationKind, "rocket_artillery", StringComparison.OrdinalIgnoreCase))
                 {
                     throw new InvalidOperationException($"Unknown weapon presentation_kind '{weapon.PresentationKind}'.");
                 }
@@ -816,6 +851,19 @@ public static class PrototypeScenario
                     throw new InvalidOperationException("Invalid max air target altitude.");
                 if (weapon.CanTargetAir && weapon.MaxAirTargetAltitude <= 0f)
                     throw new InvalidOperationException("Weapon with can_target_air requires positive max_air_target_altitude.");
+                if (!float.IsFinite(weapon.MinRange) || weapon.MinRange < 0f || weapon.MinRange >= weapon.Range)
+                    throw new InvalidOperationException("Invalid weapon min_range.");
+                if (weapon.SalvoCount < 1 || weapon.SalvoCount > ushort.MaxValue)
+                    throw new InvalidOperationException("Invalid weapon salvo_count.");
+                if (!float.IsFinite(weapon.DispersionRadius) || weapon.DispersionRadius < 0f ||
+                    !float.IsFinite(weapon.SplashRadius) || weapon.SplashRadius < 0f ||
+                    !float.IsFinite(weapon.ProjectileSpeed) || weapon.ProjectileSpeed <= 0f ||
+                    !float.IsFinite(weapon.ElevationDegrees) || weapon.ElevationDegrees < 0f || weapon.ElevationDegrees > 85f)
+                {
+                    throw new InvalidOperationException("Invalid indirect-fire artillery weapon parameters.");
+                }
+                if (weapon.IsIndirectFire && (weapon.SplashRadius <= 0f || weapon.DispersionRadius <= 0f))
+                    throw new InvalidOperationException("Indirect-fire weapon requires positive splash_radius and dispersion_radius.");
             }
         }
 

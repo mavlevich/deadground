@@ -341,6 +341,40 @@ public sealed class ClientReplica
         return leftContact.Altitude + (rightContact.Altitude - leftContact.Altitude) * alpha;
     }
 
+    public float SampleGunPitch(EntityId id, double renderTick)
+    {
+        if (_count == 0 || !Latest.Indices.TryGetValue(id, out int index))
+            return 0f;
+
+        ref readonly OwnUnitObservation latest = ref Latest.Units[index];
+        FindBracket(renderTick, out SnapshotFrame left, out SnapshotFrame right, out float alpha);
+        if (!left.Indices.TryGetValue(id, out int li) || !right.Indices.TryGetValue(id, out int ri))
+            return latest.GunPitchRad;
+
+        return left.Units[li].GunPitchRad + (right.Units[ri].GunPitchRad - left.Units[li].GunPitchRad) * alpha;
+    }
+
+    public float SampleContactGunPitch(ContactId id, double renderTick)
+    {
+        if (_count == 0 || !Latest.ContactIndices.TryGetValue(id, out int index))
+            return 0f;
+
+        ref readonly ContactObservation latest = ref Latest.Contacts[index];
+        if (latest.State != ContactState.Current)
+            return latest.GunPitchRad;
+
+        FindBracket(renderTick, out SnapshotFrame left, out SnapshotFrame right, out float alpha);
+        if (!left.ContactIndices.TryGetValue(id, out int li) || !right.ContactIndices.TryGetValue(id, out int ri))
+            return latest.GunPitchRad;
+
+        ref readonly ContactObservation leftContact = ref left.Contacts[li];
+        ref readonly ContactObservation rightContact = ref right.Contacts[ri];
+        if (leftContact.State != ContactState.Current || rightContact.State != ContactState.Current)
+            return latest.GunPitchRad;
+
+        return leftContact.GunPitchRad + (rightContact.GunPitchRad - leftContact.GunPitchRad) * alpha;
+    }
+
     private void FindBracket(double renderTick, out SnapshotFrame left, out SnapshotFrame right, out float alpha)
     {
         int oldest = (_next - _count + _frames.Length) % _frames.Length;

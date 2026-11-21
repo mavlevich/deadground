@@ -24,8 +24,10 @@ internal sealed class UnitView
     private sealed class Rig
     {
         internal Node3D? Turret;
+        internal Node3D? GunPitch;
         internal Node3D? BarrelRecoil;
         internal Node3D? Muzzle;
+        internal Node3D[] LaunchTubes = [];
         internal AnimationPlayer? AnimPlayer;
         internal Vector3 BarrelBindPosition;
         internal GeometryInstance3D[] LeftMotion = [];
@@ -52,6 +54,8 @@ internal sealed class UnitView
     private int _activeLod;
     private bool _dustCreated;
     private Vector3 _turretRotation;
+    private float _gunPitchRad;
+    private int _nextLaunchTubeCursor;
     private bool _hasAim;
     private float _leftTrackTravel;
     private float _rightTrackTravel;
@@ -114,6 +118,9 @@ internal sealed class UnitView
     internal float LeftTrackTravel => _leftTrackTravel;
     internal float RightTrackTravel => _rightTrackTravel;
     internal float RockAngle => _rockAngle;
+    internal float GunPitchRad => _gunPitchRad;
+    internal Node3D? GunPitchNode => ActiveRig.GunPitch;
+    internal int LaunchTubeCount => ActiveRig.LaunchTubes.Length;
     internal GpuParticles3D? LeftDust => _dust[0];
     internal float DustSpeed => _dustSpeed;
     internal void SetDustSpeedForTesting(float speed)
@@ -586,6 +593,7 @@ internal sealed class UnitView
         Rig rig = new()
         {
             Turret = lod.FindChild("TurretYaw", recursive: true, owned: false) as Node3D,
+            GunPitch = lod.FindChild("GunPitch", recursive: true, owned: false) as Node3D,
             BarrelRecoil = lod.FindChild("BarrelRecoil", recursive: true, owned: false) as Node3D,
             Muzzle = lod.FindChild("Muzzle", recursive: true, owned: false) as Node3D,
             AnimPlayer = lod.FindChild("AnimationPlayer", recursive: true, owned: false) as AnimationPlayer,
@@ -595,6 +603,7 @@ internal sealed class UnitView
             RearRotorBlur = lod.FindChild("RearRotorBlur", recursive: true, owned: false) as Node3D,
             RearRamp = lod.FindChild("RearRamp", recursive: true, owned: false) as Node3D,
         };
+        rig.LaunchTubes = FindLaunchTubes(rig.GunPitch ?? lod);
         rig.BarrelBindPosition = rig.BarrelRecoil?.Position ?? Vector3.Zero;
         rig.RearRampBindRotation = rig.RearRamp?.Rotation ?? Vector3.Zero;
         rig.LeftMotion = FindMotionMeshes(lod.FindChild("LeftTrack", recursive: true, owned: false));
@@ -756,6 +765,38 @@ internal sealed class UnitView
         return [.. found];
     }
 
+    // Balanced left-right ripple firing order for 4x10 BM-21 Grad rocket racks (Launch_01..Launch_40).
+    private static readonly int[] BalancedTubeSequence = BuildBalancedTubeSequence();
+
+    private static int[] BuildBalancedTubeSequence()
+    {
+        int[] seq = new int[40];
+        int k = 0;
+        for (int row = 0; row < 4; row++)
+        {
+            for (int pair = 0; pair < 5; pair++)
+            {
+                seq[k++] = row * 10 + pair;
+                seq[k++] = row * 10 + (9 - pair);
+            }
+        }
+        return seq;
+    }
+
+    private static Node3D[] FindLaunchTubes(Node root)
+    {
+        List<Node3D> found = [];
+        for (int i = 1; i <= 40; i++)
+        {
+            string name = i < 10 ? $"Launch_0{i}" : $"Launch_{i}";
+            if (root.FindChild(name, recursive: true, owned: false) is Node3D tube)
+            {
+                found.Add(tube);
+            }
+        }
+        return found.Count > 0 ? [.. found] : [];
+    }
+
     private Rig ActiveRig => _rigs[_activeLod]!;
 
     private Node3D LodNode(int lod) => _visual?.GetOrCreateLod(lod) ?? Model;
@@ -775,6 +816,8 @@ internal sealed class UnitView
         if (_muzzle is null && rig.Muzzle is not null) _muzzle = rig.Muzzle;
         if (_hasAim && rig.Turret is not null)
             rig.Turret.Rotation = _turretRotation;
+        if (rig.GunPitch is not null)
+            rig.GunPitch.Rotation = new Vector3(_gunPitchRad, 0f, 0f);
         if (rig.BarrelRecoil is not null)
             rig.BarrelRecoil.Position = rig.BarrelBindPosition + new Vector3(0, 0, _recoilAmount);
         if (IsHelicopter)
@@ -878,6 +921,42 @@ internal sealed class UnitView
         }
         transform = default;
         return false;
+    }
+
+    public bool TryGetNextLaunchTubeTransform(out Transform3D transform)
+    {
+        Node3D[] tubes = ActiveRig.LaunchTubes;
+        if (tubes.Length > 0)
+        {
+            int seqIdx = _nextLaunchTubeCursor % tubes.Length;
+            int tubeIdx = tubes.Length == 40 ? BalancedTubeSequence[seqIdx] : seqIdx;
+            _nextLaunchTubeCursor++;
+            transform = tubes[tubeIdx].GlobalTransform;
+            return true;
+        }
+        return TryGetMuzzleTransform(out transform);
+    }
+
+    public void SetGunPitch(float pitchRad)
+    {
+        if (MathF.Abs(pitchRad - _gunPitchRad) < 0.0001f)
+            return;
+        _gunPitchRad = pitchRad;
+        Vector3 rot = new(pitchRad, 0f, 0f);
+        foreach (Rig? rig in _rigs)
+        {
+            if (rig?.GunPitch is not null)
+                rig.GunPitch.Rotation = rot;
+        }
+    }
+
+    public void ApplyRocketLaunchRecoil(Vector3 shotDirection)
+    {
+        Vector3 flat = new(shotDirection.X, 0f, shotDirection.Z);
+        if (flat.LengthSquared() < 0.0001f) return;
+        Vector3 local = flat.Normalized().Rotated(Vector3.Up, -_heading);
+        _rockAxis = local.Cross(Vector3.Up).Normalized();
+        _rockVelocity += RockImpulse * 0.35f;
     }
 
     public bool TryGetMuzzlePosition(out Vector3 position)

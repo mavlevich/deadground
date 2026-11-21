@@ -25,9 +25,9 @@ public static class WireProtocol
     public const int CommandResultSize = 11;
     public const int MissionSize = 32;
     public const int SnapshotHeaderSize = 20 + MissionSize;
-    public const int UnitSize = 66;
+    public const int UnitSize = 69;
     public const int MaxUnits = 1024;
-    public const int ContactSize = 33;
+    public const int ContactSize = 35;
     public const int MaxContacts = 256;
     public const int WreckSize = 22;
     public const int MaxWrecks = 128;
@@ -48,6 +48,7 @@ public static class WireProtocol
     public const int DisembarkResultSize = 17;
     public const int DeploySmokeSize = 27;
     public const int HelicopterSize = 29;
+    public const int FireMissionSize = 23;
 
     public const byte MoveKind = 1;
     public const byte SnapshotKind = 2;
@@ -64,6 +65,7 @@ public static class WireProtocol
     public const byte DisembarkResultKind = 13;
     public const byte DeploySmokeKind = 14;
     public const byte HelicopterKind = 15;
+    public const byte FireMissionKind = 16;
 
     // Yaw in 65536 steps over a full turn: code 32768 is exactly 0, and the quarter turns are exact too.
     // +pi and -pi share code 0.
@@ -602,6 +604,36 @@ public static class WireProtocol
         return true;
     }
 
+    public static void WriteFireMission(Span<byte> bytes, FireMissionCommand command)
+    {
+        if (bytes.Length < FireMissionSize) throw new ArgumentException("Fire mission buffer is too small.");
+        bytes[0] = Version;
+        bytes[1] = FireMissionKind;
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[2..], command.Sequence);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[6..], command.ClientTick);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[10..], command.Unit.Value);
+        BinaryPrimitives.WriteSingleLittleEndian(bytes[14..], command.Cancel ? 0f : command.Target.X);
+        BinaryPrimitives.WriteSingleLittleEndian(bytes[18..], command.Cancel ? 0f : command.Target.Y);
+        bytes[22] = command.Cancel ? (byte)1 : (byte)0;
+    }
+
+    public static bool TryReadFireMission(ReadOnlySpan<byte> bytes, out FireMissionCommand command)
+    {
+        command = default;
+        if (bytes.Length != FireMissionSize || bytes[0] != Version || bytes[1] != FireMissionKind) return false;
+        uint sequence = BinaryPrimitives.ReadUInt32LittleEndian(bytes[2..]);
+        int tick = BinaryPrimitives.ReadInt32LittleEndian(bytes[6..]);
+        uint unitId = BinaryPrimitives.ReadUInt32LittleEndian(bytes[10..]);
+        float targetX = BinaryPrimitives.ReadSingleLittleEndian(bytes[14..]);
+        float targetY = BinaryPrimitives.ReadSingleLittleEndian(bytes[18..]);
+        byte cancelByte = bytes[22];
+        if (sequence == 0 || tick < 0 || unitId == 0 || cancelByte > 1) return false;
+        bool cancel = cancelByte == 1;
+        if (!cancel && (!float.IsFinite(targetX) || !float.IsFinite(targetY))) return false;
+        command = new FireMissionCommand(sequence, tick, new EntityId(unitId), cancel ? default : new Vector2(targetX, targetY), cancel);
+        return true;
+    }
+
     public static int WriteSnapshot(
         Span<byte> bytes,
         uint sequence,
@@ -676,6 +708,8 @@ public static class WireProtocol
             record[57] = flightFlags;
             BinaryPrimitives.WriteUInt32LittleEndian(record[58..], unit.SlingLoadId.Value);
             BinaryPrimitives.WriteUInt32LittleEndian(record[62..], unit.SlungById.Value);
+            BinaryPrimitives.WriteUInt16LittleEndian(record[66..], QuantizeYaw(unit.GunPitchRad));
+            record[68] = (byte)unit.ArtilleryFlags;
         }
 
         int contactsOffset = SnapshotHeaderSize + units.Length * UnitSize;
@@ -695,6 +729,7 @@ public static class WireProtocol
             BinaryPrimitives.WriteUInt32LittleEndian(record[24..], contact.SupportSurface);
             BinaryPrimitives.WriteSingleLittleEndian(record[28..], contact.Altitude);
             record[32] = (byte)contact.FlightPhase;
+            BinaryPrimitives.WriteUInt16LittleEndian(record[33..], QuantizeYaw(contact.GunPitchRad));
         }
 
         int wrecksOffset = SnapshotHeaderSize + units.Length * UnitSize + contacts.Length * ContactSize;
@@ -891,6 +926,8 @@ public static class WireProtocol
             FlightStateFlags runtimeFlightFlags = (FlightStateFlags)((flightFlags >> 5) & 0x07);
             uint slingLoadIdVal = BinaryPrimitives.ReadUInt32LittleEndian(record[58..]);
             uint slungByIdVal = BinaryPrimitives.ReadUInt32LittleEndian(record[62..]);
+            float gunPitchRad = DequantizeYaw(BinaryPrimitives.ReadUInt16LittleEndian(record[66..]));
+            byte artilleryFlagsByte = record[68];
 
             if (id.Value == 0 || !float.IsFinite(position.X) || !float.IsFinite(position.Y) ||
                 !float.IsFinite(altitude) || altitude < 0f ||
@@ -899,6 +936,7 @@ public static class WireProtocol
                 stanceByte > (byte)FireStance.HoldFire ||
                 (smokeFlags & ~3) != 0 ||
                 flightPhaseByte > (byte)FlightPhase.Crashing ||
+                (artilleryFlagsByte & ~3) != 0 ||
                 !frame.Indices.TryAdd(id, i)) return false;
 
             frame.Units[i] = new OwnUnitObservation(
@@ -931,7 +969,9 @@ public static class WireProtocol
                 hasFlightCapability,
                 new EntityId(slingLoadIdVal),
                 new EntityId(slungByIdVal),
-                runtimeFlightFlags);
+                runtimeFlightFlags,
+                gunPitchRad,
+                (ArtilleryFlags)artilleryFlagsByte);
         }
 
         int contactsOffset = SnapshotHeaderSize + unitCount * UnitSize;
@@ -951,10 +991,11 @@ public static class WireProtocol
             uint supportSurface = BinaryPrimitives.ReadUInt32LittleEndian(record[24..]);
             float contactAltitude = BinaryPrimitives.ReadSingleLittleEndian(record[28..]);
             byte contactFlightPhase = record[32];
+            float contactGunPitchRad = DequantizeYaw(BinaryPrimitives.ReadUInt16LittleEndian(record[33..]));
 
             if (contactId.Value == 0 ||
                 stateByte is not ((byte)ContactState.Current or (byte)ContactState.LastKnown) ||
-                classByte > (byte)ContactClassification.Helicopter ||
+                classByte > (byte)ContactClassification.Artillery ||
                 !float.IsFinite(position.X) || !float.IsFinite(position.Y) ||
                 !float.IsFinite(contactAltitude) || contactAltitude < 0f ||
                 contactFlightPhase > (byte)FlightPhase.Crashing ||
@@ -975,7 +1016,8 @@ public static class WireProtocol
                 hullHeading,
                 supportSurface,
                 contactAltitude,
-                (FlightPhase)contactFlightPhase);
+                (FlightPhase)contactFlightPhase,
+                contactGunPitchRad);
         }
 
         int wrecksOffset = SnapshotHeaderSize + unitCount * UnitSize + contactCount * ContactSize;
@@ -1071,9 +1113,8 @@ public static class WireProtocol
             byte resultByte = record[39];
 
             if (eventId == 0 || serverTick < 0 ||
-                (kindByte != (byte)CombatEventKind.ShotFired &&
-                 kindByte != (byte)CombatEventKind.UnitDestroyed &&
-                 kindByte != (byte)CombatEventKind.TookFire) ||
+                kindByte < (byte)CombatEventKind.ShotFired ||
+                kindByte > (byte)CombatEventKind.ArtilleryImpact ||
                 resultByte > (byte)HitResult.Miss ||
                 !float.IsFinite(origin.X) || !float.IsFinite(origin.Y) || !float.IsFinite(origin.Z) ||
                 !float.IsFinite(target.X) || !float.IsFinite(target.Y) || !float.IsFinite(target.Z))

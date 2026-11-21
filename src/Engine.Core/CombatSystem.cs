@@ -331,11 +331,12 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
     public static int GetTargetClassPriority(ContactClassification classification) => classification switch
     {
         ContactClassification.Tank => 0,
-        ContactClassification.Apc => 1,
-        ContactClassification.Helicopter => 2,
-        ContactClassification.Recon => 3,
-        ContactClassification.Infantry => 4,
-        _ => 5
+        ContactClassification.Artillery => 1,
+        ContactClassification.Apc => 2,
+        ContactClassification.Helicopter => 3,
+        ContactClassification.Recon => 4,
+        ContactClassification.Infantry => 5,
+        _ => 6
     };
 
     public static float NormalizeYaw(float yaw)
@@ -607,9 +608,10 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
             world.IsContained(command.Unit) || world.IsCrashing(command.Unit) || world.IsSlung(command.Unit))
             return false;
 
-        // Verify attacker has an operational weapon
+        // Verify attacker has an operational direct-fire weapon
         if (!_combatCatalog.TryGetProfile(attacker.Definition, out UnitCombatProfile attackerProfile) ||
-            attackerProfile.Weapon is null)
+            attackerProfile.Weapon is null ||
+            attackerProfile.Weapon.IsIndirectFire)
         {
             return false;
         }
@@ -705,6 +707,15 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
             if (cs.ReloadTicksRemaining > 0)
             {
                 cs.ReloadTicksRemaining--;
+                if (weapon.IsIndirectFire)
+                {
+                    world.SetCombatState(attacker.Id, cs);
+                }
+            }
+
+            if (weapon.IsIndirectFire)
+            {
+                continue;
             }
 
             if (cs.HasAttackOrder)
@@ -1543,6 +1554,203 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
             {
                 TotalUnitsDestroyed++;
                 DestroyUnit(_crashSplashKilledBuffer[k], world, tick);
+            }
+        }
+    }
+
+    public void RecordRocketLaunchedEvent(
+        int tick,
+        ushort presentationId,
+        EntityId shooterId,
+        int shooterOwner,
+        Vector3 origin,
+        Vector3 target)
+    {
+        uint eventId = _nextEventId++;
+        if (_nextEventId == 0) _nextEventId = 1;
+
+        TotalShotsFired++;
+        if (FirstShotTick < 0)
+        {
+            FirstShotTick = tick;
+            FirstShotDistance = Vector2.Distance(new Vector2(origin.X, origin.Z), new Vector2(target.X, target.Z));
+        }
+
+        for (int p = 1; p <= _maxSides; p++)
+        {
+            if (p == shooterOwner)
+            {
+                CombatEventObservation ev = new(
+                    eventId,
+                    tick,
+                    CombatEventKind.RocketLaunched,
+                    presentationId,
+                    origin,
+                    target,
+                    shooterId,
+                    HitResult.None);
+                AppendEvent(p, ev);
+            }
+            else if (_detection.IsEntityObservedBy(p, shooterId))
+            {
+                CombatEventObservation ev = new(
+                    eventId,
+                    tick,
+                    CombatEventKind.RocketLaunched,
+                    presentationId,
+                    origin,
+                    target,
+                    default,
+                    HitResult.None);
+                AppendEvent(p, ev);
+            }
+        }
+    }
+
+    public void ResolveArtilleryImpact(WorldState world, int tick, RocketProjectileState projectile)
+    {
+        Vector2 impact2D = new(projectile.Target.X, projectile.Target.Z);
+        float splashRadius = MathF.Max(1f, projectile.SplashRadius);
+        float splashRadiusSq = splashRadius * splashRadius;
+        int splashKilledCount = 0;
+
+        for (int i = 0; i < world.Count; i++)
+        {
+            UnitState candidate = world.GetUnitAt(i);
+            if (world.IsContained(candidate.Id) || world.IsCrashing(candidate.Id))
+                continue;
+
+            float altitude = world.GetUnitAltitude(candidate.Id);
+            if (altitude > splashRadius * 0.8f)
+                continue;
+
+            float distSq = Vector2.DistanceSquared(impact2D, candidate.Position);
+            if (distSq > splashRadiusSq)
+                continue;
+
+            float dist = MathF.Sqrt(distSq);
+            float radialFalloff = Math.Clamp(1f - (dist / splashRadius) * 0.78f, 0.22f, 1f);
+
+            float armorMultiplier = 1f;
+            if (_combatCatalog.TryGetProfile(candidate.Definition, out UnitCombatProfile targetProfile))
+            {
+                float topOrSideArmor = MathF.Min(targetProfile.Armor.Side, targetProfile.Armor.Rear);
+                if (topOrSideArmor > projectile.Penetration)
+                {
+                    // Heavy armor resists outer fragmentation; direct or near top-deck hits still cause damage
+                    if (dist <= 4.0f)
+                        armorMultiplier = 0.42f;
+                    else if (dist <= splashRadius * 0.55f)
+                        armorMultiplier = 0.16f;
+                    else
+                        armorMultiplier = 0f;
+                }
+                else if (topOrSideArmor > 0f)
+                {
+                    // Light armor (APC/recon): lethal at close range, moderate fragmentation damage farther out
+                    armorMultiplier = dist <= splashRadius * 0.45f ? 0.90f : 0.55f;
+                }
+            }
+
+            if (armorMultiplier <= 0f)
+                continue;
+
+            int damage = Math.Max(1, (int)MathF.Round(projectile.Damage * radialFalloff * armorMultiplier));
+            world.ApplyDamage(candidate.Id, damage, out bool killed);
+            TotalDamageApplied += damage;
+
+            if (killed && splashKilledCount < _crashSplashKilledBuffer.Length)
+            {
+                _crashSplashKilledBuffer[splashKilledCount++] = candidate.Id;
+            }
+        }
+
+        RecordArtilleryImpactEvent(tick, projectile.PresentationId, projectile.ShooterOwner, projectile.Origin, projectile.Target, world);
+
+        float shotDistance = Vector2.Distance(
+            new Vector2(projectile.Origin.X, projectile.Origin.Z),
+            impact2D);
+
+        for (int k = 0; k < splashKilledCount; k++)
+        {
+            EntityId victimId = _crashSplashKilledBuffer[k];
+            if (!world.TryGetUnit(victimId, out UnitState victim))
+                continue;
+
+            if (_flight is not null && world.IsAirborne(victimId) &&
+                _flight.TryBeginCrash(
+                    world,
+                    victimId,
+                    projectile.ShooterId,
+                    projectile.ShooterDefinition,
+                    projectile.ShooterOwner,
+                    shotDistance))
+            {
+                continue;
+            }
+
+            TotalUnitsDestroyed++;
+            if (projectile.ShooterId.Value != 0 && _killCount < _kills.Length)
+            {
+                _kills[_killCount++] = new CombatKillRecord(
+                    tick,
+                    projectile.ShooterId,
+                    projectile.ShooterDefinition,
+                    projectile.ShooterOwner,
+                    victim.Id,
+                    victim.Definition,
+                    victim.Owner,
+                    shotDistance);
+            }
+            DestroyUnit(victimId, world, tick);
+        }
+    }
+
+    private void RecordArtilleryImpactEvent(
+        int tick,
+        ushort presentationId,
+        int shooterOwner,
+        Vector3 origin,
+        Vector3 impactPoint,
+        WorldState world)
+    {
+        uint eventId = _nextEventId++;
+        if (_nextEventId == 0) _nextEventId = 1;
+
+        Vector2 impact2D = new(impactPoint.X, impactPoint.Z);
+        const float HearBlastRadiusSq = 350f * 350f;
+
+        for (int p = 1; p <= _maxSides; p++)
+        {
+            bool visible = (p == shooterOwner);
+            if (!visible)
+            {
+                for (int i = 0; i < world.Count; i++)
+                {
+                    UnitState u = world.GetUnitAt(i);
+                    if (u.Owner == p && !world.IsContained(u.Id) &&
+                        Vector2.DistanceSquared(u.Position, impact2D) <= HearBlastRadiusSq)
+                    {
+                        visible = true;
+                        break;
+                    }
+                }
+            }
+
+            if (visible)
+            {
+                // Never disclose hidden launcher origin to non-owner sides
+                Vector3 eventOrigin = p == shooterOwner ? origin : impactPoint;
+                CombatEventObservation ev = new(
+                    eventId,
+                    tick,
+                    CombatEventKind.ArtilleryImpact,
+                    presentationId,
+                    eventOrigin,
+                    impactPoint,
+                    default,
+                    HitResult.None);
+                AppendEvent(p, ev);
             }
         }
     }

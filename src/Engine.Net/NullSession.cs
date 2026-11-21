@@ -29,6 +29,7 @@ public sealed class NullSession : IGameSession
     public bool Disembark(EntityId transport, Vector2 target, uint targetSurface = 0) => false;
     public bool DeploySmoke(EntityId unit, bool hasTarget = false, Vector2 target = default, uint targetSurface = 0) => false;
     public bool OrderHelicopter(EntityId unit, HelicopterOrderKind kind, AltitudeBand altitudeBand = AltitudeBand.High, bool hasTarget = false, Vector2 target = default, EntityId targetUnit = default) => false;
+    public bool FireMission(EntityId unit, Vector2 target, bool cancel = false) => false;
     public void Advance(double elapsedSeconds) { }
     public void Dispose() { }
 }

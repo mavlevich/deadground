@@ -593,6 +593,12 @@ public partial class Main : Node3D
                 _map = scenarioGeometry.HeightMap;
                 setup = HelicopterPlaygroundScenario.CreateMatchSetup(scenarioGeometry);
             }
+            else if (_scenario == "artillery-playground")
+            {
+                scenarioGeometry = ArtilleryPlaygroundScenario.CreateStaticGeometry();
+                _map = scenarioGeometry.HeightMap;
+                setup = ArtilleryPlaygroundScenario.CreateMatchSetup(scenarioGeometry);
+            }
             else if (_scenario == "tank-battle")
             {
                 scenarioGeometry = TankBattleScenario.CreateStaticGeometry();
@@ -642,6 +648,7 @@ public partial class Main : Node3D
                     "infantry-playground" => InfantryPlaygroundScenario.CreateSimulation(scenarioGeometry!),
                     "infantry-transport" => InfantryTransportScenario.CreateSimulation(scenarioGeometry!),
                     "helicopter-playground" => HelicopterPlaygroundScenario.CreateSimulation(scenarioGeometry!),
+                    "artillery-playground" => ArtilleryPlaygroundScenario.CreateSimulation(scenarioGeometry!),
                     "tank-battle" => TankBattleScenario.CreateSimulation(scenarioGeometry!),
                     _ => PrototypeScenario.Create(_map)
                 };
@@ -787,6 +794,7 @@ public partial class Main : Node3D
             "infantry-playground" => 120,
             "infantry-transport" => 120,
             "helicopter-playground" => 180,
+            "artillery-playground" => 220,
             "tank-battle" => 160,
             _ => 112
         };
@@ -807,6 +815,7 @@ public partial class Main : Node3D
             "infantry-playground" => new Vector3(130f, 0f, 180f),
             "infantry-transport" => new Vector3(128f, 0f, 195f),
             "helicopter-playground" => new Vector3(HelicopterPlaygroundScenario.ChinookAlphaPos.X + 20f, 2f, HelicopterPlaygroundScenario.ChinookAlphaPos.Y),
+            "artillery-playground" => new Vector3(1024f, 4f, ArtilleryPlaygroundScenario.GradAlphaPos.Y),
             "tank-battle" => new Vector3(TankBattleScenario.Center.X - TankBattleScenario.StartOffset, 4f, TankBattleScenario.Center.Y),
             _ => new Vector3(64, 0, 64)
         };
@@ -814,7 +823,7 @@ public partial class Main : Node3D
         _initialSpawnFocus = initialFocus;
         _initialSpawnSize = initialCameraSize;
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
-        if (_scenario == "ustye-ground" || _scenario == "ustye-raid" || _scenario == "tank-battle")
+        if (_scenario == "ustye-ground" || _scenario == "ustye-raid" || _scenario == "tank-battle" || _scenario == "artillery-playground")
         {
             _cameraRig.Model.SetSizeLimits(30f, 5500f);
             _cameraRig.FarClipMargin = 3000f;
@@ -847,6 +856,7 @@ public partial class Main : Node3D
         _contactViews.UpdateLod(_cameraRig.Size);
         _wreckViews.UpdateLod(_cameraRig.Size);
         _combatEffects = new CombatEffects(_map, _scenarioGeometry);
+        _combatEffects.OnBlastImpulse = _cameraRig.AddBlastShake;
         AddChild(_combatEffects);
         bool enableAudio = !_smokeTest && !string.Equals(DisplayServer.GetName(), "headless", StringComparison.OrdinalIgnoreCase);
         _helicopterAudio = new HelicopterAudioController(this, enabled: enableAudio);
@@ -1480,6 +1490,49 @@ public partial class Main : Node3D
                 }
                 _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
             }
+            else if (_contextActionPanel?.TargetingMode == ContextTargetingMode.FireMission)
+            {
+                if (TryGetGroundPositionUnderMouse(mousePos, out NumericsVector2 groundPos) &&
+                    TryGetSelectedArtilleryWeapon(out WeaponData? artyWeapon, out NumericsVector2 refLauncherPos, out int readyLaunchers))
+                {
+                    float dist = NumericsVector2.Distance(refLauncherPos, groundPos);
+                    bool inRange = dist >= artyWeapon!.MinRange && dist <= artyWeapon.Range;
+                    float radius = artyWeapon.DispersionRadius > 0f ? artyWeapon.DispersionRadius : 55f;
+                    _destination.ShowZoneCircle(_map, groundPos.X, groundPos.Y, radius, inRange);
+
+                    string tip;
+                    if (dist < artyWeapon.MinRange)
+                    {
+                        tip = $"Too close: {dist:0}m (min {artyWeapon.MinRange:0}m) [Esc to cancel]";
+                    }
+                    else if (dist > artyWeapon.Range)
+                    {
+                        tip = $"Out of range: {dist:0}m (max {artyWeapon.Range:0}m) [Esc to cancel]";
+                    }
+                    else
+                    {
+                        float originY = _map.GetHeight(refLauncherPos.X, refLauncherPos.Y) + artyWeapon.MuzzleHeight;
+                        float targetY = _map.GetHeight(groundPos.X, groundPos.Y);
+                        ArtilleryBallistics.ComputeTrajectory(
+                            new System.Numerics.Vector3(refLauncherPos.X, originY, refLauncherPos.Y),
+                            new System.Numerics.Vector3(groundPos.X, targetY, groundPos.Y),
+                            artyWeapon.ProjectileSpeed,
+                            out int flightTicks,
+                            out _);
+                        float flightSec = flightTicks * Simulation.TickSeconds;
+                        int salvoTotal = readyLaunchers * Math.Max(1, artyWeapon.SalvoCount);
+                        tip = $"Barrage: {dist:0}m | Flight ~{flightSec:0.0}s | {salvoTotal} rockets [LMB]";
+                    }
+
+                    _orderCursorOverlay?.SetCustomTooltip(true, inRange ? DestinationValidity.Valid : DestinationValidity.Blocked, tip);
+                }
+                else
+                {
+                    _destination.HideZoneCircle();
+                    _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Blocked, "Invalid barrage target [Esc to cancel]");
+                }
+                _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
+            }
             else
             {
                 _destination.HideZoneCircle();
@@ -1757,6 +1810,7 @@ public partial class Main : Node3D
                     "infantry-playground" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 4 && CheckInfantryPlaygroundCleanPositions(_session.Replica.OwnUnits),
                     "infantry-transport" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 5,
                     "helicopter-playground" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 6,
+                    "artillery-playground" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 4,
                     _ => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
                         _session.Replica.OwnUnits[0].Position.Y > 24
                 };
@@ -1775,6 +1829,7 @@ public partial class Main : Node3D
                     "infantry-playground" => "INFANTRY_PLAYGROUND_SMOKE",
                     "infantry-transport" => "INFANTRY_TRANSPORT_SMOKE",
                     "helicopter-playground" => "HELICOPTER_PLAYGROUND_SMOKE",
+                    "artillery-playground" => "ARTILLERY_PLAYGROUND_SMOKE",
                     _ => "M0_CLIENT_SMOKE"
                 };
                 string token = prefix + (ok ? "_OK" : "_FAILED");
@@ -2433,19 +2488,7 @@ public partial class Main : Node3D
 
             if (key.Keycode == Key.F && _unitViews.Selected.Count > 0 && TryGetFirstSelectedContact(out ContactId target))
             {
-                int totalUnits = _unitViews.Selected.Count;
-                int sent = 0;
-                foreach (EntityId id in _unitViews.Selected)
-                {
-                    if (_session.Attack(id, target)) sent++;
-                }
-                string attackMsg = sent == 0
-                    ? $"Failed to submit attack order / 0 of {totalUnits} units -> Contact #{target.Value}"
-                    : sent < totalUnits
-                        ? $"Attack order submitted for {sent} of {totalUnits} units -> Contact #{target.Value}"
-                        : $"Attack order submitted / {sent} units -> Contact #{target.Value}";
-                _orderNotification?.ShowNotification(attackMsg);
-                _status.Text = attackMsg;
+                IssueAttackOrBarrageOnContact(target);
             }
 
             if (key.Keycode is Key.Z or Key.X or Key.C && _unitViews.Selected.Count > 0)
@@ -2525,6 +2568,31 @@ public partial class Main : Node3D
                 }
                 ContextTargetingMode nextMode = hasLoad ? ContextTargetingMode.SlingDrop : ContextTargetingMode.SlingPickup;
                 _contextActionPanel.SetTargetingMode(_contextActionPanel.TargetingMode == nextMode ? ContextTargetingMode.None : nextMode);
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if ((key.Keycode == Key.B || key.PhysicalKeycode == Key.B) && _unitViews.Selected.Count > 0 && _contextActionPanel?.FireMissionButton.Visible == true && !_contextActionPanel.FireMissionButton.Disabled)
+            {
+                bool hasActiveBarrage = false;
+                foreach (EntityId id in _unitViews.Selected)
+                {
+                    if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) && obs.ArtilleryFlags != ArtilleryFlags.None)
+                    {
+                        hasActiveBarrage = true;
+                        break;
+                    }
+                }
+                if (hasActiveBarrage && _contextActionPanel.TargetingMode != ContextTargetingMode.FireMission)
+                {
+                    OnCancelFireMissionRequested();
+                }
+                else
+                {
+                    _contextActionPanel.SetTargetingMode(_contextActionPanel.TargetingMode == ContextTargetingMode.FireMission
+                        ? ContextTargetingMode.None
+                        : ContextTargetingMode.FireMission);
+                }
                 GetViewport().SetInputAsHandled();
                 return;
             }
@@ -2788,6 +2856,53 @@ public partial class Main : Node3D
                 return;
             }
 
+            if (_contextActionPanel?.TargetingMode == ContextTargetingMode.FireMission)
+            {
+                if (TryGetGroundPositionUnderMouse(mouse.Position, out NumericsVector2 groundPos))
+                {
+                    int ordered = 0;
+                    int outOfRange = 0;
+                    foreach (EntityId unitId in _unitViews.Selected)
+                    {
+                        if (_session.Replica.TryGetOwnUnit(unitId, out OwnUnitObservation obs) &&
+                            obs.Ammunition > 0 &&
+                            TryGetUnitIndirectWeapon(obs.Definition, out WeaponData? weapon))
+                        {
+                            float dist = NumericsVector2.Distance(obs.Position, groundPos);
+                            if (dist >= weapon!.MinRange - 0.5f && dist <= weapon.Range + 0.5f)
+                            {
+                                if (_session.FireMission(unitId, groundPos))
+                                    ordered++;
+                            }
+                            else
+                            {
+                                outOfRange++;
+                            }
+                        }
+                    }
+
+                    if (ordered > 0)
+                    {
+                        string msg = ordered == 1
+                            ? "Rocket barrage ordered (1 launcher)"
+                            : $"Rocket barrage ordered ({ordered} launchers)";
+                        _orderNotification?.ShowNotification(msg);
+                        _status.Text = msg;
+                        _contextActionPanel.CancelTargeting();
+                        _destination.HideZoneCircle();
+                        _orderCursorOverlay?.HideTooltip();
+                    }
+                    else if (outOfRange > 0)
+                    {
+                        string msg = "Target is outside artillery firing range (350m - 4000m)";
+                        _orderNotification?.ShowNotification(msg);
+                        _status.Text = msg;
+                    }
+                }
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
             if (_selectionController.BeginPress(mouse.Position, mouse.ShiftPressed, mouse.DoubleClick, _inputOccludingPanels))
             {
                 _selectionBoxOverlay?.HideBox();
@@ -2815,20 +2930,8 @@ public partial class Main : Node3D
             {
                 if (TryGetTargetContactUnderMouse(mouse.Position, out ContactId targetContact))
                 {
-                    int totalUnits = _unitViews.Selected.Count;
-                    int sent = 0;
-                    foreach (EntityId id in _unitViews.Selected)
-                    {
-                        if (_session.Attack(id, targetContact)) sent++;
-                    }
                     _destination.Clear();
-                    string attackMsg = sent == 0
-                        ? $"Failed to submit attack order / 0 of {totalUnits} units -> Contact #{targetContact.Value}"
-                        : sent < totalUnits
-                            ? $"Attack order submitted for {sent} of {totalUnits} units -> Contact #{targetContact.Value}"
-                            : $"Attack order submitted / {sent} units -> Contact #{targetContact.Value}";
-                    _orderNotification?.ShowNotification(attackMsg);
-                    _status.Text = attackMsg;
+                    IssueAttackOrBarrageOnContact(targetContact);
                     return;
                 }
 
@@ -3451,6 +3554,140 @@ public partial class Main : Node3D
         }
     }
 
+    private void IssueAttackOrBarrageOnContact(ContactId targetContact)
+    {
+        int totalUnits = _unitViews.Selected.Count;
+        int directSent = 0;
+        int barrageSent = 0;
+        int barrageOutOfRange = 0;
+        int barrageNoAmmo = 0;
+
+        bool hasContactPos = _session.Replica.TryGetContact(targetContact, out ContactObservation contactObs);
+
+        foreach (EntityId id in _unitViews.Selected)
+        {
+            if (hasContactPos &&
+                _session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) &&
+                TryGetUnitIndirectWeapon(obs.Definition, out WeaponData? artyWeapon))
+            {
+                if (obs.Ammunition <= 0)
+                {
+                    barrageNoAmmo++;
+                    continue;
+                }
+                float dist = NumericsVector2.Distance(obs.Position, contactObs.Position);
+                if (dist >= artyWeapon!.MinRange - 0.5f && dist <= artyWeapon.Range + 0.5f)
+                {
+                    if (_session.FireMission(id, contactObs.Position))
+                        barrageSent++;
+                }
+                else
+                {
+                    barrageOutOfRange++;
+                }
+            }
+            else
+            {
+                if (_session.Attack(id, targetContact))
+                    directSent++;
+            }
+        }
+
+        int totalSent = directSent + barrageSent;
+        string msg;
+        if (barrageSent > 0 && directSent == 0)
+        {
+            msg = barrageSent == 1
+                ? $"Rocket barrage ordered -> Contact #{targetContact.Value}"
+                : $"Rocket barrage ordered ({barrageSent} launchers) -> Contact #{targetContact.Value}";
+        }
+        else if (totalSent == 0 && barrageOutOfRange > 0)
+        {
+            msg = $"Target Contact #{targetContact.Value} is outside artillery range (350m - 4000m)";
+        }
+        else if (totalSent == 0 && barrageNoAmmo > 0)
+        {
+            msg = "No rockets remaining for barrage";
+        }
+        else if (totalSent == 0)
+        {
+            msg = $"Failed to submit attack order / 0 of {totalUnits} units -> Contact #{targetContact.Value}";
+        }
+        else if (totalSent < totalUnits)
+        {
+            msg = $"Attack order submitted for {totalSent} of {totalUnits} units -> Contact #{targetContact.Value}";
+        }
+        else
+        {
+            msg = $"Attack order submitted / {totalSent} units -> Contact #{targetContact.Value}";
+        }
+
+        _orderNotification?.ShowNotification(msg);
+        _status.Text = msg;
+    }
+
+    internal void OnCancelFireMissionRequested()
+    {
+        int cancelled = 0;
+        foreach (EntityId id in _unitViews.Selected)
+        {
+            if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) &&
+                obs.ArtilleryFlags != ArtilleryFlags.None)
+            {
+                if (_session.FireMission(id, default, cancel: true))
+                    cancelled++;
+            }
+        }
+        if (cancelled > 0)
+        {
+            string msg = cancelled == 1 ? "Rocket barrage cancelled" : $"Rocket barrage cancelled ({cancelled} launchers)";
+            _orderNotification?.ShowNotification(msg);
+            _status.Text = msg;
+        }
+    }
+
+    private bool TryGetUnitIndirectWeapon(ushort definition, out WeaponData? weapon)
+    {
+        weapon = null;
+        if (definition >= _catalog.Units.Length || _catalog.Weapons is null)
+            return false;
+        string? weaponId = _catalog.Units[definition].Weapon;
+        if (weaponId is null)
+            return false;
+        for (int i = 0; i < _catalog.Weapons.Length; i++)
+        {
+            if (string.Equals(_catalog.Weapons[i].Id, weaponId, StringComparison.Ordinal) &&
+                _catalog.Weapons[i].IsIndirectFire)
+            {
+                weapon = _catalog.Weapons[i];
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private bool TryGetSelectedArtilleryWeapon(out WeaponData? weapon, out NumericsVector2 refPosition, out int readyLaunchers)
+    {
+        weapon = null;
+        refPosition = default;
+        readyLaunchers = 0;
+        foreach (EntityId id in _unitViews.Selected)
+        {
+            if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) &&
+                obs.Ammunition > 0 &&
+                TryGetUnitIndirectWeapon(obs.Definition, out WeaponData? w))
+            {
+                if (weapon is null)
+                {
+                    weapon = w;
+                    refPosition = obs.Position;
+                }
+                readyLaunchers++;
+            }
+        }
+        return weapon is not null && readyLaunchers > 0;
+    }
+
     internal void OnDeploySmokeRequested()
     {
         int capable = 0;
@@ -3935,6 +4172,7 @@ public partial class Main : Node3D
         _contextActionPanel.DeploySmokeRequested += OnDeploySmokeRequested;
         _contextActionPanel.HelicopterToggleFlightRequested += OnHelicopterToggleFlightRequested;
         _contextActionPanel.HelicopterToggleAltitudeRequested += OnHelicopterToggleAltitudeRequested;
+        _contextActionPanel.CancelFireMissionRequested += OnCancelFireMissionRequested;
         canvas.AddChild(_contextActionPanel);
 
         _orderNotification = new OrderNotification();
@@ -4179,6 +4417,7 @@ public partial class Main : Node3D
         _combatEffects?.Clear();
         _combatEffects?.QueueFree();
         _combatEffects = new CombatEffects(_map, _scenarioGeometry);
+        _combatEffects.OnBlastImpulse = _cameraRig.AddBlastShake;
         AddChild(_combatEffects);
 
         _smokeView?.Clear();
@@ -4310,6 +4549,17 @@ public partial class Main : Node3D
             Simulation localSimulation = HelicopterPlaygroundScenario.CreateSimulation(scenarioGeometry);
             _session = new LocalSession(localSimulation, player: 1);
         }
+        else if (scenarioName == "artillery-playground")
+        {
+            scenarioGeometry = ArtilleryPlaygroundScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = ArtilleryPlaygroundScenario.CreateMatchSetup(scenarioGeometry);
+            _matchSetup = setup;
+            _scenarioGeometry = scenarioGeometry;
+            _catalog = ScenarioContent.LoadCatalog("artillery-playground");
+            Simulation localSimulation = ArtilleryPlaygroundScenario.CreateSimulation(scenarioGeometry);
+            _session = new LocalSession(localSimulation, player: 1);
+        }
         else if (scenarioName == "ustye-ground")
         {
             scenarioGeometry = UstyeGroundScenario.CreateStaticGeometry();
@@ -4341,6 +4591,7 @@ public partial class Main : Node3D
             "infantry-playground" => new Vector3(130f, 0f, 180f),
             "infantry-transport" => new Vector3(128f, 0f, 195f),
             "helicopter-playground" => new Vector3(HelicopterPlaygroundScenario.ChinookAlphaPos.X + 20f, 2f, HelicopterPlaygroundScenario.ChinookAlphaPos.Y),
+            "artillery-playground" => new Vector3(1024f, 4f, ArtilleryPlaygroundScenario.GradAlphaPos.Y),
             _ => new Vector3(64, 0, 64)
         };
         float initialCameraSize = scenarioName switch
@@ -4353,6 +4604,7 @@ public partial class Main : Node3D
             "infantry-playground" => 120f,
             "infantry-transport" => 120f,
             "helicopter-playground" => 180f,
+            "artillery-playground" => 220f,
             _ => 112f
         };
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
@@ -4376,6 +4628,7 @@ public partial class Main : Node3D
         _combatEffects?.Clear();
         _combatEffects?.QueueFree();
         _combatEffects = new CombatEffects(_map, _scenarioGeometry);
+        _combatEffects.OnBlastImpulse = _cameraRig.AddBlastShake;
         AddChild(_combatEffects);
 
         _smokeView?.Clear();
@@ -4565,6 +4818,7 @@ public partial class Main : Node3D
             "infantry-playground" => "INFANTRY PLAYGROUND",
             "infantry-transport" => "INFANTRY TRANSPORT PROVING GROUND",
             "helicopter-playground" => "HELICOPTER FLIGHT PROVING GROUND",
+            "artillery-playground" => "BM-21 GRAD ROCKET ARTILLERY PROVING GROUND",
             _ => "M0 NETWORK TEST"
         };
         return $"DEAD GROUND   /   SIDE {assignedSide}   /   {name}";
@@ -4632,6 +4886,11 @@ public partial class Main : Node3D
         if (scenario == "helicopter-playground")
         {
             return new Vector3(HelicopterPlaygroundScenario.ChinookAlphaPos.X + 20f, 2f, HelicopterPlaygroundScenario.ChinookAlphaPos.Y);
+        }
+
+        if (scenario == "artillery-playground")
+        {
+            return new Vector3(1024f, 4f, ArtilleryPlaygroundScenario.GradAlphaPos.Y);
         }
 
         return fallbackFocus;

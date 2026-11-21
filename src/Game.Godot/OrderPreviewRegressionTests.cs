@@ -1753,5 +1753,7 @@ internal static class OrderPreviewRegressionTests
         {
             throw new NotImplementedException();
         }
+
+        public bool FireMission(EntityId unit, NumericsVector2 target, bool cancel = false) => true;
     }
 }

@@ -201,6 +201,31 @@
       "max_ranging_bonus": 0.15,
       "can_target_air": true,
       "max_air_target_altitude": 25.0
+    },
+    {
+      "id": "rocket_122mm_9m22u",
+      "range": 4000.0,
+      "min_range": 350.0,
+      "reload_seconds": 30.0,
+      "damage": 90,
+      "ammo_capacity": 40,
+      "muzzle_height": 2.35,
+      "presentation_id": "rocket_122mm_9m22u",
+      "presentation_kind": "rocket_artillery",
+      "penetration_near": 25.0,
+      "penetration_far": 25.0,
+      "penetration_near_range": 0.0,
+      "penetration_far_range": 4000.0,
+      "rounds_per_burst": 1,
+      "dispersion_mils": 15.0,
+      "is_indirect_fire": true,
+      "salvo_count": 20,
+      "salvo_interval_seconds": 0.5,
+      "dispersion_radius": 55.0,
+      "splash_radius": 22.0,
+      "projectile_speed": 160.0,
+      "setup_seconds": 2.0,
+      "elevation_degrees": 32.0
     }
   ],
   "units": [
@@ -509,6 +534,35 @@
         "sling_cable_length": 10.0,
         "sling_speed_penalty_at_max": 0.45
       }
+    },
+    {
+      "id": "bm21",
+      "name": "BM-21 Grad",
+      "faction": "soviet",
+      "classification": "artillery",
+      "speed_road": 20.8,
+      "speed_offroad": 9.7,
+      "reverse_speed": 3.3,
+      "sensor_range": 1200.0,
+      "eye_height": 2.2,
+      "target_points": [1.0, 2.5],
+      "radius": 1.5,
+      "collision_radius": 3.9,
+      "height": 2.73,
+      "max_health": 40,
+      "weapon": "rocket_122mm_9m22u",
+      "turret_traverse_rate": 28.0,
+      "turn_rate": 32.0,
+      "can_pivot": false,
+      "min_turn_radius": 10.5,
+      "acceleration": 2.4,
+      "deceleration": 4.5,
+      "armor_front": 0.0,
+      "armor_side": 0.0,
+      "armor_rear": 0.0,
+      "cargo_weight_kg": 13700.0,
+      "can_internal_load": false,
+      "can_sling_load": false
     }
   ]
 }

@@ -8,16 +8,24 @@ namespace DeadGround.Client;
 internal partial class CombatEffects : Node3D
 {
     public const int MaxTracers = 16;
-    public const int MaxMuzzleFlashes = 16;
-    public const int MaxSmokePuffs = 24;
-    public const int MaxImpacts = 16;
-    public const int MaxSparks = 16;
-    public const int MaxExplosions = 8;
-    public const int MaxResidues = 16;
+    public const int MaxMuzzleFlashes = 32;
+    public const int MaxSmokePuffs = 224;
+    public const int MaxImpacts = 32;
+    public const int MaxSparks = 24;
+    public const int MaxExplosions = 48;
+    public const int MaxShockwaves = 32;
+    public const int MaxArtilleryPlumes = 32;
+    public const int MaxRockets = 48;
+    public const int MaxResidues = 64;
+    public const int MaxArtilleryCraters = 96;
     public const int MaxPendingImpacts = 16;
-    public const int MaxAudioPlayers = 6;
+    public const int MaxAudioPlayers = 8;
     public const int MaxBlastDust = 6;
     public const int MaxBarrelSmoke = 6;
+    public const int MaxRocketBackblasts = 16;
+    public const int MaxArtilleryBursts = 16;
+    public const int MaxImpactSparkBursts = 8;
+    public const int MaxFlashLights = 8;
     public const int EventHistorySize = 256;
 
     public const float TracerSpeed = 160f;
@@ -28,11 +36,18 @@ internal partial class CombatEffects : Node3D
 
     public const float MuzzleFlashLifetime = 0.08f;
     public const float SmokePuffLifetime = 0.40f;
+    public const float RocketTrailSmokeLifetime = 1.65f;
+    public const float RocketTrailEmitInterval = 0.065f;
     public const float ImpactLifetime = 0.16f;
     public const float SparksLifetime = 0.20f;
-    public const float ExplosionLifetime = 0.60f;
+    public const float ExplosionLifetime = 0.36f;
+    public const float ArtilleryFireballLifetime = 0.16f;
+    public const float ShockwaveLifetime = 0.20f;
+    public const float ArtilleryPlumeLifetime = 4.60f;
     public const float ResidueLifetime = 15.0f;
     public const float ResidueFadeStart = 4.0f;
+    public const float ArtilleryCraterLifetime = 240.0f;
+    public const float ArtilleryCraterFadeStart = 25.0f;
     // Muzzle blast dust is strongest for a gun close to the ground and fades out above this height.
     public const float BlastDustMaxMuzzleHeight = 3.5f;
     // Shot particles are skipped for events older than this; younger ones are fast-forwarded.
@@ -42,8 +57,23 @@ internal partial class CombatEffects : Node3D
     private readonly StaticGeometry? _geometry;
     private readonly GpuParticles3D[] _blastDust = new GpuParticles3D[MaxBlastDust];
     private readonly GpuParticles3D[] _barrelSmoke = new GpuParticles3D[MaxBarrelSmoke];
+    private readonly GpuParticles3D[] _rocketBackblasts = new GpuParticles3D[MaxRocketBackblasts];
+    private readonly GpuParticles3D[] _rocketLaunchGroundBanks = new GpuParticles3D[MaxRocketBackblasts];
+    private readonly GpuParticles3D[] _artilleryFireballs = new GpuParticles3D[MaxArtilleryBursts];
+    private readonly GpuParticles3D[] _artillerySparks = new GpuParticles3D[MaxArtilleryBursts];
+    private readonly GpuParticles3D[] _artilleryDebris = new GpuParticles3D[MaxArtilleryBursts];
+    private readonly GpuParticles3D[] _artilleryEjectaJets = new GpuParticles3D[MaxArtilleryBursts];
+    private readonly GpuParticles3D[] _artilleryGroundDustRings = new GpuParticles3D[MaxArtilleryBursts];
+    private readonly GpuParticles3D[] _artilleryDirtPlumes = new GpuParticles3D[MaxArtilleryBursts];
+    private readonly GpuParticles3D[] _impactSparkBursts = new GpuParticles3D[MaxImpactSparkBursts];
+    private readonly TimedLight[] _flashLights = new TimedLight[MaxFlashLights];
     private int _nextBlastDust;
     private int _nextBarrelSmoke;
+    private int _nextRocketBackblast;
+    private int _nextArtilleryBurst;
+    private int _nextImpactSparkBurst;
+
+    public Action<Vector3, float>? OnBlastImpulse { get; set; }
 
     internal GpuParticles3D[] BlastDust => _blastDust;
     internal GpuParticles3D[] BarrelSmoke => _barrelSmoke;
@@ -81,6 +111,39 @@ internal partial class CombatEffects : Node3D
         public bool FadeAlpha;
     }
 
+    internal struct TimedRocket
+    {
+        public Node3D Root;
+        public MeshInstance3D BodyMesh;
+        public MeshInstance3D FlameMesh;
+        public MeshInstance3D GlowMesh;
+        public GpuParticles3D Contrail;
+        public System.Numerics.Vector3 Origin;
+        public System.Numerics.Vector3 Target;
+        public float ApexHeight;
+        public float TotalDuration;
+        public float ElapsedTime;
+        public float SmokeAccumulator;
+        public bool IncomingSoundPlayed;
+        public bool Active;
+    }
+
+    private struct TimedLight
+    {
+        public OmniLight3D Light;
+        public float Lifetime;
+        public float MaxLifetime;
+        public float InitialEnergy;
+        public bool Active;
+    }
+
+    private struct TimedDecal
+    {
+        public Decal Node;
+        public float Lifetime;
+        public bool Active;
+    }
+
     internal struct PendingImpact
     {
         public Vector3 Target;
@@ -111,6 +174,9 @@ internal partial class CombatEffects : Node3D
     internal TimedMesh[] Sparks => _sparks;
     internal TimedMesh[] Impacts => _impacts;
     internal TimedMesh[] Explosions => _explosions;
+    internal TimedMesh[] Shockwaves => _shockwaves;
+    internal TimedMesh[] ArtilleryPlumes => _artilleryPlumes;
+    internal TimedRocket[] Rockets => _rockets;
     internal TimedMesh[] Residues => _residues;
     internal PendingImpact[] PendingImpactsQueue => _pendingImpacts;
     internal AudioStreamPlayer3D[] AudioPlayers => _audioPlayers;
@@ -121,7 +187,11 @@ internal partial class CombatEffects : Node3D
     private readonly TimedMesh[] _sparks = new TimedMesh[MaxSparks];
     private readonly TimedMesh[] _impacts = new TimedMesh[MaxImpacts];
     private readonly TimedMesh[] _explosions = new TimedMesh[MaxExplosions];
+    private readonly TimedMesh[] _shockwaves = new TimedMesh[MaxShockwaves];
+    private readonly TimedMesh[] _artilleryPlumes = new TimedMesh[MaxArtilleryPlumes];
+    private readonly TimedRocket[] _rockets = new TimedRocket[MaxRockets];
     private readonly TimedMesh[] _residues = new TimedMesh[MaxResidues];
+    private readonly TimedDecal[] _artilleryCraters = new TimedDecal[MaxArtilleryCraters];
     private readonly PendingImpact[] _pendingImpacts = new PendingImpact[MaxPendingImpacts];
 
     private readonly AudioStreamPlayer3D[] _audioPlayers = new AudioStreamPlayer3D[MaxAudioPlayers];
@@ -137,6 +207,15 @@ internal partial class CombatEffects : Node3D
     public const int RifleVariantCount = 3;
     private readonly AudioStreamWav[] _rifleVariants = new AudioStreamWav[RifleVariantCount];
     internal AudioStreamWav[] RifleVariants => _rifleVariants;
+    public const int RocketLaunchVariantCount = 3;
+    private readonly AudioStreamWav[] _rocketLaunchVariants = new AudioStreamWav[RocketLaunchVariantCount];
+    internal AudioStreamWav[] RocketLaunchVariants => _rocketLaunchVariants;
+    public const int ArtilleryImpactVariantCount = 3;
+    private readonly AudioStreamWav[] _artilleryImpactVariants = new AudioStreamWav[ArtilleryImpactVariantCount];
+    internal AudioStreamWav[] ArtilleryImpactVariants => _artilleryImpactVariants;
+    public const int RocketIncomingVariantCount = 3;
+    private readonly AudioStreamWav[] _rocketIncomingVariants = new AudioStreamWav[RocketIncomingVariantCount];
+    internal AudioStreamWav[] RocketIncomingVariants => _rocketIncomingVariants;
     internal SoundPriority GetVoicePriority(int index) => _activeVoices[index].Priority;
     private AudioStreamWav? _tookFireAudio;
     private AudioStreamWav? _groundImpactAudio;
@@ -156,7 +235,11 @@ internal partial class CombatEffects : Node3D
     public int ActiveSparksCount => CountActiveMeshPool(_sparks);
     public int ActiveImpactsCount => CountActiveMeshPool(_impacts);
     public int ActiveExplosionsCount => CountActiveMeshPool(_explosions);
+    public int ActiveShockwavesCount => CountActiveMeshPool(_shockwaves);
+    public int ActiveArtilleryPlumesCount => CountActiveMeshPool(_artilleryPlumes);
+    public int ActiveRocketsCount => CountActiveRockets();
     public int ActiveResiduesCount => CountActiveMeshPool(_residues);
+    public int ActiveArtilleryCratersCount => CountActiveDecalPool(_artilleryCraters);
     public int PendingImpactsCount => CountActivePendingImpacts();
 
     public int ActiveEffectsCount => CalculateActiveEffectsCount();
@@ -176,7 +259,11 @@ internal partial class CombatEffects : Node3D
         InitSparks();
         InitImpacts();
         InitExplosions();
+        InitShockwaves();
+        InitArtilleryPlumes();
+        InitRockets();
         InitResidues();
+        InitArtilleryCraters();
         for (int i = 0; i < MaxBlastDust; i++)
         {
             _blastDust[i] = ParticleEffects.CreateBlastDust();
@@ -187,6 +274,34 @@ internal partial class CombatEffects : Node3D
             _barrelSmoke[i] = ParticleEffects.CreateBarrelSmoke();
             AddChild(_barrelSmoke[i]);
         }
+        for (int i = 0; i < MaxRocketBackblasts; i++)
+        {
+            _rocketBackblasts[i] = ParticleEffects.CreateRocketBackblast();
+            AddChild(_rocketBackblasts[i]);
+            _rocketLaunchGroundBanks[i] = ParticleEffects.CreateRocketLaunchGroundBankParticles();
+            AddChild(_rocketLaunchGroundBanks[i]);
+        }
+        for (int i = 0; i < MaxArtilleryBursts; i++)
+        {
+            _artilleryFireballs[i] = ParticleEffects.CreateArtilleryFireballParticles();
+            AddChild(_artilleryFireballs[i]);
+            _artillerySparks[i] = ParticleEffects.CreateArtillerySparksParticles();
+            AddChild(_artillerySparks[i]);
+            _artilleryDebris[i] = ParticleEffects.CreateArtilleryDebrisParticles();
+            AddChild(_artilleryDebris[i]);
+            _artilleryEjectaJets[i] = ParticleEffects.CreateArtilleryEjectaJetsParticles();
+            AddChild(_artilleryEjectaJets[i]);
+            _artilleryGroundDustRings[i] = ParticleEffects.CreateArtilleryGroundDustRingParticles();
+            AddChild(_artilleryGroundDustRings[i]);
+            _artilleryDirtPlumes[i] = ParticleEffects.CreateArtilleryDirtPlumeParticles();
+            AddChild(_artilleryDirtPlumes[i]);
+        }
+        for (int i = 0; i < MaxImpactSparkBursts; i++)
+        {
+            _impactSparkBursts[i] = ParticleEffects.CreateImpactSparksParticles();
+            AddChild(_impactSparkBursts[i]);
+        }
+        InitFlashLights();
 
         _audioListener = new AudioListener3D { Name = "CombatAudioListener" };
         AddChild(_audioListener);
@@ -207,19 +322,56 @@ internal partial class CombatEffects : Node3D
         _audioListener.Position = cameraFocus;
     }
 
+    private void InitFlashLights()
+    {
+        for (int i = 0; i < MaxFlashLights; i++)
+        {
+            OmniLight3D light = new()
+            {
+                Name = $"CombatFlashLight_{i}",
+                LightColor = new Color(1.0f, 0.68f, 0.28f),
+                LightEnergy = 0f,
+                OmniRange = 28f,
+                OmniAttenuation = 1.6f,
+                ShadowEnabled = false,
+                Visible = false
+            };
+            AddChild(light);
+            _flashLights[i] = new TimedLight { Light = light, Active = false };
+        }
+    }
+
     private void InitTracers()
     {
-        StandardMaterial3D tracerMat = new()
+        Shader tracerShader = new()
         {
-            AlbedoColor = new Color("ffe477"),
-            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
-            DisableFog = true
+            Code = """
+shader_type spatial;
+render_mode unshaded, blend_add, cull_disabled, depth_draw_never, fog_disabled;
+varying vec3 v_local;
+void vertex() {
+    v_local = VERTEX;
+}
+void fragment() {
+    float radial = 1.0 - clamp(length(v_local.xy) * 2.3, 0.0, 1.0);
+    radial = pow(radial, 2.2);
+    float along = clamp(0.5 - v_local.z, 0.0, 1.0);
+    float tail = pow(along, 0.85);
+    float core = pow(radial, 2.6) * pow(along, 0.40);
+    // Natural daylight tracer pyrotechnic glow: crisp warm-white core with pale amber-ochre sheath
+    vec3 col = mix(vec3(1.85, 0.92, 0.34), vec3(3.6, 3.25, 2.25), core);
+    ALBEDO = col;
+    ALPHA = radial * tail * 0.88;
+}
+"""
         };
+        ShaderMaterial tracerMat = new() { Shader = tracerShader };
+        BoxMesh unitBox = new() { Size = new Vector3(1.0f, 1.0f, 1.0f) };
         for (int i = 0; i < MaxTracers; i++)
         {
             MeshInstance3D mesh = new()
             {
-                Mesh = new BoxMesh { Size = new Vector3(1.0f, 1.0f, 1.0f) },
+                Mesh = unitBox,
                 MaterialOverride = tracerMat,
                 Visible = false,
                 CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
@@ -231,17 +383,52 @@ internal partial class CombatEffects : Node3D
 
     private void InitMuzzleFlashes()
     {
-        StandardMaterial3D flashMat = new()
+        // Multi-lobe anisotropic muzzle-brake flash: tight forward jet + twin lateral brake vents + hot core.
+        Shader flashShader = new()
         {
-            AlbedoColor = new Color("fff275"),
-            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
-            DisableFog = true
+            Code = """
+shader_type spatial;
+render_mode unshaded, blend_add, cull_disabled, depth_draw_never, fog_disabled;
+void vertex() {
+    mat4 mat_world = mat4(
+        normalize(INV_VIEW_MATRIX[0]),
+        normalize(INV_VIEW_MATRIX[1]),
+        normalize(INV_VIEW_MATRIX[2]),
+        MODEL_MATRIX[3]
+    );
+    vec3 scale_vec = vec3(
+        length(MODEL_MATRIX[0].xyz),
+        length(MODEL_MATRIX[1].xyz),
+        length(MODEL_MATRIX[2].xyz)
+    );
+    float s = max(scale_vec.x, max(scale_vec.y, scale_vec.z));
+    mat_world[0] *= s;
+    mat_world[1] *= s;
+    mat_world[2] *= s;
+    MODELVIEW_MATRIX = VIEW_MATRIX * mat_world;
+}
+void fragment() {
+    vec2 p = UV * 2.0 - 1.0;
+    float r = length(p);
+    float ang = atan(p.y, p.x);
+    // 4-point crisp asymmetric muzzle blast lobes + intense incandescent heart
+    float star = 0.58 + 0.42 * pow(abs(cos(ang * 2.0)), 2.8);
+    float core = exp(-r * r * 14.0);
+    float lobes = exp(-pow(r / max(0.25, star), 2.0) * 4.8) * 0.72;
+    float intensity = clamp(core + lobes, 0.0, 1.0);
+    vec3 col = mix(vec3(2.5, 0.92, 0.22), vec3(4.2, 3.5, 2.0), clamp(core * 1.4, 0.0, 1.0));
+    ALBEDO = col;
+    ALPHA = intensity * 0.92;
+}
+"""
         };
+        ShaderMaterial flashMat = new() { Shader = flashShader };
+        QuadMesh flashQuad = new() { Size = new Vector2(2.15f, 2.15f) };
         for (int i = 0; i < MaxMuzzleFlashes; i++)
         {
             MeshInstance3D mesh = new()
             {
-                Mesh = new SphereMesh { Radius = 0.50f, Height = 1.0f, RadialSegments = 8, Rings = 4 },
+                Mesh = flashQuad,
                 MaterialOverride = flashMat,
                 Visible = false,
                 CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
@@ -253,17 +440,15 @@ internal partial class CombatEffects : Node3D
 
     private void InitSmokePuffs()
     {
-        StandardMaterial3D smokeMat = new()
-        {
-            AlbedoColor = new Color(0.7f, 0.7f, 0.7f, 0.60f),
-            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
-            Roughness = 1.0f
-        };
+        ShaderMaterial smokeMat = ParticleEffects.CreateLitSmokeQuadMaterial(
+            new Color(0.84f, 0.82f, 0.78f),
+            maxAlpha: 0.62f);
+        QuadMesh smokeQuad = new() { Size = new Vector2(2.4f, 2.4f) };
         for (int i = 0; i < MaxSmokePuffs; i++)
         {
             MeshInstance3D mesh = new()
             {
-                Mesh = new SphereMesh { Radius = 0.65f, Height = 1.3f, RadialSegments = 8, Rings = 4 },
+                Mesh = smokeQuad,
                 MaterialOverride = smokeMat,
                 Visible = false,
                 CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
@@ -277,15 +462,22 @@ internal partial class CombatEffects : Node3D
     {
         StandardMaterial3D sparksMat = new()
         {
-            AlbedoColor = new Color("ffaa33"),
+            AlbedoColor = new Color(3.2f, 1.8f, 0.45f, 0.92f),
+            AlbedoTexture = ParticleEffects.HotGlow,
+            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+            BlendMode = BaseMaterial3D.BlendModeEnum.Add,
+            DepthDrawMode = BaseMaterial3D.DepthDrawModeEnum.Disabled,
             ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+            BillboardMode = BaseMaterial3D.BillboardModeEnum.Enabled,
+            BillboardKeepScale = true,
             DisableFog = true
         };
+        QuadMesh sparksQuad = new() { Size = new Vector2(1.4f, 1.4f) };
         for (int i = 0; i < MaxSparks; i++)
         {
             MeshInstance3D mesh = new()
             {
-                Mesh = new SphereMesh { Radius = 0.70f, Height = 1.4f, RadialSegments = 8, Rings = 4 },
+                Mesh = sparksQuad,
                 MaterialOverride = sparksMat,
                 Visible = false,
                 CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
@@ -299,15 +491,22 @@ internal partial class CombatEffects : Node3D
     {
         StandardMaterial3D impactMat = new()
         {
-            AlbedoColor = new Color("ff7733"),
+            AlbedoColor = new Color(3.6f, 2.2f, 0.72f, 0.94f),
+            AlbedoTexture = ParticleEffects.HotGlow,
+            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+            BlendMode = BaseMaterial3D.BlendModeEnum.Add,
+            DepthDrawMode = BaseMaterial3D.DepthDrawModeEnum.Disabled,
             ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+            BillboardMode = BaseMaterial3D.BillboardModeEnum.Enabled,
+            BillboardKeepScale = true,
             DisableFog = true
         };
+        QuadMesh impactQuad = new() { Size = new Vector2(2.2f, 2.2f) };
         for (int i = 0; i < MaxImpacts; i++)
         {
             MeshInstance3D mesh = new()
             {
-                Mesh = new SphereMesh { Radius = 1.05f, Height = 2.1f, RadialSegments = 8, Rings = 4 },
+                Mesh = impactQuad,
                 MaterialOverride = impactMat,
                 Visible = false,
                 CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
@@ -319,17 +518,58 @@ internal partial class CombatEffects : Node3D
 
     private void InitExplosions()
     {
-        StandardMaterial3D explosionMat = new()
+        // Turbulent vertex-displaced detonation flash (keeps SphereMesh for test compatibility while
+        // eliminating any spherical silhouette via 3D boiling displacement, grazing fade, and soft ground blend).
+        Shader fireballShader = new()
         {
-            AlbedoColor = new Color("ff4411"),
-            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
-            DisableFog = true
+            Code = """
+shader_type spatial;
+render_mode unshaded, cull_back, depth_draw_never, fog_disabled;
+uniform sampler2D cloud_tex : source_color;
+uniform sampler2D depth_tex : hint_depth_texture, filter_linear_mipmap;
+varying float v_disp;
+void vertex() {
+    vec3 p = VERTEX * 2.5 + vec3(TIME * 5.2, -TIME * 5.8, TIME * 3.9);
+    float w1 = sin(p.x * 2.7 + cos(p.y * 3.1)) * cos(p.z * 2.9 - sin(p.x * 2.3));
+    float w2 = sin(p.y * 5.5 - p.z * 4.9) * cos(p.x * 5.1 + p.y * 4.1);
+    float disp = w1 * 0.46 + w2 * 0.24;
+    VERTEX += NORMAL * disp;
+    v_disp = disp;
+}
+void fragment() {
+    vec2 uv1 = UV * 3.2 + vec2(TIME * 1.15, -TIME * 1.35);
+    vec2 uv2 = UV * 6.4 + vec2(-TIME * 0.85, TIME * 1.05);
+    float n1 = texture(cloud_tex, uv1).a;
+    float n2 = texture(cloud_tex, uv2).a;
+    float shred = n1 * 0.52 + n2 * 0.48;
+    float fresnel = pow(clamp(dot(NORMAL, VIEW), 0.0, 1.0), 2.3);
+    // High-contrast soot-crusted blackbody tearing: dark black blast soot veins cutting right across blinding fire
+    float heat = clamp(fresnel * 0.72 + shred * 0.62 + v_disp * 0.42 - 0.30, 0.0, 1.0);
+    vec3 soot = vec3(0.045, 0.038, 0.032);
+    vec3 crimson = vec3(1.45, 0.28, 0.04);
+    vec3 flame = vec3(2.85, 0.96, 0.16);
+    vec3 core = vec3(4.6, 3.8, 2.2);
+    vec3 col = mix(soot, crimson, smoothstep(0.24, 0.46, heat));
+    col = mix(col, flame, smoothstep(0.46, 0.70, heat));
+    col = mix(col, core, smoothstep(0.74, 0.94, heat));
+
+    float scene_depth = texture(depth_tex, SCREEN_UV).r;
+    vec4 upos = INV_PROJECTION_MATRIX * vec4(SCREEN_UV * 2.0 - 1.0, scene_depth, 1.0);
+    float soft_fade = clamp((-upos.z / upos.w - (-VERTEX.z)) / 1.4, 0.0, 1.0);
+
+    ALBEDO = col;
+    ALPHA = clamp(smoothstep(0.26, 0.62, shred * fresnel + 0.04) * soft_fade, 0.0, 0.90);
+}
+"""
         };
+        ShaderMaterial explosionMat = new() { Shader = fireballShader };
+        explosionMat.SetShaderParameter("cloud_tex", ParticleEffects.CloudPuff);
+        SphereMesh explosionSphere = new() { Radius = 1.6f, Height = 3.2f, RadialSegments = 20, Rings = 14 };
         for (int i = 0; i < MaxExplosions; i++)
         {
             MeshInstance3D mesh = new()
             {
-                Mesh = new SphereMesh { Radius = 1.6f, Height = 3.2f, RadialSegments = 12, Rings = 6 },
+                Mesh = explosionSphere,
                 MaterialOverride = explosionMat,
                 Visible = false,
                 CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
@@ -339,25 +579,203 @@ internal partial class CombatEffects : Node3D
         }
     }
 
+    private void InitShockwaves()
+    {
+        // Ultra-subtle, fleeting earthy pressure-dust veil (no white sci-fi circle; 3D GPU dust ring carries the volume).
+        Shader shockShader = new()
+        {
+            Code = """
+shader_type spatial;
+render_mode unshaded, cull_disabled, depth_draw_never;
+uniform sampler2D cloud_tex : source_color;
+uniform sampler2D depth_tex : hint_depth_texture, filter_linear_mipmap;
+void fragment() {
+    vec2 p = UV * 2.0 - 1.0;
+    float ang = atan(p.y, p.x);
+    float n1 = texture(cloud_tex, UV * 2.8 + vec2(0.17, 0.31)).a;
+    float n2 = texture(cloud_tex, UV * 5.4 - vec2(0.23, 0.11)).a;
+    float warp = sin(ang * 5.0 + 0.7) * 0.045 + cos(ang * 9.0 - 1.3) * 0.032 + (n1 - 0.5) * 0.18 + (n2 - 0.5) * 0.08;
+    float r = length(p) + warp;
+    float dustVeil = smoothstep(0.42, 0.80, r) * (1.0 - smoothstep(0.82, 0.99, r)) * (n1 * n2 * 1.45);
+
+    float scene_depth = texture(depth_tex, SCREEN_UV).r;
+    vec4 upos = INV_PROJECTION_MATRIX * vec4(SCREEN_UV * 2.0 - 1.0, scene_depth, 1.0);
+    float soft_fade = clamp((-upos.z / upos.w - (-VERTEX.z)) / 0.95, 0.0, 1.0);
+
+    ALBEDO = vec3(0.52, 0.46, 0.37);
+    ALPHA = clamp(dustVeil * 0.14 * soft_fade, 0.0, 0.14);
+}
+"""
+        };
+        ShaderMaterial shockMat = new() { Shader = shockShader };
+        shockMat.SetShaderParameter("cloud_tex", ParticleEffects.CloudPuff);
+        QuadMesh shockQuad = new() { Size = new Vector2(2.0f, 2.0f) };
+        for (int i = 0; i < MaxShockwaves; i++)
+        {
+            MeshInstance3D mesh = new()
+            {
+                Mesh = shockQuad,
+                MaterialOverride = shockMat,
+                Rotation = new Vector3(-Mathf.Pi * 0.5f, 0f, 0f),
+                Visible = false,
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
+            };
+            AddChild(mesh);
+            _shockwaves[i] = new TimedMesh { Mesh = mesh, Active = false };
+        }
+    }
+
+    private void InitArtilleryPlumes()
+    {
+        ShaderMaterial plumeMat = ParticleEffects.CreateLitSmokeQuadMaterial(
+            new Color(0.26f, 0.23f, 0.19f),
+            maxAlpha: 0.78f);
+        QuadMesh plumeQuad = new() { Size = new Vector2(3.2f, 3.4f) };
+        for (int i = 0; i < MaxArtilleryPlumes; i++)
+        {
+            MeshInstance3D mesh = new()
+            {
+                Mesh = plumeQuad,
+                MaterialOverride = plumeMat,
+                Visible = false,
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
+            };
+            AddChild(mesh);
+            _artilleryPlumes[i] = new TimedMesh { Mesh = mesh, Active = false };
+        }
+    }
+
+    private void InitRockets()
+    {
+        StandardMaterial3D bodyMat = new()
+        {
+            AlbedoColor = new Color(0.22f, 0.25f, 0.19f),
+            Roughness = 0.65f,
+            Metallic = 0.28f
+        };
+        Shader flameShader = new()
+        {
+            Code = """
+shader_type spatial;
+render_mode unshaded, blend_add, cull_disabled, depth_draw_never, fog_disabled;
+varying vec3 v_local;
+void vertex() {
+    v_local = VERTEX;
+}
+void fragment() {
+    float along = clamp(v_local.y + 0.5, 0.0, 1.0);
+    float core = pow(along, 2.3);
+    // Supersonic solid-rocket Mach shock diamonds pulsing down the exhaust cone
+    float shock_diamonds = 0.84 + 0.16 * pow(0.5 + 0.5 * cos(along * 26.0 - TIME * 42.0), 2.0);
+    float flicker = (0.90 + 0.10 * sin(TIME * 76.0 + along * 14.0)) * shock_diamonds;
+    vec3 col = mix(vec3(2.6, 0.88, 0.16), vec3(5.0, 4.4, 3.0), core) * flicker;
+    ALBEDO = col;
+    ALPHA = pow(along, 0.82) * 0.92;
+}
+"""
+        };
+        ShaderMaterial flameMat = new() { Shader = flameShader };
+        StandardMaterial3D glowHaloMat = new()
+        {
+            AlbedoColor = new Color(3.6f, 2.1f, 0.75f, 0.82f),
+            AlbedoTexture = ParticleEffects.HotGlow,
+            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+            BlendMode = BaseMaterial3D.BlendModeEnum.Add,
+            DepthDrawMode = BaseMaterial3D.DepthDrawModeEnum.Disabled,
+            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+            BillboardMode = BaseMaterial3D.BillboardModeEnum.Enabled,
+            BillboardKeepScale = true,
+            DisableFog = true
+        };
+        CylinderMesh bodyMesh = new() { TopRadius = 0.11f, BottomRadius = 0.13f, Height = 2.6f, RadialSegments = 8 };
+        CylinderMesh flameMesh = new() { TopRadius = 0.22f, BottomRadius = 0.02f, Height = 2.2f, RadialSegments = 10 };
+        QuadMesh glowQuad = new() { Size = new Vector2(1.45f, 1.45f) };
+
+        for (int i = 0; i < MaxRockets; i++)
+        {
+            Node3D root = new() { Name = $"ArtilleryRocket_{i}", Visible = false };
+            MeshInstance3D body = new()
+            {
+                Mesh = bodyMesh,
+                MaterialOverride = bodyMat,
+                Rotation = new Vector3(Mathf.Pi * 0.5f, 0f, 0f),
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
+            };
+            MeshInstance3D flame = new()
+            {
+                Mesh = flameMesh,
+                MaterialOverride = flameMat,
+                Position = new Vector3(0f, 0f, 2.35f),
+                Rotation = new Vector3(-Mathf.Pi * 0.5f, 0f, 0f),
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
+            };
+            MeshInstance3D glow = new()
+            {
+                Mesh = glowQuad,
+                MaterialOverride = glowHaloMat,
+                Position = new Vector3(0f, 0f, 1.45f),
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
+            };
+            GpuParticles3D contrail = ParticleEffects.CreateRocketContrail();
+            contrail.Position = new Vector3(0f, 0f, 1.40f);
+            root.AddChild(body);
+            root.AddChild(flame);
+            root.AddChild(glow);
+            root.AddChild(contrail);
+            AddChild(root);
+            _rockets[i] = new TimedRocket
+            {
+                Root = root,
+                BodyMesh = body,
+                FlameMesh = flame,
+                GlowMesh = glow,
+                Contrail = contrail,
+                Active = false
+            };
+        }
+    }
+
     private void InitResidues()
     {
-        StandardMaterial3D residueMat = new()
-        {
-            AlbedoColor = new Color(0.10f, 0.09f, 0.08f, 0.85f),
-            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
-            Roughness = 1.0f
-        };
+        ShaderMaterial residueMat = ParticleEffects.CreateCraterMaterial();
+        QuadMesh craterQuad = new() { Size = new Vector2(4.4f, 4.4f) };
         for (int i = 0; i < MaxResidues; i++)
         {
             MeshInstance3D mesh = new()
             {
-                Mesh = new CylinderMesh { TopRadius = 1.9f, BottomRadius = 1.9f, Height = 0.02f, RadialSegments = 14 },
+                Mesh = craterQuad,
                 MaterialOverride = residueMat,
+                Rotation = new Vector3(-Mathf.Pi * 0.5f, 0f, 0f),
                 Visible = false,
                 CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
             };
             AddChild(mesh);
             _residues[i] = new TimedMesh { Mesh = mesh, Active = false };
+        }
+    }
+
+    private void InitArtilleryCraters()
+    {
+        ParticleEffects.CraterDecalTextures[] variants = ParticleEffects.CraterDecalVariants;
+        for (int i = 0; i < MaxArtilleryCraters; i++)
+        {
+            ParticleEffects.CraterDecalTextures tex = variants[i % variants.Length];
+            Decal decal = new()
+            {
+                Name = $"ArtilleryCraterDecal_{i}",
+                TextureAlbedo = tex.Albedo,
+                TextureNormal = tex.Normal,
+                TextureOrm = tex.Orm,
+                AlbedoMix = 1.0f,
+                UpperFade = 0.35f,
+                LowerFade = 0.35f,
+                NormalFade = 0.45f,
+                Size = new Vector3(8.5f, 2.4f, 8.5f),
+                Modulate = Colors.White,
+                Visible = false
+            };
+            AddChild(decal);
+            _artilleryCraters[i] = new TimedDecal { Node = decal, Active = false };
         }
     }
 
@@ -369,6 +787,12 @@ internal partial class CombatEffects : Node3D
             _mgBurstVariants[i] = CannonSound.CreateBurstStream(2000 + i * 17);
         for (int i = 0; i < RifleVariantCount; i++)
             _rifleVariants[i] = CannonSound.CreateRifleStream(3000 + i * 29);
+        for (int i = 0; i < RocketLaunchVariantCount; i++)
+            _rocketLaunchVariants[i] = CannonSound.CreateRocketLaunchStream(4000 + i * 31);
+        for (int i = 0; i < ArtilleryImpactVariantCount; i++)
+            _artilleryImpactVariants[i] = CannonSound.CreateArtilleryImpactStream(5000 + i * 37);
+        for (int i = 0; i < RocketIncomingVariantCount; i++)
+            _rocketIncomingVariants[i] = CannonSound.CreateRocketIncomingStream(6000 + i * 41);
         _tookFireAudio = SynthesizeTookFireSound();
         _groundImpactAudio = CannonSound.CreateGroundImpactStream(1337);
         _explosionAudio = SynthesizeExplosionSound();
@@ -493,7 +917,7 @@ internal partial class CombatEffects : Node3D
         };
     }
 
-    private void PlaySound(AudioStreamWav? stream, Vector3 position, SoundPriority priority)
+    private void PlaySound(AudioStreamWav? stream, Vector3 position, SoundPriority priority, float maxDistance = 250f, float unitSize = 15f)
     {
         if (stream is null) return;
         _totalAudioRequests++;
@@ -536,6 +960,8 @@ internal partial class CombatEffects : Node3D
             }
 
             AudioStreamPlayer3D player = _audioPlayers[selectedPlayer];
+            player.MaxDistance = maxDistance;
+            player.UnitSize = unitSize;
             player.Position = position;
             player.Stream = stream;
             player.PitchScale = 0.96f + (float)(_presentationRng.NextDouble() * 0.08);
@@ -627,6 +1053,11 @@ internal partial class CombatEffects : Node3D
                 if (ageSeconds < MuzzleFlashLifetime)
                 {
                     SpawnMuzzleFlash(origin, shotDir, isMachineGun: isMg, isRifle: isRifle, elapsedOffset: ageSeconds);
+                    if (!isRifle && !isMg)
+                    {
+                        SpawnFlashLight(origin, energy: 6.0f, range: 24f, lifetime: 0.16f);
+                        OnBlastImpulse?.Invoke(origin, 0.16f);
+                    }
                 }
 
                 if (!isRifle && ageSeconds < GunParticlesMaxEventAge)
@@ -695,9 +1126,16 @@ internal partial class CombatEffects : Node3D
                     if (ageSeconds < ExplosionLifetime)
                     {
                         SpawnExplosion(target, ageSeconds);
+                        SpawnArtilleryBurstParticles(target, ageSeconds, scale: 0.72f);
+                        SpawnFlashLight(target + new Vector3(0f, 2.2f, 0f), energy: 7.5f, range: 32f, lifetime: 0.35f);
+                        if (ageSeconds < 0.15f)
+                        {
+                            OnBlastImpulse?.Invoke(target, 0.72f);
+                        }
                     }
 
-                    SpawnResidue(target, ageSeconds);
+                    SpawnResidue(target, ageSeconds, scaleMultiplier: 0.72f);
+                    SpawnArtilleryCrater(target, ageSeconds, baseDiameter: 5.6f);
 
                     if (ageSeconds < 0.20f)
                     {
@@ -723,6 +1161,119 @@ internal partial class CombatEffects : Node3D
                     {
                         TriggerImpactFeedback(target, ageSeconds);
                     }
+                }
+            }
+            else if (ev.Kind == CombatEventKind.RocketLaunched)
+            {
+                System.Numerics.Vector3 simOrigin = ev.Origin;
+                System.Numerics.Vector3 simTarget = ev.Target;
+                ArtilleryBallistics.ComputeTrajectory(simOrigin, simTarget, ArtilleryBallistics.DefaultRocketSpeed, out int flightTicks, out float apexHeight);
+                float flightDuration = flightTicks * Simulation.TickSeconds;
+
+                if (ageSeconds >= flightDuration + RocketTrailSmokeLifetime)
+                {
+                    continue;
+                }
+
+                Vector3 launchOrigin = origin;
+                Vector3 backblastPos = origin - shotDir * 3.0f;
+                Basis tubeBasis = Basis.Identity;
+                bool hasBackblast = false;
+
+                if (ev.ShooterUnitId.Value != 0 && unitViews.Views.TryGetValue(ev.ShooterUnitId, out UnitView? shooter))
+                {
+                    if (shooter.TryGetNextLaunchTubeTransform(out Transform3D tubeXform))
+                    {
+                        launchOrigin = tubeXform.Origin;
+                        tubeBasis = tubeXform.Basis.Orthonormalized();
+                        // Tube bore faces -Z; rear exhaust backblast exits +Z ~3.2m behind muzzle
+                        backblastPos = tubeXform.Origin + tubeBasis.Z * 3.2f;
+                        hasBackblast = true;
+                    }
+                    if (ageSeconds < 0.15f)
+                    {
+                        shooter.ApplyRocketLaunchRecoil(shotDir);
+                    }
+                }
+
+                if (ageSeconds < MuzzleFlashLifetime * 2.2f)
+                {
+                    SpawnMuzzleFlash(launchOrigin, shotDir, isMachineGun: false, isRifle: false, elapsedOffset: ageSeconds * 0.45f);
+                    SpawnFlashLight(launchOrigin + new Vector3(0f, 1.0f, 0f), energy: 5.5f, range: 26f, lifetime: 0.22f);
+                    if (ageSeconds < 0.12f)
+                    {
+                        OnBlastImpulse?.Invoke(launchOrigin, 0.14f);
+                    }
+                    if (hasBackblast)
+                    {
+                        SpawnMuzzleFlash(backblastPos, tubeBasis.Z, isMachineGun: false, isRifle: false, elapsedOffset: ageSeconds * 0.45f);
+                        SpawnRocketBackblastParticles(backblastPos, tubeBasis, ageSeconds);
+                    }
+                }
+
+                if (ageSeconds < SmokePuffLifetime)
+                {
+                    SpawnRocketTrailSmoke(launchOrigin, initialScale: 0.90f, targetScale: 4.0f, lifetime: 3.2f, elapsedOffset: ageSeconds);
+                    if (hasBackblast)
+                    {
+                        SpawnRocketTrailSmoke(backblastPos, initialScale: 1.40f, targetScale: 5.8f, lifetime: 4.8f, elapsedOffset: ageSeconds);
+                    }
+                }
+
+                if (ageSeconds < flightDuration)
+                {
+                    System.Numerics.Vector3 visualOrigin = new(launchOrigin.X, launchOrigin.Y, launchOrigin.Z);
+                    SpawnRocket(visualOrigin, simTarget, apexHeight, flightDuration, ageSeconds);
+                }
+
+                if (ageSeconds < 0.20f)
+                {
+                    PlaySound(
+                        _rocketLaunchVariants[_presentationRng.Next(RocketLaunchVariantCount)],
+                        launchOrigin,
+                        SoundPriority.Cannon,
+                        maxDistance: 950f,
+                        unitSize: 48f);
+                }
+            }
+            else if (ev.Kind == CombatEventKind.ArtilleryImpact)
+            {
+                if (ageSeconds >= ArtilleryCraterLifetime)
+                {
+                    continue;
+                }
+
+                if (ageSeconds < ArtilleryFireballLifetime)
+                {
+                    SpawnArtilleryFireball(target, ageSeconds);
+                    SpawnArtilleryBurstParticles(target, ageSeconds, scale: 1.0f);
+                    SpawnFlashLight(target + new Vector3(0f, 2.2f, 0f), energy: 8.5f, range: 36f, lifetime: 0.16f);
+                    if (ageSeconds < 0.15f)
+                    {
+                        OnBlastImpulse?.Invoke(target, 1.0f);
+                    }
+                }
+
+                if (ageSeconds < ShockwaveLifetime)
+                {
+                    SpawnShockwave(target, ageSeconds);
+                }
+
+                if (ageSeconds < ArtilleryPlumeLifetime)
+                {
+                    SpawnArtilleryPlume(target, ageSeconds);
+                }
+
+                SpawnArtilleryCrater(target, ageSeconds, baseDiameter: 8.8f);
+
+                if (ageSeconds < 0.25f)
+                {
+                    PlaySound(
+                        _artilleryImpactVariants[_presentationRng.Next(ArtilleryImpactVariantCount)],
+                        target,
+                        SoundPriority.Explosion,
+                        maxDistance: 1350f,
+                        unitSize: 72f);
                 }
             }
         }
@@ -820,6 +1371,8 @@ internal partial class CombatEffects : Node3D
 
         SpawnImpact(position, elapsedOffset);
         SpawnSparks(position, elapsedOffset);
+        SpawnImpactSparkBurst(position, Vector3.Up, elapsedOffset);
+        SpawnFlashLight(position + new Vector3(0f, 0.8f, 0f), energy: 4.5f, range: 18f, lifetime: 0.14f);
         SpawnSmokePuff(position, isImpactSmoke: true, elapsedOffset);
         if (elapsedOffset < 0.1f)
         {
@@ -835,6 +1388,25 @@ internal partial class CombatEffects : Node3D
         }
 
         SpawnSmokePuff(position, isImpactSmoke: true, elapsedOffset);
+        if (elapsedOffset < 0.12f)
+        {
+            // Kick up a compact soil clod & dust geyser for missed direct-fire rounds hitting earth
+            int burstIdx = _nextArtilleryBurst;
+            _nextArtilleryBurst = (_nextArtilleryBurst + 1) % MaxArtilleryBursts;
+            GpuParticles3D debris = _artilleryDebris[burstIdx];
+            debris.Position = position + new Vector3(0f, 0.2f, 0f);
+            debris.Scale = Vector3.One * 0.42f;
+            debris.AmountRatio = 0.28f;
+            debris.Preprocess = elapsedOffset;
+            debris.Restart();
+
+            GpuParticles3D dust = _blastDust[_nextBlastDust];
+            _nextBlastDust = (_nextBlastDust + 1) % MaxBlastDust;
+            dust.Transform = new Transform3D(Basis.Identity, position + new Vector3(0f, 0.4f, 0f));
+            dust.AmountRatio = 0.42f;
+            dust.Preprocess = elapsedOffset;
+            dust.Restart();
+        }
         if (elapsedOffset < 0.1f)
         {
             PlaySound(_groundImpactAudio, position, SoundPriority.TookFire);
@@ -849,6 +1421,10 @@ internal partial class CombatEffects : Node3D
         }
 
         SpawnSparks(position, elapsedOffset);
+        if (elapsedOffset < 0.08f)
+        {
+            SpawnImpactSparkBurst(position, Vector3.Up, elapsedOffset);
+        }
 
         // Reflect bounce off hit surface: keep most forward momentum, add upward bounce and random lateral deflection
         Vector3 flatIncoming = new Vector3(incomingDir.X, 0f, incomingDir.Z);
@@ -1061,8 +1637,8 @@ internal partial class CombatEffects : Node3D
         tm.ScaleDown = false;
         tm.ScaleUp = true;
         tm.FadeAlpha = true;
-        tm.InitialScale = 0.8f;
-        tm.TargetScale = 3.6f;
+        tm.InitialScale = 0.55f;
+        tm.TargetScale = 2.15f;
         tm.InitialScaleVector = Vector3.Zero;
         tm.Mesh.Position = position + tm.Velocity * elapsedOffset;
         float t = elapsedOffset / ExplosionLifetime;
@@ -1072,7 +1648,7 @@ internal partial class CombatEffects : Node3D
         tm.Mesh.Visible = true;
     }
 
-    private void SpawnResidue(Vector3 position, float elapsedOffset = 0f)
+    private void SpawnResidue(Vector3 position, float elapsedOffset = 0f, float scaleMultiplier = 1.0f)
     {
         float remainingLifetime = ResidueLifetime - elapsedOffset;
         if (remainingLifetime <= 0f) return;
@@ -1090,7 +1666,8 @@ internal partial class CombatEffects : Node3D
 
         float groundY = position.Y + 0.03f;
         tm.Mesh.Position = new Vector3(position.X, groundY, position.Z);
-        tm.Mesh.Scale = Vector3.One;
+        tm.Mesh.Rotation = new Vector3(-Mathf.Pi * 0.5f, (float)(_presentationRng.NextDouble() * Mathf.Tau), 0f);
+        tm.Mesh.Scale = new Vector3(scaleMultiplier, scaleMultiplier, 1f);
         if (remainingLifetime < ResidueFadeStart)
         {
             float fadeRatio = remainingLifetime / ResidueFadeStart;
@@ -1101,6 +1678,354 @@ internal partial class CombatEffects : Node3D
             tm.Mesh.Transparency = 0f;
         }
         tm.Mesh.Visible = true;
+    }
+
+    private void SpawnArtilleryCrater(Vector3 position, float elapsedOffset = 0f, float baseDiameter = 8.8f)
+    {
+        float remainingLifetime = ArtilleryCraterLifetime - elapsedOffset;
+        if (remainingLifetime <= 0f) return;
+
+        int idx = AcquireArtilleryCraterSlot();
+        ref TimedDecal crater = ref _artilleryCraters[idx];
+        crater.Active = true;
+        crater.Lifetime = remainingLifetime;
+
+        float groundY = _map.GetHeight(position.X, position.Z);
+        float jitter = 0.86f + (float)_presentationRng.NextDouble() * 0.30f;
+        float diameter = baseDiameter * jitter;
+
+        crater.Node.Position = new Vector3(position.X, groundY, position.Z);
+        crater.Node.Rotation = new Vector3(0f, (float)(_presentationRng.NextDouble() * Mathf.Tau), 0f);
+        crater.Node.Size = new Vector3(diameter, 2.4f, diameter);
+        if (remainingLifetime < ArtilleryCraterFadeStart)
+        {
+            float alpha = Math.Clamp(remainingLifetime / ArtilleryCraterFadeStart, 0f, 1f);
+            crater.Node.Modulate = new Color(1f, 1f, 1f, alpha);
+        }
+        else
+        {
+            crater.Node.Modulate = Colors.White;
+        }
+        crater.Node.Visible = true;
+    }
+
+    private int AcquireArtilleryCraterSlot()
+    {
+        for (int i = 0; i < MaxArtilleryCraters; i++)
+        {
+            if (!_artilleryCraters[i].Active) return i;
+        }
+
+        int oldestIdx = 0;
+        float minLifetime = float.MaxValue;
+        for (int i = 0; i < MaxArtilleryCraters; i++)
+        {
+            if (_artilleryCraters[i].Lifetime < minLifetime)
+            {
+                minLifetime = _artilleryCraters[i].Lifetime;
+                oldestIdx = i;
+            }
+        }
+        return oldestIdx;
+    }
+
+    private void SpawnRocketTrailSmoke(
+        Vector3 position,
+        float initialScale = 0.55f,
+        float targetScale = 2.6f,
+        float lifetime = RocketTrailSmokeLifetime,
+        float elapsedOffset = 0f)
+    {
+        float remainingLifetime = lifetime - elapsedOffset;
+        if (remainingLifetime <= 0f) return;
+
+        int idx = AcquireMeshSlot(_smokePuffs, MaxSmokePuffs);
+        ref TimedMesh tm = ref _smokePuffs[idx];
+        tm.Active = true;
+        tm.Lifetime = remainingLifetime;
+        tm.MaxLifetime = lifetime;
+        tm.Velocity = new Vector3(0f, 0.85f, 0f);
+        tm.ScaleDown = false;
+        tm.ScaleUp = true;
+        tm.FadeAlpha = true;
+        tm.InitialScale = initialScale;
+        tm.TargetScale = targetScale;
+        tm.InitialScaleVector = Vector3.Zero;
+        float t = elapsedOffset / lifetime;
+        tm.Mesh.Position = position + tm.Velocity * elapsedOffset;
+        tm.Mesh.Scale = Vector3.One * Mathf.Lerp(initialScale, targetScale, t);
+        tm.Mesh.Transparency = Mathf.Clamp(t, 0f, 1f);
+        tm.Mesh.Visible = true;
+    }
+
+    private void SpawnArtilleryFireball(Vector3 position, float elapsedOffset = 0f)
+    {
+        float remainingLifetime = ArtilleryFireballLifetime - elapsedOffset;
+        if (remainingLifetime <= 0f) return;
+
+        int idx = AcquireMeshSlot(_explosions, MaxExplosions);
+        ref TimedMesh tm = ref _explosions[idx];
+        tm.Active = true;
+        tm.Lifetime = remainingLifetime;
+        tm.MaxLifetime = ArtilleryFireballLifetime;
+        tm.Velocity = new Vector3(0f, 1.3f, 0f);
+        tm.ScaleDown = false;
+        tm.ScaleUp = true;
+        tm.FadeAlpha = true;
+        tm.InitialScale = 0.36f;
+        tm.TargetScale = 1.65f;
+        tm.InitialScaleVector = Vector3.Zero;
+        float t = elapsedOffset / ArtilleryFireballLifetime;
+        tm.Mesh.Position = position + new Vector3(0f, 0.55f, 0f) + tm.Velocity * elapsedOffset;
+        tm.Mesh.Scale = Vector3.One * Mathf.Lerp(tm.InitialScale, tm.TargetScale, t);
+        tm.Mesh.Transparency = Mathf.Clamp(t, 0f, 1f);
+        tm.Mesh.Visible = true;
+    }
+
+    private void SpawnShockwave(Vector3 position, float elapsedOffset = 0f)
+    {
+        float remainingLifetime = ShockwaveLifetime - elapsedOffset;
+        if (remainingLifetime <= 0f) return;
+
+        int idx = AcquireMeshSlot(_shockwaves, MaxShockwaves);
+        ref TimedMesh tm = ref _shockwaves[idx];
+        tm.Active = true;
+        tm.Lifetime = remainingLifetime;
+        tm.MaxLifetime = ShockwaveLifetime;
+        tm.Velocity = Vector3.Zero;
+        tm.ScaleDown = false;
+        tm.ScaleUp = true;
+        tm.FadeAlpha = true;
+        tm.InitialScale = 1.8f;
+        tm.TargetScale = 24.0f;
+        tm.InitialScaleVector = Vector3.Zero;
+        float t = elapsedOffset / ShockwaveLifetime;
+        float radius = Mathf.Lerp(tm.InitialScale, tm.TargetScale, t);
+        tm.Mesh.Position = new Vector3(position.X, position.Y + 0.35f, position.Z);
+        tm.Mesh.Scale = new Vector3(radius, radius, 1f);
+        tm.Mesh.Transparency = Mathf.Clamp(t, 0f, 1f);
+        tm.Mesh.Visible = true;
+    }
+
+    private void SpawnRocketBackblastParticles(Vector3 backblastPos, Basis tubeBasis, float ageSeconds)
+    {
+        int idx = _nextRocketBackblast;
+        _nextRocketBackblast = (_nextRocketBackblast + 1) % MaxRocketBackblasts;
+
+        // Fire rear exhaust along the true 3D elevated tube axis (+Z angles backward and DOWN into the dirt)
+        GpuParticles3D blast = _rocketBackblasts[idx];
+        blast.Transform = new Transform3D(tubeBasis, backblastPos);
+        blast.Preprocess = ageSeconds;
+        blast.Restart();
+
+        // Project the downward exhaust jet onto the terrain behind the truck and bloom a lingering ground dust/smoke bank
+        Vector3 rearDir = tubeBasis.Z.Normalized();
+        float groundAtBreech = _map.GetHeight(backblastPos.X, backblastPos.Z);
+        float dropDist = rearDir.Y < -0.15f
+            ? Math.Clamp((backblastPos.Y - groundAtBreech) / (-rearDir.Y), 2.0f, 11.0f)
+            : 5.0f;
+        Vector3 hitEst = backblastPos + rearDir * dropDist;
+        float groundY = _map.GetHeight(hitEst.X, hitEst.Z);
+        Vector3 groundHit = new(hitEst.X, groundY + 0.35f, hitEst.Z);
+
+        GpuParticles3D bank = _rocketLaunchGroundBanks[idx];
+        bank.Position = groundHit;
+        bank.Preprocess = ageSeconds;
+        bank.Restart();
+    }
+
+    private void SpawnArtilleryBurstParticles(Vector3 position, float ageSeconds, float scale)
+    {
+        int idx = _nextArtilleryBurst;
+        _nextArtilleryBurst = (_nextArtilleryBurst + 1) % MaxArtilleryBursts;
+
+        Vector3 burstPos = position + new Vector3(0f, 0.45f, 0f);
+        Vector3 s = Vector3.One * scale;
+
+        GpuParticles3D fireball = _artilleryFireballs[idx];
+        fireball.Position = burstPos;
+        fireball.Scale = s;
+        fireball.Preprocess = ageSeconds;
+        fireball.Restart();
+
+        GpuParticles3D sparks = _artillerySparks[idx];
+        sparks.Position = burstPos;
+        sparks.Scale = s;
+        sparks.Preprocess = ageSeconds;
+        sparks.Restart();
+
+        GpuParticles3D debris = _artilleryDebris[idx];
+        debris.Position = burstPos;
+        debris.Scale = s;
+        debris.AmountRatio = 1.0f;
+        debris.Preprocess = ageSeconds;
+        debris.Restart();
+
+        GpuParticles3D ejectaJets = _artilleryEjectaJets[idx];
+        ejectaJets.Position = burstPos;
+        ejectaJets.Scale = s;
+        ejectaJets.Preprocess = ageSeconds;
+        ejectaJets.Restart();
+
+        GpuParticles3D groundRing = _artilleryGroundDustRings[idx];
+        groundRing.Position = position + new Vector3(0f, 0.25f, 0f);
+        groundRing.Scale = s;
+        groundRing.Preprocess = ageSeconds;
+        groundRing.Restart();
+
+        GpuParticles3D dirt = _artilleryDirtPlumes[idx];
+        dirt.Position = burstPos;
+        dirt.Scale = s;
+        dirt.Preprocess = ageSeconds;
+        dirt.Restart();
+    }
+
+    private void SpawnImpactSparkBurst(Vector3 position, Vector3 normalDir, float ageSeconds)
+    {
+        GpuParticles3D burst = _impactSparkBursts[_nextImpactSparkBurst];
+        _nextImpactSparkBurst = (_nextImpactSparkBurst + 1) % MaxImpactSparkBursts;
+        burst.Position = position;
+        burst.Preprocess = ageSeconds;
+        burst.Restart();
+    }
+
+    private void SpawnFlashLight(Vector3 position, float energy, float range, float lifetime)
+    {
+        int selected = -1;
+        float minRemaining = float.MaxValue;
+        for (int i = 0; i < MaxFlashLights; i++)
+        {
+            if (!_flashLights[i].Active)
+            {
+                selected = i;
+                break;
+            }
+            if (_flashLights[i].Lifetime < minRemaining)
+            {
+                minRemaining = _flashLights[i].Lifetime;
+                selected = i;
+            }
+        }
+        if (selected < 0) return;
+
+        ref TimedLight tl = ref _flashLights[selected];
+        tl.Active = true;
+        tl.Lifetime = lifetime;
+        tl.MaxLifetime = lifetime;
+        tl.InitialEnergy = energy;
+        tl.Light.Position = position;
+        tl.Light.OmniRange = range;
+        tl.Light.LightEnergy = energy;
+        tl.Light.Visible = true;
+    }
+
+    private void SpawnArtilleryPlume(Vector3 position, float elapsedOffset = 0f)
+    {
+        float remainingLifetime = ArtilleryPlumeLifetime - elapsedOffset;
+        if (remainingLifetime <= 0f) return;
+
+        int idx = AcquireMeshSlot(_artilleryPlumes, MaxArtilleryPlumes);
+        ref TimedMesh tm = ref _artilleryPlumes[idx];
+        tm.Active = true;
+        tm.Lifetime = remainingLifetime;
+        tm.MaxLifetime = ArtilleryPlumeLifetime;
+        tm.Velocity = new Vector3(0f, 1.1f, 0f);
+        tm.ScaleDown = false;
+        tm.ScaleUp = true;
+        tm.FadeAlpha = true;
+        tm.InitialScale = 0.85f;
+        tm.TargetScale = 2.6f;
+        tm.InitialScaleVector = Vector3.Zero;
+        float t = elapsedOffset / ArtilleryPlumeLifetime;
+        tm.Mesh.Position = position + new Vector3(0f, 0.8f, 0f) + tm.Velocity * elapsedOffset;
+        tm.Mesh.Scale = Vector3.One * Mathf.Lerp(tm.InitialScale, tm.TargetScale, t);
+        tm.Mesh.Transparency = Mathf.Clamp(t, 0f, 1f);
+        tm.Mesh.Visible = true;
+    }
+
+    private void SpawnRocket(
+        System.Numerics.Vector3 origin,
+        System.Numerics.Vector3 target,
+        float apexHeight,
+        float flightDuration,
+        float elapsedOffset = 0f)
+    {
+        if (elapsedOffset >= flightDuration) return;
+
+        int idx = AcquireRocketSlot();
+        ref TimedRocket rocket = ref _rockets[idx];
+        rocket.Active = true;
+        rocket.Origin = origin;
+        rocket.Target = target;
+        rocket.ApexHeight = apexHeight;
+        rocket.TotalDuration = flightDuration;
+        rocket.ElapsedTime = elapsedOffset;
+        rocket.SmokeAccumulator = 0f;
+        rocket.IncomingSoundPlayed = (flightDuration - elapsedOffset) < 0.45f;
+
+        PositionRocket(ref rocket);
+        rocket.BodyMesh.Visible = true;
+        rocket.Root.Visible = true;
+        rocket.Contrail.AmountRatio = 1.0f;
+        rocket.Contrail.Emitting = true;
+    }
+
+    private static void PositionRocket(ref TimedRocket rocket)
+    {
+        float t = Mathf.Clamp(rocket.ElapsedTime / rocket.TotalDuration, 0f, 1f);
+        ArtilleryBallistics.SamplePositionAndTangent(
+            rocket.Origin,
+            rocket.Target,
+            rocket.ApexHeight,
+            t,
+            out System.Numerics.Vector3 pos,
+            out System.Numerics.Vector3 tangent);
+
+        Vector3 gPos = new(pos.X, pos.Y, pos.Z);
+        Vector3 gDir = new(tangent.X, tangent.Y, tangent.Z);
+        rocket.Root.Position = gPos;
+        if (gDir.LengthSquared() > 1e-6f)
+        {
+            Vector3 up = MathF.Abs(gDir.Y) > 0.96f ? Vector3.Right : Vector3.Up;
+            rocket.Root.LookAt(gPos + gDir, up);
+        }
+
+        // Authentic 9M22U two-phase flight: bright ~2.1s solid-fuel boost, rapid sputter burnout, then dark ballistic coast
+        const float burnEnd = 0.26f;
+        const float taperEnd = 0.32f;
+        bool motorBurning = t < taperEnd;
+        rocket.FlameMesh.Visible = motorBurning;
+        rocket.GlowMesh.Visible = motorBurning;
+        if (motorBurning)
+        {
+            float burnFade = t <= burnEnd
+                ? 1.0f
+                : Math.Clamp(1.0f - (t - burnEnd) / (taperEnd - burnEnd), 0f, 1f);
+            float flicker = (0.86f + 0.28f * MathF.Sin(rocket.ElapsedTime * 68f)) * burnFade;
+            rocket.FlameMesh.Scale = new Vector3(0.70f + 0.30f * burnFade, MathF.Max(0.05f, flicker), 0.70f + 0.30f * burnFade);
+            rocket.GlowMesh.Scale = Vector3.One * MathF.Max(0.05f, (0.90f + 0.22f * flicker) * burnFade);
+        }
+    }
+
+    private int AcquireRocketSlot()
+    {
+        for (int i = 0; i < MaxRockets; i++)
+        {
+            if (!_rockets[i].Active) return i;
+        }
+
+        _droppedMeshEffectsCount++;
+        int oldestIdx = 0;
+        float maxElapsed = -1f;
+        for (int i = 0; i < MaxRockets; i++)
+        {
+            if (_rockets[i].ElapsedTime > maxElapsed)
+            {
+                maxElapsed = _rockets[i].ElapsedTime;
+                oldestIdx = i;
+            }
+        }
+        return oldestIdx;
     }
 
     private int AcquireMeshSlot(TimedMesh[] pool, int max)
@@ -1176,6 +2101,18 @@ internal partial class CombatEffects : Node3D
             _tracers[i].Active = false;
             _tracers[i].Mesh.Visible = false;
         }
+        for (int i = 0; i < MaxRockets; i++)
+        {
+            _rockets[i].Active = false;
+            _rockets[i].Contrail.Emitting = false;
+            _rockets[i].Root.Visible = false;
+        }
+        for (int i = 0; i < MaxFlashLights; i++)
+        {
+            _flashLights[i].Active = false;
+            _flashLights[i].Light.Visible = false;
+            _flashLights[i].Light.LightEnergy = 0f;
+        }
         for (int i = 0; i < MaxPendingImpacts; i++)
         {
             _pendingImpacts[i].Active = false;
@@ -1186,15 +2123,37 @@ internal partial class CombatEffects : Node3D
         ResetPool(_sparks);
         ResetPool(_impacts);
         ResetPool(_explosions);
+        ResetPool(_shockwaves);
+        ResetPool(_artilleryPlumes);
         ResetPool(_residues);
+        for (int i = 0; i < MaxArtilleryCraters; i++)
+        {
+            _artilleryCraters[i].Active = false;
+            _artilleryCraters[i].Node.Visible = false;
+            _artilleryCraters[i].Node.Modulate = Colors.White;
+        }
         foreach (GpuParticles3D dust in _blastDust)
-        {
             dust.Emitting = false;
-        }
         foreach (GpuParticles3D smoke in _barrelSmoke)
-        {
             smoke.Emitting = false;
-        }
+        foreach (GpuParticles3D blast in _rocketBackblasts)
+            blast.Emitting = false;
+        foreach (GpuParticles3D bank in _rocketLaunchGroundBanks)
+            bank.Emitting = false;
+        foreach (GpuParticles3D fireball in _artilleryFireballs)
+            fireball.Emitting = false;
+        foreach (GpuParticles3D sparks in _artillerySparks)
+            sparks.Emitting = false;
+        foreach (GpuParticles3D debris in _artilleryDebris)
+            debris.Emitting = false;
+        foreach (GpuParticles3D ejectaJets in _artilleryEjectaJets)
+            ejectaJets.Emitting = false;
+        foreach (GpuParticles3D groundRing in _artilleryGroundDustRings)
+            groundRing.Emitting = false;
+        foreach (GpuParticles3D dirt in _artilleryDirtPlumes)
+            dirt.Emitting = false;
+        foreach (GpuParticles3D impSparks in _impactSparkBursts)
+            impSparks.Emitting = false;
 
         for (int i = 0; i < MaxAudioPlayers; i++)
         {
@@ -1232,12 +2191,17 @@ internal partial class CombatEffects : Node3D
         float dt = (float)delta;
 
         UpdateTracers(dt);
+        UpdateRockets(dt);
         UpdateMeshPool(_muzzleFlashes, dt);
         UpdateMeshPool(_smokePuffs, dt);
         UpdateMeshPool(_sparks, dt);
         UpdateMeshPool(_impacts, dt);
         UpdateMeshPool(_explosions, dt);
+        UpdateShockwavePool(dt);
+        UpdateMeshPool(_artilleryPlumes, dt);
         UpdateResiduePool(dt);
+        UpdateArtilleryCraterPool(dt);
+        UpdateFlashLights(dt);
 
         // Update pending impacts after existing mesh pools so newly spawned effects are not aged in the same frame
         UpdatePendingImpacts(dt);
@@ -1382,6 +2346,40 @@ internal partial class CombatEffects : Node3D
         }
     }
 
+    private void UpdateArtilleryCraterPool(float dt)
+    {
+        for (int i = 0; i < MaxArtilleryCraters; i++)
+        {
+            ref TimedDecal crater = ref _artilleryCraters[i];
+            if (!crater.Active) continue;
+
+            crater.Lifetime -= dt;
+            if (crater.Lifetime <= 0f)
+            {
+                crater.Active = false;
+                crater.Node.Visible = false;
+                crater.Node.Modulate = Colors.White;
+                continue;
+            }
+
+            if (crater.Lifetime < ArtilleryCraterFadeStart)
+            {
+                float alpha = Math.Clamp(crater.Lifetime / ArtilleryCraterFadeStart, 0f, 1f);
+                crater.Node.Modulate = new Color(1f, 1f, 1f, alpha);
+            }
+        }
+    }
+
+    private static int CountActiveDecalPool(TimedDecal[] pool)
+    {
+        int count = 0;
+        for (int i = 0; i < pool.Length; i++)
+        {
+            if (pool[i].Active) count++;
+        }
+        return count;
+    }
+
     private int CountActiveTracers()
     {
         int count = 0;
@@ -1415,12 +2413,127 @@ internal partial class CombatEffects : Node3D
     private int CalculateActiveEffectsCount()
     {
         return CountActiveTracers() +
+               CountActiveRockets() +
                CountActiveMeshPool(_muzzleFlashes) +
                CountActiveMeshPool(_smokePuffs) +
                CountActiveMeshPool(_sparks) +
                CountActiveMeshPool(_impacts) +
                CountActiveMeshPool(_explosions) +
+               CountActiveMeshPool(_shockwaves) +
+               CountActiveMeshPool(_artilleryPlumes) +
                CountActiveMeshPool(_residues) +
+               CountActiveDecalPool(_artilleryCraters) +
                CountActivePendingImpacts();
+    }
+
+    private void UpdateRockets(float dt)
+    {
+        for (int i = 0; i < MaxRockets; i++)
+        {
+            ref TimedRocket rocket = ref _rockets[i];
+            if (!rocket.Active) continue;
+
+            rocket.ElapsedTime += dt;
+            if (rocket.ElapsedTime >= rocket.TotalDuration)
+            {
+                rocket.Active = false;
+                rocket.Contrail.Emitting = false;
+                rocket.BodyMesh.Visible = false;
+                rocket.FlameMesh.Visible = false;
+                rocket.GlowMesh.Visible = false;
+                continue;
+            }
+
+            PositionRocket(ref rocket);
+
+            float remaining = rocket.TotalDuration - rocket.ElapsedTime;
+            if (!rocket.IncomingSoundPlayed && remaining <= CannonSound.RocketIncomingDuration && remaining > 0.40f)
+            {
+                rocket.IncomingSoundPlayed = true;
+                Vector3 targetPos = new(rocket.Target.X, rocket.Target.Y, rocket.Target.Z);
+                if (_audioListener.Position.DistanceSquaredTo(targetPos) <= 680f * 680f)
+                {
+                    PlaySound(
+                        _rocketIncomingVariants[_presentationRng.Next(RocketIncomingVariantCount)],
+                        targetPos,
+                        SoundPriority.TookFire,
+                        maxDistance: 720f,
+                        unitSize: 44f);
+                }
+            }
+
+            float t = rocket.ElapsedTime / rocket.TotalDuration;
+            if (t < 0.28f)
+            {
+                rocket.Contrail.AmountRatio = 1.0f;
+                rocket.Contrail.Emitting = true;
+            }
+            else if (t < 0.34f)
+            {
+                // Brief thinning smolder tail immediately after propellant exhaustion
+                float wisp = 1.0f - (t - 0.28f) / 0.06f;
+                rocket.Contrail.AmountRatio = Math.Clamp(0.18f + 0.82f * wisp, 0.15f, 1.0f);
+                rocket.Contrail.Emitting = true;
+            }
+            else
+            {
+                rocket.Contrail.Emitting = false;
+            }
+        }
+    }
+
+    private void UpdateShockwavePool(float dt)
+    {
+        for (int i = 0; i < MaxShockwaves; i++)
+        {
+            ref TimedMesh tm = ref _shockwaves[i];
+            if (!tm.Active) continue;
+
+            tm.Lifetime -= dt;
+            if (tm.Lifetime <= 0f)
+            {
+                tm.Active = false;
+                tm.Mesh.Visible = false;
+                continue;
+            }
+
+            float t = 1f - (tm.Lifetime / tm.MaxLifetime);
+            // Rapid initial blast wave expansion with smooth deceleration
+            float eased = 1f - (1f - t) * (1f - t);
+            float radius = Mathf.Lerp(tm.InitialScale, tm.TargetScale, eased);
+            tm.Mesh.Scale = new Vector3(radius, radius, 1f);
+            tm.Mesh.Transparency = Mathf.Clamp(t * t, 0f, 1f);
+        }
+    }
+
+    private void UpdateFlashLights(float dt)
+    {
+        for (int i = 0; i < MaxFlashLights; i++)
+        {
+            ref TimedLight tl = ref _flashLights[i];
+            if (!tl.Active) continue;
+
+            tl.Lifetime -= dt;
+            if (tl.Lifetime <= 0f)
+            {
+                tl.Active = false;
+                tl.Light.Visible = false;
+                tl.Light.LightEnergy = 0f;
+                continue;
+            }
+
+            float ratio = tl.Lifetime / tl.MaxLifetime;
+            tl.Light.LightEnergy = tl.InitialEnergy * ratio * ratio;
+        }
+    }
+
+    private int CountActiveRockets()
+    {
+        int count = 0;
+        for (int i = 0; i < MaxRockets; i++)
+        {
+            if (_rockets[i].Active) count++;
+        }
+        return count;
     }
 }

@@ -118,6 +118,14 @@ public sealed class PlayerKnowledge
                 }
             }
 
+            float gunPitchRad = 0f;
+            ArtilleryFlags artilleryFlags = ArtilleryFlags.None;
+            if (world.TryGetArtilleryState(unit.Id, out WorldState.UnitArtilleryState artState))
+            {
+                gunPitchRad = artState.GunPitchRad;
+                artilleryFlags = world.GetArtilleryFlags(unit.Id);
+            }
+
             if (world.TryGetCombatState(unit.Id, out WorldState.CombatState combat))
             {
                 _ownUnits[count++] = new OwnUnitObservation(
@@ -150,7 +158,9 @@ public sealed class PlayerKnowledge
                     hasFlight,
                     slingLoadId,
                     slungById,
-                    flightFlags);
+                    flightFlags,
+                    gunPitchRad,
+                    artilleryFlags);
             }
             else
             {
@@ -178,7 +188,9 @@ public sealed class PlayerKnowledge
                     HasFlightCapability: hasFlight,
                     SlingLoadId: slingLoadId,
                     SlungById: slungById,
-                    FlightFlags: flightFlags);
+                    FlightFlags: flightFlags,
+                    GunPitchRad: gunPitchRad,
+                    ArtilleryFlags: artilleryFlags);
             }
         }
         Count = count;
