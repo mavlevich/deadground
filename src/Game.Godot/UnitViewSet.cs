@@ -165,6 +165,15 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
                 parent.AddChild(view.Root);
                 if (_hasHealthBarBasis) view.FaceHealthBar(_healthBarBasis);
             }
+            if (unit.ContainerId != default)
+            {
+                Selected.Remove(unit.Id);
+                if (view.Root.Visible)
+                {
+                    view.SetContainedHidden();
+                }
+                continue;
+            }
             System.Numerics.Vector2 position = replica.SamplePosition(unit.Id, renderTick);
             float groundY = geometry is not null
                 ? geometry.GetSurfaceHeight(position, unit.SupportSurface)
@@ -179,16 +188,12 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
             }
             int maxHealth = _maxHealthProvider?.Invoke(unit.Definition) ?? GetDefaultMaxHealth(unit.Definition);
             view.UpdateHealth(unit.Health, maxHealth);
-            if (unit.ContainerId != default)
-            {
-                Selected.Remove(unit.Id);
-                view.Root.Visible = false;
-            }
-            else
+            if (!view.Root.Visible)
             {
                 view.Root.Visible = true;
-                view.SetSelected(Selected.Contains(unit.Id));
+                if (_hasHealthBarBasis) view.FaceHealthBar(_healthBarBasis);
             }
+            view.SetSelected(Selected.Contains(unit.Id));
         }
         _removed.Clear();
         foreach (EntityId id in Views.Keys)
@@ -210,7 +215,10 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
         if (_hasHealthBarBasis && _healthBarBasis.IsEqualApprox(cameraBasis)) return;
         _healthBarBasis = cameraBasis;
         _hasHealthBarBasis = true;
-        foreach (UnitView view in Views.Values) view.FaceHealthBar(cameraBasis);
+        foreach (UnitView view in Views.Values)
+        {
+            if (view.Root.Visible) view.FaceHealthBar(cameraBasis);
+        }
     }
 
     internal int UpdateLod(float cameraSize)
@@ -239,13 +247,17 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
     internal void UpdateEffects(double delta)
     {
         foreach (UnitView view in Views.Values)
-            view.UpdateEffects(delta);
+        {
+            if (view.Root.Visible) view.UpdateEffects(delta);
+        }
     }
 
     internal void UpdateRecoil(double delta)
     {
         foreach (UnitView view in Views.Values)
-            view.UpdateRecoil(delta);
+        {
+            if (view.Root.Visible) view.UpdateRecoil(delta);
+        }
     }
 
     internal void ResetRecoil()

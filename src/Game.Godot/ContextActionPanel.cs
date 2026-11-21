@@ -21,20 +21,29 @@ internal sealed partial class ContextActionPanel : PanelContainer
     private readonly Button _boardButton;
     private readonly Button _disembarkHereButton;
     private readonly Button _disembarkButton;
+    private readonly Button _smokeButton;
     private readonly Label _passengerLabel;
     private readonly Label _statusLabel;
-    private readonly UnitCatalog _catalog;
+    private UnitCatalog _catalog;
+
+    public void SetCatalog(UnitCatalog catalog)
+    {
+        _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+        _cachedSelectionCount = -1;
+    }
 
     public ContextTargetingMode TargetingMode { get; private set; } = ContextTargetingMode.None;
 
     internal Button BoardButton => _boardButton;
     internal Button DisembarkHereButton => _disembarkHereButton;
     internal Button DisembarkButton => _disembarkButton;
+    internal Button SmokeButton => _smokeButton;
     internal Label PassengerLabel => _passengerLabel;
     internal Label StatusLabel => _statusLabel;
 
     public event Action<ContextTargetingMode>? TargetingModeChanged;
     public event Action? DisembarkHereRequested;
+    public event Action? DeploySmokeRequested;
 
     // Cached state for zero-allocation steady-state updates
     private int _cachedSelectionCount = -1;
@@ -43,6 +52,11 @@ internal sealed partial class ContextActionPanel : PanelContainer
     private int _cachedPassengerCount = -1;
     private int _cachedPassengerCapacity = -1;
     private EntityId _cachedTransportId;
+    private int _cachedSmokeCapableCount = -1;
+    private int _cachedSmokeReadyCount = -1;
+    private int _cachedSmokeActiveCount = -1;
+    private int _cachedSmokeChargesTotal = -1;
+    private int _cachedSmokeMinCooldownSec = -1;
 
     public ContextActionPanel(UnitCatalog catalog)
     {
@@ -106,6 +120,16 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _disembarkButton.Pressed += OnDisembarkButtonPressed;
         hbox.AddChild(_disembarkButton);
 
+        _smokeButton = new Button
+        {
+            Text = "SMOKE [G]",
+            MouseFilter = MouseFilterEnum.Stop,
+            CustomMinimumSize = new Vector2(130, 32)
+        };
+        _smokeButton.AddThemeFontSizeOverride("font_size", 11);
+        _smokeButton.Pressed += () => DeploySmokeRequested?.Invoke();
+        hbox.AddChild(_smokeButton);
+
         _passengerLabel = new Label
         {
             MouseFilter = MouseFilterEnum.Ignore,
@@ -128,6 +152,7 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _boardButton.Visible = false;
         _disembarkHereButton.Visible = false;
         _disembarkButton.Visible = false;
+        _smokeButton.Visible = false;
         _passengerLabel.Visible = false;
         _statusLabel.Visible = false;
     }
@@ -177,6 +202,11 @@ internal sealed partial class ContextActionPanel : PanelContainer
                 _cachedPassengerCount = -1;
                 _cachedPassengerCapacity = -1;
                 _cachedTransportId = default;
+                _cachedSmokeCapableCount = -1;
+                _cachedSmokeReadyCount = -1;
+                _cachedSmokeActiveCount = -1;
+                _cachedSmokeChargesTotal = -1;
+                _cachedSmokeMinCooldownSec = -1;
                 Visible = false;
             }
             return;
@@ -186,6 +216,11 @@ internal sealed partial class ContextActionPanel : PanelContainer
         bool allInfantry = true;
         bool hasTransport = false;
         OwnUnitObservation singleTransport = default;
+        int smokeCapableCount = 0;
+        int smokeReadyCount = 0;
+        int smokeActiveCount = 0;
+        int smokeChargesTotal = 0;
+        int smokeMinCooldownTicks = int.MaxValue;
 
         foreach (EntityId id in selectedUnits)
         {
@@ -213,11 +248,32 @@ internal sealed partial class ContextActionPanel : PanelContainer
                     singleTransport = obs;
                 }
             }
+
+            if (obs.HasSmokeCapability)
+            {
+                smokeCapableCount++;
+                smokeChargesTotal += obs.SmokeCharges;
+                if (obs.SmokeActive)
+                {
+                    smokeActiveCount++;
+                }
+                else if (obs.SmokeCharges > 0 && obs.SmokeCooldownTicks == 0)
+                {
+                    smokeReadyCount++;
+                }
+                else if (obs.SmokeCharges > 0 && obs.SmokeCooldownTicks > 0 && obs.SmokeCooldownTicks < smokeMinCooldownTicks)
+                {
+                    smokeMinCooldownTicks = obs.SmokeCooldownTicks;
+                }
+            }
         }
 
         int passengerCount = hasTransport && count == 1 ? singleTransport.PassengerCount : -1;
         int passengerCapacity = hasTransport && count == 1 ? singleTransport.PassengerCapacity : -1;
         EntityId transportId = hasTransport && count == 1 ? singleTransport.Id : default;
+        int smokeMinCooldownSec = smokeMinCooldownTicks < int.MaxValue
+            ? (int)MathF.Ceiling(smokeMinCooldownTicks * Simulation.TickSeconds)
+            : 0;
 
         // Skip layout/string updates if unchanged
         if (_cachedSelectionCount == count &&
@@ -225,7 +281,12 @@ internal sealed partial class ContextActionPanel : PanelContainer
             _cachedTargetingMode == TargetingMode &&
             _cachedPassengerCount == passengerCount &&
             _cachedPassengerCapacity == passengerCapacity &&
-            _cachedTransportId == transportId)
+            _cachedTransportId == transportId &&
+            _cachedSmokeCapableCount == smokeCapableCount &&
+            _cachedSmokeReadyCount == smokeReadyCount &&
+            _cachedSmokeActiveCount == smokeActiveCount &&
+            _cachedSmokeChargesTotal == smokeChargesTotal &&
+            _cachedSmokeMinCooldownSec == smokeMinCooldownSec)
         {
             return;
         }
@@ -236,6 +297,37 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _cachedPassengerCount = passengerCount;
         _cachedPassengerCapacity = passengerCapacity;
         _cachedTransportId = transportId;
+        _cachedSmokeCapableCount = smokeCapableCount;
+        _cachedSmokeReadyCount = smokeReadyCount;
+        _cachedSmokeActiveCount = smokeActiveCount;
+        _cachedSmokeChargesTotal = smokeChargesTotal;
+        _cachedSmokeMinCooldownSec = smokeMinCooldownSec;
+
+        bool hasSmokeUi = smokeCapableCount > 0;
+        _smokeButton.Visible = hasSmokeUi;
+        if (hasSmokeUi)
+        {
+            if (smokeReadyCount > 0)
+            {
+                _smokeButton.Disabled = false;
+                _smokeButton.Text = $"SMOKE [G] ({smokeChargesTotal})";
+            }
+            else if (smokeActiveCount > 0)
+            {
+                _smokeButton.Disabled = true;
+                _smokeButton.Text = "LAYING SMOKE...";
+            }
+            else if (smokeChargesTotal > 0 && smokeMinCooldownSec > 0)
+            {
+                _smokeButton.Disabled = true;
+                _smokeButton.Text = $"SMOKE CD {smokeMinCooldownSec}s";
+            }
+            else
+            {
+                _smokeButton.Disabled = true;
+                _smokeButton.Text = "SMOKE (0)";
+            }
+        }
 
         if (allInfantry && count > 0)
         {
@@ -278,6 +370,26 @@ internal sealed partial class ContextActionPanel : PanelContainer
                 _statusLabel.Visible = true;
                 _statusLabel.Text = "Empty transport";
             }
+        }
+        else if (hasSmokeUi)
+        {
+            if (TargetingMode != ContextTargetingMode.None)
+            {
+                CancelTargeting();
+            }
+            Visible = true;
+            _boardButton.Visible = false;
+            _disembarkHereButton.Visible = false;
+            _disembarkButton.Visible = false;
+            _passengerLabel.Visible = false;
+            _statusLabel.Visible = true;
+            _statusLabel.Text = smokeActiveCount > 0
+                ? "Smoke screen active (blocks sight)"
+                : smokeReadyCount > 0
+                    ? "Press G to lay smoke screen"
+                    : smokeChargesTotal > 0
+                        ? $"Smoke recharging ({smokeMinCooldownSec}s)"
+                        : "Smoke charges depleted";
         }
         else
         {

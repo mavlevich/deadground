@@ -63,10 +63,11 @@ public static class TankBattleScenario
         OpsPerceptionCatalog perception = new(catalog);
         NavigationSystem navigation = new(new NavigationGrid(geometry, NavigationTuning.DefaultCellSize,
             enableHierarchical: true), new OpsMovementCatalog(catalog));
-        DetectionSystem detection = new(geometry, perception, PrototypeScenario.CreateDetectionTuning(catalog));
+        SmokeSystem smoke = new(geometry, new OpsSmokeCatalog(catalog));
+        DetectionSystem detection = new(geometry, perception, PrototypeScenario.CreateDetectionTuning(catalog), smokeSystem: smoke);
         CombatSystem combat = new(geometry, new OpsCombatCatalog(catalog), perception, detection, navigation);
         TankBattleDirector director = new(geometry, catalog);
-        Simulation simulation = new(world, new OpsRules(navigation, detection, combat, director), seed);
+        Simulation simulation = new(world, new OpsRules(navigation, smoke, detection, combat, director), seed);
         director.Attach(simulation);
         simulation.SetPlayerAdmitted(1, true);
         simulation.SetPlayerAdmitted(2, true);

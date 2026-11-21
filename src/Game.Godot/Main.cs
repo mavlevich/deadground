@@ -61,6 +61,7 @@ public partial class Main : Node3D
     private uint _lastCommandResult;
     private string _scenario = "prototype";
     private CombatEffects _combatEffects = null!;
+    private SmokeView? _smokeView;
     private MissionPanel? _missionPanel;
     private StaticGeometry? _scenarioGeometry;
     private UnitCatalog _catalog = null!;
@@ -167,6 +168,7 @@ public partial class Main : Node3D
     internal IGameSession Session { get => _session; set => _session = value; }
     internal UnitCatalog Catalog => _catalog;
     internal CombatEffects CombatEffects => _combatEffects;
+    internal SmokeView? SmokeView => _smokeView;
     internal OrderDestinationView DestinationMarker => _destination;
     internal HeightMap Map => _map;
     internal string Scenario => _scenario;
@@ -308,6 +310,7 @@ public partial class Main : Node3D
         string? connectTarget = null;
         string? captureDir = null;
         string? effectsCaptureDir = null;
+        string? smokeCaptureDir = null;
         string? orderPreviewCaptureDir = null;
         float? overrideCameraSize = null;
         Vector3? overrideCameraFocus = null;
@@ -439,6 +442,11 @@ public partial class Main : Node3D
                 else if (args[i] == "--vehicle-effects-capture" && i + 1 < args.Length)
                 {
                     effectsCaptureDir = args[i + 1];
+                    i++;
+                }
+                else if (args[i] == "--smoke-capture" && i + 1 < args.Length)
+                {
+                    smokeCaptureDir = args[i + 1];
                     i++;
                 }
                 else if (args[i] == "--order-preview-capture" && i + 1 < args.Length)
@@ -711,6 +719,7 @@ public partial class Main : Node3D
             {
                 _ustyeMapView.ApplyEnvironmentTints(profile.MaterialTints);
             }
+            _smokeView?.ApplyEnvironment(profile);
         };
 
         if (_benchmarkOverrides.ScreenIndex.HasValue && !SettingsPanel.IsHeadlessDisplay)
@@ -829,6 +838,12 @@ public partial class Main : Node3D
         _wreckViews.UpdateLod(_cameraRig.Size);
         _combatEffects = new CombatEffects(_map, _scenarioGeometry);
         AddChild(_combatEffects);
+        _smokeView = new SmokeView(_map, _scenarioGeometry);
+        if (_environmentView?.ActiveProfile is not null)
+        {
+            _smokeView.ApplyEnvironment(_environmentView.ActiveProfile);
+        }
+        AddChild(_smokeView);
 
         if (!_isMenuMode)
         {
@@ -1028,6 +1043,18 @@ public partial class Main : Node3D
                 if (task.IsFaulted)
                 {
                     GD.PushError($"VEHICLE_EFFECTS_CAPTURE_FAULT: {task.Exception}");
+                    GetTree().Quit(1);
+                }
+            }, System.Threading.Tasks.TaskScheduler.Default);
+        }
+
+        if (smokeCaptureDir is not null)
+        {
+            _ = SmokeVisualProbe.RunCapture(this, smokeCaptureDir).ContinueWith(task =>
+            {
+                if (task.IsFaulted)
+                {
+                    GD.PushError($"SMOKE_VISUAL_CAPTURE_FAULT: {task.Exception}");
                     GetTree().Quit(1);
                 }
             }, System.Threading.Tasks.TaskScheduler.Default);
@@ -1263,6 +1290,7 @@ public partial class Main : Node3D
         _combatEffects.Update(delta);
         _combatEffects.ProcessEvents(_session.Replica.Events, _unitViews, _session.Tick, _contactViews);
         _wreckViews.ProcessEvents(_session.Replica.Events, _session.Tick);
+        _smokeView?.Update((float)delta, _session.Replica, _session.RenderTick);
         _combatEffects.UpdateListener(_cameraRig.Focus);
         _missionPanel?.UpdateMission(_session.Mission, _session.Tick);
 
@@ -1642,6 +1670,7 @@ public partial class Main : Node3D
                 string token = prefix + (ok ? "_OK" : "_FAILED");
                 GD.Print(token);
                 _combatEffects?.Clear();
+                _smokeView?.Clear();
                 _smokeQuitFrames = 0;
                 _smokeExitCode = ok ? 0 : 1;
             }
@@ -2342,6 +2371,13 @@ public partial class Main : Node3D
                 GetViewport().SetInputAsHandled();
                 return;
             }
+
+            if (key.Keycode == Key.G && _unitViews.Selected.Count > 0)
+            {
+                OnDeploySmokeRequested();
+                GetViewport().SetInputAsHandled();
+                return;
+            }
             return;
         }
 
@@ -2932,6 +2968,74 @@ public partial class Main : Node3D
         }
     }
 
+    internal void OnDeploySmokeRequested()
+    {
+        int capable = 0;
+        int deployed = 0;
+        int active = 0;
+        int recharging = 0;
+        int minCooldownTicks = int.MaxValue;
+
+        foreach (EntityId id in _unitViews.Selected)
+        {
+            if (!_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) || !obs.HasSmokeCapability)
+            {
+                continue;
+            }
+
+            capable++;
+            if (obs.SmokeActive)
+            {
+                active++;
+            }
+            else if (obs.SmokeCharges > 0 && obs.SmokeCooldownTicks == 0)
+            {
+                if (_session.DeploySmoke(id))
+                {
+                    deployed++;
+                }
+            }
+            else if (obs.SmokeCharges > 0 && obs.SmokeCooldownTicks > 0)
+            {
+                recharging++;
+                if (obs.SmokeCooldownTicks < minCooldownTicks)
+                {
+                    minCooldownTicks = obs.SmokeCooldownTicks;
+                }
+            }
+        }
+
+        if (capable == 0)
+        {
+            return;
+        }
+
+        string msg;
+        if (deployed > 0)
+        {
+            msg = deployed == 1
+                ? "Tactical smoke screen deployed (1 unit)"
+                : $"Tactical smoke screen deployed ({deployed} units)";
+        }
+        else if (active > 0)
+        {
+            msg = "Smoke screen already active";
+        }
+        else if (recharging > 0)
+        {
+            int sec = (int)MathF.Ceiling(minCooldownTicks * Simulation.TickSeconds);
+            msg = $"Smoke recharging ({sec}s)";
+        }
+        else
+        {
+            msg = "No smoke charges remaining";
+        }
+
+        _orderNotification?.ShowNotification(msg);
+        _status.Text = msg;
+        UpdateSelectionPresentation();
+    }
+
     internal void UpdateViews()
     {
         int selectedUnits = _unitViews.Selected.Count;
@@ -3342,9 +3446,10 @@ public partial class Main : Node3D
         _contextActionPanel.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.BottomLeft);
         _contextActionPanel.OffsetLeft = 24;
         _contextActionPanel.OffsetBottom = -96 - 100 - 8;
-        _contextActionPanel.OffsetTop = -96 - 100 - 8 - 44;
-        _contextActionPanel.OffsetRight = 24 + 380;
+        _contextActionPanel.OffsetTop = -96 - 100 - 8 - 48;
+        _contextActionPanel.OffsetRight = 24 + 420;
         _contextActionPanel.DisembarkHereRequested += OnDisembarkHereRequested;
+        _contextActionPanel.DeploySmokeRequested += OnDeploySmokeRequested;
         canvas.AddChild(_contextActionPanel);
 
         _orderNotification = new OrderNotification();
@@ -3441,6 +3546,7 @@ public partial class Main : Node3D
         _destination.Clear();
         _previewController?.Reset();
         _combatEffects.Clear();
+        _smokeView?.Clear();
         _session.Dispose();
 
         _presentedKind = SelectionPresentationKind.None;
@@ -3524,6 +3630,7 @@ public partial class Main : Node3D
         _orderNotification?.Clear();
         _destination?.Clear();
         _combatEffects?.Clear();
+        _smokeView?.Clear();
         _fogOfWar?.Clear();
         _minimap?.Reset();
         _missionPanel?.ResetUi();
@@ -3557,6 +3664,7 @@ public partial class Main : Node3D
         _map = _scenarioGeometry.HeightMap;
         _matchSetup = BattleScenario.CreateMatchSetup(_scenarioGeometry);
         _catalog = ScenarioContent.LoadCatalog("battle");
+        _contextActionPanel?.SetCatalog(_catalog);
 
         _fogOfWar?.Dispose();
         _fogOfWar = new FogOfWarView(_map, _scenarioGeometry);
@@ -3586,6 +3694,15 @@ public partial class Main : Node3D
         _combatEffects?.QueueFree();
         _combatEffects = new CombatEffects(_map, _scenarioGeometry);
         AddChild(_combatEffects);
+
+        _smokeView?.Clear();
+        _smokeView?.QueueFree();
+        _smokeView = new SmokeView(_map, _scenarioGeometry);
+        if (_environmentView?.ActiveProfile is not null)
+        {
+            _smokeView.ApplyEnvironment(_environmentView.ActiveProfile);
+        }
+        AddChild(_smokeView);
 
         _destinationEvaluator = new DestinationEvaluator(_scenarioGeometry);
         _previewController = new OrderPreviewController(
@@ -3647,6 +3764,7 @@ public partial class Main : Node3D
             _matchSetup = setup;
             _scenarioGeometry = scenarioGeometry;
             _catalog = ScenarioContent.LoadCatalog("battle");
+            _contextActionPanel?.SetCatalog(_catalog);
             Simulation localSimulation = BattleScenario.CreateSimulation(scenarioGeometry);
             _session = new LocalSession(localSimulation, player: 1);
         }
@@ -3712,6 +3830,7 @@ public partial class Main : Node3D
 
         _fogOfWar?.Dispose();
         _fogOfWar = new FogOfWarView(_map, scenarioGeometry);
+        _contextActionPanel?.SetCatalog(_catalog);
         BuildEnvironment(scenarioGeometry);
 
         Vector3 initialFocus = scenarioName switch
@@ -3758,6 +3877,15 @@ public partial class Main : Node3D
         _combatEffects?.QueueFree();
         _combatEffects = new CombatEffects(_map, _scenarioGeometry);
         AddChild(_combatEffects);
+
+        _smokeView?.Clear();
+        _smokeView?.QueueFree();
+        _smokeView = new SmokeView(_map, _scenarioGeometry);
+        if (_environmentView?.ActiveProfile is not null)
+        {
+            _smokeView.ApplyEnvironment(_environmentView.ActiveProfile);
+        }
+        AddChild(_smokeView);
 
         _destinationEvaluator = new DestinationEvaluator(_scenarioGeometry);
         _previewController = new OrderPreviewController(
@@ -4122,6 +4250,7 @@ public partial class Main : Node3D
             SettingsPanel.ActiveBenchmarkOverrides = null;
         }
         _combatEffects?.Clear();
+        _smokeView?.Clear();
         _fogOfWar?.Dispose();
         _missionPanel?.Cleanup();
         _session?.Dispose();

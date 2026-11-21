@@ -49,6 +49,7 @@ public sealed class LocalSession : IGameSession
     public bool SetFireStance(EntityId unit, FireStance stance) => _client.SetFireStance(unit, stance);
     public bool BoardTransport(EntityId unit, EntityId transport) => _client.BoardTransport(unit, transport);
     public bool Disembark(EntityId transport, Vector2 target, uint targetSurface = 0) => _client.Disembark(transport, target, targetSurface);
+    public bool DeploySmoke(EntityId unit, bool hasTarget = false, Vector2 target = default, uint targetSurface = 0) => _client.DeploySmoke(unit, hasTarget, target, targetSurface);
 
     public void Dispose()
     {

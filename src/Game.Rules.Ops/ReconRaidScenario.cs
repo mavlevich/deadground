@@ -347,10 +347,13 @@ public static class ReconRaidScenario
             movCatalog,
             navTuning);
 
+        SmokeSystem smoke = new(geometry, new OpsSmokeCatalog(catalog));
+
         DetectionSystem det = new(
             geometry,
             perCatalog,
-            detTuning ?? PrototypeScenario.CreateDetectionTuning(catalog));
+            detTuning ?? PrototypeScenario.CreateDetectionTuning(catalog),
+            smokeSystem: smoke);
 
         CombatSystem combat = new(geometry, comCatalog, perCatalog, det, nav);
 
@@ -374,7 +377,7 @@ public static class ReconRaidScenario
             timeLimitTicks,
             world.Capacity);
 
-        OpsRules rules = new(nav, det, combat, mission);
+        OpsRules rules = new(nav, smoke, det, combat, mission);
         Simulation sim = new(world, rules, matchSeed);
 
         // Wire simulation reference into bot command sink

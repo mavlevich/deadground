@@ -12,6 +12,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
     private readonly DetectionSystem? _detection;
     private readonly NavigationSystem? _navigation;
     private readonly CombatSystem? _combat;
+    private readonly SmokeSystem? _smoke;
     private readonly IMissionSystem? _mission;
     private readonly DeterministicRandom[] _domainStreams = new DeterministicRandom[4];
 
@@ -31,6 +32,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
     public DetectionSystem? Detection => _detection;
     public NavigationSystem? Navigation => _navigation;
     public CombatSystem? Combat => _combat;
+    public SmokeSystem? Smoke => _smoke;
     public IMissionSystem? Mission => _mission;
     public bool IsMissionFinished => _mission?.IsFinished == true;
     public GroupMoveResult? LastGroupMoveResult { get; private set; }
@@ -43,7 +45,8 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         SetFireStance = 2,
         GroupMove = 3,
         BoardTransport = 4,
-        Disembark = 5
+        Disembark = 5,
+        DeploySmoke = 6
     }
 
     private readonly record struct QueuedCommand(
@@ -54,25 +57,29 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         SetFireStanceCommand SetFireStance,
         GroupMoveCommand GroupMove,
         BoardTransportCommand BoardTransport,
-        DisembarkCommand Disembark)
+        DisembarkCommand Disembark,
+        DeploySmokeCommand DeploySmoke)
     {
         public static QueuedCommand CreateMove(int player, MoveCommand move) =>
-            new(player, CommandKind.Move, move, default, default, default, default, default);
+            new(player, CommandKind.Move, move, default, default, default, default, default, default);
 
         public static QueuedCommand CreateAttack(int player, AttackCommand attack) =>
-            new(player, CommandKind.Attack, default, attack, default, default, default, default);
+            new(player, CommandKind.Attack, default, attack, default, default, default, default, default);
 
         public static QueuedCommand CreateSetFireStance(int player, SetFireStanceCommand stance) =>
-            new(player, CommandKind.SetFireStance, default, default, stance, default, default, default);
+            new(player, CommandKind.SetFireStance, default, default, stance, default, default, default, default);
 
         public static QueuedCommand CreateGroupMove(int player, GroupMoveCommand groupMove) =>
-            new(player, CommandKind.GroupMove, default, default, default, groupMove, default, default);
+            new(player, CommandKind.GroupMove, default, default, default, groupMove, default, default, default);
 
         public static QueuedCommand CreateBoardTransport(int player, BoardTransportCommand board) =>
-            new(player, CommandKind.BoardTransport, default, default, default, default, board, default);
+            new(player, CommandKind.BoardTransport, default, default, default, default, board, default, default);
 
         public static QueuedCommand CreateDisembark(int player, DisembarkCommand disembark) =>
-            new(player, CommandKind.Disembark, default, default, default, default, default, disembark);
+            new(player, CommandKind.Disembark, default, default, default, default, default, disembark, default);
+
+        public static QueuedCommand CreateDeploySmoke(int player, DeploySmokeCommand deploySmoke) =>
+            new(player, CommandKind.DeploySmoke, default, default, default, default, default, default, deploySmoke);
     }
 
     public ulong MatchSeed { get; }
@@ -101,7 +108,9 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         _detection = (_rules as RuleSet)?.FindSystem<DetectionSystem>();
         _navigation = (_rules as RuleSet)?.FindSystem<NavigationSystem>();
         _combat = (_rules as RuleSet)?.FindSystem<CombatSystem>();
+        _smoke = (_rules as RuleSet)?.FindSystem<SmokeSystem>();
         _mission = (_rules as RuleSet)?.FindSystem<IMissionSystem>();
+        _smoke?.EnsureUnitsInitialized(_world);
         for (int i = 0; i < MaxPlayers; i++)
         {
             _pendingGroupMoveResults[i] = new Queue<GroupMoveResult>();
@@ -227,6 +236,33 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
             return false;
 
         _commands[_commandCount++] = QueuedCommand.CreateDisembark(player, command);
+        _lastAccepted[player - 1] = command.Sequence;
+        return true;
+    }
+
+    public bool TryEnqueue(int player, DeploySmokeCommand command)
+    {
+        if (IsMissionFinished) return false;
+        if (player < 1 || player > _lastAccepted.Length || command.Sequence == 0 ||
+            command.Sequence <= _lastAccepted[player - 1] || _commandCount == _commands.Length)
+            return false;
+
+        if (command.HasTarget && !_world.Map.Contains(command.Target))
+            return false;
+
+        if (_smoke is null || !_smoke.CanDeploySmoke(player, command.Unit, _world))
+            return false;
+
+        // Prevent duplicate smoke activation in the same tick for the same unit
+        for (int i = 0; i < _commandCount; i++)
+        {
+            if (_commands[i].Kind == CommandKind.DeploySmoke && _commands[i].DeploySmoke.Unit == command.Unit)
+            {
+                return false;
+            }
+        }
+
+        _commands[_commandCount++] = QueuedCommand.CreateDeploySmoke(player, command);
         _lastAccepted[player - 1] = command.Sequence;
         return true;
     }
@@ -434,6 +470,10 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
                     }
                 }
             }
+            else if (queued.Kind == CommandKind.DeploySmoke)
+            {
+                _smoke?.TryExecuteDeploySmoke(queued.Player, queued.DeploySmoke, _world, Tick);
+            }
             else
             {
                 // A valid accepted movement order cancels an active attack or boarding order on this unit
@@ -611,10 +651,13 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         ReadOnlySpan<WreckObservation> wrecks = _detection is not null
             ? _detection.GetKnownWrecks(knowledge.Player)
             : [];
+        ReadOnlySpan<SmokeCloudObservation> smokeClouds = _detection is not null
+            ? _detection.GetVisibleSmokeClouds(knowledge.Player)
+            : [];
         MissionObservation mission = _mission is not null
             ? _mission.GetObservation(knowledge.Player)
             : default;
-        knowledge.Refresh(_world, contacts, _navigation, events, mission, wrecks);
+        knowledge.Refresh(_world, contacts, _navigation, events, mission, wrecks, smokeClouds);
     }
 
     private readonly bool[] _admittedPlayers = new bool[MaxPlayers];

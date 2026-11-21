@@ -24,16 +24,18 @@ public static class WireProtocol
     public const int SetFireStanceSize = 15;
     public const int CommandResultSize = 11;
     public const int MissionSize = 32;
-    public const int SnapshotHeaderSize = 18 + MissionSize;
-    public const int UnitSize = 45;
+    public const int SnapshotHeaderSize = 20 + MissionSize;
+    public const int UnitSize = 49;
     public const int MaxUnits = 1024;
     public const int ContactSize = 28;
     public const int MaxContacts = 256;
     public const int WreckSize = 22;
     public const int MaxWrecks = 128;
+    public const int SmokeSize = 40;
+    public const int MaxSmokeClouds = WorldState.MaxSmokeClouds;
     public const int EventSize = 40;
     public const int MaxEvents = 64;
-    public const int MaxMessageSize = SnapshotHeaderSize + MaxUnits * UnitSize + MaxContacts * ContactSize + MaxWrecks * WreckSize + MaxEvents * EventSize;
+    public const int MaxMessageSize = SnapshotHeaderSize + MaxUnits * UnitSize + MaxContacts * ContactSize + MaxWrecks * WreckSize + MaxSmokeClouds * SmokeSize + MaxEvents * EventSize;
     public const int HandshakeResponseSize = 5;
     public const int FragmentHeaderSize = 22;
     public const int MaxFragmentPayloadSize = 960;
@@ -44,6 +46,7 @@ public static class WireProtocol
     public const int BoardTransportSize = 18;
     public const int DisembarkSize = 26;
     public const int DisembarkResultSize = 17;
+    public const int DeploySmokeSize = 27;
 
     public const byte MoveKind = 1;
     public const byte SnapshotKind = 2;
@@ -58,6 +61,7 @@ public static class WireProtocol
     public const byte BoardTransportKind = 11;
     public const byte DisembarkKind = 12;
     public const byte DisembarkResultKind = 13;
+    public const byte DeploySmokeKind = 14;
 
     // Yaw in 65536 steps over a full turn: code 32768 is exactly 0, and the quarter turns are exact too.
     // +pi and -pi share code 0.
@@ -511,6 +515,39 @@ public static class WireProtocol
         return true;
     }
 
+    public static void WriteDeploySmoke(Span<byte> bytes, DeploySmokeCommand command)
+    {
+        if (bytes.Length < DeploySmokeSize) throw new ArgumentException("Deploy smoke buffer is too small.");
+        bytes[0] = Version;
+        bytes[1] = DeploySmokeKind;
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[2..], command.Sequence);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[6..], command.ClientTick);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[10..], command.Unit.Value);
+        bytes[14] = command.HasTarget ? (byte)1 : (byte)0;
+        BinaryPrimitives.WriteSingleLittleEndian(bytes[15..], command.HasTarget ? command.Target.X : 0f);
+        BinaryPrimitives.WriteSingleLittleEndian(bytes[19..], command.HasTarget ? command.Target.Y : 0f);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[23..], command.HasTarget ? command.TargetSurface : 0u);
+    }
+
+    public static bool TryReadDeploySmoke(ReadOnlySpan<byte> bytes, out DeploySmokeCommand command)
+    {
+        command = default;
+        if (bytes.Length != DeploySmokeSize || bytes[0] != Version || bytes[1] != DeploySmokeKind) return false;
+        uint sequence = BinaryPrimitives.ReadUInt32LittleEndian(bytes[2..]);
+        int tick = BinaryPrimitives.ReadInt32LittleEndian(bytes[6..]);
+        uint unitId = BinaryPrimitives.ReadUInt32LittleEndian(bytes[10..]);
+        byte hasTargetByte = bytes[14];
+        if (sequence == 0 || tick < 0 || unitId == 0 || hasTargetByte > 1) return false;
+        bool hasTarget = hasTargetByte == 1;
+        Vector2 target = new(
+            BinaryPrimitives.ReadSingleLittleEndian(bytes[15..]),
+            BinaryPrimitives.ReadSingleLittleEndian(bytes[19..]));
+        uint targetSurface = BinaryPrimitives.ReadUInt32LittleEndian(bytes[23..]);
+        if (hasTarget && (!float.IsFinite(target.X) || !float.IsFinite(target.Y))) return false;
+        command = new DeploySmokeCommand(sequence, tick, new EntityId(unitId), hasTarget, hasTarget ? target : default, hasTarget ? targetSurface : 0u);
+        return true;
+    }
+
     public static int WriteSnapshot(
         Span<byte> bytes,
         uint sequence,
@@ -519,10 +556,11 @@ public static class WireProtocol
         ReadOnlySpan<ContactObservation> contacts = default,
         ReadOnlySpan<CombatEventObservation> events = default,
         MissionObservation mission = default,
-        ReadOnlySpan<WreckObservation> wrecks = default)
+        ReadOnlySpan<WreckObservation> wrecks = default,
+        ReadOnlySpan<SmokeCloudObservation> smokeClouds = default)
     {
-        int length = checked(SnapshotHeaderSize + units.Length * UnitSize + contacts.Length * ContactSize + wrecks.Length * WreckSize + events.Length * EventSize);
-        if (units.Length > MaxUnits || contacts.Length > MaxContacts || wrecks.Length > MaxWrecks || events.Length > MaxEvents || bytes.Length < length)
+        int length = checked(SnapshotHeaderSize + units.Length * UnitSize + contacts.Length * ContactSize + wrecks.Length * WreckSize + smokeClouds.Length * SmokeSize + events.Length * EventSize);
+        if (units.Length > MaxUnits || contacts.Length > MaxContacts || wrecks.Length > MaxWrecks || smokeClouds.Length > MaxSmokeClouds || events.Length > MaxEvents || bytes.Length < length)
             throw new ArgumentException("Snapshot buffer is too small or capacity exceeded.");
 
         bytes[0] = Version; bytes[1] = SnapshotKind;
@@ -532,8 +570,9 @@ public static class WireProtocol
         BinaryPrimitives.WriteUInt16LittleEndian(bytes[12..], (ushort)contacts.Length);
         BinaryPrimitives.WriteUInt16LittleEndian(bytes[14..], (ushort)events.Length);
         BinaryPrimitives.WriteUInt16LittleEndian(bytes[16..], (ushort)wrecks.Length);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes[18..], (ushort)smokeClouds.Length);
 
-        Span<byte> missionRecord = bytes.Slice(18, MissionSize);
+        Span<byte> missionRecord = bytes.Slice(20, MissionSize);
         BinaryPrimitives.WriteUInt16LittleEndian(missionRecord, mission.MissionId);
         missionRecord[2] = (byte)mission.Status;
         missionRecord[3] = (byte)mission.EndReason;
@@ -570,6 +609,9 @@ public static class WireProtocol
             BinaryPrimitives.WriteUInt32LittleEndian(record[39..], unit.ContainerId.Value);
             record[43] = unit.PassengerCount;
             record[44] = unit.PassengerCapacity;
+            record[45] = unit.SmokeCharges;
+            BinaryPrimitives.WriteUInt16LittleEndian(record[46..], unit.SmokeCooldownTicks);
+            record[48] = (byte)((unit.HasSmokeCapability ? 1 : 0) | (unit.SmokeActive ? 2 : 0));
         }
 
         int contactsOffset = SnapshotHeaderSize + units.Length * UnitSize;
@@ -603,7 +645,25 @@ public static class WireProtocol
             BinaryPrimitives.WriteUInt16LittleEndian(record[20..], QuantizeYaw(wreck.TurretYaw));
         }
 
-        int eventsOffset = SnapshotHeaderSize + units.Length * UnitSize + contacts.Length * ContactSize + wrecks.Length * WreckSize;
+        int smokeOffset = SnapshotHeaderSize + units.Length * UnitSize + contacts.Length * ContactSize + wrecks.Length * WreckSize;
+        for (int i = 0; i < smokeClouds.Length; i++)
+        {
+            SmokeCloudObservation cloud = smokeClouds[i];
+            Span<byte> record = bytes.Slice(smokeOffset + i * SmokeSize, SmokeSize);
+            BinaryPrimitives.WriteUInt32LittleEndian(record, cloud.Id.Value);
+            BinaryPrimitives.WriteSingleLittleEndian(record[4..], cloud.Position.X);
+            BinaryPrimitives.WriteSingleLittleEndian(record[8..], cloud.Position.Y);
+            BinaryPrimitives.WriteUInt32LittleEndian(record[12..], cloud.SupportSurface);
+            BinaryPrimitives.WriteSingleLittleEndian(record[16..], cloud.Radius);
+            BinaryPrimitives.WriteSingleLittleEndian(record[20..], cloud.Height);
+            BinaryPrimitives.WriteInt32LittleEndian(record[24..], cloud.CreatedTick);
+            BinaryPrimitives.WriteInt32LittleEndian(record[28..], cloud.ExpiresTick);
+            BinaryPrimitives.WriteUInt16LittleEndian(record[32..], cloud.BloomTicks);
+            BinaryPrimitives.WriteUInt16LittleEndian(record[34..], cloud.FadeTicks);
+            BinaryPrimitives.WriteSingleLittleEndian(record[36..], cloud.OpticalDensity);
+        }
+
+        int eventsOffset = smokeOffset + smokeClouds.Length * SmokeSize;
         for (int i = 0; i < events.Length; i++)
         {
             CombatEventObservation ev = events[i];
@@ -688,14 +748,15 @@ public static class WireProtocol
         int contactCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes[12..]);
         int eventCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes[14..]);
         int wreckCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes[16..]);
+        int smokeCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes[18..]);
 
-        if (sequence == 0 || tick < 0 || unitCount > frame.Units.Length || contactCount > frame.Contacts.Length || eventCount > frame.Events.Length || wreckCount > frame.Wrecks.Length)
+        if (sequence == 0 || tick < 0 || unitCount > frame.Units.Length || contactCount > frame.Contacts.Length || eventCount > frame.Events.Length || wreckCount > frame.Wrecks.Length || smokeCount > frame.SmokeClouds.Length)
             return false;
 
-        int expectedLength = checked(SnapshotHeaderSize + unitCount * UnitSize + contactCount * ContactSize + wreckCount * WreckSize + eventCount * EventSize);
+        int expectedLength = checked(SnapshotHeaderSize + unitCount * UnitSize + contactCount * ContactSize + wreckCount * WreckSize + smokeCount * SmokeSize + eventCount * EventSize);
         if (bytes.Length != expectedLength) return false;
 
-        ReadOnlySpan<byte> missionRecord = bytes.Slice(18, MissionSize);
+        ReadOnlySpan<byte> missionRecord = bytes.Slice(20, MissionSize);
         ushort missionId = BinaryPrimitives.ReadUInt16LittleEndian(missionRecord);
         byte statusByte = missionRecord[2];
         byte endReasonByte = missionRecord[3];
@@ -751,11 +812,15 @@ public static class WireProtocol
             uint containerIdVal = BinaryPrimitives.ReadUInt32LittleEndian(record[39..]);
             byte passengerCount = record[43];
             byte passengerCapacity = record[44];
+            byte smokeCharges = record[45];
+            ushort smokeCooldownTicks = BinaryPrimitives.ReadUInt16LittleEndian(record[46..]);
+            byte smokeFlags = record[48];
 
             if (id.Value == 0 || !float.IsFinite(position.X) || !float.IsFinite(position.Y) ||
                 navStatusByte > (byte)PathRequestStatus.WaitingForClearance ||
                 attackStatusByte > (byte)AttackExecutionStatus.TargetLost ||
                 stanceByte > (byte)FireStance.HoldFire ||
+                (smokeFlags & ~3) != 0 ||
                 !frame.Indices.TryAdd(id, i)) return false;
 
             frame.Units[i] = new OwnUnitObservation(
@@ -775,7 +840,11 @@ public static class WireProtocol
                 navOrderSequence,
                 new EntityId(containerIdVal),
                 passengerCount,
-                passengerCapacity);
+                passengerCapacity,
+                smokeCharges,
+                smokeCooldownTicks,
+                (smokeFlags & 1) != 0,
+                (smokeFlags & 2) != 0);
         }
 
         int contactsOffset = SnapshotHeaderSize + unitCount * UnitSize;
@@ -846,7 +915,49 @@ public static class WireProtocol
                 turretYaw);
         }
 
-        int eventsOffset = SnapshotHeaderSize + unitCount * UnitSize + contactCount * ContactSize + wreckCount * WreckSize;
+        int smokeOffset = SnapshotHeaderSize + unitCount * UnitSize + contactCount * ContactSize + wreckCount * WreckSize;
+        frame.SmokeIndices.Clear();
+        for (int i = 0; i < smokeCount; i++)
+        {
+            ReadOnlySpan<byte> record = bytes.Slice(smokeOffset + i * SmokeSize, SmokeSize);
+            SmokeCloudId smokeId = new(BinaryPrimitives.ReadUInt32LittleEndian(record));
+            Vector2 position = new(
+                BinaryPrimitives.ReadSingleLittleEndian(record[4..]),
+                BinaryPrimitives.ReadSingleLittleEndian(record[8..]));
+            uint supportSurface = BinaryPrimitives.ReadUInt32LittleEndian(record[12..]);
+            float radius = BinaryPrimitives.ReadSingleLittleEndian(record[16..]);
+            float height = BinaryPrimitives.ReadSingleLittleEndian(record[20..]);
+            int createdTick = BinaryPrimitives.ReadInt32LittleEndian(record[24..]);
+            int expiresTick = BinaryPrimitives.ReadInt32LittleEndian(record[28..]);
+            ushort bloomTicks = BinaryPrimitives.ReadUInt16LittleEndian(record[32..]);
+            ushort fadeTicks = BinaryPrimitives.ReadUInt16LittleEndian(record[34..]);
+            float opticalDensity = BinaryPrimitives.ReadSingleLittleEndian(record[36..]);
+
+            if (smokeId.Value == 0 ||
+                !float.IsFinite(position.X) || !float.IsFinite(position.Y) ||
+                !float.IsFinite(radius) || radius <= 0f ||
+                !float.IsFinite(height) || height <= 0f ||
+                !float.IsFinite(opticalDensity) || opticalDensity <= 0f ||
+                createdTick < 0 || expiresTick <= createdTick ||
+                !frame.SmokeIndices.TryAdd(smokeId, i))
+            {
+                return false;
+            }
+
+            frame.SmokeClouds[i] = new SmokeCloudObservation(
+                smokeId,
+                position,
+                supportSurface,
+                radius,
+                height,
+                createdTick,
+                expiresTick,
+                bloomTicks,
+                fadeTicks,
+                opticalDensity);
+        }
+
+        int eventsOffset = smokeOffset + smokeCount * SmokeSize;
         for (int i = 0; i < eventCount; i++)
         {
             ReadOnlySpan<byte> record = bytes.Slice(eventsOffset + i * EventSize, EventSize);
@@ -894,6 +1005,7 @@ public static class WireProtocol
         frame.ContactCount = contactCount;
         frame.EventCount = eventCount;
         frame.WreckCount = wreckCount;
+        frame.SmokeCount = smokeCount;
         return true;
     }
 }
@@ -901,7 +1013,7 @@ public static class WireProtocol
 public sealed class SnapshotAssembler
 {
     private readonly byte[] _buffer = new byte[WireProtocol.MaxMessageSize];
-    private readonly bool[] _received = new bool[64];
+    private readonly bool[] _received = new bool[(WireProtocol.MaxMessageSize + WireProtocol.MaxFragmentPayloadSize - 1) / WireProtocol.MaxFragmentPayloadSize];
     private uint _sequence;
     private int _serverTick;
     private int _totalSize;
@@ -957,10 +1069,12 @@ internal sealed class SnapshotFrame
     public readonly ContactObservation[] Contacts;
     public readonly CombatEventObservation[] Events;
     public readonly WreckObservation[] Wrecks;
+    public readonly SmokeCloudObservation[] SmokeClouds;
     public readonly Dictionary<EntityId, int> Indices;
     public readonly Dictionary<ContactId, int> ContactIndices;
     public readonly Dictionary<WreckId, int> WreckIndices;
-    public int Count, ContactCount, EventCount, WreckCount, Tick;
+    public readonly Dictionary<SmokeCloudId, int> SmokeIndices;
+    public int Count, ContactCount, EventCount, WreckCount, SmokeCount, Tick;
     public uint Sequence;
     public MissionObservation Mission;
 
@@ -968,14 +1082,17 @@ internal sealed class SnapshotFrame
         int capacity,
         int contactCapacity = WireProtocol.MaxContacts,
         int eventCapacity = WireProtocol.MaxEvents,
-        int wreckCapacity = WireProtocol.MaxWrecks)
+        int wreckCapacity = WireProtocol.MaxWrecks,
+        int smokeCapacity = WireProtocol.MaxSmokeClouds)
     {
         Units = new OwnUnitObservation[capacity];
         Contacts = new ContactObservation[contactCapacity];
         Events = new CombatEventObservation[eventCapacity];
         Wrecks = new WreckObservation[wreckCapacity];
+        SmokeClouds = new SmokeCloudObservation[smokeCapacity];
         Indices = new Dictionary<EntityId, int>(capacity);
         ContactIndices = new Dictionary<ContactId, int>(contactCapacity);
         WreckIndices = new Dictionary<WreckId, int>(wreckCapacity);
+        SmokeIndices = new Dictionary<SmokeCloudId, int>(smokeCapacity);
     }
 }

@@ -24,5 +24,6 @@ public interface IGameSession : IDisposable
     bool SetFireStance(EntityId unit, FireStance stance);
     bool BoardTransport(EntityId unit, EntityId transport);
     bool Disembark(EntityId transport, System.Numerics.Vector2 target, uint targetSurface = 0);
+    bool DeploySmoke(EntityId unit, bool hasTarget = false, System.Numerics.Vector2 target = default, uint targetSurface = 0);
     void Advance(double elapsedSeconds);
 }

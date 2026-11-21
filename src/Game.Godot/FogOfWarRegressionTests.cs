@@ -21,7 +21,9 @@ internal static class FogOfWarRegressionTests
         CheckTimeBudgetWith40Units();
         CheckCachedViewsheds();
         CheckToggle();
-        GD.Print("FOG_OF_WAR_REGRESSIONS_OK 10/10 passed: flat_range structure_occlusion vegetation_detection battle_soviet_start los_agreement zero_allocations relief_shading budget_40_units cached_viewsheds toggle");
+        CheckUstyeVegetationBudgetAndAgreement();
+        CheckContainedPassengersSkipped();
+        GD.Print("FOG_OF_WAR_REGRESSIONS_OK 12/12 passed: flat_range structure_occlusion vegetation_detection battle_soviet_start los_agreement zero_allocations relief_shading budget_40_units cached_viewsheds toggle ustye_vegetation_budget contained_passengers");
     }
 
     private static void CheckFlatMapRange()
@@ -530,6 +532,160 @@ internal static class FogOfWarRegressionTests
         fog.Toggle();
         Require(fog.IsEnabled, "Toggle() again must re-enable fog of war.");
         Require((bool)fog.Material.GetShaderParameter("fog_enabled"), "Shader parameter fog_enabled must be true after second toggle.");
+    }
+
+    private static void CheckUstyeVegetationBudgetAndAgreement()
+    {
+        StaticGeometry geo = UstyeRaidScenario.CreateStaticGeometry();
+        HeightMap map = geo.HeightMap;
+        UnitCatalog catalog = ScenarioContent.LoadCatalog("ustye-raid");
+        ushort t62Def = catalog.RequireDefinitionIndex("t62");
+        UnitDefinition t62 = catalog.Units[t62Def];
+
+        long bakeStart = System.Diagnostics.Stopwatch.GetTimestamp();
+        using FogOfWarView fog = new(map, geo);
+        double bakeMs = (System.Diagnostics.Stopwatch.GetTimestamp() - bakeStart) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+
+        // 1. Check agreement between baked vegetation grid viewshed and exact StaticGeometry LOS away from fog edges.
+        System.Numerics.Vector2 startPos = UstyeRaidScenario.PlayerTank1Spawn;
+        fog.UpdateUnitNow(startPos, t62.EyeHeight, t62.SensorRange);
+
+        LineOfSightContext context = new();
+        float eyeY = map.GetHeight(startPos.X, startPos.Y) + t62.EyeHeight;
+        System.Numerics.Vector3 eye = new(startPos.X, eyeY, startPos.Y);
+
+        int sampleCount = 0;
+        int agreeCount = 0;
+        int rows = fog.Rows;
+        int cols = fog.Columns;
+        float cellSize = fog.CellSize;
+
+        for (int cz = 5; cz < rows - 5; cz += 5)
+        {
+            for (int cx = 5; cx < cols - 5; cx += 5)
+            {
+                float cellCenterX = (cx + 0.5f) * cellSize;
+                float cellCenterZ = (cz + 0.5f) * cellSize;
+                float dist = System.Numerics.Vector2.Distance(startPos, new System.Numerics.Vector2(cellCenterX, cellCenterZ));
+                if (dist > t62.SensorRange) continue;
+
+                bool viewshedSeen = fog.IsCellSeen(cx, cz);
+                bool nearEdge = false;
+                for (int dz = -1; dz <= 1 && !nearEdge; dz++)
+                {
+                    for (int dx = -1; dx <= 1; dx++)
+                    {
+                        int ncx = cx + dx, ncz = cz + dz;
+                        if (ncx >= 0 && ncx < cols && ncz >= 0 && ncz < rows &&
+                            fog.IsCellSeen(ncx, ncz) != viewshedSeen)
+                        {
+                            nearEdge = true;
+                            break;
+                        }
+                    }
+                }
+                if (nearEdge) continue;
+
+                float targetY = map.GetHeight(cellCenterX, cellCenterZ);
+                System.Numerics.Vector3 target = new(cellCenterX, targetY, cellCenterZ);
+                bool losClear = geo.IsLineOfSightClear(eye, target, context);
+                sampleCount++;
+                if (viewshedSeen == losClear)
+                {
+                    agreeCount++;
+                }
+            }
+        }
+
+        Require(sampleCount >= 150, $"Must evaluate at least 150 Ustye cells away from fog edges, got {sampleCount}.");
+        float agreement = (float)agreeCount / sampleCount;
+
+        // 2. Check moving-vehicle frame budget and zero steady-state allocations on Ustye's 250x250 vegetation map.
+        ClientReplica replica = new();
+        byte[] bytes = new byte[WireProtocol.MaxMessageSize];
+        OwnUnitObservation[] units =
+        [
+            new OwnUnitObservation(new EntityId(701), t62Def, startPos, 0)
+        ];
+        Apply(replica, bytes, 1, 10, units);
+
+        // Warm up JIT and grow the unit's viewshed buffer to steady capacity.
+        RunCycle(fog, replica, catalog);
+        units[0] = units[0] with { Position = startPos + new System.Numerics.Vector2(20f, 0f) };
+        Apply(replica, bytes, 2, 20, units);
+        RunCycle(fog, replica, catalog);
+
+        // Measure a moving resweep cycle: bounded per-frame cost, bounded frame count, 0 managed allocations.
+        units[0] = units[0] with { Position = startPos + new System.Numerics.Vector2(40f, 0f) };
+        Apply(replica, bytes, 3, 30, units);
+
+        int frames = 0;
+        double maxFrameMs = 0.0;
+        double totalMs = 0.0;
+        long allocBefore = GC.GetAllocatedBytesForCurrentThread();
+
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        fog.Update(FogOfWarView.CycleInterval, replica, catalog);
+        double f0Ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        maxFrameMs = f0Ms;
+        totalMs = f0Ms;
+        frames++;
+
+        while (fog.IsCycleInProgress && frames < 60)
+        {
+            long ts = System.Diagnostics.Stopwatch.GetTimestamp();
+            fog.Update(0.016f, replica, catalog);
+            double fMs = (System.Diagnostics.Stopwatch.GetTimestamp() - ts) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            if (fMs > maxFrameMs) maxFrameMs = fMs;
+            totalMs += fMs;
+            frames++;
+        }
+
+        long allocBytes = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
+        GD.Print($"FOG_USTYE_VEG bake_ms={bakeMs:F2} samples={sampleCount} agreed={agreeCount} agreement={agreement * 100f:F2}% frames={frames} max_frame_ms={maxFrameMs:F3} total_ms={totalMs:F3} alloc_bytes={allocBytes}");
+
+        Require(agreement >= 0.90f, $"Ustye vegetation FoW agreement with LineOfSightContext must be at least 90%, got {agreement * 100f:F2}%.");
+        Require(!fog.IsCycleInProgress, $"Moving T-62 sweep on Ustye did not complete within 60 frames.");
+        Require(fog.SweepsInLastCycle == 1, $"Moving T-62 on Ustye must trigger 1 sweep, got {fog.SweepsInLastCycle}.");
+        Require(maxFrameMs < 20.0, $"Moving T-62 on Ustye exceeded per-frame budget guard: max_frame_ms={maxFrameMs:F3} ms (limit 20.0 ms).");
+        Require(allocBytes == 0L, $"Moving T-62 steady-state resweep on Ustye must allocate 0 bytes, got {allocBytes} bytes.");
+    }
+
+    private static void CheckContainedPassengersSkipped()
+    {
+        StaticGeometry geo = InfantryTransportScenario.CreateStaticGeometry();
+        UnitCatalog catalog = ColdWarContent.LoadCatalog();
+        ushort m113Def = catalog.RequireDefinitionIndex("m113a1");
+        ushort riflemanDef = catalog.RequireDefinitionIndex("us_rifleman");
+
+        using FogOfWarView fog = new(geo.HeightMap, geo);
+        ClientReplica replica = new();
+        byte[] bytes = new byte[WireProtocol.MaxMessageSize];
+
+        EntityId apcId = new(1);
+        System.Numerics.Vector2 apcPos = InfantryTransportScenario.UsTransportPos;
+        OwnUnitObservation[] boarded =
+        [
+            new OwnUnitObservation(apcId, m113Def, apcPos, 0, PassengerCount: 4, PassengerCapacity: 11),
+            new OwnUnitObservation(new EntityId(2), riflemanDef, apcPos, 0, ContainerId: apcId),
+            new OwnUnitObservation(new EntityId(3), riflemanDef, apcPos, 0, ContainerId: apcId),
+            new OwnUnitObservation(new EntityId(4), riflemanDef, apcPos, 0, ContainerId: apcId),
+            new OwnUnitObservation(new EntityId(5), riflemanDef, apcPos, 0, ContainerId: apcId),
+        ];
+
+        Apply(replica, bytes, 1, 10, boarded);
+        RunCycle(fog, replica, catalog);
+        Require(fog.SweepsInLastCycle == 1, $"Boarded transport cycle must only sweep the transport (1), got {fog.SweepsInLastCycle}.");
+
+        // Move transport and its 4 passengers together: still only 1 sweep (the transport).
+        System.Numerics.Vector2 movedPos = apcPos + new System.Numerics.Vector2(0f, -20f);
+        for (int i = 0; i < boarded.Length; i++)
+        {
+            boarded[i] = boarded[i] with { Position = movedPos };
+        }
+        Apply(replica, bytes, 2, 20, boarded);
+        RunCycle(fog, replica, catalog);
+        Require(fog.SweepsInLastCycle == 1, $"Moving transport with 4 passengers must only sweep 1 unit, got {fog.SweepsInLastCycle}.");
     }
 
     private static void Apply(ClientReplica replica, byte[] bytes, uint sequence, int tick, OwnUnitObservation[] units)

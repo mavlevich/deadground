@@ -60,6 +60,15 @@ internal sealed partial class RoleBadgeOverlay : Control
             if (!replica.TryGetOwnUnit(id, out OwnUnitObservation obs))
                 continue;
 
+            if (obs.ContainerId != default || !view.Root.Visible)
+            {
+                if (_unitBadges.TryGetValue(id, out RoleBadge? hiddenBadge))
+                {
+                    hiddenBadge.Visible = false;
+                }
+                continue;
+            }
+
             if (!_unitBadges.TryGetValue(id, out RoleBadge? badge))
             {
                 badge = new RoleBadge();

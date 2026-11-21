@@ -220,7 +220,13 @@ public partial class TacticalMinimap : Control
             return;
         }
 
-        RenderedOwnUnitCount = _session.Replica.OwnUnits.Length;
+        ReadOnlySpan<OwnUnitObservation> ownUnits = _session.Replica.OwnUnits;
+        int visibleOwn = 0;
+        for (int i = 0; i < ownUnits.Length; i++)
+        {
+            if (ownUnits[i].ContainerId == default) visibleOwn++;
+        }
+        RenderedOwnUnitCount = visibleOwn;
         ReadOnlySpan<ContactObservation> contacts = _session.Replica.Contacts;
         int current = 0;
         int lastKnown = 0;
@@ -710,6 +716,7 @@ public partial class TacticalMinimap : Control
         for (int i = 0; i < units.Length; i++)
         {
             ref readonly OwnUnitObservation u = ref units[i];
+            if (u.ContainerId != default) continue;
             Vector2 mPos = WorldToMinimap(new Vector2(u.Position.X, u.Position.Y));
 
             // Solid circle for friendly unit
