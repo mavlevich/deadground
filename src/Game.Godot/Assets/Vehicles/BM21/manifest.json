@@ -1,0 +1,637 @@
+{
+  "asset": "BM-21 (2B5) 122 mm MRL on a Ural-375D 6x6 truck, RTS visual study",
+  "configuration": "Simplified launcher for artillery tests: Ural-375D 6x6 chassis with a tall hood between flat-topped wings, high bumper, short all-metal cab, upright spare wheel and deck equipment behind the cab, turntable over the rear bogie with rear jacks, and a 40 tube pack in 4 rows of 10 pointing forward",
+  "units": "meters",
+  "up": "+Y",
+  "forward": "-Z",
+  "right": "+X",
+  "ground_y": 0.0,
+  "node_scale": "1 on every node; no node rotation in the rest pose",
+  "color_authoring": "sRGB hex converted to linear glTF factors",
+  "vertex_colors": "rgb: tint x baked ambient occlusion x panel variation, a: dirt mask",
+  "sources": [
+    "https://ru.wikipedia.org/wiki/%D0%93%D1%80%D0%B0%D0%B4_%28%D0%A0%D0%A1%D0%97%D0%9E%29",
+    "https://ru.wikipedia.org/wiki/%D0%A3%D1%80%D0%B0%D0%BB-375%D0%94",
+    "https://en.wikipedia.org/wiki/BM-21_Grad",
+    "https://truck-encyclopedia.com/coldwar/ussr/BM-21-Grad.php",
+    "https://the-blueprints.com/blueprints/trucks/ural/86698/view/ural-4320_bm-21_grad_122mm",
+    "https://commons.wikimedia.org/wiki/Category:BM-21_Grad_in_museums",
+    "https://commons.wikimedia.org/wiki/File:BM-21_Grad_(3).jpg",
+    "https://vk.ru/@oo_svk-rszo-bm-21-grad"
+  ],
+  "reference_anchors": {
+    "note": "published figures; stations along the length are scaled from a non-factory side view drawing (the-blueprints.com) to these figures",
+    "overall_length_meters": 7.35,
+    "overall_width_meters": 2.4,
+    "travel_height_meters": 3.09,
+    "cab_height_meters": 2.68,
+    "ground_clearance_meters": 0.4,
+    "wheelbase_front_to_first_rear_meters": 3.525,
+    "rear_axle_spacing_meters": 1.4,
+    "wheel_track_meters": 2.0,
+    "tube_length_meters": 3.0,
+    "caliber_meters": 0.122,
+    "conflicts": [
+      "Width: 2,400 mm for the combat vehicle (Russian Wikipedia, Grad MLRS) against 2,690 mm for the Ural-375D truck (Russian Wikipedia, Ural-375D). The body uses 2.40 m; mirrors reach past it.",
+      "Wheel radius 0.61 m comes from the drawing; the tire size for the 375D was not confirmed in text sources.",
+      "Travel height: 3,090 mm is published, but the drawing, a side photo and a travel position photo show the pack top about level with the 2.68 m cab roof. The model follows the drawing and photos, so its measured height is lower than the published figure."
+    ]
+  },
+  "measured": {
+    "bounds_min": [
+      -1.33,
+      0.0,
+      -3.705
+    ],
+    "bounds_max": [
+      1.33,
+      2.73,
+      3.675
+    ],
+    "overall_length_meters": 7.38,
+    "overall_width_meters": 2.66,
+    "travel_height_meters": 2.73,
+    "lowest_point_meters": 0.0,
+    "cab_roof_meters": 2.68,
+    "tube_length_meters": 3.0
+  },
+  "rig": {
+    "TurretYaw": {
+      "role": "launcher turntable",
+      "position": [
+        0.0,
+        1.45,
+        2.4
+      ],
+      "axis": "+Y",
+      "traverse_left_degrees": 102.0,
+      "traverse_right_degrees": 70.0,
+      "rotation_y_range_degrees": [
+        -70.0,
+        102.0
+      ],
+      "traverse_verified": true,
+      "traverse_source": "https://vk.ru/@oo_svk-rszo-bm-21-grad",
+      "traverse_conflict": "the same source also gives 110 degrees left in a later paragraph; 102 left and 70 right appear in more sources",
+      "note": "positive rotation about +Y turns the pack to the left"
+    },
+    "GunPitch": {
+      "role": "pack elevation trunnions",
+      "parent": "TurretYaw",
+      "local_position": [
+        0.0,
+        0.35,
+        0.62
+      ],
+      "rest_world_position": [
+        0.0,
+        1.8,
+        3.02
+      ],
+      "axis": "+X",
+      "rotation_x_range_degrees": [
+        0.0,
+        55.0
+      ],
+      "note": "positive rotation about +X raises the pack front; 0 to 55 degrees is published",
+      "min_elevation_sectors": [
+        {
+          "rotation_y_range_degrees": [
+            -34.0,
+            34.0
+          ],
+          "min_elevation_degrees": 11.0,
+          "reason": "firing sector over the cab: below this elevation the rockets would pass through the cab",
+          "source_wording": "the source gives a horizontal sector of up to 34 degrees over the cab; read as 34 degrees each side, which matches this geometry (zero elevation clears the cab from about 32 degrees off the axis)"
+        }
+      ]
+    },
+    "Muzzle": {
+      "parent": "GunPitch",
+      "role": "generic effect anchor at the pack front center",
+      "local_position": [
+        0.0,
+        0.5035,
+        -2.79
+      ]
+    },
+    "launch_points": {
+      "parent": "GunPitch",
+      "count": 40,
+      "bore_axis": "-Z of GunPitch",
+      "naming": "Launch_NN, NN = row * 10 + column + 1; row 0 is the top row, column 0 is the left column",
+      "points": [
+        {
+          "name": "Launch_01",
+          "row": 0,
+          "column": 0,
+          "local_position": [
+            -0.711,
+            0.753,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_02",
+          "row": 0,
+          "column": 1,
+          "local_position": [
+            -0.553,
+            0.753,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_03",
+          "row": 0,
+          "column": 2,
+          "local_position": [
+            -0.395,
+            0.753,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_04",
+          "row": 0,
+          "column": 3,
+          "local_position": [
+            -0.237,
+            0.753,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_05",
+          "row": 0,
+          "column": 4,
+          "local_position": [
+            -0.079,
+            0.753,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_06",
+          "row": 0,
+          "column": 5,
+          "local_position": [
+            0.079,
+            0.753,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_07",
+          "row": 0,
+          "column": 6,
+          "local_position": [
+            0.237,
+            0.753,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_08",
+          "row": 0,
+          "column": 7,
+          "local_position": [
+            0.395,
+            0.753,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_09",
+          "row": 0,
+          "column": 8,
+          "local_position": [
+            0.553,
+            0.753,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_10",
+          "row": 0,
+          "column": 9,
+          "local_position": [
+            0.711,
+            0.753,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_11",
+          "row": 1,
+          "column": 0,
+          "local_position": [
+            -0.711,
+            0.595,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_12",
+          "row": 1,
+          "column": 1,
+          "local_position": [
+            -0.553,
+            0.595,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_13",
+          "row": 1,
+          "column": 2,
+          "local_position": [
+            -0.395,
+            0.595,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_14",
+          "row": 1,
+          "column": 3,
+          "local_position": [
+            -0.237,
+            0.595,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_15",
+          "row": 1,
+          "column": 4,
+          "local_position": [
+            -0.079,
+            0.595,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_16",
+          "row": 1,
+          "column": 5,
+          "local_position": [
+            0.079,
+            0.595,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_17",
+          "row": 1,
+          "column": 6,
+          "local_position": [
+            0.237,
+            0.595,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_18",
+          "row": 1,
+          "column": 7,
+          "local_position": [
+            0.395,
+            0.595,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_19",
+          "row": 1,
+          "column": 8,
+          "local_position": [
+            0.553,
+            0.595,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_20",
+          "row": 1,
+          "column": 9,
+          "local_position": [
+            0.711,
+            0.595,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_21",
+          "row": 2,
+          "column": 0,
+          "local_position": [
+            -0.711,
+            0.437,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_22",
+          "row": 2,
+          "column": 1,
+          "local_position": [
+            -0.553,
+            0.437,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_23",
+          "row": 2,
+          "column": 2,
+          "local_position": [
+            -0.395,
+            0.437,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_24",
+          "row": 2,
+          "column": 3,
+          "local_position": [
+            -0.237,
+            0.437,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_25",
+          "row": 2,
+          "column": 4,
+          "local_position": [
+            -0.079,
+            0.437,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_26",
+          "row": 2,
+          "column": 5,
+          "local_position": [
+            0.079,
+            0.437,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_27",
+          "row": 2,
+          "column": 6,
+          "local_position": [
+            0.237,
+            0.437,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_28",
+          "row": 2,
+          "column": 7,
+          "local_position": [
+            0.395,
+            0.437,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_29",
+          "row": 2,
+          "column": 8,
+          "local_position": [
+            0.553,
+            0.437,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_30",
+          "row": 2,
+          "column": 9,
+          "local_position": [
+            0.711,
+            0.437,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_31",
+          "row": 3,
+          "column": 0,
+          "local_position": [
+            -0.711,
+            0.279,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_32",
+          "row": 3,
+          "column": 1,
+          "local_position": [
+            -0.553,
+            0.279,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_33",
+          "row": 3,
+          "column": 2,
+          "local_position": [
+            -0.395,
+            0.279,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_34",
+          "row": 3,
+          "column": 3,
+          "local_position": [
+            -0.237,
+            0.279,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_35",
+          "row": 3,
+          "column": 4,
+          "local_position": [
+            -0.079,
+            0.279,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_36",
+          "row": 3,
+          "column": 5,
+          "local_position": [
+            0.079,
+            0.279,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_37",
+          "row": 3,
+          "column": 6,
+          "local_position": [
+            0.237,
+            0.279,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_38",
+          "row": 3,
+          "column": 7,
+          "local_position": [
+            0.395,
+            0.279,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_39",
+          "row": 3,
+          "column": 8,
+          "local_position": [
+            0.553,
+            0.279,
+            -2.79
+          ]
+        },
+        {
+          "name": "Launch_40",
+          "row": 3,
+          "column": 9,
+          "local_position": [
+            0.711,
+            0.279,
+            -2.79
+          ]
+        }
+      ],
+      "firing_order": [
+        "Launch_01",
+        "Launch_10",
+        "Launch_02",
+        "Launch_09",
+        "Launch_03",
+        "Launch_08",
+        "Launch_04",
+        "Launch_07",
+        "Launch_05",
+        "Launch_06",
+        "Launch_11",
+        "Launch_20",
+        "Launch_12",
+        "Launch_19",
+        "Launch_13",
+        "Launch_18",
+        "Launch_14",
+        "Launch_17",
+        "Launch_15",
+        "Launch_16",
+        "Launch_21",
+        "Launch_30",
+        "Launch_22",
+        "Launch_29",
+        "Launch_23",
+        "Launch_28",
+        "Launch_24",
+        "Launch_27",
+        "Launch_25",
+        "Launch_26",
+        "Launch_31",
+        "Launch_40",
+        "Launch_32",
+        "Launch_39",
+        "Launch_33",
+        "Launch_38",
+        "Launch_34",
+        "Launch_37",
+        "Launch_35",
+        "Launch_36"
+      ],
+      "firing_order_note": "authoring choice for effects, not historical data: rows top to bottom, outer tubes inward, alternating left and right"
+    },
+    "wheels": {
+      "left_parent": "LeftTrack",
+      "right_parent": "RightTrack",
+      "axle_z": [
+        -2.375,
+        1.15,
+        2.55
+      ],
+      "motion_mesh_pattern": "*_Motion_*"
+    }
+  },
+  "lods": [
+    {
+      "file": "bm21.glb",
+      "triangles": 9638,
+      "vertices": 11230,
+      "mesh_parts": 21,
+      "materials": 7,
+      "bytes": 642492,
+      "lod": 0,
+      "role": "close",
+      "triangle_budget": 14000
+    },
+    {
+      "file": "bm21_lod1.glb",
+      "triangles": 3500,
+      "vertices": 4467,
+      "mesh_parts": 20,
+      "materials": 7,
+      "bytes": 255248,
+      "lod": 1,
+      "role": "rts",
+      "triangle_budget": 4000
+    },
+    {
+      "file": "bm21_lod2.glb",
+      "triangles": 780,
+      "vertices": 1229,
+      "mesh_parts": 12,
+      "materials": 6,
+      "bytes": 76512,
+      "lod": 2,
+      "role": "distant",
+      "triangle_budget": 800
+    }
+  ],
+  "track_gauge_meters": 2.0,
+  "track_wrap_meters": 1000.345932756062,
+  "simplifications": [
+    "Layout follows published dimensions; part shapes and small details are simplified for readability.",
+    "Cab, hood, wings and launcher base follow the drawing and photos in simplified flat panels; no curved stampings.",
+    "Tube spacing and pack width are measured from the drawing front view (about 1.58 m for 10 tubes), not from a published figure.",
+    "No markings, number plates, crew, tarps or stowed rockets.",
+    "LOD2 renders the tube pack as one block with dark tube mouth strips.",
+    "Single tires on all axles; tread lugs on LOD0 only."
+  ],
+  "unsupported_motions": [
+    "Suspension travel and front wheel steering.",
+    "Doors.",
+    "Rear stabilizing jacks are modeled stowed and do not deploy. Sources disagree whether the BM-21 has rear jacks or only a spring lockout; the photos show vertical fittings at the rear corners.",
+    "No recoil node: the client fallback recoil would shift the whole model, so firing effects should not call it for this launcher.",
+    "No rocket geometry or reload animation."
+  ],
+  "clearance": {
+    "pack_reach_meters": 2.3183,
+    "turntable_to_spare_wheel_meters": 2.47,
+    "rule": "In travel position the pack lies on the carriage, points forward and ends behind the spare wheel. Its front corners stay clear of the spare wheel and cab at every traverse angle, because the reach from the traverse axis is shorter than the distance to them."
+  }
+}

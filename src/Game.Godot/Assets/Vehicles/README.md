@@ -41,3 +41,71 @@ every material except markings and optics. Running gear meshes (`*_Motion_*`) ge
 `vehicle_weathering_motion.gdshader`, which turns wheels and moves track links from a per-instance
 `track_travel` value. Keep import compression, automatic LOD generation and shadow meshes off for
 these files: running gear meshes store motion data in UV and UV2 at full precision.
+
+## BM-21 launcher (artillery test asset)
+
+`BM21/` holds a simplified BM-21 (2B5) 122 mm multiple rocket launcher on a Ural-375D 6x6 truck.
+It is a test asset for artillery work. The priority is recognizable proportions and readability
+from the game camera. Dimensions follow published figures (length 7.35 m, width 2.40 m, travel
+height 3.09 m, ground clearance 0.40 m, cab height 2.68 m, wheelbase 3.525 + 1.40 m, track 2.0 m,
+3.0 m tubes, maximum elevation 55 degrees). The layout and silhouette follow a side, front and rear
+view drawing of the Ural-4320 BM-21 (same cab, hood and launcher) and museum photos of the BM-21 on
+the Ural-375D. Sources and data conflicts are listed in `BM21/manifest.json`.
+
+The turntable sits over the rear bogie and carries a low upper carriage. The trunnions are at the
+rear end of the cradle, about 1.8 m above the ground. In travel position the pack lies on the
+carriage, points forward, and its top is about level with the 2.68 m cab roof, with the tube mouths
+behind the spare wheel. This follows the drawing and the photos; the published 3.09 m travel height
+is higher, and the conflict is recorded in the manifest. The front end is the Ural form: a tall
+wide hood between flat-topped wings with the headlights in the wing fronts, a high square bumper
+and a short tall cab. Laying limits follow a description of the launcher: elevation 0 to 55
+degrees, traverse 102 degrees left and 70 degrees right, and a minimum elevation of 11 degrees
+within 34 degrees either side of the axis, over the cab. The elevating gear sits at the center of
+the base and meshes with a toothed sector under the cradle, which turns down into a slot in the
+carriage.
+
+Regenerate from the repository root with `python3 tools/model-authoring/build_bm21.py`. The output
+is deterministic. Run the checks with `python3 -B -m unittest tools/model-authoring/test_bm21.py`.
+They cover triangle budgets, rig nodes, launch points, ground contact, measured dimensions against the
+published figures, the travel layout, pack clearance against every tall chassis part over the whole
+traverse and elevation range, and that the committed files match the generator. Review images
+(orthographic views, LODs, launcher limits, a BTR-70 comparison and game camera views at true
+pixel scale) come from
+`python3 tools/model-authoring/render_review.py --out <folder>`, a z-buffered software renderer
+(numpy and matplotlib) that needs no Godot window.
+
+| LOD | File | Triangle budget |
+| --- | --- | --- |
+| 0 | `bm21.glb` | 14,000 |
+| 1 | `bm21_lod1.glb` | 4,000 |
+| 2 | `bm21_lod2.glb` | 800 |
+
+Measured counts, dimensions, the rig and the lists of simplifications and unsupported motions are
+in `BM21/manifest.json`. Import settings match the other vehicles (`Shared/vehicle_import.gd`, no
+compression, no automatic LOD, no shadow meshes).
+
+### Integration contract
+
+The asset is not wired into `visuals.json` or any catalog yet. A later PR that connects it should
+rely on these points only:
+
+- Axes and scale: meters, +Y up, -Z forward, +X right, ground at Y=0. All nodes have unit scale and
+  no rotation in the rest pose. Visual scale in `visuals.json` should stay 0.75 like other vehicles.
+- `TurretYaw`: launcher turntable, rotates about +Y. Positive rotation turns the pack to the left.
+  Limits come from `rig.TurretYaw.rotation_y_range_degrees` in the manifest (-70 to +102).
+- `GunPitch`: child of `TurretYaw`, the pack trunnions, rotates about +X. Positive rotation raises
+  the pack front. Limits come from `rig.GunPitch.rotation_x_range_degrees` (0 to 55).
+- `rig.GunPitch.min_elevation_sectors`: inside the listed `TurretYaw` range (-34 to +34 degrees,
+  the sector over the cab) the elevation must not go below 11 degrees, or the rockets would pass
+  through the cab. Firing and laying code must clamp to it; the tests check that the geometry agrees.
+- `Launch_01` to `Launch_40`: children of `GunPitch`, one at each tube mouth, with the bore along
+  local -Z of `GunPitch`. `Launch_01` is the top left tube, `Launch_40` the bottom right.
+  The ripple sequence for effects is `rig.launch_points.firing_order`; do not derive it from names.
+- `Muzzle`: child of `GunPitch` at the pack front center. It stays the generic effect anchor that
+  `UnitView` and `ContactView` already look up.
+- There is no `BarrelRecoil`. The client fallback recoil moves the whole model, so the firing
+  path should not apply recoil to this launcher.
+- Wheels are `*_Motion_*` meshes under `LeftTrack` and `RightTrack`. Use `track_gauge_meters` and
+  `track_wrap_meters` from the manifest for the `visuals.json` entry.
+- Node names and transforms of the rig and all launch points are identical in every LOD, so LOD
+  switches never move an effect anchor.
