@@ -43,6 +43,8 @@ public sealed class DetectionSystem : ISimulationSystem
     private readonly float[] _unitTurretYaws;
     private readonly float[] _unitHullHeadings;
     private readonly uint[] _unitSupportSurfaces;
+    private readonly float[] _unitAltitudes;
+    private readonly FlightPhase[] _unitFlightPhases;
     private readonly int _maxUnits;
     private readonly int _wordsPerSide;
 
@@ -119,6 +121,8 @@ public sealed class DetectionSystem : ISimulationSystem
         _unitTurretYaws = new float[maxUnits];
         _unitHullHeadings = new float[maxUnits];
         _unitSupportSurfaces = new uint[maxUnits];
+        _unitAltitudes = new float[maxUnits];
+        _unitFlightPhases = new FlightPhase[maxUnits];
     }
 
     public void Update(WorldState world, int tick)
@@ -146,7 +150,17 @@ public sealed class DetectionSystem : ISimulationSystem
             _unitPositions[i] = u.Position;
             _unitSupportSurfaces[i] = u.SupportSurface;
             float groundY = _geometry.GetSurfaceHeight(u.Position, u.SupportSurface);
-            _unitGroundHeights[i] = groundY;
+            float altitude = 0f;
+            FlightPhase flightPhase = FlightPhase.Ground;
+            if (world.TryGetFlightState(u.Id, out WorldState.UnitFlightState fs) && fs.HasCapability)
+            {
+                altitude = fs.Altitude;
+                flightPhase = fs.Phase;
+            }
+            _unitAltitudes[i] = altitude;
+            _unitFlightPhases[i] = flightPhase;
+            float baseElevationY = groundY + altitude;
+            _unitGroundHeights[i] = baseElevationY;
             _unitOwners[i] = u.Owner;
             _unitTeams[i] = world.GetPlayerTeam(u.Owner);
             _unitDefinitions[i] = u.Definition;
@@ -166,11 +180,11 @@ public sealed class DetectionSystem : ISimulationSystem
             if (_catalog.TryGetProfile(u.Definition, out UnitPerceptionProfile profile))
             {
                 _unitClassifications[i] = profile.Classification;
-                if (profile.Sensor is not null)
+                if (profile.Sensor is not null && flightPhase != FlightPhase.Crashing)
                 {
                     _unitHasSensor[i] = true;
                     _unitSensorRange[i] = profile.Sensor.Range;
-                    _unitEyePos[i] = new Vector3(u.Position.X, groundY + profile.Sensor.EyeHeight, u.Position.Y);
+                    _unitEyePos[i] = new Vector3(u.Position.X, baseElevationY + profile.Sensor.EyeHeight, u.Position.Y);
                 }
                 else
                 {
@@ -181,7 +195,7 @@ public sealed class DetectionSystem : ISimulationSystem
                 {
                     _unitTargetPoints[i] = profile.TargetPoints;
                     float topRelY = profile.TargetPoints.RelativeHeights[^1];
-                    _unitTopTargetPoint[i] = new Vector3(u.Position.X, groundY + topRelY, u.Position.Y);
+                    _unitTopTargetPoint[i] = new Vector3(u.Position.X, baseElevationY + topRelY, u.Position.Y);
                 }
                 else
                 {
@@ -311,7 +325,9 @@ public sealed class DetectionSystem : ISimulationSystem
                             targetType,
                             _unitTurretYaws[targetUnitIndex],
                             _unitHullHeadings[targetUnitIndex],
-                            _unitSupportSurfaces[targetUnitIndex]);
+                            _unitSupportSurfaces[targetUnitIndex],
+                            _unitAltitudes[targetUnitIndex],
+                            _unitFlightPhases[targetUnitIndex]);
                         _observedCounts[sideIndex] = count + 1;
                     }
 

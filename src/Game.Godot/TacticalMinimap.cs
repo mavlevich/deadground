@@ -460,6 +460,7 @@ public partial class TacticalMinimap : Control
             ContactClassification.Command or ContactClassification.CommandVehicle => "Command",
             ContactClassification.Apc => "APC",
             ContactClassification.Infantry => "Infantry",
+            ContactClassification.Helicopter => "Helicopter",
             _ => "Vehicle"
         };
     }

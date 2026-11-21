@@ -80,7 +80,8 @@ internal sealed partial class RoleBadgeOverlay : Control
             int groupNumber = unitViews.GetLowestControlGroup(id);
             badge.BindUnit(id, roleText, groupNumber);
 
-            Vector3 worldPos = view.Root.Position + Vector3.Up * 2.8f;
+            float badgeElevation = (view.IsHelicopter ? 6.2f : 2.8f) + view.Altitude;
+            Vector3 worldPos = view.Root.Position + Vector3.Up * badgeElevation;
             if (camera.IsPositionBehind(worldPos))
             {
                 badge.Visible = false;
@@ -132,7 +133,7 @@ internal sealed partial class RoleBadgeOverlay : Control
 
             float heightOffset = view.Observation.State == ContactState.LastKnown
                 ? 2.2f
-                : 2.8f;
+                : (view.Observation.Classification == ContactClassification.Helicopter ? 6.2f : 2.8f) + view.Altitude;
 
             Vector3 worldPos = view.Root.Position + Vector3.Up * heightOffset;
             if (camera.IsPositionBehind(worldPos))
@@ -223,6 +224,7 @@ internal sealed partial class RoleBadgeOverlay : Control
                     "apc" => "APC",
                     "command_vehicle" => "CMD",
                     "infantry" => "INF",
+                    "helicopter" => "HELI",
                     _ => def.Classification.ToUpperInvariant()
                 };
             }
@@ -238,6 +240,7 @@ internal sealed partial class RoleBadgeOverlay : Control
             ContactClassification.CommandVehicle => "CMD",
             ContactClassification.Vehicle => "VEH",
             ContactClassification.Infantry => "INF",
+            ContactClassification.Helicopter => "HELI",
             _ => "UNIT"
         };
     }

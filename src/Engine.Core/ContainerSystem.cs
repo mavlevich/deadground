@@ -38,8 +38,8 @@ public sealed class ContainerSystem : ISimulationSystem
                 continue;
             }
 
-            // If transport began moving while soldier was approaching, cancel boarding
-            if (transport.Moving)
+            // If transport began moving or took off while soldier was approaching, cancel boarding
+            if (transport.Moving || world.IsAirborne(transport.Id))
             {
                 world.ClearBoardingOrder(unit.Id);
                 _navigation?.ClearUnit(unit.Id);

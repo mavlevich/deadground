@@ -242,6 +242,16 @@ public sealed class ClientSession : IGameSession
         return true;
     }
 
+    public bool OrderHelicopter(EntityId unit, HelicopterOrderKind kind, AltitudeBand altitudeBand = AltitudeBand.High, bool hasTarget = false, Vector2 target = default)
+    {
+        if (State != SessionConnectionState.Connected) return false;
+        HelicopterCommand command = new(_nextCommand, Replica.LatestTick, unit, kind, altitudeBand, hasTarget, target);
+        WireProtocol.WriteHelicopter(_command, command);
+        if (!_transport.TrySend(_command.AsSpan(0, WireProtocol.HelicopterSize))) return false;
+        _nextCommand = checked(_nextCommand + 1);
+        return true;
+    }
+
     private void Poll()
     {
         _transport.Poll(MaxMessagesPerPoll);

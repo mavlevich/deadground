@@ -97,7 +97,8 @@ string[] validScenarios =
     "ustye-raid",
     "forest-visibility",
     "infantry-playground",
-    "infantry-transport"
+    "infantry-transport",
+    "helicopter-playground"
 ];
 
 if (!validScenarios.Contains(scenario))
@@ -127,6 +128,7 @@ StaticGeometry? scenarioGeometry = scenario switch
     "forest-visibility" => ForestVisibilityScenario.CreateStaticGeometry(),
     "infantry-playground" => InfantryPlaygroundScenario.CreateStaticGeometry(),
     "infantry-transport" => InfantryTransportScenario.CreateStaticGeometry(),
+    "helicopter-playground" => HelicopterPlaygroundScenario.CreateStaticGeometry(),
     "prototype" => null,
     _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
 };
@@ -150,6 +152,7 @@ MatchSetup setup = scenario switch
     "forest-visibility" => ForestVisibilityScenario.CreateMatchSetup(scenarioGeometry!),
     "infantry-playground" => InfantryPlaygroundScenario.CreateMatchSetup(scenarioGeometry!),
     "infantry-transport" => InfantryTransportScenario.CreateMatchSetup(scenarioGeometry!),
+    "helicopter-playground" => HelicopterPlaygroundScenario.CreateMatchSetup(scenarioGeometry!),
     "prototype" => PrototypeScenario.CreateMatchSetup(map),
     _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
 };
@@ -185,6 +188,7 @@ Simulation CreateSimulation(ulong seed = 0)
         "forest-visibility" => ForestVisibilityScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "infantry-playground" => InfantryPlaygroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "infantry-transport" => InfantryTransportScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
+        "helicopter-playground" => HelicopterPlaygroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "prototype" => PrototypeScenario.Create(map),
         _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
     };
@@ -358,6 +362,26 @@ if (smokeTest)
             throw new InvalidOperationException($"Infantry-transport smoke test: rifleman failed to disembark. container={rifleman.ContainerId}");
 
         Console.WriteLine($"INFANTRY_TRANSPORT_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} board_disembark=true");
+        return;
+    }
+
+    if (scenario == "helicopter-playground")
+    {
+        for (int i = 0; i < 20; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.Replica.OwnUnits.Length != 6)
+            throw new InvalidOperationException($"Helicopter-playground smoke test: expected 6 own units, got {session.Replica.OwnUnits.Length}.");
+
+        EntityId heliId = session.Replica.OwnUnits[0].Id;
+        session.Move(heliId, HelicopterPlaygroundScenario.SouthLandingZone);
+        for (int i = 0; i < 200; i++) session.Advance(1d / Simulation.TickRate);
+        if (!session.Replica.TryGetOwnUnit(heliId, out OwnUnitObservation heliObs) ||
+            heliObs.FlightPhase != FlightPhase.Airborne ||
+            heliObs.Altitude < 10f)
+        {
+            throw new InvalidOperationException($"Helicopter-playground smoke test: Chinook did not take off and fly. phase={heliObs.FlightPhase} alt={heliObs.Altitude:F1}");
+        }
+
+        Console.WriteLine($"HELICOPTER_PLAYGROUND_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} alt={heliObs.Altitude:F1}");
         return;
     }
 

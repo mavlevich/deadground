@@ -226,6 +226,27 @@ public sealed class WorldState : IDisposable
         Vector2 LastCloudPosition,
         int LastCloudTick);
 
+    public record struct UnitFlightState(
+        bool Initialized,
+        bool HasCapability,
+        FlightPhase Phase,
+        AltitudeBand DesiredBand,
+        float Altitude,
+        Vector2 Velocity,
+        Vector2 TargetPosition,
+        bool HasMoveTarget,
+        bool LandOnArrival,
+        bool HasFinalFacing,
+        float FinalFacing,
+        float PitchRad,
+        float RollRad,
+        float CrashSpinVelocity,
+        int CrashTicks,
+        EntityId CrashKillerId,
+        ushort CrashKillerDefinition,
+        int CrashKillerOwner,
+        float CrashShotDistance);
+
     public EntityId CreateUnit(
         int owner,
         ushort definition,
@@ -260,7 +281,7 @@ public sealed class WorldState : IDisposable
             initialTurretYaw,
             initialTurretYaw);
         Entity entity = _storage.Create(new Identity(id, owner, definition),
-            new Position(position), new Motion(position, speed, false, initialSupportSurface), combat, default(UnitSmokeState));
+            new Position(position), new Motion(position, speed, false, initialSupportSurface), combat, default(UnitSmokeState), default(UnitFlightState));
         _entities[Count] = entity;
         _indices.Add(id, Count++);
 
@@ -581,6 +602,36 @@ public sealed class WorldState : IDisposable
         _storage.Get<UnitSmokeState>(_entities[index]) = smoke;
         return true;
     }
+
+    public bool TryGetFlightState(EntityId id, out UnitFlightState flight)
+    {
+        if (_indices.TryGetValue(id, out int index))
+        {
+            flight = _storage.Get<UnitFlightState>(_entities[index]);
+            return true;
+        }
+        flight = default;
+        return false;
+    }
+
+    public bool SetFlightState(EntityId id, in UnitFlightState flight)
+    {
+        if (!_indices.TryGetValue(id, out int index)) return false;
+        _storage.Get<UnitFlightState>(_entities[index]) = flight;
+        return true;
+    }
+
+    public bool IsAircraft(EntityId id) =>
+        TryGetFlightState(id, out UnitFlightState flight) && flight.HasCapability;
+
+    public bool IsAirborne(EntityId id) =>
+        TryGetFlightState(id, out UnitFlightState flight) && flight.HasCapability && flight.Phase != FlightPhase.Ground;
+
+    public bool IsCrashing(EntityId id) =>
+        TryGetFlightState(id, out UnitFlightState flight) && flight.HasCapability && flight.Phase == FlightPhase.Crashing;
+
+    public float GetUnitAltitude(EntityId id) =>
+        TryGetFlightState(id, out UnitFlightState flight) && flight.HasCapability ? flight.Altitude : 0f;
 
     public bool ApplyDamage(EntityId id, int damage, out bool destroyed)
     {
