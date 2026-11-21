@@ -138,5 +138,20 @@
   "contact_infantry": {
     "scene": "res://Assets/Infantry/US/us_rifleman.glb",
     "scale": 1.0
+  },
+  "ch47d": {
+    "scene": "res://Assets/Vehicles/CH47/ch47.glb",
+    "lods": [
+      "res://Assets/Vehicles/CH47/ch47_lod1.glb",
+      "res://Assets/Vehicles/CH47/ch47_lod2.glb"
+    ],
+    "scale": 1.0
+  },
+  "contact_helicopter": {
+    "scene": "res://Assets/Vehicles/CH47/ch47_lod1.glb",
+    "lods": [
+      "res://Assets/Vehicles/CH47/ch47_lod2.glb"
+    ],
+    "scale": 1.0
   }
 }

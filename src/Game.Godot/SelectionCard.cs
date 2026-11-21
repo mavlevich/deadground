@@ -95,6 +95,10 @@ internal sealed partial class SelectionCard : PanelContainer
     private FireStance _cachedSingleStance;
     private PathRequestStatus _cachedSingleNavStatus;
     private int _cachedSingleControlGroup = -1;
+    private FlightPhase _cachedSingleFlightPhase;
+    private AltitudeBand _cachedSingleAltitudeBand;
+    private int _cachedSingleAltMeters = -1;
+    private bool _cachedSingleHasFlight;
 
     // Multiple units cached state
     private int _cachedMultiTotal = -1;
@@ -124,6 +128,7 @@ internal sealed partial class SelectionCard : PanelContainer
 
     public void UpdateSingleOwnUnit(OwnUnitObservation ownUnit, int controlGroup = 0)
     {
+        int altMeters = ownUnit.HasFlightCapability ? (int)MathF.Round(ownUnit.Altitude) : 0;
         if (_mode == DisplayMode.SingleUnit &&
             _cachedSingleId == ownUnit.Id &&
             _cachedSingleDef == ownUnit.Definition &&
@@ -134,7 +139,11 @@ internal sealed partial class SelectionCard : PanelContainer
             _cachedSingleTargetContact == ownUnit.TargetContactId &&
             _cachedSingleStance == ownUnit.Stance &&
             _cachedSingleNavStatus == ownUnit.NavStatus &&
-            _cachedSingleControlGroup == controlGroup)
+            _cachedSingleControlGroup == controlGroup &&
+            _cachedSingleHasFlight == ownUnit.HasFlightCapability &&
+            _cachedSingleFlightPhase == ownUnit.FlightPhase &&
+            _cachedSingleAltitudeBand == ownUnit.AltitudeBand &&
+            _cachedSingleAltMeters == altMeters)
         {
             return;
         }
@@ -150,6 +159,10 @@ internal sealed partial class SelectionCard : PanelContainer
         _cachedSingleStance = ownUnit.Stance;
         _cachedSingleNavStatus = ownUnit.NavStatus;
         _cachedSingleControlGroup = controlGroup;
+        _cachedSingleHasFlight = ownUnit.HasFlightCapability;
+        _cachedSingleFlightPhase = ownUnit.FlightPhase;
+        _cachedSingleAltitudeBand = ownUnit.AltitudeBand;
+        _cachedSingleAltMeters = altMeters;
 
         UnitDefinition? def = ownUnit.Definition < _catalog.Units.Length ? _catalog.Units[ownUnit.Definition] : null;
         string name = def is not null ? FormatUnitName(def) : $"Unit #{ownUnit.Id.Value}";
@@ -163,7 +176,24 @@ internal sealed partial class SelectionCard : PanelContainer
 
         int maxHealth = def?.MaxHealth ?? 100;
         int hpPct = maxHealth > 0 ? (int)(ownUnit.Health * 100f / maxHealth) : 0;
-        _line1Label.Text = $"Health: {ownUnit.Health} / {maxHealth} HP ({hpPct}%)";
+        if (ownUnit.HasFlightCapability)
+        {
+            string phaseStr = ownUnit.FlightPhase switch
+            {
+                FlightPhase.Ground => "Landed",
+                FlightPhase.TakingOff => "Taking Off",
+                FlightPhase.Airborne => "Airborne",
+                FlightPhase.Landing => "Landing",
+                FlightPhase.Crashing => "CRASHING",
+                _ => ownUnit.FlightPhase.ToString()
+            };
+            string bandStr = ownUnit.AltitudeBand == AltitudeBand.Low ? "NOE Low" : "Cruise High";
+            _line1Label.Text = $"Health: {ownUnit.Health} / {maxHealth} HP ({hpPct}%) | Flight: {phaseStr} ({altMeters}m AGL, {bandStr})";
+        }
+        else
+        {
+            _line1Label.Text = $"Health: {ownUnit.Health} / {maxHealth} HP ({hpPct}%)";
+        }
 
         // Weaponry & readiness
         if (def?.Weapon is null)
@@ -340,6 +370,7 @@ internal sealed partial class SelectionCard : PanelContainer
                 "apc" => "Armored Personnel Carrier",
                 "command_vehicle" => "Command Vehicle",
                 "infantry" => "Infantry",
+                "helicopter" => "Transport Helicopter",
                 _ => def.Classification
             };
         }
@@ -367,6 +398,7 @@ internal sealed partial class SelectionCard : PanelContainer
         "mg_14_5mm_kpvt" => "14.5mm KPVT HMG",
         "mg_12_7mm_m2hb" => "12.7mm M2HB HMG",
         "mg_7_62mm_m60" => "7.62mm M60 MG",
+        "mg_7_62mm_m60d" => "Twin 7.62mm M60D Door Guns",
         "rifle_5_56mm_m16a1" => "5.56mm M16A1 Rifle",
         _ => id
     };
@@ -378,6 +410,7 @@ internal sealed partial class SelectionCard : PanelContainer
         ContactClassification.Apc => "APC",
         ContactClassification.CommandVehicle => "Command Vehicle",
         ContactClassification.Infantry => "Infantry",
+        ContactClassification.Helicopter => "Helicopter",
         ContactClassification.Vehicle => "Vehicle",
         _ => "Unknown"
     };

@@ -161,7 +161,13 @@ public readonly record struct OwnUnitObservation(
     byte SmokeCharges = 0,
     ushort SmokeCooldownTicks = 0,
     bool HasSmokeCapability = false,
-    bool SmokeActive = false);
+    bool SmokeActive = false,
+    float Altitude = 0f,
+    FlightPhase FlightPhase = FlightPhase.Ground,
+    AltitudeBand AltitudeBand = AltitudeBand.High,
+    float PitchRad = 0f,
+    float RollRad = 0f,
+    bool HasFlightCapability = false);
 
 public interface ISimulationRules
 {

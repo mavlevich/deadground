@@ -75,7 +75,9 @@ public sealed record WeaponDefinition(
     float DispersionMils = 3.0f,
     float TargetMovementPenalty = 0.20f,
     float RangingBonus = 0.08f,
-    float MaxRangingBonus = 0.24f)
+    float MaxRangingBonus = 0.24f,
+    bool CanTargetAir = false,
+    float MaxAirTargetAltitude = 0f)
 {
     public float Dispersion => DispersionMils;
 

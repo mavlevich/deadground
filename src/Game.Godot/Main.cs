@@ -586,6 +586,12 @@ public partial class Main : Node3D
                 _map = scenarioGeometry.HeightMap;
                 setup = InfantryTransportScenario.CreateMatchSetup(scenarioGeometry);
             }
+            else if (_scenario == "helicopter-playground")
+            {
+                scenarioGeometry = HelicopterPlaygroundScenario.CreateStaticGeometry();
+                _map = scenarioGeometry.HeightMap;
+                setup = HelicopterPlaygroundScenario.CreateMatchSetup(scenarioGeometry);
+            }
             else if (_scenario == "tank-battle")
             {
                 scenarioGeometry = TankBattleScenario.CreateStaticGeometry();
@@ -634,6 +640,7 @@ public partial class Main : Node3D
                     "forest-visibility" => ForestVisibilityScenario.CreateSimulation(scenarioGeometry!),
                     "infantry-playground" => InfantryPlaygroundScenario.CreateSimulation(scenarioGeometry!),
                     "infantry-transport" => InfantryTransportScenario.CreateSimulation(scenarioGeometry!),
+                    "helicopter-playground" => HelicopterPlaygroundScenario.CreateSimulation(scenarioGeometry!),
                     "tank-battle" => TankBattleScenario.CreateSimulation(scenarioGeometry!),
                     _ => PrototypeScenario.Create(_map)
                 };
@@ -778,6 +785,7 @@ public partial class Main : Node3D
             "forest-visibility" => 150,
             "infantry-playground" => 120,
             "infantry-transport" => 120,
+            "helicopter-playground" => 180,
             "tank-battle" => 160,
             _ => 112
         };
@@ -797,6 +805,7 @@ public partial class Main : Node3D
             "forest-visibility" => new Vector3(100f, 0f, 110f),
             "infantry-playground" => new Vector3(130f, 0f, 180f),
             "infantry-transport" => new Vector3(128f, 0f, 195f),
+            "helicopter-playground" => new Vector3(HelicopterPlaygroundScenario.ChinookAlphaPos.X + 20f, 2f, HelicopterPlaygroundScenario.ChinookAlphaPos.Y),
             "tank-battle" => new Vector3(TankBattleScenario.Center.X - TankBattleScenario.StartOffset, 4f, TankBattleScenario.Center.Y),
             _ => new Vector3(64, 0, 64)
         };
@@ -1375,6 +1384,18 @@ public partial class Main : Node3D
                 }
                 _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
             }
+            else if (_contextActionPanel?.TargetingMode == ContextTargetingMode.LandAt)
+            {
+                if (TryGetGroundPositionUnderMouse(mousePos, out NumericsVector2 groundPos))
+                {
+                    _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Valid, $"Land at ({groundPos.X:0.0}, {groundPos.Y:0.0}) [LMB] [Esc to cancel]");
+                }
+                else
+                {
+                    _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Blocked, "Invalid landing location [Esc to cancel]");
+                }
+                _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
+            }
             else
             {
                 bool hasEnemyContact = TryGetTargetContactUnderMouse(mousePos, out _);
@@ -1648,6 +1669,7 @@ public partial class Main : Node3D
                     "forest-visibility" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 5 && CheckForestVisibilityCleanPositions(_session.Replica.OwnUnits),
                     "infantry-playground" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 4 && CheckInfantryPlaygroundCleanPositions(_session.Replica.OwnUnits),
                     "infantry-transport" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 5,
+                    "helicopter-playground" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 6,
                     _ => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
                         _session.Replica.OwnUnits[0].Position.Y > 24
                 };
@@ -1665,6 +1687,7 @@ public partial class Main : Node3D
                     "forest-visibility" => "FOREST_VISIBILITY_SMOKE",
                     "infantry-playground" => "INFANTRY_PLAYGROUND_SMOKE",
                     "infantry-transport" => "INFANTRY_TRANSPORT_SMOKE",
+                    "helicopter-playground" => "HELICOPTER_PLAYGROUND_SMOKE",
                     _ => "M0_CLIENT_SMOKE"
                 };
                 string token = prefix + (ok ? "_OK" : "_FAILED");
@@ -2372,9 +2395,23 @@ public partial class Main : Node3D
                 return;
             }
 
-            if (key.Keycode == Key.G && _unitViews.Selected.Count > 0)
+            if ((key.Keycode == Key.G || key.PhysicalKeycode == Key.G) && _unitViews.Selected.Count > 0)
             {
                 OnDeploySmokeRequested();
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if ((key.Keycode == Key.L || key.PhysicalKeycode == Key.L) && _unitViews.Selected.Count > 0)
+            {
+                OnHelicopterToggleFlightRequested();
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if ((key.Keycode == Key.H || key.PhysicalKeycode == Key.H) && _unitViews.Selected.Count > 0)
+            {
+                OnHelicopterToggleAltitudeRequested();
                 GetViewport().SetInputAsHandled();
                 return;
             }
@@ -2480,6 +2517,36 @@ public partial class Main : Node3D
                         _contextActionPanel.CancelTargeting();
                         _orderCursorOverlay?.HideTooltip();
                     }
+                }
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if (_contextActionPanel?.TargetingMode == ContextTargetingMode.LandAt)
+            {
+                if (TryGetGroundPositionUnderMouse(mouse.Position, out NumericsVector2 groundPos))
+                {
+                    int ordered = 0;
+                    foreach (EntityId unitId in _unitViews.Selected)
+                    {
+                        if (_session.Replica.TryGetOwnUnit(unitId, out OwnUnitObservation obs) &&
+                            obs.HasFlightCapability &&
+                            obs.FlightPhase != FlightPhase.Crashing)
+                        {
+                            if (_session.OrderHelicopter(unitId, HelicopterOrderKind.Land, obs.AltitudeBand, hasTarget: true, target: groundPos))
+                                ordered++;
+                        }
+                    }
+                    if (ordered > 0)
+                    {
+                        string msg = ordered == 1
+                            ? "Landing order submitted (1 helicopter)"
+                            : $"Landing order submitted ({ordered} helicopters)";
+                        _orderNotification?.ShowNotification(msg);
+                        _status.Text = msg;
+                    }
+                    _contextActionPanel.CancelTargeting();
+                    _orderCursorOverlay?.HideTooltip();
                 }
                 GetViewport().SetInputAsHandled();
                 return;
@@ -2607,7 +2674,7 @@ public partial class Main : Node3D
         bool found = false;
         foreach ((ContactId id, ContactView view) in _contactViews.Views)
         {
-            Vector3 center = view.Root.Position + Vector3.Up * 1.5f;
+            Vector3 center = view.Root.Position + Vector3.Up * (1.5f + view.Altitude);
             if (_camera.IsPositionBehind(center)) continue;
             float distance = _camera.UnprojectPosition(center).DistanceSquaredTo(mousePos);
             if (distance < nearestContactDistance)
@@ -2965,6 +3032,82 @@ public partial class Main : Node3D
             _status.Text = msg;
             _contextActionPanel?.CancelTargeting();
             _orderCursorOverlay?.HideTooltip();
+        }
+    }
+
+    internal void OnHelicopterToggleFlightRequested()
+    {
+        int helis = 0;
+        int airborne = 0;
+        foreach (EntityId id in _unitViews.Selected)
+        {
+            if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) &&
+                obs.HasFlightCapability &&
+                obs.FlightPhase != FlightPhase.Crashing)
+            {
+                helis++;
+                if (obs.FlightPhase != FlightPhase.Ground)
+                    airborne++;
+            }
+        }
+        if (helis == 0) return;
+
+        HelicopterOrderKind kind = airborne > 0 ? HelicopterOrderKind.Land : HelicopterOrderKind.TakeOff;
+        int sent = 0;
+        foreach (EntityId id in _unitViews.Selected)
+        {
+            if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) &&
+                obs.HasFlightCapability &&
+                obs.FlightPhase != FlightPhase.Crashing)
+            {
+                if (_session.OrderHelicopter(id, kind, obs.AltitudeBand))
+                    sent++;
+            }
+        }
+        if (sent > 0)
+        {
+            string action = kind == HelicopterOrderKind.TakeOff ? "Takeoff" : "Landing";
+            string msg = sent == 1 ? $"{action} order submitted (1 helicopter)" : $"{action} order submitted ({sent} helicopters)";
+            _orderNotification?.ShowNotification(msg);
+            _status.Text = msg;
+        }
+    }
+
+    internal void OnHelicopterToggleAltitudeRequested()
+    {
+        int helis = 0;
+        int lowCount = 0;
+        foreach (EntityId id in _unitViews.Selected)
+        {
+            if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) &&
+                obs.HasFlightCapability &&
+                obs.FlightPhase != FlightPhase.Crashing)
+            {
+                helis++;
+                if (obs.AltitudeBand == AltitudeBand.Low)
+                    lowCount++;
+            }
+        }
+        if (helis == 0) return;
+
+        AltitudeBand nextBand = lowCount > 0 ? AltitudeBand.High : AltitudeBand.Low;
+        int sent = 0;
+        foreach (EntityId id in _unitViews.Selected)
+        {
+            if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) &&
+                obs.HasFlightCapability &&
+                obs.FlightPhase != FlightPhase.Crashing)
+            {
+                if (_session.OrderHelicopter(id, HelicopterOrderKind.SetAltitudeBand, nextBand))
+                    sent++;
+            }
+        }
+        if (sent > 0)
+        {
+            string label = nextBand == AltitudeBand.Low ? "NOE Low" : "Cruise High";
+            string msg = $"Altitude set to {label} ({sent} {(sent == 1 ? "helicopter" : "helicopters")})";
+            _orderNotification?.ShowNotification(msg);
+            _status.Text = msg;
         }
     }
 
@@ -3450,6 +3593,8 @@ public partial class Main : Node3D
         _contextActionPanel.OffsetRight = 24 + 420;
         _contextActionPanel.DisembarkHereRequested += OnDisembarkHereRequested;
         _contextActionPanel.DeploySmokeRequested += OnDeploySmokeRequested;
+        _contextActionPanel.HelicopterToggleFlightRequested += OnHelicopterToggleFlightRequested;
+        _contextActionPanel.HelicopterToggleAltitudeRequested += OnHelicopterToggleAltitudeRequested;
         canvas.AddChild(_contextActionPanel);
 
         _orderNotification = new OrderNotification();
@@ -3812,6 +3957,17 @@ public partial class Main : Node3D
             Simulation localSimulation = InfantryTransportScenario.CreateSimulation(scenarioGeometry);
             _session = new LocalSession(localSimulation, player: 1);
         }
+        else if (scenarioName == "helicopter-playground")
+        {
+            scenarioGeometry = HelicopterPlaygroundScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = HelicopterPlaygroundScenario.CreateMatchSetup(scenarioGeometry);
+            _matchSetup = setup;
+            _scenarioGeometry = scenarioGeometry;
+            _catalog = ScenarioContent.LoadCatalog("helicopter-playground");
+            Simulation localSimulation = HelicopterPlaygroundScenario.CreateSimulation(scenarioGeometry);
+            _session = new LocalSession(localSimulation, player: 1);
+        }
         else if (scenarioName == "ustye-ground")
         {
             scenarioGeometry = UstyeGroundScenario.CreateStaticGeometry();
@@ -3842,6 +3998,7 @@ public partial class Main : Node3D
             "forest-visibility" => new Vector3(100f, 0f, 110f),
             "infantry-playground" => new Vector3(130f, 0f, 180f),
             "infantry-transport" => new Vector3(128f, 0f, 195f),
+            "helicopter-playground" => new Vector3(HelicopterPlaygroundScenario.ChinookAlphaPos.X + 20f, 2f, HelicopterPlaygroundScenario.ChinookAlphaPos.Y),
             _ => new Vector3(64, 0, 64)
         };
         float initialCameraSize = scenarioName switch
@@ -3853,6 +4010,7 @@ public partial class Main : Node3D
             "forest-visibility" => 150f,
             "infantry-playground" => 120f,
             "infantry-transport" => 120f,
+            "helicopter-playground" => 180f,
             _ => 112f
         };
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
@@ -4061,6 +4219,7 @@ public partial class Main : Node3D
             "forest-visibility" => "FOREST VISIBILITY POLYGON",
             "infantry-playground" => "INFANTRY PLAYGROUND",
             "infantry-transport" => "INFANTRY TRANSPORT PROVING GROUND",
+            "helicopter-playground" => "HELICOPTER FLIGHT PROVING GROUND",
             _ => "M0 NETWORK TEST"
         };
         return $"DEAD GROUND   /   SIDE {assignedSide}   /   {name}";
@@ -4123,6 +4282,11 @@ public partial class Main : Node3D
         if (scenario == "infantry-transport")
         {
             return new Vector3(128f, 0f, 195f);
+        }
+
+        if (scenario == "helicopter-playground")
+        {
+            return new Vector3(HelicopterPlaygroundScenario.ChinookAlphaPos.X + 20f, 2f, HelicopterPlaygroundScenario.ChinookAlphaPos.Y);
         }
 
         return fallbackFocus;

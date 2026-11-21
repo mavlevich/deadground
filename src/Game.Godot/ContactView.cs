@@ -13,7 +13,15 @@ internal sealed class ContactView
     private static readonly StringName AnimRun = "Run";
     private static readonly StringName AnimAimStanding = "AimStanding";
 
-    private sealed record ContactRig(Node3D? Turret, Node3D? Muzzle, AnimationPlayer? AnimPlayer);
+    private sealed record ContactRig(
+        Node3D? Turret,
+        Node3D? Muzzle,
+        AnimationPlayer? AnimPlayer,
+        Node3D? FrontRotor,
+        Node3D? RearRotor,
+        Node3D? FrontRotorBlur,
+        Node3D? RearRotorBlur,
+        Node3D? RearRamp);
 
     private readonly MeshInstance3D _ghostBase;
     private readonly MeshInstance3D _selection;
@@ -26,6 +34,13 @@ internal sealed class ContactView
     private Node3D? _turret;
     private Node3D? _muzzle;
     private AnimationPlayer? _animPlayer;
+    private Node3D? _frontRotor;
+    private Node3D? _rearRotor;
+    private Node3D? _frontRotorBlur;
+    private Node3D? _rearRotorBlur;
+    private Node3D? _rearRamp;
+    private float _altitude;
+    private float _rotorAngle;
     private string _currentAnim = "";
     private StringName? _currentAnimName;
     private float _aimingTimer;
@@ -48,6 +63,7 @@ internal sealed class ContactView
     internal ContactClassification CurrentModelClassification => _currentModelClassification;
     internal string CurrentAnimation => _currentAnim;
     internal AnimationPlayer? AnimationPlayer => _animPlayer;
+    internal float Altitude => _altitude;
 
     public void SetAiming(bool aiming)
     {
@@ -125,12 +141,13 @@ internal sealed class ContactView
     }
 
     public void Update(ContactObservation contact, float groundY, bool isSelected) =>
-        Update(contact, contact.Position, groundY, isSelected, contact.TurretYaw, contact.HullHeading);
+        Update(contact, contact.Position, groundY, isSelected, contact.TurretYaw, contact.HullHeading, contact.Altitude);
 
     public void Update(ContactObservation contact, System.Numerics.Vector2 position, float groundY, bool isSelected,
-        float turretYaw, float hullHeading)
+        float turretYaw, float hullHeading, float altitude = 0f)
     {
         Observation = contact;
+        _altitude = MathF.Max(0f, altitude);
         Vector3 newPos = new(position.X, groundY, position.Y);
         float speed = 0f;
         if (_hasPrevPos)
@@ -149,8 +166,17 @@ internal sealed class ContactView
         }
 
         bool isInfantry = contact.Classification == ContactClassification.Infantry;
-        _selection.Scale = isInfantry ? new Vector3(0.35f, 0.15f, 0.35f) : new Vector3(1, 0.15f, 1);
-        _ghostBase.Scale = isInfantry ? new Vector3(0.5f, 0.15f, 0.5f) : new Vector3(1, 0.15f, 1);
+        bool isHelicopter = contact.Classification == ContactClassification.Helicopter;
+        _selection.Scale = isInfantry
+            ? new Vector3(0.35f, 0.15f, 0.35f)
+            : isHelicopter
+                ? new Vector3(2.6f, 0.15f, 2.6f)
+                : new Vector3(1, 0.15f, 1);
+        _ghostBase.Scale = isInfantry
+            ? new Vector3(0.5f, 0.15f, 0.5f)
+            : isHelicopter
+                ? new Vector3(2.4f, 0.15f, 2.4f)
+                : new Vector3(1, 0.15f, 1);
 
         if (contact.State == ContactState.Current)
         {
@@ -202,9 +228,40 @@ internal sealed class ContactView
                 }
                 bool isAiming = _aimingTimer > 0f || MathF.Abs(_relativeTurretYaw) > 0.05f;
                 float yaw = (isInfantry && isAiming && speed < 0.15f) ? turretYaw : hullHeading;
+                _enemyModel.Position = new Vector3(0f, _altitude, 0f);
                 _enemyModel.Rotation = new Vector3(0, yaw, 0);
                 if (_turret is not null)
                     _turret.Rotation = new Vector3(0, _relativeTurretYaw, 0);
+
+                if (isHelicopter || _frontRotor is not null || _frontRotorBlur is not null)
+                {
+                    bool airborne = contact.FlightPhase != FlightPhase.Ground || _altitude > 0.25f;
+                    _rotorAngle = Mathf.Wrap(_rotorAngle + (airborne ? 1.1f : 0.14f), 0f, Mathf.Tau);
+                    if (_frontRotor is not null)
+                    {
+                        _frontRotor.Visible = !airborne;
+                        if (!airborne) _frontRotor.Rotation = new Vector3(0f, _rotorAngle, 0f);
+                    }
+                    if (_rearRotor is not null)
+                    {
+                        _rearRotor.Visible = !airborne;
+                        if (!airborne) _rearRotor.Rotation = new Vector3(0f, -_rotorAngle, 0f);
+                    }
+                    if (_frontRotorBlur is not null)
+                    {
+                        _frontRotorBlur.Visible = airborne;
+                        if (airborne) _frontRotorBlur.Rotation = new Vector3(0f, _rotorAngle * 0.25f, 0f);
+                    }
+                    if (_rearRotorBlur is not null)
+                    {
+                        _rearRotorBlur.Visible = airborne;
+                        if (airborne) _rearRotorBlur.Rotation = new Vector3(0f, -_rotorAngle * 0.25f, 0f);
+                    }
+                    if (_rearRamp is not null)
+                    {
+                        _rearRamp.Rotation = new Vector3(airborne ? 0f : Mathf.DegToRad(42f), 0f, 0f);
+                    }
+                }
 
                 if (_animPlayer is not null)
                 {
@@ -314,6 +371,13 @@ internal sealed class ContactView
         Node3D? turret = lodNode.FindChild("TurretYaw", recursive: true, owned: false) as Node3D;
         Node3D? muzzle = lodNode.FindChild("Muzzle", recursive: true, owned: false) as Node3D;
         AnimationPlayer? animPlayer = lodNode.FindChild("AnimationPlayer", recursive: true, owned: false) as AnimationPlayer;
+        Node3D? frontRotor = lodNode.FindChild("FrontRotor", recursive: true, owned: false) as Node3D;
+        Node3D? rearRotor = lodNode.FindChild("RearRotor", recursive: true, owned: false) as Node3D;
+        Node3D? frontRotorBlur = lodNode.FindChild("FrontRotorBlur", recursive: true, owned: false) as Node3D;
+        Node3D? rearRotorBlur = lodNode.FindChild("RearRotorBlur", recursive: true, owned: false) as Node3D;
+        Node3D? rearRamp = lodNode.FindChild("RearRamp", recursive: true, owned: false) as Node3D;
+        DisableShadowCasting(frontRotorBlur);
+        DisableShadowCasting(rearRotorBlur);
         if (muzzle is null && isInfantry)
         {
             Node3D mNode = new() { Name = "Muzzle", Position = new Vector3(0, 1.35f, -0.6f) };
@@ -324,7 +388,7 @@ internal sealed class ContactView
         {
             turret.Rotation = new Vector3(0, _relativeTurretYaw, 0);
         }
-        rig = new ContactRig(turret, muzzle, animPlayer);
+        rig = new ContactRig(turret, muzzle, animPlayer, frontRotor, rearRotor, frontRotorBlur, rearRotorBlur, rearRamp);
         _rigs[lod] = rig;
         return rig;
     }
@@ -334,6 +398,11 @@ internal sealed class ContactView
         _turret = rig.Turret;
         _muzzle = rig.Muzzle;
         _animPlayer = rig.AnimPlayer;
+        _frontRotor = rig.FrontRotor;
+        _rearRotor = rig.RearRotor;
+        _frontRotorBlur = rig.FrontRotorBlur;
+        _rearRotorBlur = rig.RearRotorBlur;
+        _rearRamp = rig.RearRamp;
     }
 
     private void ClearEnemyModel()
@@ -349,6 +418,13 @@ internal sealed class ContactView
             _turret = null;
             _muzzle = null;
             _animPlayer = null;
+            _frontRotor = null;
+            _rearRotor = null;
+            _frontRotorBlur = null;
+            _rearRotorBlur = null;
+            _rearRamp = null;
+            _altitude = 0f;
+            _rotorAngle = 0f;
             _currentAnim = "";
             _currentAnimName = null;
             _aimingTimer = 0f;
@@ -358,5 +434,19 @@ internal sealed class ContactView
         }
         _currentModelType = ushort.MaxValue;
         _currentModelClassification = ContactClassification.Unknown;
+    }
+
+    private static void DisableShadowCasting(Node? root)
+    {
+        if (root is null) return;
+        if (root is GeometryInstance3D geom)
+        {
+            geom.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
+        }
+        int count = root.GetChildCount();
+        for (int i = 0; i < count; i++)
+        {
+            DisableShadowCasting(root.GetChild(i));
+        }
     }
 }

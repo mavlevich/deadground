@@ -686,6 +686,11 @@ public sealed class NavigationSystem : ISimulationSystem
 
     public bool EnqueueCommand(int player, MoveCommand command, WorldState? world = null)
     {
+        if (world is not null && world.IsAircraft(command.Unit))
+        {
+            return false;
+        }
+
         if (!GetOrCreateSlot(command.Unit, out int slot))
         {
             CapacityExceeded++;
@@ -2623,6 +2628,11 @@ public sealed class NavigationSystem : ISimulationSystem
         for (int i = 0; i < unitCount; i++)
         {
             UnitState unit = world.GetUnitAt(i);
+            if (world.IsAircraft(unit.Id))
+            {
+                continue;
+            }
+
             if (!TryGetSlot(unit.Id, out int slot))
             {
                 continue;

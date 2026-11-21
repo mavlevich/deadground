@@ -73,7 +73,7 @@ public sealed class VehicleSpatialGrid
             UnitState unit = world.GetUnitAt(i);
             _positions[i] = unit.Position;
 
-            if (world.IsContained(unit.Id))
+            if (world.IsContained(unit.Id) || world.IsAirborne(unit.Id))
             {
                 _next[i] = -1;
                 continue;

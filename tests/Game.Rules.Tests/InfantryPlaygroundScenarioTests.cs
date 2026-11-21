@@ -712,8 +712,8 @@ public sealed class InfantryPlaygroundScenarioTests
     [Fact]
     public void Protocol24_WireValues_ContactInfantry_And_WeaponPresentationRifle()
     {
-        Assert.Equal(26, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(26, WireProtocol.Version);
+        Assert.Equal(27, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(27, WireProtocol.Version);
         Assert.Equal(6, (int)ContactClassification.Infantry);
         Assert.Equal(3, (int)WeaponPresentationKind.Rifle);
 

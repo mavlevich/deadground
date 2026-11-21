@@ -11,15 +11,15 @@ public static class PassengerDistribution
     public const float SoldierRadius = 0.4f;
     public const float MinInfantryDistance = 0.8f;
     public const float ClearanceMargin = 0.4f;
-    public const int MaxCandidates = 192;
+    public const int MaxCandidates = 288;
 
     private static readonly Vector2[] s_candidateOffsets = InitializeOffsets();
 
     private static Vector2[] InitializeOffsets()
     {
         var offsets = new List<Vector2>(MaxCandidates);
-        float[] radii = [2.25f, 3.0f, 3.8f, 4.6f, 5.4f, 6.2f, 7.0f, 8.0f, 9.0f];
-        int[] angleCounts = [8, 12, 16, 18, 20, 22, 24, 24, 24];
+        float[] radii = [2.25f, 3.0f, 3.8f, 4.6f, 5.4f, 6.2f, 7.0f, 8.0f, 9.0f, 10.2f, 11.5f, 13.0f, 14.5f];
+        int[] angleCounts = [8, 12, 16, 18, 20, 22, 24, 24, 24, 24, 24, 24, 24];
         for (int r = 0; r < radii.Length; r++)
         {
             float radius = radii[r];
@@ -148,7 +148,7 @@ public static class PassengerDistribution
             UnitState other = world.GetUnitAt(i);
             if (other.Id == passengerId) continue;
             if (hasTransport && other.Id == transportPosId(world, passengerId)) continue;
-            if (world.IsContained(other.Id)) continue;
+            if (world.IsContained(other.Id) || world.IsAirborne(other.Id)) continue;
 
             const float minOtherDist = 1.2f;
             if (Vector2.Distance(pos, other.Position) < minOtherDist)
