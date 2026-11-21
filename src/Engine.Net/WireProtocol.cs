@@ -25,7 +25,7 @@ public static class WireProtocol
     public const int CommandResultSize = 11;
     public const int MissionSize = 32;
     public const int SnapshotHeaderSize = 20 + MissionSize;
-    public const int UnitSize = 58;
+    public const int UnitSize = 66;
     public const int MaxUnits = 1024;
     public const int ContactSize = 33;
     public const int MaxContacts = 256;
@@ -47,7 +47,7 @@ public static class WireProtocol
     public const int DisembarkSize = 26;
     public const int DisembarkResultSize = 17;
     public const int DeploySmokeSize = 27;
-    public const int HelicopterSize = 25;
+    public const int HelicopterSize = 29;
 
     public const byte MoveKind = 1;
     public const byte SnapshotKind = 2;
@@ -563,6 +563,7 @@ public static class WireProtocol
         bytes[16] = command.HasTarget ? (byte)1 : (byte)0;
         BinaryPrimitives.WriteSingleLittleEndian(bytes[17..], command.HasTarget ? command.Target.X : 0f);
         BinaryPrimitives.WriteSingleLittleEndian(bytes[21..], command.HasTarget ? command.Target.Y : 0f);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[25..], command.TargetUnit.Value);
     }
 
     public static bool TryReadHelicopter(ReadOnlySpan<byte> bytes, out HelicopterCommand command)
@@ -576,7 +577,7 @@ public static class WireProtocol
         byte bandByte = bytes[15];
         byte hasTargetByte = bytes[16];
         if (sequence == 0 || tick < 0 || unitId == 0 ||
-            kindByte > (byte)HelicopterOrderKind.SetAltitudeBand ||
+            kindByte > (byte)HelicopterOrderKind.SlingDrop ||
             bandByte > (byte)AltitudeBand.High ||
             hasTargetByte > 1)
         {
@@ -587,6 +588,7 @@ public static class WireProtocol
         Vector2 target = new(
             BinaryPrimitives.ReadSingleLittleEndian(bytes[17..]),
             BinaryPrimitives.ReadSingleLittleEndian(bytes[21..]));
+        uint targetUnitId = BinaryPrimitives.ReadUInt32LittleEndian(bytes[25..]);
         if (hasTarget && (!float.IsFinite(target.X) || !float.IsFinite(target.Y))) return false;
         command = new HelicopterCommand(
             sequence,
@@ -595,7 +597,8 @@ public static class WireProtocol
             (HelicopterOrderKind)kindByte,
             (AltitudeBand)bandByte,
             hasTarget,
-            hasTarget ? target : default);
+            hasTarget ? target : default,
+            new EntityId(targetUnitId));
         return true;
     }
 
@@ -668,8 +671,11 @@ public static class WireProtocol
             BinaryPrimitives.WriteUInt16LittleEndian(record[55..], QuantizeYaw(unit.RollRad));
             byte flightFlags = (byte)(((byte)unit.FlightPhase & 0x07) |
                 (((byte)unit.AltitudeBand & 0x01) << 3) |
-                (unit.HasFlightCapability ? 0x10 : 0));
+                (unit.HasFlightCapability ? 0x10 : 0) |
+                (((byte)unit.FlightFlags & 0x07) << 5));
             record[57] = flightFlags;
+            BinaryPrimitives.WriteUInt32LittleEndian(record[58..], unit.SlingLoadId.Value);
+            BinaryPrimitives.WriteUInt32LittleEndian(record[62..], unit.SlungById.Value);
         }
 
         int contactsOffset = SnapshotHeaderSize + units.Length * UnitSize;
@@ -882,6 +888,9 @@ public static class WireProtocol
             byte flightPhaseByte = (byte)(flightFlags & 0x07);
             byte altitudeBandByte = (byte)((flightFlags >> 3) & 0x01);
             bool hasFlightCapability = (flightFlags & 0x10) != 0;
+            FlightStateFlags runtimeFlightFlags = (FlightStateFlags)((flightFlags >> 5) & 0x07);
+            uint slingLoadIdVal = BinaryPrimitives.ReadUInt32LittleEndian(record[58..]);
+            uint slungByIdVal = BinaryPrimitives.ReadUInt32LittleEndian(record[62..]);
 
             if (id.Value == 0 || !float.IsFinite(position.X) || !float.IsFinite(position.Y) ||
                 !float.IsFinite(altitude) || altitude < 0f ||
@@ -889,7 +898,6 @@ public static class WireProtocol
                 attackStatusByte > (byte)AttackExecutionStatus.TargetLost ||
                 stanceByte > (byte)FireStance.HoldFire ||
                 (smokeFlags & ~3) != 0 ||
-                (flightFlags & ~0x1F) != 0 ||
                 flightPhaseByte > (byte)FlightPhase.Crashing ||
                 !frame.Indices.TryAdd(id, i)) return false;
 
@@ -920,7 +928,10 @@ public static class WireProtocol
                 (AltitudeBand)altitudeBandByte,
                 pitchRad,
                 rollRad,
-                hasFlightCapability);
+                hasFlightCapability,
+                new EntityId(slingLoadIdVal),
+                new EntityId(slungByIdVal),
+                runtimeFlightFlags);
         }
 
         int contactsOffset = SnapshotHeaderSize + unitCount * UnitSize;

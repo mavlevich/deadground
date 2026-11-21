@@ -604,7 +604,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
 
         // Attacker ownership validation
         if (!world.TryGetUnit(command.Unit, out UnitState attacker) || attacker.Owner != player ||
-            world.IsContained(command.Unit) || world.IsCrashing(command.Unit))
+            world.IsContained(command.Unit) || world.IsCrashing(command.Unit) || world.IsSlung(command.Unit))
             return false;
 
         // Verify attacker has an operational weapon
@@ -689,7 +689,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         for (int i = 0; i < unitCount; i++)
         {
             UnitState attacker = world.GetUnitAt(i);
-            if (world.IsContained(attacker.Id) || world.IsCrashing(attacker.Id)) continue;
+            if (world.IsContained(attacker.Id) || world.IsCrashing(attacker.Id) || world.IsSlung(attacker.Id)) continue;
             if (!_combatCatalog.TryGetProfile(attacker.Definition, out UnitCombatProfile profile) ||
                 profile.Weapon is null)
             {
@@ -1460,6 +1460,21 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         {
             int crashPassengerDamage = Math.Max(200, profile.CrashSplashDamage * 3);
             HandleContainerDestruction(unitId, world, tick, damageOverride: crashPassengerDamage);
+        }
+
+        // Destroy any externally slung cargo vehicle on crash impact
+        if (flightState.SlingLoadId != default && world.TryGetUnit(flightState.SlingLoadId, out UnitState slungUnit))
+        {
+            float slungHeading = world.TryGetCombatState(slungUnit.Id, out WorldState.CombatState slungCs) ? slungCs.HullHeading : heading;
+            float slungTurret = slungCs.TurretYaw;
+            world.AddWreck(slungUnit.Definition, impactPosition, 0, slungHeading, slungTurret, tick, slungUnit.Owner);
+            if (world.IsContainer(slungUnit.Id) && world.GetPassengerCount(slungUnit.Id) > 0)
+            {
+                HandleContainerDestruction(slungUnit.Id, world, tick, damageOverride: 200);
+            }
+            _navigation?.ClearUnit(slungUnit.Id);
+            world.RemoveUnit(slungUnit.Id);
+            TotalUnitsDestroyed++;
         }
 
         // Apply crash explosion splash damage to nearby ground units

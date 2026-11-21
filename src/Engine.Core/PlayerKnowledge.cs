@@ -95,14 +95,27 @@ public sealed class PlayerKnowledge
             float pitchRad = 0f;
             float rollRad = 0f;
             bool hasFlight = false;
-            if (world.TryGetFlightState(unit.Id, out WorldState.UnitFlightState flightState) && flightState.HasCapability)
+            EntityId slingLoadId = default;
+            EntityId slungById = default;
+            FlightStateFlags flightFlags = FlightStateFlags.None;
+            if (world.TryGetFlightState(unit.Id, out WorldState.UnitFlightState flightState))
             {
-                hasFlight = true;
-                altitude = flightState.Altitude;
-                flightPhase = flightState.Phase;
-                altitudeBand = flightState.DesiredBand;
-                pitchRad = flightState.PitchRad;
-                rollRad = flightState.RollRad;
+                if (flightState.HasCapability)
+                {
+                    hasFlight = true;
+                    altitude = flightState.Altitude;
+                    flightPhase = flightState.Phase;
+                    altitudeBand = flightState.DesiredBand;
+                    pitchRad = flightState.PitchRad;
+                    rollRad = flightState.RollRad;
+                    slingLoadId = flightState.SlingLoadId;
+                    flightFlags = world.GetFlightFlags(unit.Id);
+                }
+                else if (flightState.SlungById != default)
+                {
+                    slungById = flightState.SlungById;
+                    altitude = flightState.SlungAltitude;
+                }
             }
 
             if (world.TryGetCombatState(unit.Id, out WorldState.CombatState combat))
@@ -116,8 +129,8 @@ public sealed class PlayerKnowledge
                     (ushort)Math.Clamp(combat.CurrentHealth, 0, ushort.MaxValue),
                     (ushort)Math.Clamp(combat.Ammunition, 0, ushort.MaxValue),
                     (ushort)Math.Clamp(combat.ReloadTicksRemaining, 0, ushort.MaxValue),
-                    containerId.Value != 0 ? AttackExecutionStatus.None : combat.Status,
-                    containerId.Value != 0 ? default : combat.TargetContactId,
+                    (containerId.Value != 0 || slungById.Value != 0) ? AttackExecutionStatus.None : combat.Status,
+                    (containerId.Value != 0 || slungById.Value != 0) ? default : combat.TargetContactId,
                     combat.Stance,
                     combat.TurretYaw,
                     combat.HullHeading,
@@ -134,7 +147,10 @@ public sealed class PlayerKnowledge
                     altitudeBand,
                     pitchRad,
                     rollRad,
-                    hasFlight);
+                    hasFlight,
+                    slingLoadId,
+                    slungById,
+                    flightFlags);
             }
             else
             {
@@ -159,7 +175,10 @@ public sealed class PlayerKnowledge
                     AltitudeBand: altitudeBand,
                     PitchRad: pitchRad,
                     RollRad: rollRad,
-                    HasFlightCapability: hasFlight);
+                    HasFlightCapability: hasFlight,
+                    SlingLoadId: slingLoadId,
+                    SlungById: slungById,
+                    FlightFlags: flightFlags);
             }
         }
         Count = count;

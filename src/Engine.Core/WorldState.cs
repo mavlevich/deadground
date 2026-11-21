@@ -149,7 +149,9 @@ public sealed class WorldState : IDisposable
         public int Capacity;
         public int ReservedSeats;
         public int PassengerCount;
+        public int UsedSlots;
         public readonly EntityId[] Passengers = new EntityId[32];
+        public readonly int[] PassengerSlots = new int[32];
     }
 
     public readonly record struct PendingDisembarkOrder(
@@ -163,6 +165,7 @@ public sealed class WorldState : IDisposable
     private readonly List<EntityId> _containerIds = new(32);
     private readonly Dictionary<EntityId, EntityId> _containedIn = new();
     private readonly Dictionary<EntityId, EntityId> _boardingOrders = new();
+    private readonly Dictionary<EntityId, int> _boardingSlots = new();
     private readonly Dictionary<EntityId, PendingDisembarkOrder> _pendingDisembarks = new();
 
     public WorldState(HeightMap map, int capacity = 1024, ReadOnlySpan<int> playerTeams = default)
@@ -245,7 +248,16 @@ public sealed class WorldState : IDisposable
         EntityId CrashKillerId,
         ushort CrashKillerDefinition,
         int CrashKillerOwner,
-        float CrashShotDistance);
+        float CrashShotDistance,
+        bool FastRopePending = false,
+        bool FastRopeActive = false,
+        int FastRopeCooldownTicks = 0,
+        EntityId SlingLoadId = default,
+        EntityId PendingSlingTargetId = default,
+        bool SlingDropPending = false,
+        int SlingActionTicks = 0,
+        EntityId SlungById = default,
+        float SlungAltitude = 0f);
 
     public EntityId CreateUnit(
         int owner,
@@ -295,11 +307,42 @@ public sealed class WorldState : IDisposable
 
     public bool RemoveUnit(EntityId id)
     {
-        if (!_indices.Remove(id, out int index)) return false;
+        if (!_indices.TryGetValue(id, out int index)) return false;
+
+        // Clean up sling load relationships before removing entity from storage
+        UnitFlightState removedFlight = _storage.Get<UnitFlightState>(_entities[index]);
+        if (removedFlight.SlingLoadId != default && TryGetFlightState(removedFlight.SlingLoadId, out UnitFlightState loadFs))
+        {
+            loadFs.SlungById = default;
+            loadFs.SlungAltitude = 0f;
+            SetFlightState(removedFlight.SlingLoadId, in loadFs);
+        }
+        if (removedFlight.SlungById != default && TryGetFlightState(removedFlight.SlungById, out UnitFlightState carrierFs))
+        {
+            if (carrierFs.SlingLoadId == id)
+            {
+                carrierFs.SlingLoadId = default;
+                carrierFs.SlingDropPending = false;
+                carrierFs.SlingActionTicks = 0;
+            }
+            if (carrierFs.PendingSlingTargetId == id)
+            {
+                carrierFs.PendingSlingTargetId = default;
+                carrierFs.SlingActionTicks = 0;
+            }
+            SetFlightState(removedFlight.SlungById, in carrierFs);
+        }
+
+        _indices.Remove(id);
 
         if (_boardingOrders.Remove(id, out EntityId targetTransport))
         {
-            ReleaseSeatReservation(targetTransport);
+            int slots = _boardingSlots.Remove(id, out int reservedSlots) ? reservedSlots : 1;
+            ReleaseSeatReservation(targetTransport, slots);
+        }
+        else
+        {
+            _boardingSlots.Remove(id);
         }
         _pendingDisembarks.Remove(id);
         if (_containedIn.Remove(id, out EntityId containerId))
@@ -309,12 +352,16 @@ public sealed class WorldState : IDisposable
                 int pIdx = Array.IndexOf(c.Passengers, id, 0, c.PassengerCount);
                 if (pIdx >= 0)
                 {
+                    int freedSlots = Math.Max(1, c.PassengerSlots[pIdx]);
                     for (int i = pIdx; i < c.PassengerCount - 1; i++)
                     {
                         c.Passengers[i] = c.Passengers[i + 1];
+                        c.PassengerSlots[i] = c.PassengerSlots[i + 1];
                     }
                     c.PassengerCount--;
+                    c.UsedSlots = Math.Max(0, c.UsedSlots - freedSlots);
                     c.Passengers[c.PassengerCount] = default;
+                    c.PassengerSlots[c.PassengerCount] = 0;
                 }
             }
         }
@@ -352,27 +399,30 @@ public sealed class WorldState : IDisposable
     public EntityId GetContainerIdAt(int index) => _containerIds[index];
     public int GetContainerCapacity(EntityId id) => _containers.TryGetValue(id, out ContainerData? c) ? c.Capacity : 0;
     public int GetPassengerCount(EntityId id) => _containers.TryGetValue(id, out ContainerData? c) ? c.PassengerCount : 0;
+    public int GetUsedCargoSlots(EntityId id) => _containers.TryGetValue(id, out ContainerData? c) ? c.UsedSlots : 0;
     public int GetReservedSeats(EntityId id) => _containers.TryGetValue(id, out ContainerData? c) ? c.ReservedSeats : 0;
-    public int GetAvailableSeats(EntityId id) => _containers.TryGetValue(id, out ContainerData? c) ? Math.Max(0, c.Capacity - c.PassengerCount - c.ReservedSeats) : 0;
+    public int GetAvailableSeats(EntityId id) => _containers.TryGetValue(id, out ContainerData? c) ? Math.Max(0, c.Capacity - c.UsedSlots - c.ReservedSeats) : 0;
 
-    public bool TryReserveSeat(EntityId transportId)
+    public bool TryReserveSeat(EntityId transportId, int slots = 1)
     {
+        int required = Math.Max(1, slots);
         if (_containers.TryGetValue(transportId, out ContainerData? c))
         {
-            if (c.PassengerCount + c.ReservedSeats < c.Capacity)
+            if (c.UsedSlots + c.ReservedSeats + required <= c.Capacity)
             {
-                c.ReservedSeats++;
+                c.ReservedSeats += required;
                 return true;
             }
         }
         return false;
     }
 
-    public void ReleaseSeatReservation(EntityId transportId)
+    public void ReleaseSeatReservation(EntityId transportId, int slots = 1)
     {
+        int release = Math.Max(1, slots);
         if (_containers.TryGetValue(transportId, out ContainerData? c) && c.ReservedSeats > 0)
         {
-            c.ReservedSeats--;
+            c.ReservedSeats = Math.Max(0, c.ReservedSeats - release);
         }
     }
 
@@ -386,18 +436,28 @@ public sealed class WorldState : IDisposable
         return [];
     }
 
-    public bool Board(EntityId transportId, EntityId passengerId)
+    public bool Board(EntityId transportId, EntityId passengerId, int slots = 1)
     {
+        int required = Math.Max(1, slots);
         if (!_containers.TryGetValue(transportId, out ContainerData? c)) return false;
-        if (c.PassengerCount >= c.Capacity) return false;
+        if (c.PassengerCount >= c.Passengers.Length) return false;
+        if (c.UsedSlots + required > c.Capacity) return false;
         if (_containedIn.ContainsKey(passengerId)) return false;
 
         if (_boardingOrders.Remove(passengerId))
         {
-            if (c.ReservedSeats > 0) c.ReservedSeats--;
+            int reserved = _boardingSlots.Remove(passengerId, out int s) ? s : required;
+            if (c.ReservedSeats > 0) c.ReservedSeats = Math.Max(0, c.ReservedSeats - reserved);
+        }
+        else
+        {
+            _boardingSlots.Remove(passengerId);
         }
 
-        c.Passengers[c.PassengerCount++] = passengerId;
+        c.Passengers[c.PassengerCount] = passengerId;
+        c.PassengerSlots[c.PassengerCount] = required;
+        c.PassengerCount++;
+        c.UsedSlots += required;
         _containedIn[passengerId] = transportId;
 
         if (TryGetUnit(transportId, out UnitState transport))
@@ -424,12 +484,16 @@ public sealed class WorldState : IDisposable
         }
         if (idx < 0) return false;
 
+        int freedSlots = Math.Max(1, c.PassengerSlots[idx]);
         for (int i = idx; i < c.PassengerCount - 1; i++)
         {
             c.Passengers[i] = c.Passengers[i + 1];
+            c.PassengerSlots[i] = c.PassengerSlots[i + 1];
         }
         c.PassengerCount--;
+        c.UsedSlots = Math.Max(0, c.UsedSlots - freedSlots);
         c.Passengers[c.PassengerCount] = default;
+        c.PassengerSlots[c.PassengerCount] = 0;
         _containedIn.Remove(passengerId);
 
         SetPosition(passengerId, destination);
@@ -437,21 +501,26 @@ public sealed class WorldState : IDisposable
         return true;
     }
 
-    public bool SetBoardingOrder(EntityId unitId, EntityId transportId)
+    public bool SetBoardingOrder(EntityId unitId, EntityId transportId, int slots = 1)
     {
         _boardingOrders[unitId] = transportId;
+        _boardingSlots[unitId] = Math.Max(1, slots);
         return true;
     }
 
     public bool TryGetBoardingTarget(EntityId unitId, out EntityId transportId) => _boardingOrders.TryGetValue(unitId, out transportId);
 
+    public int GetBoardingSlots(EntityId unitId) => _boardingSlots.TryGetValue(unitId, out int s) ? s : 1;
+
     public bool ClearBoardingOrder(EntityId unitId)
     {
         if (_boardingOrders.Remove(unitId, out EntityId transportId))
         {
-            ReleaseSeatReservation(transportId);
+            int slots = _boardingSlots.Remove(unitId, out int s) ? s : 1;
+            ReleaseSeatReservation(transportId, slots);
             return true;
         }
+        _boardingSlots.Remove(unitId);
         return false;
     }
 
@@ -630,8 +699,37 @@ public sealed class WorldState : IDisposable
     public bool IsCrashing(EntityId id) =>
         TryGetFlightState(id, out UnitFlightState flight) && flight.HasCapability && flight.Phase == FlightPhase.Crashing;
 
-    public float GetUnitAltitude(EntityId id) =>
-        TryGetFlightState(id, out UnitFlightState flight) && flight.HasCapability ? flight.Altitude : 0f;
+    public bool IsSlung(EntityId id) =>
+        TryGetFlightState(id, out UnitFlightState flight) && flight.SlungById != default;
+
+    public EntityId GetSlungBy(EntityId id) =>
+        TryGetFlightState(id, out UnitFlightState flight) ? flight.SlungById : default;
+
+    public EntityId GetSlingLoad(EntityId id) =>
+        TryGetFlightState(id, out UnitFlightState flight) ? flight.SlingLoadId : default;
+
+    public FlightStateFlags GetFlightFlags(EntityId id)
+    {
+        if (!TryGetFlightState(id, out UnitFlightState flight) || !flight.HasCapability)
+            return FlightStateFlags.None;
+        FlightStateFlags flags = FlightStateFlags.None;
+        if (flight.FastRopeActive)
+            flags |= FlightStateFlags.FastRopeActive;
+        if (flight.PendingSlingTargetId != default && flight.SlingActionTicks > 0)
+            flags |= FlightStateFlags.SlingHookupActive;
+        if (flight.SlingDropPending && flight.SlingActionTicks > 0)
+            flags |= FlightStateFlags.SlingDropActive;
+        return flags;
+    }
+
+    public float GetUnitAltitude(EntityId id)
+    {
+        if (!TryGetFlightState(id, out UnitFlightState flight))
+            return 0f;
+        if (flight.HasCapability)
+            return flight.Altitude;
+        return flight.SlungById != default ? flight.SlungAltitude : 0f;
+    }
 
     public bool ApplyDamage(EntityId id, int damage, out bool destroyed)
     {

@@ -1863,6 +1863,18 @@ Helicopters, off-map air support, SAM, radar and EW, engineers and mines, destru
   - Client presentation in `Game.Godot`: `ch47d` 3-LOD GLB visual with altitude elevation, ground-projection tether, pitch/roll banking, counter-rotating tandem rotors switching to blur discs at flight RPM, animated `RearRamp` (+42 deg ground loading vs 0 deg flight), crash smoke, and zero-allocation `ContextActionPanel` controls (`L` takeoff/land, `H` altitude band, `LAND AT...`).
   - Playable `helicopter-playground` scenario (1024 m x 1024 m map with staging airfield, hangar, river, dense woods, steep ridge, two US CH-47D Chinooks with embarked/escort US Riflemen, and Soviet BTR-70, T-62, and BRDM-2 forces).
 
+### Rotorcraft cargo, fast-rope, and sling-load slice (protocol v28)
+
+- Data-driven cargo and insertion profiles (`CargoProfile`, extended `FlightProfile`, `content/coldwar/units.json`):
+  - Transportable units declare `cargo_weight_kg`, `internal_cargo_slots`, `can_internal_load`, and `can_sling_load`.
+  - Cargo helicopters declare `can_load_internal_vehicles`, `can_fast_rope`, `fast_rope_altitude`, `fast_rope_interval_ticks`, `max_sling_weight_kg`, `sling_cable_length`, and `sling_speed_penalty_at_max`.
+- Three historical CH-47D transport and insertion modes in `FlightSystem`, `ContainerSystem`, and `Simulation`:
+  - Internal vehicle ramp embark/disembark: light vehicles with `can_internal_load = true` (M151A2 taking 8 of 24 cargo slots) drive into landed ramp-capable helicopters via `BoardTransportCommand` and exit cleanly on ground disembark; APCs with `can_load_internal_vehicles = false` continue accepting infantry only.
+  - Fast-rope infantry insertion (`HelicopterOrderKind.FastRope`): helicopter hovers at `fast_rope_altitude` (18 m AGL) over open terrain, dense forests, or steep slopes (water and opaque structures blocked), deploying embarked infantry staggered every `fast_rope_interval_ticks` while keeping internal vehicles aboard.
+  - External sling-load transport (`HelicopterOrderKind.SlingPickup` / `HelicopterOrderKind.SlingDrop`): helicopter hovers over a valid friendly cargo vehicle within `max_sling_weight_kg` (12,700 kg on CH-47D: M151A2 1.1t and M113A1 11.2t allowed; M60A1/T-62 40-49t rejected), hooks up, and carries it externally beneath the fuselage with continuous weight-based speed/acceleration/climb penalties. Slung vehicles stay visible at `Altitude = max(0, heliAltitude - slingCableLength)`, cannot move or fire independently, are destroyed on carrier crash impact, and can be dropped onto tight clearings/roads (`EvaluateSlingDropZone`).
+- Wire protocol v28 (`MatchSetup.CurrentProtocolVersion = 28`): extends `HelicopterCommand` with `FastRope`, `SlingPickup`, `SlingDrop`, and `TargetUnit` (`HelicopterSize = 29`), and extends `OwnUnitObservation` with `SlingLoadId`, `SlungById`, and `FlightStateFlags` (`UnitSize = 66`).
+- Client presentation and audio (`Game.Godot`): ground projection ring and low-altitude rotor downwash dust, 3D fast-rope and 4-leg sling harness visuals, terrain-draped green/red LZ/fast-rope/sling-drop preview rings, `FAST-ROPE [F]` and `SLING PICKUP / DROP SLING [K]` HUD controls, and procedural CH-47D tandem-rotor audio (`HelicopterSound`).
+
 ## 23. Code rules
 
 - No gameplay logic in Godot nodes.

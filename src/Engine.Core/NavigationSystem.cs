@@ -686,7 +686,7 @@ public sealed class NavigationSystem : ISimulationSystem
 
     public bool EnqueueCommand(int player, MoveCommand command, WorldState? world = null)
     {
-        if (world is not null && world.IsAircraft(command.Unit))
+        if (world is not null && (world.IsAircraft(command.Unit) || world.IsSlung(command.Unit)))
         {
             return false;
         }
@@ -2628,7 +2628,7 @@ public sealed class NavigationSystem : ISimulationSystem
         for (int i = 0; i < unitCount; i++)
         {
             UnitState unit = world.GetUnitAt(i);
-            if (world.IsAircraft(unit.Id))
+            if (world.IsAircraft(unit.Id) || world.IsSlung(unit.Id))
             {
                 continue;
             }

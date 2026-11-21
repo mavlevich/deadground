@@ -376,8 +376,10 @@ internal sealed class ContactView
         Node3D? frontRotorBlur = lodNode.FindChild("FrontRotorBlur", recursive: true, owned: false) as Node3D;
         Node3D? rearRotorBlur = lodNode.FindChild("RearRotorBlur", recursive: true, owned: false) as Node3D;
         Node3D? rearRamp = lodNode.FindChild("RearRamp", recursive: true, owned: false) as Node3D;
-        DisableShadowCasting(frontRotorBlur);
-        DisableShadowCasting(rearRotorBlur);
+        UnitView.ConfigureRotorBlurVisual(frontRotorBlur);
+        UnitView.ConfigureRotorBlurVisual(rearRotorBlur);
+        UnitView.ConfigureSolidRotorVisual(frontRotor);
+        UnitView.ConfigureSolidRotorVisual(rearRotor);
         if (muzzle is null && isInfantry)
         {
             Node3D mNode = new() { Name = "Muzzle", Position = new Vector3(0, 1.35f, -0.6f) };
@@ -434,19 +436,5 @@ internal sealed class ContactView
         }
         _currentModelType = ushort.MaxValue;
         _currentModelClassification = ContactClassification.Unknown;
-    }
-
-    private static void DisableShadowCasting(Node? root)
-    {
-        if (root is null) return;
-        if (root is GeometryInstance3D geom)
-        {
-            geom.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
-        }
-        int count = root.GetChildCount();
-        for (int i = 0; i < count; i++)
-        {
-            DisableShadowCasting(root.GetChild(i));
-        }
     }
 }

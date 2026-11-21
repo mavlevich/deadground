@@ -99,6 +99,9 @@ internal sealed partial class SelectionCard : PanelContainer
     private AltitudeBand _cachedSingleAltitudeBand;
     private int _cachedSingleAltMeters = -1;
     private bool _cachedSingleHasFlight;
+    private EntityId _cachedSingleSlingLoadId;
+    private EntityId _cachedSingleSlungById;
+    private FlightStateFlags _cachedSingleFlightFlags;
 
     // Multiple units cached state
     private int _cachedMultiTotal = -1;
@@ -143,7 +146,10 @@ internal sealed partial class SelectionCard : PanelContainer
             _cachedSingleHasFlight == ownUnit.HasFlightCapability &&
             _cachedSingleFlightPhase == ownUnit.FlightPhase &&
             _cachedSingleAltitudeBand == ownUnit.AltitudeBand &&
-            _cachedSingleAltMeters == altMeters)
+            _cachedSingleAltMeters == altMeters &&
+            _cachedSingleSlingLoadId == ownUnit.SlingLoadId &&
+            _cachedSingleSlungById == ownUnit.SlungById &&
+            _cachedSingleFlightFlags == ownUnit.FlightFlags)
         {
             return;
         }
@@ -163,6 +169,9 @@ internal sealed partial class SelectionCard : PanelContainer
         _cachedSingleFlightPhase = ownUnit.FlightPhase;
         _cachedSingleAltitudeBand = ownUnit.AltitudeBand;
         _cachedSingleAltMeters = altMeters;
+        _cachedSingleSlingLoadId = ownUnit.SlingLoadId;
+        _cachedSingleSlungById = ownUnit.SlungById;
+        _cachedSingleFlightFlags = ownUnit.FlightFlags;
 
         UnitDefinition? def = ownUnit.Definition < _catalog.Units.Length ? _catalog.Units[ownUnit.Definition] : null;
         string name = def is not null ? FormatUnitName(def) : $"Unit #{ownUnit.Id.Value}";
@@ -188,7 +197,16 @@ internal sealed partial class SelectionCard : PanelContainer
                 _ => ownUnit.FlightPhase.ToString()
             };
             string bandStr = ownUnit.AltitudeBand == AltitudeBand.Low ? "NOE Low" : "Cruise High";
-            _line1Label.Text = $"Health: {ownUnit.Health} / {maxHealth} HP ({hpPct}%) | Flight: {phaseStr} ({altMeters}m AGL, {bandStr})";
+            string cargoExtra = (ownUnit.FlightFlags & FlightStateFlags.FastRopeActive) != 0
+                ? " | FAST-ROPING"
+                : ownUnit.SlingLoadId != default
+                    ? $" | Sling #{ownUnit.SlingLoadId.Value}"
+                    : string.Empty;
+            _line1Label.Text = $"Health: {ownUnit.Health} / {maxHealth} HP ({hpPct}%) | Flight: {phaseStr} ({altMeters}m AGL, {bandStr}){cargoExtra}";
+        }
+        else if (ownUnit.SlungById != default)
+        {
+            _line1Label.Text = $"Health: {ownUnit.Health} / {maxHealth} HP ({hpPct}%) | External Sling Cargo (Carrier #{ownUnit.SlungById.Value})";
         }
         else
         {
