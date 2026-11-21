@@ -13,6 +13,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
     private readonly NavigationSystem? _navigation;
     private readonly CombatSystem? _combat;
     private readonly SmokeSystem? _smoke;
+    private readonly FlightSystem? _flight;
     private readonly IMissionSystem? _mission;
     private readonly DeterministicRandom[] _domainStreams = new DeterministicRandom[4];
 
@@ -33,6 +34,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
     public NavigationSystem? Navigation => _navigation;
     public CombatSystem? Combat => _combat;
     public SmokeSystem? Smoke => _smoke;
+    public FlightSystem? Flight => _flight;
     public IMissionSystem? Mission => _mission;
     public bool IsMissionFinished => _mission?.IsFinished == true;
     public GroupMoveResult? LastGroupMoveResult { get; private set; }
@@ -46,7 +48,8 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         GroupMove = 3,
         BoardTransport = 4,
         Disembark = 5,
-        DeploySmoke = 6
+        DeploySmoke = 6,
+        Helicopter = 7
     }
 
     private readonly record struct QueuedCommand(
@@ -58,28 +61,32 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         GroupMoveCommand GroupMove,
         BoardTransportCommand BoardTransport,
         DisembarkCommand Disembark,
-        DeploySmokeCommand DeploySmoke)
+        DeploySmokeCommand DeploySmoke,
+        HelicopterCommand Helicopter)
     {
         public static QueuedCommand CreateMove(int player, MoveCommand move) =>
-            new(player, CommandKind.Move, move, default, default, default, default, default, default);
+            new(player, CommandKind.Move, move, default, default, default, default, default, default, default);
 
         public static QueuedCommand CreateAttack(int player, AttackCommand attack) =>
-            new(player, CommandKind.Attack, default, attack, default, default, default, default, default);
+            new(player, CommandKind.Attack, default, attack, default, default, default, default, default, default);
 
         public static QueuedCommand CreateSetFireStance(int player, SetFireStanceCommand stance) =>
-            new(player, CommandKind.SetFireStance, default, default, stance, default, default, default, default);
+            new(player, CommandKind.SetFireStance, default, default, stance, default, default, default, default, default);
 
         public static QueuedCommand CreateGroupMove(int player, GroupMoveCommand groupMove) =>
-            new(player, CommandKind.GroupMove, default, default, default, groupMove, default, default, default);
+            new(player, CommandKind.GroupMove, default, default, default, groupMove, default, default, default, default);
 
         public static QueuedCommand CreateBoardTransport(int player, BoardTransportCommand board) =>
-            new(player, CommandKind.BoardTransport, default, default, default, default, board, default, default);
+            new(player, CommandKind.BoardTransport, default, default, default, default, board, default, default, default);
 
         public static QueuedCommand CreateDisembark(int player, DisembarkCommand disembark) =>
-            new(player, CommandKind.Disembark, default, default, default, default, default, disembark, default);
+            new(player, CommandKind.Disembark, default, default, default, default, default, disembark, default, default);
 
         public static QueuedCommand CreateDeploySmoke(int player, DeploySmokeCommand deploySmoke) =>
-            new(player, CommandKind.DeploySmoke, default, default, default, default, default, default, deploySmoke);
+            new(player, CommandKind.DeploySmoke, default, default, default, default, default, default, deploySmoke, default);
+
+        public static QueuedCommand CreateHelicopter(int player, HelicopterCommand helicopter) =>
+            new(player, CommandKind.Helicopter, default, default, default, default, default, default, default, helicopter);
     }
 
     public ulong MatchSeed { get; }
@@ -109,8 +116,15 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         _navigation = (_rules as RuleSet)?.FindSystem<NavigationSystem>();
         _combat = (_rules as RuleSet)?.FindSystem<CombatSystem>();
         _smoke = (_rules as RuleSet)?.FindSystem<SmokeSystem>();
+        _flight = (_rules as RuleSet)?.FindSystem<FlightSystem>();
         _mission = (_rules as RuleSet)?.FindSystem<IMissionSystem>();
         _smoke?.EnsureUnitsInitialized(_world);
+        _flight?.EnsureUnitsInitialized(_world);
+        if (_flight is not null && _combat is not null)
+        {
+            _combat.SetFlightSystem(_flight);
+            _flight.OnCrashImpact = _combat.ResolveHelicopterCrashImpact;
+        }
         for (int i = 0; i < MaxPlayers; i++)
         {
             _pendingGroupMoveResults[i] = new Queue<GroupMoveResult>();
@@ -139,7 +153,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         if (player < 1 || player > _lastAccepted.Length || command.Sequence == 0 ||
             command.Sequence <= _lastAccepted[player - 1] || _commandCount == _commands.Length ||
             !_world.Map.Contains(command.Target) || !_world.TryGetUnit(command.Unit, out UnitState unit) ||
-            unit.Owner != player || _world.IsContained(command.Unit)) return false;
+            unit.Owner != player || _world.IsContained(command.Unit) || _world.IsCrashing(command.Unit) || _world.IsSlung(command.Unit)) return false;
 
         if (command.FinalFacing.HasValue && !float.IsFinite(command.FinalFacing.Value)) return false;
 
@@ -155,7 +169,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         if (player < 1 || player > _lastAccepted.Length || command.Sequence == 0 ||
             command.Sequence <= _lastAccepted[player - 1] || _commandCount == _commands.Length ||
             command.Target.Value == 0 || !_world.TryGetUnit(command.Unit, out UnitState unit) ||
-            unit.Owner != player || _world.IsContained(command.Unit)) return false;
+            unit.Owner != player || _world.IsContained(command.Unit) || _world.IsCrashing(command.Unit) || _world.IsSlung(command.Unit)) return false;
 
         // Contact validation: target ContactId must be in sender's current contact knowledge
         if (_detection is not null)
@@ -181,7 +195,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
             command.Sequence <= _lastAccepted[player - 1] || _commandCount == _commands.Length ||
             command.Stance > FireStance.HoldFire ||
             !_world.TryGetUnit(command.Unit, out UnitState unit) ||
-            unit.Owner != player || _world.IsContained(command.Unit)) return false;
+            unit.Owner != player || _world.IsContained(command.Unit) || _world.IsCrashing(command.Unit) || _world.IsSlung(command.Unit)) return false;
 
         _commands[_commandCount++] = QueuedCommand.CreateSetFireStance(player, command);
         _lastAccepted[player - 1] = command.Sequence;
@@ -195,11 +209,18 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
             command.Sequence <= _lastAccepted[player - 1] || _commandCount == _commands.Length)
             return false;
 
-        if (!_world.TryGetUnit(command.Unit, out UnitState unit) || unit.Owner != player || _world.IsContained(command.Unit))
+        if (!_world.TryGetUnit(command.Unit, out UnitState unit) || unit.Owner != player ||
+            _world.IsContained(command.Unit) || _world.IsAircraft(command.Unit) ||
+            _world.IsCrashing(command.Unit) || _world.IsSlung(command.Unit))
             return false;
         if (!_world.TryGetUnit(command.Transport, out UnitState transport) || transport.Owner != player)
             return false;
-        if (!_world.IsContainer(command.Transport) || transport.Moving)
+        if (!_world.IsContainer(command.Transport) || transport.Moving ||
+            _world.IsAirborne(command.Transport) || _world.IsCrashing(command.Transport) || _world.IsSlung(command.Transport))
+            return false;
+
+        int requiredSlots = ResolveInternalCargoSlots(unit.Definition, transport.Definition);
+        if (requiredSlots <= 0)
             return false;
 
         int queuedSeats = 0;
@@ -207,18 +228,35 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         {
             if (_commands[i].Kind == CommandKind.BoardTransport &&
                 _commands[i].BoardTransport.Transport == command.Transport &&
-                _commands[i].BoardTransport.Unit != command.Unit)
+                _commands[i].BoardTransport.Unit != command.Unit &&
+                _world.TryGetUnit(_commands[i].BoardTransport.Unit, out UnitState qUnit))
             {
-                queuedSeats++;
+                queuedSeats += Math.Max(1, ResolveInternalCargoSlots(qUnit.Definition, transport.Definition));
             }
         }
 
-        if (_world.GetAvailableSeats(command.Transport) - queuedSeats <= 0)
+        if (_world.GetAvailableSeats(command.Transport) - queuedSeats < requiredSlots)
             return false;
 
         _commands[_commandCount++] = QueuedCommand.CreateBoardTransport(player, command);
         _lastAccepted[player - 1] = command.Sequence;
         return true;
+    }
+
+    private int ResolveInternalCargoSlots(ushort unitDef, ushort transportDef)
+    {
+        if (_flight is not null && _flight.TryGetCargoProfile(unitDef, out CargoProfile cargo))
+        {
+            if (!cargo.CanInternalLoad)
+                return 0;
+            if (!cargo.IsInfantry)
+            {
+                if (!_flight.TryGetProfile(transportDef, out FlightProfile fp) || !fp.CanLoadInternalVehicles)
+                    return 0;
+            }
+            return Math.Max(1, cargo.InternalCargoSlots);
+        }
+        return 1;
     }
 
     public bool TryEnqueue(int player, DisembarkCommand command)
@@ -228,7 +266,8 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
             command.Sequence <= _lastAccepted[player - 1] || _commandCount == _commands.Length)
             return false;
 
-        if (!_world.TryGetUnit(command.Transport, out UnitState transport) || transport.Owner != player)
+        if (!_world.TryGetUnit(command.Transport, out UnitState transport) || transport.Owner != player ||
+            _world.IsCrashing(command.Transport) || _world.IsSlung(command.Transport))
             return false;
         if (!_world.IsContainer(command.Transport) || _world.GetPassengerCount(command.Transport) == 0)
             return false;
@@ -250,7 +289,8 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         if (command.HasTarget && !_world.Map.Contains(command.Target))
             return false;
 
-        if (_smoke is null || !_smoke.CanDeploySmoke(player, command.Unit, _world))
+        if (_smoke is null || !_smoke.CanDeploySmoke(player, command.Unit, _world) ||
+            _world.IsCrashing(command.Unit) || _world.IsSlung(command.Unit))
             return false;
 
         // Prevent duplicate smoke activation in the same tick for the same unit
@@ -263,6 +303,55 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         }
 
         _commands[_commandCount++] = QueuedCommand.CreateDeploySmoke(player, command);
+        _lastAccepted[player - 1] = command.Sequence;
+        return true;
+    }
+
+    public bool TryEnqueue(int player, HelicopterCommand command)
+    {
+        if (IsMissionFinished) return false;
+        if (player < 1 || player > _lastAccepted.Length || command.Sequence == 0 ||
+            command.Sequence <= _lastAccepted[player - 1] || _commandCount == _commands.Length)
+            return false;
+
+        if (_flight is null) return false;
+        if (command.Kind > HelicopterOrderKind.SlingDrop) return false;
+        if (command.Kind == HelicopterOrderKind.SetAltitudeBand && command.AltitudeBand > AltitudeBand.High) return false;
+        if (command.HasTarget && !_world.Map.Contains(command.Target)) return false;
+
+        if (!_world.TryGetUnit(command.Unit, out UnitState unit) ||
+            unit.Owner != player ||
+            _world.IsContained(command.Unit) ||
+            _world.IsCrashing(command.Unit) ||
+            !_flight.IsAircraftDefinition(unit.Definition))
+        {
+            return false;
+        }
+
+        if (command.Kind == HelicopterOrderKind.SlingPickup)
+        {
+            if (!_flight.TryGetProfile(unit.Definition, out FlightProfile fp) ||
+                !_flight.CanSlingTarget(_world, command.Unit, player, in fp, command.TargetUnit, out _))
+            {
+                return false;
+            }
+        }
+        else if (command.Kind == HelicopterOrderKind.SlingDrop)
+        {
+            if (_world.GetSlingLoad(command.Unit) == default)
+                return false;
+        }
+        else if (command.Kind == HelicopterOrderKind.FastRope)
+        {
+            if (!_flight.TryGetProfile(unit.Definition, out FlightProfile fp) ||
+                !fp.CanFastRope ||
+                !_flight.HasInfantryPassenger(_world, command.Unit))
+            {
+                return false;
+            }
+        }
+
+        _commands[_commandCount++] = QueuedCommand.CreateHelicopter(player, command);
         _lastAccepted[player - 1] = command.Sequence;
         return true;
     }
@@ -288,7 +377,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
             {
                 EntityId u = units[i];
                 if (u.Value == 0 || !seen.Add(u.Value)) return false;
-                if (!_world.TryGetUnit(u, out UnitState unit) || unit.Owner != player || _world.IsContained(u)) return false;
+                if (!_world.TryGetUnit(u, out UnitState unit) || unit.Owner != player || _world.IsContained(u) || _world.IsCrashing(u) || _world.IsSlung(u)) return false;
             }
         }
         else
@@ -301,7 +390,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
                 {
                     if (units[j].Value == u.Value) return false;
                 }
-                if (!_world.TryGetUnit(u, out UnitState unit) || unit.Owner != player || _world.IsContained(u)) return false;
+                if (!_world.TryGetUnit(u, out UnitState unit) || unit.Owner != player || _world.IsContained(u) || _world.IsCrashing(u) || _world.IsSlung(u)) return false;
             }
         }
 
@@ -335,8 +424,15 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
                 {
                     UnitState u = _world.GetUnitAt(i);
                     _world.ClearAttackOrder(u.Id);
-                    _navigation?.ClearUnit(u.Id);
-                    _world.UpdateUnitNavigation(u.Id, u.Position, u.Position, false);
+                    if (_flight is not null && _world.IsAircraft(u.Id))
+                    {
+                        _flight.HoldPosition(_world, u.Id);
+                    }
+                    else
+                    {
+                        _navigation?.ClearUnit(u.Id);
+                        _world.UpdateUnitNavigation(u.Id, u.Position, u.Position, false);
+                    }
                 }
             }
             return;
@@ -344,7 +440,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
 
         _navigation?.SweepRemovedUnits(_world);
 
-        // Process queued orders: movement, attack, and stance commands
+        // Process queued orders: movement, attack, stance, and helicopter commands
         for (int i = 0; i < _commandCount; i++)
         {
             QueuedCommand queued = _commands[i];
@@ -361,12 +457,25 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
             }
             else if (queued.Kind == CommandKind.GroupMove)
             {
-                int gCount = queued.GroupMove.Units.Length;
+                ReadOnlySpan<EntityId> gUnits = queued.GroupMove.Units.Span;
+                int gCount = gUnits.Length;
+                int aircraftCount = 0;
                 for (int u = 0; u < gCount; u++)
                 {
-                    _world.ClearPendingDisembark(queued.GroupMove.Units.Span[u]);
+                    _world.ClearPendingDisembark(gUnits[u]);
+                    if (_flight is not null && _world.IsAircraft(gUnits[u]))
+                    {
+                        aircraftCount++;
+                    }
                 }
-                if (_navigation is not null)
+
+                if (aircraftCount > 0 && _flight is not null)
+                {
+                    GroupMoveResult result = ExecuteMixedGroupMove(queued.Player, queued.GroupMove, aircraftCount);
+                    LastGroupMoveResult = result;
+                    _pendingGroupMoveResults[queued.Player - 1].Enqueue(result);
+                }
+                else if (_navigation is not null)
                 {
                     GroupMoveResult result = _navigation.ExecuteGroupMove(queued.Player, queued.GroupMove, _world);
                     LastGroupMoveResult = result;
@@ -392,20 +501,28 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
             {
                 if (!_world.TryGetUnit(queued.BoardTransport.Transport, out UnitState targetTransport) ||
                     targetTransport.Owner != queued.Player || targetTransport.Moving ||
+                    _world.IsAirborne(targetTransport.Id) || _world.IsCrashing(targetTransport.Id) || _world.IsSlung(targetTransport.Id) ||
                     !_world.TryGetUnit(queued.BoardTransport.Unit, out UnitState soldier) ||
-                    soldier.Owner != queued.Player || _world.IsContained(soldier.Id))
+                    soldier.Owner != queued.Player || _world.IsContained(soldier.Id) || _world.IsAircraft(soldier.Id) || _world.IsSlung(soldier.Id))
+                {
+                    _world.ClearBoardingOrder(queued.BoardTransport.Unit);
+                    continue;
+                }
+
+                int requiredSlots = ResolveInternalCargoSlots(soldier.Definition, targetTransport.Definition);
+                if (requiredSlots <= 0)
                 {
                     _world.ClearBoardingOrder(queued.BoardTransport.Unit);
                     continue;
                 }
 
                 _world.ClearBoardingOrder(soldier.Id);
-                if (!_world.TryReserveSeat(targetTransport.Id))
+                if (!_world.TryReserveSeat(targetTransport.Id, requiredSlots))
                 {
                     continue;
                 }
 
-                _world.SetBoardingOrder(soldier.Id, targetTransport.Id);
+                _world.SetBoardingOrder(soldier.Id, targetTransport.Id, requiredSlots);
                 _world.ClearAttackOrder(soldier.Id);
 
                 Vector2 diff = soldier.Position - targetTransport.Position;
@@ -444,7 +561,23 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
                 if (_world.TryGetUnit(queued.Disembark.Transport, out UnitState trans) && trans.Owner == queued.Player)
                 {
                     float dist = Vector2.Distance(trans.Position, queued.Disembark.Target);
-                    if (dist > 3.0f)
+                    if (_flight is not null && _world.IsAircraft(trans.Id))
+                    {
+                        if (_world.IsAirborne(trans.Id) || dist > 3.0f)
+                        {
+                            _world.SetPendingDisembark(trans.Id, queued.Disembark.Sequence, queued.Player, queued.Disembark.Target, queued.Disembark.TargetSurface);
+                            if (_flight.OrderMove(_world, trans.Id, queued.Disembark.Target, finalFacing: null, landOnArrival: true, Tick))
+                            {
+                                _world.ClearAttackOrder(trans.Id);
+                            }
+                        }
+                        else
+                        {
+                            _world.ClearPendingDisembark(trans.Id);
+                            ExecuteDisembarkInternal(queued.Player, trans, queued.Disembark.Sequence, queued.Disembark.TargetSurface, queued.Disembark.Target);
+                        }
+                    }
+                    else if (dist > 3.0f)
                     {
                         _world.SetPendingDisembark(trans.Id, queued.Disembark.Sequence, queued.Player, queued.Disembark.Target, queued.Disembark.TargetSurface);
                         MoveCommand moveCmd = new(queued.Disembark.Sequence, queued.Disembark.ClientTick, trans.Id, queued.Disembark.Target, TargetSurface: queued.Disembark.TargetSurface);
@@ -474,12 +607,33 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
             {
                 _smoke?.TryExecuteDeploySmoke(queued.Player, queued.DeploySmoke, _world, Tick);
             }
+            else if (queued.Kind == CommandKind.Helicopter)
+            {
+                if (queued.Helicopter.Kind is HelicopterOrderKind.TakeOff or HelicopterOrderKind.FastRope or HelicopterOrderKind.SlingPickup or HelicopterOrderKind.SlingDrop ||
+                    (queued.Helicopter.Kind == HelicopterOrderKind.Land && queued.Helicopter.HasTarget))
+                {
+                    _world.ClearPendingDisembark(queued.Helicopter.Unit);
+                    _world.ClearAttackOrder(queued.Helicopter.Unit);
+                }
+                if (queued.Helicopter.Kind == HelicopterOrderKind.SlingPickup && queued.Helicopter.TargetUnit != default)
+                {
+                    _navigation?.ClearUnit(queued.Helicopter.TargetUnit);
+                }
+                _flight?.OrderHelicopter(_world, queued.Helicopter, Tick);
+            }
             else
             {
                 // A valid accepted movement order cancels an active attack or boarding order on this unit
                 _world.ClearBoardingOrder(queued.Move.Unit);
                 _world.ClearPendingDisembark(queued.Move.Unit);
-                if (_navigation is not null)
+                if (_flight is not null && _world.IsAircraft(queued.Move.Unit))
+                {
+                    if (_flight.OrderMove(_world, queued.Move.Unit, queued.Move.Target, queued.Move.FinalFacing, landOnArrival: false, Tick))
+                    {
+                        _world.ClearAttackOrder(queued.Move.Unit);
+                    }
+                }
+                else if (_navigation is not null)
                 {
                     if (_navigation.EnqueueCommand(queued.Player, queued.Move, _world))
                     {
@@ -501,6 +655,83 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         ProcessPendingDisembarks();
     }
 
+    private GroupMoveResult ExecuteMixedGroupMove(int player, GroupMoveCommand command, int aircraftCount)
+    {
+        ReadOnlySpan<EntityId> allUnits = command.Units.Span;
+        int totalCount = allUnits.Length;
+        int groundCount = totalCount - aircraftCount;
+
+        var aircraftAssignments = new GroupMoveAssignment[aircraftCount];
+        EntityId[]? groundUnits = groundCount > 0 ? new EntityId[groundCount] : null;
+        int airIdx = 0;
+        int gndIdx = 0;
+
+        for (int i = 0; i < totalCount; i++)
+        {
+            EntityId id = allUnits[i];
+            if (_world.IsAircraft(id))
+            {
+                Vector2 target = command.Target;
+                if (aircraftCount > 1)
+                {
+                    float angle = (MathF.Tau * airIdx) / aircraftCount;
+                    float spacing = 22.0f;
+                    target += new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * spacing;
+                    target = new Vector2(
+                        Math.Clamp(target.X, 10f, MathF.Max(10f, _world.Map.Width - 10f)),
+                        Math.Clamp(target.Y, 10f, MathF.Max(10f, _world.Map.Depth - 10f)));
+                }
+
+                if (_flight!.OrderMove(_world, id, target, command.FinalFacing, landOnArrival: false, Tick))
+                {
+                    _world.ClearAttackOrder(id);
+                }
+                aircraftAssignments[airIdx++] = new GroupMoveAssignment(id, target, 0, command.FinalFacing);
+            }
+            else if (groundUnits is not null)
+            {
+                groundUnits[gndIdx++] = id;
+            }
+        }
+
+        if (groundUnits is null)
+        {
+            return new GroupMoveResult(
+                command.Sequence,
+                Tick,
+                command.Target,
+                command.TargetSurface,
+                command.Mode,
+                aircraftAssignments,
+                ReadOnlyMemory<GroupMoveUnplaced>.Empty);
+        }
+
+        GroupMoveCommand groundCmd = command with { Units = groundUnits };
+        GroupMoveResult groundResult;
+        if (_navigation is not null)
+        {
+            groundResult = _navigation.ExecuteGroupMove(player, groundCmd, _world);
+        }
+        else
+        {
+            var groundPlaced = new GroupMoveAssignment[groundUnits.Length];
+            for (int u = 0; u < groundUnits.Length; u++)
+            {
+                EntityId id = groundUnits[u];
+                groundPlaced[u] = new GroupMoveAssignment(id, command.Target, command.TargetSurface, command.FinalFacing);
+                _world.SetMoveTarget(player, id, command.Target);
+                _world.ClearAttackOrder(id);
+            }
+            groundResult = new GroupMoveResult(command.Sequence, Tick, command.Target, command.TargetSurface, command.Mode, groundPlaced, ReadOnlyMemory<GroupMoveUnplaced>.Empty);
+        }
+
+        var mergedPlaced = new GroupMoveAssignment[groundResult.Placed.Length + aircraftAssignments.Length];
+        groundResult.Placed.Span.CopyTo(mergedPlaced);
+        aircraftAssignments.CopyTo(mergedPlaced, groundResult.Placed.Length);
+
+        return groundResult with { Placed = mergedPlaced };
+    }
+
     private void ProcessPendingDisembarks()
     {
         if (_world.PendingDisembarkCount == 0) return;
@@ -515,6 +746,31 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
             if (!_world.TryGetUnit(transId, out UnitState trans))
             {
                 _world.ClearPendingDisembark(transId);
+                continue;
+            }
+
+            if (_world.IsAircraft(transId))
+            {
+                if (_world.TryGetFlightState(transId, out WorldState.UnitFlightState fs))
+                {
+                    if (fs.Phase == FlightPhase.Crashing)
+                    {
+                        _world.ClearPendingDisembark(transId);
+                        continue;
+                    }
+                    if (fs.Phase == FlightPhase.Ground && !trans.Moving)
+                    {
+                        _world.ClearPendingDisembark(transId);
+                        ExecuteDisembarkInternal(pending.Player, trans, pending.Sequence, pending.Surface, pending.Target);
+                        continue;
+                    }
+                    // If the helicopter reached hover and aborted landing due to blocked LZ, clear pending disembark
+                    if (fs.Phase == FlightPhase.Airborne && !fs.HasMoveTarget && !fs.LandOnArrival)
+                    {
+                        _world.ClearPendingDisembark(transId);
+                        continue;
+                    }
+                }
                 continue;
             }
 

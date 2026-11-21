@@ -35,8 +35,10 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
     private readonly IUnitPerceptionCatalog _perceptionCatalog;
     private readonly DetectionSystem _detection;
     private readonly NavigationSystem? _navigation;
+    private FlightSystem? _flight;
     private readonly LineOfSightContext _losContext;
     private DeterministicRandom? _combatRandom;
+    private int _currentTick;
 
     private DeterministicRandom CombatRandom =>
         _combatRandom ?? throw new InvalidOperationException("CombatSystem random stream is not initialized.");
@@ -55,6 +57,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
 
     private readonly EntityId[] _destroyedBuffer;
     private int _destroyedCount;
+    private readonly EntityId[] _crashSplashKilledBuffer;
 
     private readonly CombatKillRecord[] _kills = new CombatKillRecord[256];
     private int _killCount;
@@ -86,7 +89,8 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         int maxUnits = 1024,
         int maxSides = Simulation.MaxPlayers,
         int maxEventsPerPlayer = DefaultMaxEventsPerPlayer,
-        DeterministicRandom? combatRandom = null)
+        DeterministicRandom? combatRandom = null,
+        FlightSystem? flight = null)
     {
         ArgumentNullException.ThrowIfNull(geometry);
         ArgumentNullException.ThrowIfNull(combatCatalog);
@@ -98,6 +102,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         _perceptionCatalog = perceptionCatalog;
         _detection = detection;
         _navigation = navigation;
+        _flight = flight;
         _maxUnits = maxUnits;
         _maxSides = maxSides;
         _maxEventsPerPlayer = maxEventsPerPlayer;
@@ -106,11 +111,31 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         _destinationEvaluator = new DestinationEvaluator(geometry);
         _losContext = new LineOfSightContext(geometry.Structures.Count);
         _destroyedBuffer = new EntityId[maxUnits];
+        _crashSplashKilledBuffer = new EntityId[maxUnits];
         _playerEvents = new CombatEventObservation[maxSides * maxEventsPerPlayer];
         _playerEventCount = new int[maxSides];
         _playerEventOverflow = new long[maxSides];
         _admittedPlayers = new bool[maxSides];
         Array.Fill(_admittedPlayers, true);
+    }
+
+    internal void SetFlightSystem(FlightSystem? flight) => _flight = flight;
+
+    public static bool CanEngageTargetAltitude(WeaponDefinition weapon, WorldState world, EntityId targetId)
+    {
+        if (world.IsCrashing(targetId))
+            return false;
+
+        if (world.IsAirborne(targetId))
+        {
+            float altitude = world.GetUnitAltitude(targetId);
+            if (altitude > FlightSystem.MinCrashAltitude)
+            {
+                return weapon.CanTargetAir && altitude <= weapon.MaxAirTargetAltitude;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -119,6 +144,12 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
     /// </summary>
     private void OrderUnitToMove(int player, EntityId unitId, Vector2 destination, WorldState world)
     {
+        if (_flight is not null && world.IsAircraft(unitId))
+        {
+            _flight.OrderMove(world, unitId, destination, finalFacing: null, landOnArrival: false, _currentTick);
+            return;
+        }
+
         if (_navigation is not null)
         {
             _navigation.EnqueueCommand(player, new MoveCommand(0, 0, unitId, destination), world);
@@ -129,12 +160,44 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         }
     }
 
-    public bool HasLineOfSightToTarget(UnitState attacker, WeaponDefinition weapon, UnitState targetUnit, out Vector3 hitPoint, out Vector3 muzzlePos)
+    private void StopUnitMovement(UnitState unit, WorldState world)
     {
-        float attackerGroundY = _geometry.GetSurfaceHeight(attacker.Position, attacker.SupportSurface);
+        if (_flight is not null && world.IsAircraft(unit.Id))
+        {
+            _flight.HoldPosition(world, unit.Id);
+            return;
+        }
+
+        world.UpdateUnitNavigation(unit.Id, unit.Position, unit.Position, false);
+        _navigation?.ClearUnit(unit.Id);
+    }
+
+    public bool HasLineOfSightToTarget(UnitState attacker, WeaponDefinition weapon, UnitState targetUnit, out Vector3 hitPoint, out Vector3 muzzlePos) =>
+        HasLineOfSightToTarget(attacker, weapon, targetUnit, attackerAltitude: 0f, targetAltitude: 0f, out hitPoint, out muzzlePos);
+
+    public bool HasLineOfSightToTarget(UnitState attacker, WeaponDefinition weapon, UnitState targetUnit, WorldState world, out Vector3 hitPoint, out Vector3 muzzlePos) =>
+        HasLineOfSightToTarget(
+            attacker,
+            weapon,
+            targetUnit,
+            world.GetUnitAltitude(attacker.Id),
+            world.GetUnitAltitude(targetUnit.Id),
+            out hitPoint,
+            out muzzlePos);
+
+    public bool HasLineOfSightToTarget(
+        UnitState attacker,
+        WeaponDefinition weapon,
+        UnitState targetUnit,
+        float attackerAltitude,
+        float targetAltitude,
+        out Vector3 hitPoint,
+        out Vector3 muzzlePos)
+    {
+        float attackerGroundY = _geometry.GetSurfaceHeight(attacker.Position, attacker.SupportSurface) + attackerAltitude;
         muzzlePos = new Vector3(attacker.Position.X, attackerGroundY + weapon.MuzzleHeight, attacker.Position.Y);
 
-        float targetGroundY = _geometry.GetSurfaceHeight(targetUnit.Position, targetUnit.SupportSurface);
+        float targetGroundY = _geometry.GetSurfaceHeight(targetUnit.Position, targetUnit.SupportSurface) + targetAltitude;
         hitPoint = Vector3.Zero;
 
         if (_perceptionCatalog.TryGetProfile(targetUnit.Definition, out UnitPerceptionProfile targetPerception) &&
@@ -162,9 +225,15 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         return false;
     }
 
-    public float ComputeVisibleShare(UnitState attacker, UnitState targetUnit)
+    public float ComputeVisibleShare(UnitState attacker, UnitState targetUnit) =>
+        ComputeVisibleShare(attacker, targetUnit, attackerAltitude: 0f, targetAltitude: 0f);
+
+    public float ComputeVisibleShare(UnitState attacker, UnitState targetUnit, WorldState world) =>
+        ComputeVisibleShare(attacker, targetUnit, world.GetUnitAltitude(attacker.Id), world.GetUnitAltitude(targetUnit.Id));
+
+    public float ComputeVisibleShare(UnitState attacker, UnitState targetUnit, float attackerAltitude, float targetAltitude)
     {
-        float attackerGroundY = _geometry.GetSurfaceHeight(attacker.Position, attacker.SupportSurface);
+        float attackerGroundY = _geometry.GetSurfaceHeight(attacker.Position, attacker.SupportSurface) + attackerAltitude;
         float muzzleHeight = 1.8f;
         if (_combatCatalog.TryGetProfile(attacker.Definition, out UnitCombatProfile attackerProfile) &&
             attackerProfile.Weapon is not null)
@@ -173,7 +242,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         }
         Vector3 muzzlePos = new(attacker.Position.X, attackerGroundY + muzzleHeight, attacker.Position.Y);
 
-        float targetGroundY = _geometry.GetSurfaceHeight(targetUnit.Position, targetUnit.SupportSurface);
+        float targetGroundY = _geometry.GetSurfaceHeight(targetUnit.Position, targetUnit.SupportSurface) + targetAltitude;
         if (_perceptionCatalog.TryGetProfile(targetUnit.Definition, out UnitPerceptionProfile targetPerception) &&
             targetPerception.TargetPoints is { RelativeHeights.Length: > 0 } points)
         {
@@ -219,7 +288,8 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         Vector2 targetPos,
         float targetRadius,
         WeaponDefinition weapon,
-        uint targetSupportSurface = 0)
+        uint targetSupportSurface = 0,
+        float targetAltitude = 0f)
     {
         Vector2 lineOfFire = targetPos - attackerPos;
         float lineLen = lineOfFire.Length();
@@ -249,7 +319,10 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
             }
         }
         float groundY = _geometry.GetSurfaceHeight(miss2D, surfaceAtMiss);
-        Vector3 miss3D = new(miss2D.X, groundY, miss2D.Y);
+        float missY = targetAltitude > FlightSystem.MinCrashAltitude
+            ? MathF.Max(groundY, groundY + targetAltitude + ((float)CombatRandom.NextDouble() * 2f - 1f) * MathF.Min(4.0f, lateralMax))
+            : groundY;
+        Vector3 miss3D = new(miss2D.X, missY, miss2D.Y);
 
         LineOfSightResult los = _geometry.CheckLineOfFire(muzzlePos, miss3D, _losContext);
         return !los.IsClear ? los.HitPoint : miss3D;
@@ -259,9 +332,10 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
     {
         ContactClassification.Tank => 0,
         ContactClassification.Apc => 1,
-        ContactClassification.Recon => 2,
-        ContactClassification.Infantry => 3,
-        _ => 4
+        ContactClassification.Helicopter => 2,
+        ContactClassification.Recon => 3,
+        ContactClassification.Infantry => 4,
+        _ => 5
     };
 
     public static float NormalizeYaw(float yaw)
@@ -380,7 +454,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         SideContactTracker tracker,
         WorldState world)
     {
-        if (cs.Stance == FireStance.HoldFire || cs.Ammunition <= 0)
+        if (cs.Stance == FireStance.HoldFire || cs.Ammunition <= 0 || world.IsCrashing(attacker.Id))
         {
             return false;
         }
@@ -393,6 +467,11 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         if (!tracker.TryGetBoundEntity(contact.Id, out EntityId candidateEntityId) ||
             !world.TryGetUnit(candidateEntityId, out UnitState candidateUnit) ||
             !world.AreHostile(attacker.Owner, candidateUnit.Owner))
+        {
+            return false;
+        }
+
+        if (!CanEngageTargetAltitude(weapon, world, candidateEntityId))
         {
             return false;
         }
@@ -414,12 +493,12 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
             return false;
         }
 
-        if (!HasLineOfSightToTarget(attacker, weapon, candidateUnit, out _, out _))
+        if (!HasLineOfSightToTarget(attacker, weapon, candidateUnit, world, out _, out _))
         {
             return false;
         }
 
-        if (ComputeVisibleShare(attacker, candidateUnit) <= 0f)
+        if (ComputeVisibleShare(attacker, candidateUnit, world) <= 0f)
         {
             return false;
         }
@@ -524,7 +603,8 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
             return false;
 
         // Attacker ownership validation
-        if (!world.TryGetUnit(command.Unit, out UnitState attacker) || attacker.Owner != player || world.IsContained(command.Unit))
+        if (!world.TryGetUnit(command.Unit, out UnitState attacker) || attacker.Owner != player ||
+            world.IsContained(command.Unit) || world.IsCrashing(command.Unit) || world.IsSlung(command.Unit))
             return false;
 
         // Verify attacker has an operational weapon
@@ -546,7 +626,8 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         if (!tracker.TryGetBoundEntity(command.Target, out EntityId targetEntityId))
             return false;
 
-        if (!world.TryGetUnit(targetEntityId, out UnitState targetUnit) || !world.AreHostile(player, targetUnit.Owner) || world.IsContained(targetEntityId))
+        if (!world.TryGetUnit(targetEntityId, out UnitState targetUnit) || !world.AreHostile(player, targetUnit.Owner) ||
+            world.IsContained(targetEntityId) || !CanEngageTargetAltitude(attackerProfile.Weapon, world, targetEntityId))
             return false;
 
         SyncSmokeContext();
@@ -556,12 +637,11 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         // Otherwise: drive toward target position.
         float dist = Vector2.Distance(attacker.Position, targetUnit.Position);
         bool inRange = dist <= attackerProfile.Weapon.Range + RangeToleranceMargin;
-        bool hasClearShot = inRange && HasLineOfSightToTarget(attacker, attackerProfile.Weapon, targetUnit, out _, out _);
+        bool hasClearShot = inRange && HasLineOfSightToTarget(attacker, attackerProfile.Weapon, targetUnit, world, out _, out _);
 
         if (inRange && hasClearShot)
         {
-            world.UpdateUnitNavigation(command.Unit, attacker.Position, attacker.Position, false);
-            _navigation?.ClearUnit(command.Unit);
+            StopUnitMovement(attacker, world);
         }
         else
         {
@@ -598,6 +678,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
 
     public void Update(WorldState world, int tick)
     {
+        _currentTick = tick;
         ActiveAttackersCount = 0;
         _destroyedCount = 0;
         SyncSmokeContext();
@@ -608,7 +689,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         for (int i = 0; i < unitCount; i++)
         {
             UnitState attacker = world.GetUnitAt(i);
-            if (world.IsContained(attacker.Id)) continue;
+            if (world.IsContained(attacker.Id) || world.IsCrashing(attacker.Id) || world.IsSlung(attacker.Id)) continue;
             if (!_combatCatalog.TryGetProfile(attacker.Definition, out UnitCombatProfile profile) ||
                 profile.Weapon is null)
             {
@@ -658,7 +739,8 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                 // Contact is Current: re-resolve bound entity
                 if (!tracker.TryGetBoundEntity(cs.TargetContactId, out EntityId targetEntityId) ||
                     !world.TryGetUnit(targetEntityId, out UnitState targetUnit) ||
-                    !world.AreHostile(attacker.Owner, targetUnit.Owner))
+                    !world.AreHostile(attacker.Owner, targetUnit.Owner) ||
+                    !CanEngageTargetAltitude(weapon, world, targetEntityId))
                 {
                     cs.HasAttackOrder = false;
                     cs.TargetContactId = default;
@@ -678,13 +760,12 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                 // Check if within weapon range
                 if (dist <= weapon.Range + RangeToleranceMargin)
                 {
-                    if (HasLineOfSightToTarget(attacker, weapon, targetUnit, out Vector3 hitPoint, out Vector3 muzzlePos))
+                    if (HasLineOfSightToTarget(attacker, weapon, targetUnit, world, out Vector3 hitPoint, out Vector3 muzzlePos))
                     {
                         // Within range and clear line of sight: stop moving and engage
                         if (attacker.Moving)
                         {
-                            world.UpdateUnitNavigation(attacker.Id, attacker.Position, attacker.Position, false);
-                            _navigation?.ClearUnit(attacker.Id);
+                            StopUnitMovement(attacker, world);
                             attacker = world.GetUnitAt(i);
                         }
 
@@ -712,7 +793,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                             continue;
                         }
 
-                        float visibleShare = ComputeVisibleShare(attacker, targetUnit);
+                        float visibleShare = ComputeVisibleShare(attacker, targetUnit, world);
                         if (visibleShare <= 0f)
                         {
                             cs.Status = AttackExecutionStatus.Obstructed;
@@ -762,10 +843,11 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                         boundId.Value == cs.TargetEntityId.Value &&
                         world.TryGetUnit(cs.TargetEntityId, out UnitState currentTargetUnit) &&
                         world.AreHostile(attacker.Owner, currentTargetUnit.Owner) &&
+                        CanEngageTargetAltitude(weapon, world, cs.TargetEntityId) &&
                         Vector2.Distance(attacker.Position, currentTargetUnit.Position) <= weapon.Range + RangeToleranceMargin &&
                         (cs.Stance != FireStance.ReturnFire || (cs.LastTookFireAttacker.Value != 0 && cs.TargetEntityId.Value == cs.LastTookFireAttacker.Value)) &&
                         CanPenetrateObservedContact(attacker.Position, weapon, currentContact, _combatCatalog) &&
-                        HasLineOfSightToTarget(attacker, weapon, currentTargetUnit, out currentHitPoint, out currentMuzzlePos))
+                        HasLineOfSightToTarget(attacker, weapon, currentTargetUnit, world, out currentHitPoint, out currentMuzzlePos))
                     {
                         targetRetained = true;
                         retainedContact = currentContact;
@@ -832,6 +914,9 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                             continue;
                         }
 
+                        if (!CanEngageTargetAltitude(weapon, world, candidateEntityId))
+                            continue;
+
                         float distToCandidate = Vector2.Distance(attacker.Position, candidateUnit.Position);
                         if (distToCandidate > weapon.Range + RangeToleranceMargin)
                             continue;
@@ -842,10 +927,10 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                         if (!CanPenetrateObservedContact(attacker.Position, weapon, candidate, _combatCatalog))
                             continue;
 
-                        if (!HasLineOfSightToTarget(attacker, weapon, candidateUnit, out Vector3 candHit, out Vector3 candMuzzle))
+                        if (!HasLineOfSightToTarget(attacker, weapon, candidateUnit, world, out Vector3 candHit, out Vector3 candMuzzle))
                             continue;
 
-                        if (ComputeVisibleShare(attacker, candidateUnit) <= 0f)
+                        if (ComputeVisibleShare(attacker, candidateUnit, world) <= 0f)
                             continue;
 
                         int priority = GetTargetClassPriority(candidate.Classification);
@@ -915,7 +1000,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                         continue;
                     }
 
-                    float visibleShare = ComputeVisibleShare(attacker, targetUnit);
+                    float visibleShare = ComputeVisibleShare(attacker, targetUnit, world);
                     if (visibleShare <= 0f)
                     {
                         cs.Status = AttackExecutionStatus.Obstructed;
@@ -1031,7 +1116,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         }
 
         // 0. Visible share calculation from muzzle height
-        float visibleShare = ComputeVisibleShare(attacker, targetUnit);
+        float visibleShare = ComputeVisibleShare(attacker, targetUnit, world);
         if (visibleShare <= 0f)
         {
             return;
@@ -1134,7 +1219,14 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         else
         {
             // Miss: calculate dispersed impact point, hits ground or structure, never the target
-            impactPoint = CalculateMissImpactPoint(muzzlePos, attacker.Position, targetUnit.Position, targetRadius, weapon, targetUnit.SupportSurface);
+            impactPoint = CalculateMissImpactPoint(
+                muzzlePos,
+                attacker.Position,
+                targetUnit.Position,
+                targetRadius,
+                weapon,
+                targetUnit.SupportSurface,
+                world.GetUnitAltitude(targetUnit.Id));
             hitResult = HitResult.Miss;
         }
 
@@ -1160,6 +1252,12 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
 
         if (isDestroyed)
         {
+            if (_flight is not null &&
+                _flight.TryBeginCrash(world, targetUnit.Id, attacker.Id, attacker.Definition, attacker.Owner, shotDistance))
+            {
+                return;
+            }
+
             bool alreadyDestroyed = false;
             for (int d = 0; d < _destroyedCount; d++)
             {
@@ -1301,7 +1399,155 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         }
     }
 
-    private void HandleContainerDestruction(EntityId transportId, WorldState world, int tick)
+    public void ResolveHelicopterCrashImpact(
+        WorldState world,
+        int tick,
+        EntityId unitId,
+        ushort definition,
+        int owner,
+        Vector2 impactPosition,
+        float heading,
+        in FlightProfile profile,
+        in WorldState.UnitFlightState flightState)
+    {
+        if (!world.TryGetUnit(unitId, out UnitState u))
+            return;
+
+        TotalUnitsDestroyed++;
+        bool leavesWreck = true;
+        if (_combatCatalog is not null && _combatCatalog.TryGetProfile(definition, out UnitCombatProfile victimProfile))
+        {
+            leavesWreck = victimProfile.LeavesWreck;
+        }
+
+        WreckState wreck = default;
+        if (leavesWreck)
+        {
+            wreck = world.AddWreck(
+                definition,
+                impactPosition,
+                supportSurface: 0,
+                heading,
+                turretYaw: 0f,
+                tick,
+                owner);
+            _detection.NotifyWreckCreated(wreck, owner, unitId);
+        }
+
+        RecordDestroyedEvent(
+            tick,
+            definition,
+            unitId,
+            owner,
+            impactPosition,
+            targetSupportSurface: 0,
+            wreck.Id);
+
+        if (flightState.CrashKillerId.Value != 0 && _killCount < _kills.Length)
+        {
+            _kills[_killCount++] = new CombatKillRecord(
+                tick,
+                flightState.CrashKillerId,
+                flightState.CrashKillerDefinition,
+                flightState.CrashKillerOwner,
+                unitId,
+                definition,
+                owner,
+                flightState.CrashShotDistance);
+        }
+
+        if (world.IsContainer(unitId) && world.GetPassengerCount(unitId) > 0)
+        {
+            int crashPassengerDamage = Math.Max(200, profile.CrashSplashDamage * 3);
+            HandleContainerDestruction(unitId, world, tick, damageOverride: crashPassengerDamage);
+        }
+
+        // Destroy any externally slung cargo vehicle on crash impact
+        if (flightState.SlingLoadId != default && world.TryGetUnit(flightState.SlingLoadId, out UnitState slungUnit))
+        {
+            float slungHeading = world.TryGetCombatState(slungUnit.Id, out WorldState.CombatState slungCs) ? slungCs.HullHeading : heading;
+            float slungTurret = slungCs.TurretYaw;
+            world.AddWreck(slungUnit.Definition, impactPosition, 0, slungHeading, slungTurret, tick, slungUnit.Owner);
+            if (world.IsContainer(slungUnit.Id) && world.GetPassengerCount(slungUnit.Id) > 0)
+            {
+                HandleContainerDestruction(slungUnit.Id, world, tick, damageOverride: 200);
+            }
+            _navigation?.ClearUnit(slungUnit.Id);
+            world.RemoveUnit(slungUnit.Id);
+            TotalUnitsDestroyed++;
+        }
+
+        // Apply crash explosion splash damage to nearby ground units
+        int splashKilledCount = 0;
+        if (profile.CrashSplashRadius > 0f && profile.CrashSplashDamage > 0)
+        {
+            float radiusSq = profile.CrashSplashRadius * profile.CrashSplashRadius;
+            for (int i = 0; i < world.Count; i++)
+            {
+                UnitState candidate = world.GetUnitAt(i);
+                if (candidate.Id == unitId || world.IsContained(candidate.Id) || world.IsAirborne(candidate.Id))
+                    continue;
+
+                float distSq = Vector2.DistanceSquared(impactPosition, candidate.Position);
+                if (distSq > radiusSq)
+                    continue;
+
+                float dist = MathF.Sqrt(distSq);
+                float falloff = Math.Clamp(1f - (dist / profile.CrashSplashRadius) * 0.65f, 0.35f, 1f);
+                int splashDamage = Math.Max(1, (int)MathF.Round(profile.CrashSplashDamage * falloff));
+                world.ApplyDamage(candidate.Id, splashDamage, out bool killed);
+                TotalDamageApplied += splashDamage;
+                if (killed && splashKilledCount < _crashSplashKilledBuffer.Length)
+                {
+                    _crashSplashKilledBuffer[splashKilledCount++] = candidate.Id;
+                }
+            }
+        }
+
+        world.RemoveUnit(unitId);
+        _navigation?.ClearUnit(unitId);
+        _detection.NotifyEntityDestroyed(unitId);
+
+        for (int i = 0; i < world.Count; i++)
+        {
+            UnitState survivor = world.GetUnitAt(i);
+            if (world.TryGetCombatState(survivor.Id, out WorldState.CombatState survivorCs) &&
+                survivorCs.TargetEntityId.Value != 0 &&
+                survivorCs.TargetEntityId.Value == unitId.Value)
+            {
+                if (survivorCs.HasAttackOrder)
+                {
+                    survivorCs = survivorCs with
+                    {
+                        HasAttackOrder = false,
+                        TargetEntityId = default,
+                        TargetContactId = default
+                    };
+                    StopUnitMovement(survivor, world);
+                }
+                else
+                {
+                    survivorCs = survivorCs with
+                    {
+                        TargetEntityId = default,
+                        TargetContactId = default
+                    };
+                }
+                world.SetCombatState(survivor.Id, survivorCs);
+            }
+        }
+
+        for (int k = 0; k < splashKilledCount; k++)
+        {
+            if (world.TryGetUnit(_crashSplashKilledBuffer[k], out _))
+            {
+                TotalUnitsDestroyed++;
+                DestroyUnit(_crashSplashKilledBuffer[k], world, tick);
+            }
+        }
+    }
+
+    private void HandleContainerDestruction(EntityId transportId, WorldState world, int tick, int? damageOverride = null)
     {
         if (!world.TryGetUnit(transportId, out UnitState transport)) return;
         ReadOnlySpan<EntityId> passengers = world.GetPassengers(transportId);
@@ -1313,8 +1559,8 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         Span<EntityId> survivors = stackalloc EntityId[buffer.Length];
         int survivorCount = 0;
 
-        int destructionDamage = DefaultContainerDestructionDamage;
-        if (_combatCatalog is not null && _combatCatalog.TryGetProfile(transport.Definition, out UnitCombatProfile transProfile))
+        int destructionDamage = damageOverride ?? DefaultContainerDestructionDamage;
+        if (!damageOverride.HasValue && _combatCatalog is not null && _combatCatalog.TryGetProfile(transport.Definition, out UnitCombatProfile transProfile))
         {
             destructionDamage = transProfile.ContainerDestructionDamage;
         }

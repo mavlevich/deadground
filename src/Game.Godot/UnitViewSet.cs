@@ -182,6 +182,21 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
             replica.SampleYaws(unit.Id, renderTick, out float turretYaw, out float hullHeading);
             view.SetHullHeading(hullHeading);
             view.SetTurretYaw(turretYaw);
+            if (unit.HasFlightCapability || view.IsHelicopter)
+            {
+                replica.SampleFlightPose(unit.Id, renderTick, out float altitude, out float pitchRad, out float rollRad);
+                view.UpdateFlightState(altitude, pitchRad, rollRad, unit.FlightPhase, unit.FlightFlags, unit.SlingLoadId != default);
+            }
+            else
+            {
+                bool isSlung = unit.SlungById != default;
+                float slungAlt = 0f;
+                if (isSlung)
+                {
+                    replica.SampleFlightPose(unit.Id, renderTick, out slungAlt, out _, out _);
+                }
+                view.UpdateSlungState(slungAlt, isSlung);
+            }
             if (unit.AttackStatus == AttackExecutionStatus.Aiming || unit.ReloadTicksRemaining > 0 || unit.TargetContactId.Value != 0)
             {
                 view.SetAiming(true);

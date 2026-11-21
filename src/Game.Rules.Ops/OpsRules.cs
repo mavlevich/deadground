@@ -31,12 +31,13 @@ public sealed class OpsRules : RuleSet
         DetectionTuning? detTuning = null,
         DeterministicRandom? combatRandom = null,
         NavigationBuildLimits? buildLimits = null,
-        IUnitSmokeCatalog? smokeCatalog = null)
-        : base(CreateSystems(geometry, perceptionCatalog, movementCatalog, combatCatalog, navTuning, detTuning, combatRandom, buildLimits, mission: null, smokeCatalog: smokeCatalog))
+        IUnitSmokeCatalog? smokeCatalog = null,
+        IUnitFlightCatalog? flightCatalog = null)
+        : base(CreateSystems(geometry, perceptionCatalog, movementCatalog, combatCatalog, navTuning, detTuning, combatRandom, buildLimits, mission: null, smokeCatalog: smokeCatalog, flightCatalog: flightCatalog))
     { }
 
     public OpsRules(StaticGeometry geometry, UnitCatalog catalog, DeterministicRandom? combatRandom = null)
-        : this(geometry, new OpsPerceptionCatalog(catalog), new OpsMovementCatalog(catalog), new OpsCombatCatalog(catalog), null, PrototypeScenario.CreateDetectionTuning(catalog), combatRandom, null, new OpsSmokeCatalog(catalog)) { }
+        : this(geometry, new OpsPerceptionCatalog(catalog), new OpsMovementCatalog(catalog), new OpsCombatCatalog(catalog), null, PrototypeScenario.CreateDetectionTuning(catalog), combatRandom, null, new OpsSmokeCatalog(catalog), new OpsFlightCatalog(catalog)) { }
 
     public OpsRules(StaticGeometry geometry, UnitCatalog catalog, NavigationTuning? navTuning, DetectionTuning? detTuning = null, DeterministicRandom? combatRandom = null, NavigationBuildLimits? buildLimits = null)
         : this(
@@ -48,7 +49,8 @@ public sealed class OpsRules : RuleSet
             detTuning ?? PrototypeScenario.CreateDetectionTuning(catalog),
             combatRandom,
             buildLimits,
-            new OpsSmokeCatalog(catalog))
+            new OpsSmokeCatalog(catalog),
+            new OpsFlightCatalog(catalog))
     { }
 
     public static OpsRules CreateWithMission(
@@ -61,6 +63,7 @@ public sealed class OpsRules : RuleSet
         OpsMovementCatalog movementCatalog = new(catalog);
         OpsCombatCatalog combatCatalog = new(catalog);
         OpsSmokeCatalog smokeCatalog = new(catalog);
+        OpsFlightCatalog flightCatalog = new(catalog);
         DetectionTuning detTuning = PrototypeScenario.CreateDetectionTuning(catalog);
         ISimulationSystem[] systems = CreateSystems(
             geometry,
@@ -72,7 +75,8 @@ public sealed class OpsRules : RuleSet
             combatRandom: combatRandom,
             buildLimits: null,
             mission: mission,
-            smokeCatalog: smokeCatalog);
+            smokeCatalog: smokeCatalog,
+            flightCatalog: flightCatalog);
         return new OpsRules(systems);
     }
 
@@ -86,26 +90,27 @@ public sealed class OpsRules : RuleSet
         DeterministicRandom? combatRandom = null,
         NavigationBuildLimits? buildLimits = null,
         IMissionSystem? mission = null,
-        IUnitSmokeCatalog? smokeCatalog = null)
+        IUnitSmokeCatalog? smokeCatalog = null,
+        IUnitFlightCatalog? flightCatalog = null)
     {
+        FlightSystem? flight = flightCatalog is not null ? new FlightSystem(geometry, flightCatalog) : null;
         NavigationSystem nav = new(new NavigationGrid(geometry, navTuning?.CellSize ?? NavigationTuning.DefaultCellSize, enableHierarchical: true, buildLimits: buildLimits, sectorSize: navTuning?.SectorSize ?? NavigationTuning.DefaultSectorSize), movementCatalog, navTuning);
         ContainerSystem container = new(nav);
         SmokeSystem? smoke = smokeCatalog is not null ? new SmokeSystem(geometry, smokeCatalog) : null;
         DetectionSystem det = new(geometry, perceptionCatalog, detTuning, smokeSystem: smoke);
-        if (combatCatalog is not null)
-        {
-            CombatSystem combat = new(geometry, combatCatalog, perceptionCatalog, det, nav, combatRandom: combatRandom);
-            if (smoke is not null)
-            {
-                return mission is not null ? [nav, container, smoke, det, combat, mission] : [nav, container, smoke, det, combat];
-            }
-            return mission is not null ? [nav, container, det, combat, mission] : [nav, container, det, combat];
-        }
-        if (smoke is not null)
-        {
-            return mission is not null ? [nav, container, smoke, det, mission] : [nav, container, smoke, det];
-        }
-        return mission is not null ? [nav, container, det, mission] : [nav, container, det];
+        CombatSystem? combat = combatCatalog is not null
+            ? new CombatSystem(geometry, combatCatalog, perceptionCatalog, det, nav, combatRandom: combatRandom, flight: flight)
+            : null;
+
+        List<ISimulationSystem> list = new(7);
+        if (flight is not null) list.Add(flight);
+        list.Add(nav);
+        list.Add(container);
+        if (smoke is not null) list.Add(smoke);
+        list.Add(det);
+        if (combat is not null) list.Add(combat);
+        if (mission is not null) list.Add(mission);
+        return list.ToArray();
     }
 }
 
@@ -138,7 +143,34 @@ public sealed record WeaponData(
     float Dispersion = 0f,
     float TargetMovementPenalty = 0.20f,
     float RangingBonus = 0.08f,
-    float MaxRangingBonus = 0.24f);
+    float MaxRangingBonus = 0.24f,
+    bool CanTargetAir = false,
+    float MaxAirTargetAltitude = 0f);
+
+public sealed record FlightData(
+    float CruiseSpeed,
+    float LowAltitudeSpeed,
+    float Acceleration,
+    float Deceleration,
+    float YawRate,
+    float ClimbRate,
+    float DescentRate,
+    float LowAltitude,
+    float HighAltitude,
+    float LandingClearanceRadius = 10.0f,
+    float MaxLandingSlopeDegrees = 12.0f,
+    float CrashDescentRate = 14.0f,
+    float CrashSpinRate = 180.0f,
+    float CrashSplashRadius = 12.0f,
+    int CrashSplashDamage = 60,
+    bool StartAirborne = false,
+    bool CanLoadInternalVehicles = false,
+    bool CanFastRope = false,
+    float FastRopeAltitude = 18.0f,
+    int FastRopeIntervalTicks = 10,
+    float MaxSlingWeightKg = 0.0f,
+    float SlingCableLength = 10.0f,
+    float SlingSpeedPenaltyAtMax = 0.45f);
 
 public sealed record SmokeData(
     string Kind,
@@ -196,7 +228,12 @@ public sealed record UnitDefinition(
     float Height = 0f,
     int PassengerCapacity = 0,
     int ContainerDestructionDamage = 50,
-    SmokeData? Smoke = null);
+    SmokeData? Smoke = null,
+    FlightData? Flight = null,
+    float CargoWeightKg = 0f,
+    int InternalCargoSlots = 0,
+    bool CanInternalLoad = false,
+    bool CanSlingLoad = false);
 
 public sealed record FactionData(string Id, string? Name = null);
 
@@ -299,6 +336,7 @@ public sealed class OpsPerceptionCatalog : IUnitPerceptionCatalog
                 "recon" or "recon_vehicle" => ContactClassification.Recon,
                 "apc" => ContactClassification.Apc,
                 "infantry" => ContactClassification.Infantry,
+                "helicopter" or "rotorcraft" => ContactClassification.Helicopter,
                 "vehicle" => ContactClassification.Vehicle,
                 _ => ContactClassification.Vehicle
             };
@@ -418,7 +456,9 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
                     dispersion,
                     w.TargetMovementPenalty,
                     w.RangingBonus,
-                    w.MaxRangingBonus);
+                    w.MaxRangingBonus,
+                    w.CanTargetAir,
+                    w.MaxAirTargetAltitude);
             }
         }
 
@@ -542,11 +582,108 @@ public sealed class OpsSmokeCatalog : IUnitSmokeCatalog
     }
 }
 
+public sealed class OpsFlightCatalog : IUnitFlightCatalog
+{
+    private readonly FlightProfile[] _profiles;
+    private readonly bool[] _hasProfile;
+    private readonly CargoProfile[] _cargoProfiles;
+
+    public OpsFlightCatalog(UnitCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        _profiles = new FlightProfile[catalog.Units.Length];
+        _hasProfile = new bool[catalog.Units.Length];
+        _cargoProfiles = new CargoProfile[catalog.Units.Length];
+
+        for (int i = 0; i < catalog.Units.Length; i++)
+        {
+            UnitDefinition u = catalog.Units[i];
+            bool isInfantry = string.Equals(u.Classification, "infantry", StringComparison.OrdinalIgnoreCase);
+            if (isInfantry)
+            {
+                _cargoProfiles[i] = new CargoProfile(
+                    u.CargoWeightKg > 0f ? u.CargoWeightKg : 100f,
+                    u.InternalCargoSlots > 0 ? u.InternalCargoSlots : 1,
+                    CanInternalLoad: true,
+                    CanSlingLoad: u.CanSlingLoad,
+                    IsInfantry: true);
+            }
+            else
+            {
+                _cargoProfiles[i] = new CargoProfile(
+                    u.CargoWeightKg,
+                    u.InternalCargoSlots,
+                    u.CanInternalLoad,
+                    u.CanSlingLoad,
+                    IsInfantry: false);
+            }
+
+            FlightData? f = u.Flight;
+            if (f is null)
+                continue;
+
+            FlightProfile profile = new(
+                f.CruiseSpeed,
+                f.LowAltitudeSpeed,
+                f.Acceleration,
+                f.Deceleration,
+                f.YawRate,
+                f.ClimbRate,
+                f.DescentRate,
+                f.LowAltitude,
+                f.HighAltitude,
+                f.LandingClearanceRadius,
+                f.MaxLandingSlopeDegrees,
+                f.CrashDescentRate,
+                f.CrashSpinRate,
+                f.CrashSplashRadius,
+                f.CrashSplashDamage,
+                f.StartAirborne,
+                f.CanLoadInternalVehicles,
+                f.CanFastRope,
+                f.FastRopeAltitude,
+                f.FastRopeIntervalTicks,
+                f.MaxSlingWeightKg,
+                f.SlingCableLength,
+                f.SlingSpeedPenaltyAtMax);
+
+            if (profile.IsValid)
+            {
+                _profiles[i] = profile;
+                _hasProfile[i] = true;
+            }
+        }
+    }
+
+    public bool TryGetFlightProfile(ushort definition, out FlightProfile profile)
+    {
+        if (definition < _profiles.Length && _hasProfile[definition])
+        {
+            profile = _profiles[definition];
+            return true;
+        }
+        profile = default;
+        return false;
+    }
+
+    public bool TryGetCargoProfile(ushort definition, out CargoProfile cargo)
+    {
+        if (definition < _cargoProfiles.Length)
+        {
+            cargo = _cargoProfiles[definition];
+            return true;
+        }
+        cargo = CargoProfile.NonTransportable;
+        return false;
+    }
+}
+
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
     ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true)]
 [JsonSerializable(typeof(UnitCatalog))]
 [JsonSerializable(typeof(UnitDefinition))]
 [JsonSerializable(typeof(SmokeData))]
+[JsonSerializable(typeof(FlightData))]
 [JsonSerializable(typeof(DetectionSettings))]
 [JsonSerializable(typeof(WeaponData))]
 [JsonSerializable(typeof(WeaponData[]))]
@@ -675,6 +812,10 @@ public static class PrototypeScenario
                     throw new InvalidOperationException("Invalid ranging bonus.");
                 if (!float.IsFinite(weapon.MaxRangingBonus) || weapon.MaxRangingBonus < 0f || weapon.MaxRangingBonus > 1f)
                     throw new InvalidOperationException("Invalid max ranging bonus.");
+                if (!float.IsFinite(weapon.MaxAirTargetAltitude) || weapon.MaxAirTargetAltitude < 0f)
+                    throw new InvalidOperationException("Invalid max air target altitude.");
+                if (weapon.CanTargetAir && weapon.MaxAirTargetAltitude <= 0f)
+                    throw new InvalidOperationException("Weapon with can_target_air requires positive max_air_target_altitude.");
             }
         }
 
@@ -787,6 +928,46 @@ public static class PrototypeScenario
                 if (kind != SmokeDeliveryKind.EngineScreen && s.Range <= 0f)
                     throw new InvalidOperationException($"Unit '{unit.Id}' targeted smoke requires positive range.");
             }
+            if (!float.IsFinite(unit.CargoWeightKg) || unit.CargoWeightKg < 0f || unit.InternalCargoSlots < 0)
+            {
+                throw new InvalidOperationException($"Unit '{unit.Id}' has invalid cargo parameters.");
+            }
+            if (unit.CanInternalLoad && !string.Equals(unit.Classification, "infantry", StringComparison.OrdinalIgnoreCase) && unit.InternalCargoSlots <= 0)
+            {
+                throw new InvalidOperationException($"Unit '{unit.Id}' with can_internal_load requires positive internal_cargo_slots.");
+            }
+            if (unit.CanSlingLoad && unit.CargoWeightKg <= 0f)
+            {
+                throw new InvalidOperationException($"Unit '{unit.Id}' with can_sling_load requires positive cargo_weight_kg.");
+            }
+            if (unit.Flight is not null)
+            {
+                FlightData f = unit.Flight;
+                if (!float.IsFinite(f.CruiseSpeed) || f.CruiseSpeed <= 0f ||
+                    !float.IsFinite(f.LowAltitudeSpeed) || f.LowAltitudeSpeed <= 0f ||
+                    f.LowAltitudeSpeed > f.CruiseSpeed ||
+                    !float.IsFinite(f.Acceleration) || f.Acceleration <= 0f ||
+                    !float.IsFinite(f.Deceleration) || f.Deceleration <= 0f ||
+                    !float.IsFinite(f.YawRate) || f.YawRate <= 0f ||
+                    !float.IsFinite(f.ClimbRate) || f.ClimbRate <= 0f ||
+                    !float.IsFinite(f.DescentRate) || f.DescentRate <= 0f ||
+                    !float.IsFinite(f.LowAltitude) || f.LowAltitude <= 0f ||
+                    !float.IsFinite(f.HighAltitude) || f.HighAltitude < f.LowAltitude ||
+                    !float.IsFinite(f.LandingClearanceRadius) || f.LandingClearanceRadius <= 0f ||
+                    !float.IsFinite(f.MaxLandingSlopeDegrees) || f.MaxLandingSlopeDegrees <= 0f ||
+                    !float.IsFinite(f.CrashDescentRate) || f.CrashDescentRate <= 0f ||
+                    !float.IsFinite(f.CrashSpinRate) || f.CrashSpinRate <= 0f ||
+                    !float.IsFinite(f.CrashSplashRadius) || f.CrashSplashRadius < 0f ||
+                    f.CrashSplashDamage < 0 ||
+                    !float.IsFinite(f.FastRopeAltitude) || f.FastRopeAltitude <= 0f ||
+                    f.FastRopeIntervalTicks < 1 ||
+                    !float.IsFinite(f.MaxSlingWeightKg) || f.MaxSlingWeightKg < 0f ||
+                    !float.IsFinite(f.SlingCableLength) || f.SlingCableLength <= 0f ||
+                    !float.IsFinite(f.SlingSpeedPenaltyAtMax) || f.SlingSpeedPenaltyAtMax < 0f || f.SlingSpeedPenaltyAtMax > 0.85f)
+                {
+                    throw new InvalidOperationException($"Unit '{unit.Id}' has invalid flight parameters.");
+                }
+            }
         }
         return data;
     }
@@ -833,6 +1014,10 @@ public static class PrototypeScenario
                 if (unit.Speed != 0f)
                     throw new InvalidOperationException($"Unit '{unit.Id}' gives both speed and speed_offroad.");
                 unit = unit with { Speed = unit.SpeedOffroad };
+            }
+            else if (unit.Speed == 0f && unit.Flight is not null)
+            {
+                unit = unit with { Speed = unit.Flight.CruiseSpeed };
             }
             if (unit.Capabilities == TraversabilityCapabilities.DefaultVehicle &&
                 string.Equals(unit.Classification, "infantry", StringComparison.OrdinalIgnoreCase))

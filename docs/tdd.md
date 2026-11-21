@@ -1847,6 +1847,34 @@ Internet 1v1, reconnect, replays, dedicated server on Linux. Then 2v2.
 
 Helicopters, off-map air support, SAM, radar and EW, engineers and mines, destruction, night and weather, chemical and nuclear weapons, amphibious operations.
 
+### Rotorcraft flight slice (protocol v27)
+
+- Server-authoritative rotorcraft simulation in `Engine.Core` (`FlightSystem`, `FlightState.cs`, `WorldState.UnitFlightState`):
+  - Data-driven `FlightProfile` (cruise speed, NOE low-altitude speed, acceleration, deceleration, yaw rate, climb/descent rates, low/high AGL bands, landing clearance radius, max landing slope, crash descent/spin rates, and crash splash radius/damage).
+  - Flight phases: `Ground`, `TakingOff`, `Airborne`, `Landing`, and `Crashing`.
+  - Right-click `Move` orders take off automatically, fly directly across impassable ground obstacles (water, woods, structures), and hover at the destination without auto-landing.
+  - Explicit `HelicopterCommand` (`TakeOff`, `Land` in place or at target coordinates, `SetAltitudeBand` for `Low` NOE vs `High` cruise) and `Disembark` while airborne (flies to LZ, lands, and unloads passengers).
+  - Deterministic landing zone validation (`FlightSystem.EvaluateLandingZone`): rejects map bounds, water, opaque structures, dense forest outside clearings, terrain slopes exceeding `MaxLandingSlopeDegrees`, ground units, and wrecks. Mid-descent obstructions abort safely back to hover.
+  - Zero-allocation pairwise airspace separation for airborne helicopters, while excluding airborne units from ground vehicle separation and spatial grids.
+  - 3D line-of-sight and detection elevation: `DetectionSystem` and `CombatSystem` elevate observer eyes and target observation points by `groundY + altitude`.
+  - Anti-air engagement rules: weapons declare `CanTargetAir` and `MaxAirTargetAltitude`. Heavy machine guns (`mg_14_5mm_kpvt`, `mg_12_7mm_m2hb`), medium MGs (`mg_7_62mm_m60`, `mg_7_62mm_m60d`), and close-range rifles (`rifle_5_56mm_m16a1`) engage airborne helicopters within their altitude ceilings; tank main cannons (`gun_115mm_u5ts`, `gun_105mm_m68`) cannot engage airborne targets but can destroy landed helicopters.
+  - Deterministic crash lifecycle: airborne helicopters reduced to 0 HP enter `FlightPhase.Crashing` (sensors disabled, orders rejected, spinning yaw descent) until ground impact, which spawns a wreck, resolves lethal passenger crash damage, applies radial splash damage to nearby ground units, attributes the kill, and removes the aircraft.
+  - Wire protocol v27 (`MatchSetup.CurrentProtocolVersion = 27`): adds `HelicopterKind = 15` (`HelicopterSize = 25`), extends `UnitSize` to 58 bytes (altitude, quantized pitch/roll, flight flags), and extends `ContactSize` to 33 bytes (altitude, flight phase, `ContactClassification.Helicopter = 7`). Enemy `EntityId` and enemy passenger state are never replicated.
+  - Client presentation in `Game.Godot`: `ch47d` 3-LOD GLB visual with altitude elevation, ground-projection tether, pitch/roll banking, counter-rotating tandem rotors switching to blur discs at flight RPM, animated `RearRamp` (+42 deg ground loading vs 0 deg flight), crash smoke, and zero-allocation `ContextActionPanel` controls (`L` takeoff/land, `H` altitude band, `LAND AT...`).
+  - Playable `helicopter-playground` scenario (1024 m x 1024 m map with staging airfield, hangar, river, dense woods, steep ridge, two US CH-47D Chinooks with embarked/escort US Riflemen, and Soviet BTR-70, T-62, and BRDM-2 forces).
+
+### Rotorcraft cargo, fast-rope, and sling-load slice (protocol v28)
+
+- Data-driven cargo and insertion profiles (`CargoProfile`, extended `FlightProfile`, `content/coldwar/units.json`):
+  - Transportable units declare `cargo_weight_kg`, `internal_cargo_slots`, `can_internal_load`, and `can_sling_load`.
+  - Cargo helicopters declare `can_load_internal_vehicles`, `can_fast_rope`, `fast_rope_altitude`, `fast_rope_interval_ticks`, `max_sling_weight_kg`, `sling_cable_length`, and `sling_speed_penalty_at_max`.
+- Three historical CH-47D transport and insertion modes in `FlightSystem`, `ContainerSystem`, and `Simulation`:
+  - Internal vehicle ramp embark/disembark: light vehicles with `can_internal_load = true` (M151A2 taking 8 of 24 cargo slots) drive into landed ramp-capable helicopters via `BoardTransportCommand` and exit cleanly on ground disembark; APCs with `can_load_internal_vehicles = false` continue accepting infantry only.
+  - Fast-rope infantry insertion (`HelicopterOrderKind.FastRope`): helicopter hovers at `fast_rope_altitude` (18 m AGL) over open terrain, dense forests, or steep slopes (water and opaque structures blocked), deploying embarked infantry staggered every `fast_rope_interval_ticks` while keeping internal vehicles aboard.
+  - External sling-load transport (`HelicopterOrderKind.SlingPickup` / `HelicopterOrderKind.SlingDrop`): helicopter hovers over a valid friendly cargo vehicle within `max_sling_weight_kg` (12,700 kg on CH-47D: M151A2 1.1t and M113A1 11.2t allowed; M60A1/T-62 40-49t rejected), hooks up, and carries it externally beneath the fuselage with continuous weight-based speed/acceleration/climb penalties. Slung vehicles stay visible at `Altitude = max(0, heliAltitude - slingCableLength)`, cannot move or fire independently, are destroyed on carrier crash impact, and can be dropped onto tight clearings/roads (`EvaluateSlingDropZone`).
+- Wire protocol v28 (`MatchSetup.CurrentProtocolVersion = 28`): extends `HelicopterCommand` with `FastRope`, `SlingPickup`, `SlingDrop`, and `TargetUnit` (`HelicopterSize = 29`), and extends `OwnUnitObservation` with `SlingLoadId`, `SlungById`, and `FlightStateFlags` (`UnitSize = 66`).
+- Client presentation and audio (`Game.Godot`): ground projection ring and low-altitude rotor downwash dust, 3D fast-rope and 4-leg sling harness visuals, terrain-draped green/red LZ/fast-rope/sling-drop preview rings, `FAST-ROPE [F]` and `SLING PICKUP / DROP SLING [K]` HUD controls, and procedural CH-47D tandem-rotor audio (`HelicopterSound`).
+
 ## 23. Code rules
 
 - No gameplay logic in Godot nodes.

@@ -50,6 +50,7 @@ public sealed class LocalSession : IGameSession
     public bool BoardTransport(EntityId unit, EntityId transport) => _client.BoardTransport(unit, transport);
     public bool Disembark(EntityId transport, Vector2 target, uint targetSurface = 0) => _client.Disembark(transport, target, targetSurface);
     public bool DeploySmoke(EntityId unit, bool hasTarget = false, Vector2 target = default, uint targetSurface = 0) => _client.DeploySmoke(unit, hasTarget, target, targetSurface);
+    public bool OrderHelicopter(EntityId unit, HelicopterOrderKind kind, AltitudeBand altitudeBand = AltitudeBand.High, bool hasTarget = false, Vector2 target = default, EntityId targetUnit = default) => _client.OrderHelicopter(unit, kind, altitudeBand, hasTarget, target, targetUnit);
 
     public void Dispose()
     {

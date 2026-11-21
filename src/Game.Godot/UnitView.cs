@@ -1,3 +1,4 @@
+using DeadGround.Engine;
 using Godot;
 
 namespace DeadGround.Client;
@@ -29,6 +30,15 @@ internal sealed class UnitView
         internal Vector3 BarrelBindPosition;
         internal GeometryInstance3D[] LeftMotion = [];
         internal GeometryInstance3D[] RightMotion = [];
+        internal Node3D? FrontRotor;
+        internal Node3D? RearRotor;
+        internal Node3D? FrontRotorBlur;
+        internal Node3D? RearRotorBlur;
+        internal GeometryInstance3D[] SolidRotorGeoms = [];
+        internal GeometryInstance3D[] BlurRotorGeoms = [];
+        internal float LastBlurBlend = -1f;
+        internal Node3D? RearRamp;
+        internal Vector3 RearRampBindRotation;
     }
 
     public Node3D Root { get; } = new();
@@ -66,11 +76,41 @@ internal sealed class UnitView
     internal string? UnitId { get; }
     internal bool HasVehicleModel { get; }
     internal bool IsInfantry { get; }
+    internal bool IsHelicopter { get; }
+    private float _altitude;
+    private float _pitchRad;
+    private float _rollRad;
+    private FlightPhase _flightPhase = FlightPhase.Ground;
+    private FlightStateFlags _flightFlags = FlightStateFlags.None;
+    private bool _hasSlingLoad;
+    private bool _isSlung;
+    private float _swayPhase;
+    private float _rotorSpinSpeed;
+    private float _rotorAngle;
+    private float _rampAngleRad;
+    private MeshInstance3D? _altitudeTether;
+    private MeshInstance3D? _groundFootprintRing;
+    private Node3D? _fastRopeRoot;
+    private MeshInstance3D? _fastRopeLeft;
+    private MeshInstance3D? _fastRopeRight;
+    private Node3D? _slingHarnessRoot;
+    private GpuParticles3D? _downwashDust;
+    private GpuParticles3D? _crashSmoke;
     private string _currentAnim = "";
     private StringName? _currentAnimName;
     private float _aimingTimer;
     internal int ActiveLod => _activeLod;
     internal int LodCount => _rigs.Length;
+    internal float Altitude => _altitude;
+    internal FlightPhase CurrentFlightPhase => _flightPhase;
+    internal bool AreRotorBlursVisible => ActiveRig.FrontRotorBlur?.Visible == true;
+    internal float RearRampAngleDeg => Mathf.RadToDeg(_rampAngleRad);
+    internal bool IsAltitudeTetherVisible => _altitudeTether?.Visible == true;
+    internal bool IsGroundFootprintVisible => _groundFootprintRing?.Visible == true;
+    internal bool AreFastRopesVisible => _fastRopeRoot?.Visible == true;
+    internal bool IsSlingHarnessVisible => _slingHarnessRoot?.Visible == true;
+    internal bool IsDownwashEmitting => _downwashDust?.Emitting == true;
+    internal bool IsSlung => _isSlung;
     internal float LeftTrackTravel => _leftTrackTravel;
     internal float RightTrackTravel => _rightTrackTravel;
     internal float RockAngle => _rockAngle;
@@ -118,6 +158,7 @@ internal sealed class UnitView
         UnitId = unitId;
         classification ??= UnitViewSet.GetDefaultClassification(unitId);
         IsInfantry = string.Equals(classification, "infantry", StringComparison.OrdinalIgnoreCase);
+        IsHelicopter = string.Equals(classification, "helicopter", StringComparison.OrdinalIgnoreCase);
         HasVehicleModel = visual is not null;
         Model = visual?.Root ?? new Node3D { Name = "PlaceholderModel" };
         _visual = visual;
@@ -128,6 +169,10 @@ internal sealed class UnitView
         _rigs = new Rig?[visual?.LodCount ?? 1];
         Rig initialRig = CreateRig(visual?.GetOrCreateLod(_activeLod) ?? Model);
         _rigs[_activeLod] = initialRig;
+        if (initialRig.FrontRotor is not null || initialRig.FrontRotorBlur is not null)
+        {
+            IsHelicopter = true;
+        }
         _turret = initialRig.Turret;
         _barrelRecoil = initialRig.BarrelRecoil;
         _muzzle = initialRig.Muzzle;
@@ -141,6 +186,118 @@ internal sealed class UnitView
         _barrelBindPosition = initialRig.BarrelBindPosition;
         _modelBindPosition = Model.Position;
         _modelScale = Model.Scale;
+        if (IsHelicopter)
+        {
+            _rampAngleRad = Mathf.DegToRad(42f);
+            _rotorSpinSpeed = 2.8f;
+            ApplyHelicopterRigState(initialRig);
+            _altitudeTether = new MeshInstance3D
+            {
+                Name = "AltitudeTether",
+                Mesh = new BoxMesh { Size = new Vector3(0.32f, 1.0f, 0.32f) },
+                MaterialOverride = new StandardMaterial3D
+                {
+                    AlbedoColor = new Color(0.70f, 0.90f, 1.0f, 0.55f),
+                    Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+                    ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+                    DisableFog = true
+                },
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+                Visible = false
+            };
+            Root.AddChild(_altitudeTether);
+
+            _groundFootprintRing = new MeshInstance3D
+            {
+                Name = "GroundFootprintRing",
+                Mesh = new TorusMesh { InnerRadius = 4.9f, OuterRadius = 5.35f, Rings = 32, RingSegments = 8 },
+                Scale = new Vector3(1f, 0.14f, 1f),
+                Position = new Vector3(0f, 0.18f, 0f),
+                MaterialOverride = new StandardMaterial3D
+                {
+                    AlbedoColor = new Color(0.68f, 0.90f, 1.0f, 0.48f),
+                    Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+                    ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+                    DisableFog = true
+                },
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+                Visible = false
+            };
+            Root.AddChild(_groundFootprintRing);
+
+            StandardMaterial3D ropeMat = new()
+            {
+                AlbedoColor = new Color(0.18f, 0.16f, 0.12f),
+                Roughness = 0.95f
+            };
+            _fastRopeRoot = new Node3D { Name = "FastRopeRoot", Visible = false };
+            _fastRopeLeft = new MeshInstance3D
+            {
+                Name = "FastRopeLeft",
+                Mesh = new CylinderMesh { TopRadius = 0.08f, BottomRadius = 0.08f, Height = 1.0f, RadialSegments = 6 },
+                MaterialOverride = ropeMat,
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
+            };
+            _fastRopeRight = new MeshInstance3D
+            {
+                Name = "FastRopeRight",
+                Mesh = new CylinderMesh { TopRadius = 0.08f, BottomRadius = 0.08f, Height = 1.0f, RadialSegments = 6 },
+                MaterialOverride = ropeMat,
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
+            };
+            _fastRopeRoot.AddChild(_fastRopeLeft);
+            _fastRopeRoot.AddChild(_fastRopeRight);
+            Root.AddChild(_fastRopeRoot);
+
+            StandardMaterial3D cableMat = new()
+            {
+                AlbedoColor = new Color(0.14f, 0.14f, 0.15f),
+                Roughness = 0.7f,
+                Metallic = 0.5f
+            };
+            _slingHarnessRoot = new Node3D { Name = "SlingHarnessRoot", Visible = false };
+            CylinderMesh cableMesh = new() { TopRadius = 0.06f, BottomRadius = 0.06f, Height = 1.0f, RadialSegments = 6 };
+            // 4-leg tandem cargo sling converging from CH-47D belly hook to cargo corners
+            Vector3[] cornerOffsets =
+            [
+                new(-1.1f, 0f, -1.6f),
+                new(1.1f, 0f, -1.6f),
+                new(-1.1f, 0f, 1.6f),
+                new(1.1f, 0f, 1.6f)
+            ];
+            for (int c = 0; c < cornerOffsets.Length; c++)
+            {
+                Vector3 top = new(0f, 0f, 0f);
+                Vector3 bottom = new(cornerOffsets[c].X, -9.2f, cornerOffsets[c].Z);
+                Vector3 mid = (top + bottom) * 0.5f;
+                Vector3 delta = bottom - top;
+                float len = delta.Length();
+                MeshInstance3D leg = new()
+                {
+                    Name = $"SlingCable_{c}",
+                    Mesh = cableMesh,
+                    MaterialOverride = cableMat,
+                    CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+                    Position = mid,
+                    Scale = new Vector3(1f, len, 1f)
+                };
+                Vector3 dir = delta / len;
+                Vector3 axis = Vector3.Up.Cross(dir);
+                if (axis.LengthSquared() > 1e-6f)
+                {
+                    float ang = Mathf.Acos(Mathf.Clamp(Vector3.Up.Dot(dir), -1f, 1f));
+                    leg.Basis = new Basis(axis.Normalized(), ang).Scaled(new Vector3(1f, len, 1f));
+                }
+                _slingHarnessRoot.AddChild(leg);
+            }
+            Root.AddChild(_slingHarnessRoot);
+
+            _downwashDust = ParticleEffects.CreateMovementDust(new Vector3(5.2f, 0.18f, 5.2f));
+            _downwashDust.Name = "RotorDownwashDust";
+            _downwashDust.Position = new Vector3(0f, 0.35f, 0f);
+            _downwashDust.Emitting = false;
+            Root.AddChild(_downwashDust);
+        }
         CreateDustIfReady(initialRig);
         if (visual is null)
         {
@@ -162,7 +319,9 @@ internal sealed class UnitView
         {
             Mesh = IsInfantry
                 ? new TorusMesh { InnerRadius = 0.65f, OuterRadius = 0.85f, Rings = 24, RingSegments = 8 }
-                : new TorusMesh { InnerRadius = 2.5f, OuterRadius = 2.8f, Rings = 24, RingSegments = 8 },
+                : IsHelicopter
+                    ? new TorusMesh { InnerRadius = 6.8f, OuterRadius = 7.4f, Rings = 32, RingSegments = 8 }
+                    : new TorusMesh { InnerRadius = 2.5f, OuterRadius = 2.8f, Rings = 24, RingSegments = 8 },
             Scale = new Vector3(1, 0.15f, 1),
             Position = new Vector3(0, 0.15f, 0),
             MaterialOverride = new StandardMaterial3D
@@ -176,7 +335,7 @@ internal sealed class UnitView
         };
         Root.AddChild(_selection);
 
-        _healthBarRoot = new Node3D { Position = new Vector3(0, IsInfantry ? 2.1f : 3.4f, 0) };
+        _healthBarRoot = new Node3D { Position = new Vector3(0, IsHelicopter ? 6.5f : (IsInfantry ? 2.1f : 3.4f), 0) };
         Root.AddChild(_healthBarRoot);
         Vector3 barSize = IsInfantry ? new Vector3(1.1f, 0.08f, 0.08f) : new Vector3(1.8f, 0.12f, 0.12f);
         _healthBarBg = new MeshInstance3D
@@ -430,11 +589,161 @@ internal sealed class UnitView
             BarrelRecoil = lod.FindChild("BarrelRecoil", recursive: true, owned: false) as Node3D,
             Muzzle = lod.FindChild("Muzzle", recursive: true, owned: false) as Node3D,
             AnimPlayer = lod.FindChild("AnimationPlayer", recursive: true, owned: false) as AnimationPlayer,
+            FrontRotor = lod.FindChild("FrontRotor", recursive: true, owned: false) as Node3D,
+            RearRotor = lod.FindChild("RearRotor", recursive: true, owned: false) as Node3D,
+            FrontRotorBlur = lod.FindChild("FrontRotorBlur", recursive: true, owned: false) as Node3D,
+            RearRotorBlur = lod.FindChild("RearRotorBlur", recursive: true, owned: false) as Node3D,
+            RearRamp = lod.FindChild("RearRamp", recursive: true, owned: false) as Node3D,
         };
         rig.BarrelBindPosition = rig.BarrelRecoil?.Position ?? Vector3.Zero;
+        rig.RearRampBindRotation = rig.RearRamp?.Rotation ?? Vector3.Zero;
         rig.LeftMotion = FindMotionMeshes(lod.FindChild("LeftTrack", recursive: true, owned: false));
         rig.RightMotion = FindMotionMeshes(lod.FindChild("RightTrack", recursive: true, owned: false));
+        // Transparent rotor blur discs must not cast solid shadows and should stay visually subtle without bright yellow rings.
+        ConfigureRotorBlurVisual(rig.FrontRotorBlur);
+        ConfigureRotorBlurVisual(rig.RearRotorBlur);
+        // Match tactical low-vis CARC composite blades on solid rotors (remove bright yellow tip bands for ground/flight consistency).
+        ConfigureSolidRotorVisual(rig.FrontRotor);
+        ConfigureSolidRotorVisual(rig.RearRotor);
+        rig.SolidRotorGeoms = CollectGeometryInstances(rig.FrontRotor, rig.RearRotor);
+        rig.BlurRotorGeoms = CollectGeometryInstances(rig.FrontRotorBlur, rig.RearRotorBlur);
         return rig;
+    }
+
+    private static GeometryInstance3D[] CollectGeometryInstances(Node? a, Node? b)
+    {
+        if (a is null && b is null) return [];
+        List<GeometryInstance3D> list = [];
+        CollectInto(a, list);
+        CollectInto(b, list);
+        return [.. list];
+
+        static void CollectInto(Node? node, List<GeometryInstance3D> target)
+        {
+            if (node is null) return;
+            if (node is GeometryInstance3D geom) target.Add(geom);
+            int count = node.GetChildCount();
+            for (int i = 0; i < count; i++) CollectInto(node.GetChild(i), target);
+        }
+    }
+
+    private static StandardMaterial3D? s_rotorBlurMaterial;
+    private static StandardMaterial3D? s_rotorBladeMaterial;
+
+    private static StandardMaterial3D GetRotorBladeMaterial()
+    {
+        return s_rotorBladeMaterial ??= new StandardMaterial3D
+        {
+            AlbedoColor = new Color(0.14f, 0.15f, 0.13f),
+            Roughness = 0.85f,
+            Metallic = 0.08f
+        };
+    }
+
+    internal static void ConfigureSolidRotorVisual(Node? root)
+    {
+        if (root is null) return;
+        if (root is MeshInstance3D meshInstance && meshInstance.Mesh is Mesh mesh)
+        {
+            int surfaceCount = mesh.GetSurfaceCount();
+            for (int s = 0; s < surfaceCount; s++)
+            {
+                Material? mat = meshInstance.GetSurfaceOverrideMaterial(s) ?? mesh.SurfaceGetMaterial(s);
+                bool isYellowTip = mat is not null &&
+                    (mat.ResourceName.Contains("TipYellow", StringComparison.OrdinalIgnoreCase) ||
+                     (mat is BaseMaterial3D bm && bm.AlbedoColor.R > 0.65f && bm.AlbedoColor.G > 0.50f && bm.AlbedoColor.B < 0.30f));
+                if (isYellowTip)
+                {
+                    meshInstance.SetSurfaceOverrideMaterial(s, GetRotorBladeMaterial());
+                }
+            }
+        }
+        else if (root is GeometryInstance3D geom &&
+            geom.Name.ToString().Contains("BladeTipStripe", StringComparison.OrdinalIgnoreCase))
+        {
+            geom.MaterialOverride = GetRotorBladeMaterial();
+        }
+        int count = root.GetChildCount();
+        for (int i = 0; i < count; i++)
+        {
+            ConfigureSolidRotorVisual(root.GetChild(i));
+        }
+    }
+
+    private static StandardMaterial3D GetRotorBlurMaterial()
+    {
+        if (s_rotorBlurMaterial is not null)
+            return s_rotorBlurMaterial;
+
+        const int size = 256;
+        byte[] pixels = new byte[size * size * 4];
+        for (int y = 0; y < size; y++)
+        {
+            float cy = (y + 0.5f) / size * 2.0f - 1.0f;
+            for (int x = 0; x < size; x++)
+            {
+                float cx = (x + 0.5f) / size * 2.0f - 1.0f;
+                float r = MathF.Sqrt(cx * cx + cy * cy);
+                int idx = (y * size + x) * 4;
+                if (r >= 1.0f || r <= 0.08f)
+                {
+                    pixels[idx] = 0;
+                    pixels[idx + 1] = 0;
+                    pixels[idx + 2] = 0;
+                    pixels[idx + 3] = 0;
+                    continue;
+                }
+
+                float theta = MathF.Atan2(cy, cx);
+                float cosWave = MathF.Cos(3.0f * theta + r * 0.9f);
+                float wave = 0.40f + 0.60f * (cosWave * cosWave);
+                float innerMask = Math.Clamp((r - 0.08f) / 0.07f, 0f, 1f);
+                float outerMask = Math.Clamp((1.0f - r) / 0.08f, 0f, 1f);
+                float radial = innerMask * outerMask;
+
+                // Subtle dark charcoal rotor motion blur with very faint muted outer tip hint (no bright yellow halo)
+                float tipHint = MathF.Exp(-((r - 0.92f) * (r - 0.92f)) / (0.03f * 0.03f));
+                float red = 0.14f + 0.10f * tipHint;
+                float green = 0.15f + 0.09f * tipHint;
+                float blue = 0.13f + 0.05f * tipHint;
+                float alpha = radial * (0.14f * wave + 0.07f * (1.0f - r * 0.4f) + 0.04f * tipHint);
+                alpha = Math.Clamp(alpha, 0f, 0.24f);
+
+                pixels[idx] = (byte)MathF.Round(red * 255f);
+                pixels[idx + 1] = (byte)MathF.Round(green * 255f);
+                pixels[idx + 2] = (byte)MathF.Round(blue * 255f);
+                pixels[idx + 3] = (byte)MathF.Round(alpha * 255f);
+            }
+        }
+
+        Image image = Image.CreateFromData(size, size, useMipmaps: false, Image.Format.Rgba8, pixels);
+        ImageTexture tex = ImageTexture.CreateFromImage(image);
+        s_rotorBlurMaterial = new StandardMaterial3D
+        {
+            AlbedoTexture = tex,
+            AlbedoColor = Colors.White,
+            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+            DepthDrawMode = BaseMaterial3D.DepthDrawModeEnum.Disabled,
+            CullMode = BaseMaterial3D.CullModeEnum.Disabled,
+            Roughness = 0.92f,
+            Metallic = 0.05f
+        };
+        return s_rotorBlurMaterial;
+    }
+
+    internal static void ConfigureRotorBlurVisual(Node? root)
+    {
+        if (root is null) return;
+        if (root is GeometryInstance3D geom)
+        {
+            geom.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
+            geom.MaterialOverride = GetRotorBlurMaterial();
+        }
+        int count = root.GetChildCount();
+        for (int i = 0; i < count; i++)
+        {
+            ConfigureRotorBlurVisual(root.GetChild(i));
+        }
     }
 
     // Running gear meshes exported with motion data (see vehicle_kit.emit_motion_parts).
@@ -468,6 +777,8 @@ internal sealed class UnitView
             rig.Turret.Rotation = _turretRotation;
         if (rig.BarrelRecoil is not null)
             rig.BarrelRecoil.Position = rig.BarrelBindPosition + new Vector3(0, 0, _recoilAmount);
+        if (IsHelicopter)
+            ApplyHelicopterRigState(rig);
         _rigs[lod] = rig;
         CreateDustIfReady(rig);
         return rig;
@@ -526,6 +837,8 @@ internal sealed class UnitView
         }
         _activeLod = lod;
         PushTrackTravel();
+        if (IsHelicopter)
+            ApplyHelicopterRigState(nextRig);
         VehicleLod.TransferAnimationState(prevPlayer, nextRig.AnimPlayer, _currentAnimName, prevPlayer?.SpeedScale ?? 1.0f);
         return true;
     }
@@ -670,7 +983,7 @@ internal sealed class UnitView
         else
         {
             _fallbackRecoilOffset = -shotDirection.Normalized() * 0.35f;
-            Model.Position = _modelBindPosition + _fallbackRecoilOffset;
+            Model.Position = _modelBindPosition + new Vector3(0f, _altitude, 0f) + _fallbackRecoilOffset;
         }
     }
 
@@ -688,7 +1001,7 @@ internal sealed class UnitView
         else if (_fallbackRecoilOffset != Vector3.Zero)
         {
             _fallbackRecoilOffset = _fallbackRecoilOffset.MoveToward(Vector3.Zero, dt * 3.5f);
-            Model.Position = _modelBindPosition + _fallbackRecoilOffset;
+            Model.Position = _modelBindPosition + new Vector3(0f, _altitude, 0f) + _fallbackRecoilOffset;
         }
         UpdateRock(dt);
     }
@@ -725,9 +1038,166 @@ internal sealed class UnitView
         ApplyHullPose();
     }
 
+    public void UpdateFlightState(
+        float altitude,
+        float pitchRad,
+        float rollRad,
+        FlightPhase phase,
+        FlightStateFlags flags = FlightStateFlags.None,
+        bool hasSlingLoad = false)
+    {
+        float clampedAlt = MathF.Max(0f, altitude);
+        bool altChanged = MathF.Abs(clampedAlt - _altitude) > 0.001f;
+        bool poseChanged = MathF.Abs(pitchRad - _pitchRad) > 0.0005f || MathF.Abs(rollRad - _rollRad) > 0.0005f;
+        bool flagsChanged = flags != _flightFlags || hasSlingLoad != _hasSlingLoad;
+        _altitude = clampedAlt;
+        _pitchRad = pitchRad;
+        _rollRad = rollRad;
+        _flightPhase = phase;
+        _flightFlags = flags;
+        _hasSlingLoad = hasSlingLoad;
+
+        if (altChanged)
+        {
+            Model.Position = _modelBindPosition + new Vector3(0f, _altitude, 0f) + _fallbackRecoilOffset;
+            float baseBarHeight = IsHelicopter ? 6.5f : (IsInfantry ? 2.1f : 3.4f);
+            _healthBarRoot.Position = new Vector3(0f, baseBarHeight + _altitude, 0f);
+            bool showAirMarkers = _altitude > 0.35f;
+            if (_altitudeTether is not null)
+            {
+                if (_altitudeTether.Visible != showAirMarkers)
+                    _altitudeTether.Visible = showAirMarkers;
+                if (showAirMarkers)
+                {
+                    _altitudeTether.Scale = new Vector3(1f, _altitude, 1f);
+                    _altitudeTether.Position = new Vector3(0f, _altitude * 0.5f, 0f);
+                }
+            }
+            if (_groundFootprintRing is not null && _groundFootprintRing.Visible != showAirMarkers)
+            {
+                _groundFootprintRing.Visible = showAirMarkers;
+            }
+        }
+
+        if (altChanged || flagsChanged)
+        {
+            if (_fastRopeRoot is not null)
+            {
+                bool showRopes = (_flightFlags & FlightStateFlags.FastRopeActive) != 0 && _altitude > 1.0f;
+                if (_fastRopeRoot.Visible != showRopes)
+                    _fastRopeRoot.Visible = showRopes;
+                if (showRopes && _fastRopeLeft is not null && _fastRopeRight is not null)
+                {
+                    float ropeHeight = _altitude + 1.2f;
+                    // Hang twin braided ropes from the lowered rear ramp of the helicopter
+                    Vector3 rearOffset = new Vector3(MathF.Sin(_heading), 0f, MathF.Cos(_heading)) * 5.8f;
+                    Vector3 sideOffset = new Vector3(MathF.Cos(_heading), 0f, -MathF.Sin(_heading)) * 0.85f;
+                    _fastRopeLeft.Scale = new Vector3(1f, ropeHeight, 1f);
+                    _fastRopeLeft.Position = rearOffset - sideOffset + new Vector3(0f, ropeHeight * 0.5f, 0f);
+                    _fastRopeRight.Scale = new Vector3(1f, ropeHeight, 1f);
+                    _fastRopeRight.Position = rearOffset + sideOffset + new Vector3(0f, ropeHeight * 0.5f, 0f);
+                }
+            }
+
+            if (_slingHarnessRoot is not null)
+            {
+                bool showSling = _hasSlingLoad && _altitude > 0.5f;
+                if (_slingHarnessRoot.Visible != showSling)
+                    _slingHarnessRoot.Visible = showSling;
+                if (showSling)
+                {
+                    _slingHarnessRoot.Position = new Vector3(0f, _altitude + 0.6f, 0f);
+                    _slingHarnessRoot.Rotation = new Vector3(0f, _heading, 0f);
+                }
+            }
+        }
+
+        if (poseChanged)
+        {
+            ApplyHullPose();
+        }
+    }
+
+    public void UpdateSlungState(float altitude, bool isSlung)
+    {
+        float clampedAlt = isSlung ? MathF.Max(0f, altitude) : 0f;
+        bool changed = isSlung != _isSlung || MathF.Abs(clampedAlt - _altitude) > 0.001f;
+        _isSlung = isSlung;
+        _altitude = clampedAlt;
+        if (changed)
+        {
+            Model.Position = _modelBindPosition + new Vector3(0f, _altitude, 0f) + _fallbackRecoilOffset;
+            float baseBarHeight = IsInfantry ? 2.1f : 3.4f;
+            _healthBarRoot.Position = new Vector3(0f, baseBarHeight + _altitude, 0f);
+            if (!_isSlung && (_pitchRad != 0f || _rollRad != 0f))
+            {
+                _pitchRad = 0f;
+                _rollRad = 0f;
+                ApplyHullPose();
+            }
+        }
+    }
+
+    private void ApplyHelicopterRigState(Rig rig)
+    {
+        // Smooth RPM cross-fade between 3D solid blades and translucent motion-blur discs (no sudden 1-frame snap)
+        float blurBlend = Mathf.SmoothStep(6.5f, 16.5f, _rotorSpinSpeed);
+        bool showSolid = blurBlend < 0.96f;
+        bool showBlur = blurBlend > 0.01f;
+
+        if (rig.FrontRotor is not null)
+        {
+            if (rig.FrontRotor.Visible != showSolid)
+                rig.FrontRotor.Visible = showSolid;
+            if (showSolid)
+                rig.FrontRotor.Rotation = new Vector3(0f, _rotorAngle, 0f);
+        }
+        if (rig.RearRotor is not null)
+        {
+            if (rig.RearRotor.Visible != showSolid)
+                rig.RearRotor.Visible = showSolid;
+            if (showSolid)
+                rig.RearRotor.Rotation = new Vector3(0f, -_rotorAngle, 0f);
+        }
+        if (rig.FrontRotorBlur is not null)
+        {
+            if (rig.FrontRotorBlur.Visible != showBlur)
+                rig.FrontRotorBlur.Visible = showBlur;
+            if (showBlur)
+                rig.FrontRotorBlur.Rotation = new Vector3(0f, _rotorAngle * 0.40f, 0f);
+        }
+        if (rig.RearRotorBlur is not null)
+        {
+            if (rig.RearRotorBlur.Visible != showBlur)
+                rig.RearRotorBlur.Visible = showBlur;
+            if (showBlur)
+                rig.RearRotorBlur.Rotation = new Vector3(0f, -_rotorAngle * 0.40f, 0f);
+        }
+
+        if (MathF.Abs(blurBlend - rig.LastBlurBlend) > 0.005f)
+        {
+            rig.LastBlurBlend = blurBlend;
+            float solidTransparency = Mathf.SmoothStep(0.32f, 0.96f, blurBlend);
+            float blurTransparency = 1.0f - blurBlend;
+            for (int i = 0; i < rig.SolidRotorGeoms.Length; i++)
+            {
+                rig.SolidRotorGeoms[i].Transparency = solidTransparency;
+            }
+            for (int i = 0; i < rig.BlurRotorGeoms.Length; i++)
+            {
+                rig.BlurRotorGeoms[i].Transparency = blurTransparency;
+            }
+        }
+
+        if (rig.RearRamp is not null)
+        {
+            rig.RearRamp.Rotation = rig.RearRampBindRotation + new Vector3(_rampAngleRad, 0f, 0f);
+        }
+    }
+
     private void ApplyHullPose()
     {
-        if (_rockAngle == 0f)
+        if (_rockAngle == 0f && _pitchRad == 0f && _rollRad == 0f)
         {
             float yaw = (IsInfantry && (_aimingTimer > 0f || _hasAim) && _dustSpeed < 0.15f)
                 ? (_turretRotation.Y + _heading)
@@ -735,7 +1205,14 @@ internal sealed class UnitView
             Model.Rotation = new Vector3(0, yaw, 0);
             return;
         }
-        Model.Basis = new Basis(Vector3.Up, _heading) * new Basis(_rockAxis, _rockAngle);
+        Basis basis = new Basis(Vector3.Up, _heading);
+        if (_pitchRad != 0f)
+            basis *= new Basis(Vector3.Right, _pitchRad);
+        if (_rollRad != 0f)
+            basis *= new Basis(Vector3.Forward, _rollRad);
+        if (_rockAngle != 0f)
+            basis *= new Basis(_rockAxis, _rockAngle);
+        Model.Basis = basis;
         Model.Scale = _modelScale;
     }
 
@@ -801,6 +1278,65 @@ internal sealed class UnitView
             _aimingTimer = MathF.Max(0f, _aimingTimer - dt);
         }
 
+        if (IsHelicopter)
+        {
+            float targetSpin = _flightPhase switch
+            {
+                FlightPhase.Ground => 2.8f,
+                FlightPhase.Crashing => 14.0f,
+                _ => 24.0f
+            };
+            float spoolRate = _flightPhase == FlightPhase.Ground ? 1.8f : 2.3f;
+            _rotorSpinSpeed = Mathf.Lerp(_rotorSpinSpeed, targetSpin, 1f - Mathf.Exp(-spoolRate * dt));
+            _rotorAngle = Mathf.Wrap(_rotorAngle + _rotorSpinSpeed * dt, 0f, Mathf.Tau);
+
+            bool rampOpen = _flightPhase == FlightPhase.Ground || (_flightFlags & FlightStateFlags.FastRopeActive) != 0;
+            float targetRampRad = rampOpen ? Mathf.DegToRad(42f) : 0f;
+            _rampAngleRad = Mathf.MoveToward(_rampAngleRad, targetRampRad, Mathf.DegToRad(50f) * dt);
+            ApplyHelicopterRigState(ActiveRig);
+
+            // Rotor downwash dust on terrain below low-hovering / landing / fast-roping helicopters
+            if (_downwashDust is not null)
+            {
+                bool showDownwash = _flightPhase != FlightPhase.Ground && _altitude < 22.0f && _activeLod < 2;
+                if (showDownwash)
+                {
+                    float washRatio = Mathf.Clamp(1.0f - (_altitude / 22.0f), 0.15f, 1.0f);
+                    if (Mathf.Abs(_downwashDust.AmountRatio - washRatio) > 0.04f)
+                        _downwashDust.AmountRatio = washRatio;
+                }
+                if (_downwashDust.Emitting != showDownwash)
+                    _downwashDust.Emitting = showDownwash;
+            }
+
+            if (_flightPhase == FlightPhase.Crashing)
+            {
+                if (_crashSmoke is null)
+                {
+                    _crashSmoke = ParticleEffects.CreateMovementDust(new Vector3(0.8f, 0.8f, 1.2f));
+                    _crashSmoke.Position = new Vector3(0f, 3.2f, 2.5f);
+                    Model.AddChild(_crashSmoke);
+                }
+                if (!_crashSmoke.Emitting)
+                {
+                    _crashSmoke.AmountRatio = 1.0f;
+                    _crashSmoke.Emitting = true;
+                }
+            }
+            else if (_crashSmoke is not null && _crashSmoke.Emitting)
+            {
+                _crashSmoke.Emitting = false;
+            }
+        }
+        else if (_isSlung && _altitude > 0.5f)
+        {
+            // Subtle damped pendulum sway for externally slung cargo vehicles
+            _swayPhase = Mathf.Wrap(_swayPhase + dt * 2.1f, 0f, Mathf.Tau);
+            _pitchRad = Mathf.Sin(_swayPhase) * 0.045f;
+            _rollRad = Mathf.Cos(_swayPhase * 0.85f) * 0.055f;
+            ApplyHullPose();
+        }
+
         AnimationPlayer? animPlayer = ActiveRig.AnimPlayer;
         if (animPlayer is not null)
         {
@@ -859,7 +1395,7 @@ internal sealed class UnitView
             SetBarrelRecoil(0f);
         }
         _fallbackRecoilOffset = Vector3.Zero;
-        Model.Position = _modelBindPosition;
+        Model.Position = _modelBindPosition + new Vector3(0f, _altitude, 0f);
     }
 
     private void SetBarrelRecoil(float amount)

@@ -204,7 +204,7 @@ internal sealed class SelectionController
             if (!view.Root.Visible)
                 continue;
 
-            Vector3 center = view.Root.Position + Vector3.Up;
+            Vector3 center = view.Root.Position + Vector3.Up * (1.0f + view.Altitude);
             if (!TryProjectWorldPoint(camera, center, out Vector2 screenPos))
                 continue;
 
@@ -251,7 +251,7 @@ internal sealed class SelectionController
             if (!string.Equals(view.UnitId, targetType, StringComparison.Ordinal))
                 continue;
 
-            Vector3 center = view.Root.Position + Vector3.Up;
+            Vector3 center = view.Root.Position + Vector3.Up * (1.0f + view.Altitude);
             if (!TryProjectWorldPoint(camera, center, out Vector2 screenPos))
                 continue;
 
@@ -290,7 +290,7 @@ internal sealed class SelectionController
                 if (!view.Root.Visible)
                     continue;
 
-                Vector3 center = view.Root.Position + Vector3.Up;
+                Vector3 center = view.Root.Position + Vector3.Up * (1.0f + view.Altitude);
                 if (!TryProjectWorldPoint(camera, center, out Vector2 projected))
                     continue;
 
@@ -305,7 +305,7 @@ internal sealed class SelectionController
             float nearestContactDistance = ClickPickRadiusPixels * ClickPickRadiusPixels;
             foreach ((ContactId id, ContactView view) in contactViews.Views)
             {
-                Vector3 center = view.Root.Position + Vector3.Up * 1.5f;
+                Vector3 center = view.Root.Position + Vector3.Up * (1.5f + view.Altitude);
                 if (!TryProjectWorldPoint(camera, center, out Vector2 projected))
                     continue;
 

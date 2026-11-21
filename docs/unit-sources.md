@@ -170,6 +170,12 @@ Balance, revisit after play.
   LOD 0 (`ch47.glb`, close): 9,462 triangles, 20 materials, 1,085,096 bytes.
   LOD 1 (`ch47_lod1.glb`, rts): 6,650 triangles, 20 materials, 906,200 bytes.
   LOD 2 (`ch47_lod2.glb`, distant): 4,374 triangles, 17 materials, 687,088 bytes.
+- CH-47D Chinook gameplay parameters (`content/coldwar/units.json`, `ch47d` and `mg_7_62mm_m60d`):
+  Flight performance from Boeing CH-47D / US Army TM 55-1520-240-10 [19]: cruise speed ~132 kt (68.0 m/s), nap-of-the-earth (NOE) low-altitude speed ~82 kt (42.0 m/s), climb rate 9.0 m/s, descent rate 7.0 m/s, low altitude band 18.0 m AGL, cruise altitude band 55.0 m AGL, landing clearance radius 10.0 m (rotor radius 9.15 m plus margin), max landing slope 12.0 deg.
+  Transport and protection: `passenger_capacity = 24` combat-equipped troops (within the 33-seat cabin and 32-slot engine cap), `max_health = 160` (twin-engine redundant transport airframe, game value), unarmored aluminum skin `armor_front/side/rear = 2.0` mm RHA equivalent (penetrable by 14.5 mm, 12.7 mm, and 7.62 mm MGs at all ranges, and by 5.56 mm rifle fire at close range and low altitude).
+  Defensive armament (`mg_7_62mm_m60d`): twin 7.62x51mm M60D door guns, 550 m effective range, 5-round burst, 1,200 rounds total, `can_target_air = true`, `max_air_target_altitude = 65.0` m.
+  Cargo and insertion capabilities from US Army TM 55-1520-240-10 and FM 55-450-3 [19]: internal cargo bay accepts infantry (`1` slot each, `100` kg) and light utility vehicles (`m151a2`, `1,100` kg, `8` slots via rear ramp); hover fast-rope insertion (`18.0` m AGL, `0.5` s per trooper) inserts infantry into forests and steep terrain where landing is impossible; external center cargo hook rated to `12,700` kg (28,000 lb) carries `m151a2` (`1,100` kg, ~4% speed penalty) and `m113a1` (`11,200` kg, ~40% speed penalty) on a `10.0` m sling cable, while main battle tanks (`t62` 40,000 kg, `m60a1` 49,000 kg) exceed hook capacity and are rejected.
+  Anti-air engagement ceilings (`can_target_air` / `max_air_target_altitude`): `mg_14_5mm_kpvt` (80.0 m), `mg_12_7mm_m2hb` (70.0 m), `mg_7_62mm_m60` (40.0 m), `rifle_5_56mm_m16a1` (25.0 m); main tank cannons (`gun_115mm_u5ts`, `gun_105mm_m68`) remain `can_target_air = false`.
 
 ## Sources
 

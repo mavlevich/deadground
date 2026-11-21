@@ -1745,7 +1745,13 @@ internal static class OrderPreviewRegressionTests
         public bool BoardTransport(EntityId unit, EntityId transport) => true;
         public bool Disembark(EntityId transport, NumericsVector2 target, uint targetSurface = 0) => true;
         public bool DeploySmoke(EntityId unit, bool hasTarget = false, NumericsVector2 target = default, uint targetSurface = 0) => true;
+        public bool OrderHelicopter(EntityId unit, HelicopterOrderKind kind, AltitudeBand altitudeBand = AltitudeBand.High, bool hasTarget = false, NumericsVector2 target = default) => true;
         public void Advance(double elapsedSeconds) { }
         public void Dispose() { }
+
+        public bool OrderHelicopter(EntityId unit, HelicopterOrderKind kind, AltitudeBand altitudeBand = AltitudeBand.High, bool hasTarget = false, NumericsVector2 target = default, EntityId targetUnit = default)
+        {
+            throw new NotImplementedException();
+        }
     }
 }

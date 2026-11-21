@@ -295,6 +295,52 @@ public sealed class ClientReplica
     public void SampleContactYaws(ContactId id, double renderTick, out float turretYaw, out float hullHeading) =>
         SampleContactYaws(id, renderTick, out turretYaw, out hullHeading, out _, out _, out _);
 
+    public void SampleFlightPose(EntityId id, double renderTick, out float altitude, out float pitchRad, out float rollRad)
+    {
+        altitude = 0f;
+        pitchRad = 0f;
+        rollRad = 0f;
+        if (_count == 0 || !Latest.Indices.TryGetValue(id, out int index))
+            return;
+
+        ref readonly OwnUnitObservation latest = ref Latest.Units[index];
+        FindBracket(renderTick, out SnapshotFrame left, out SnapshotFrame right, out float alpha);
+        if (!left.Indices.TryGetValue(id, out int li) || !right.Indices.TryGetValue(id, out int ri))
+        {
+            altitude = latest.Altitude;
+            pitchRad = latest.PitchRad;
+            rollRad = latest.RollRad;
+            return;
+        }
+
+        ref readonly OwnUnitObservation leftUnit = ref left.Units[li];
+        ref readonly OwnUnitObservation rightUnit = ref right.Units[ri];
+        altitude = leftUnit.Altitude + (rightUnit.Altitude - leftUnit.Altitude) * alpha;
+        pitchRad = leftUnit.PitchRad + (rightUnit.PitchRad - leftUnit.PitchRad) * alpha;
+        rollRad = leftUnit.RollRad + (rightUnit.RollRad - leftUnit.RollRad) * alpha;
+    }
+
+    public float SampleContactAltitude(ContactId id, double renderTick)
+    {
+        if (_count == 0 || !Latest.ContactIndices.TryGetValue(id, out int index))
+            return 0f;
+
+        ref readonly ContactObservation latest = ref Latest.Contacts[index];
+        if (latest.State != ContactState.Current)
+            return latest.Altitude;
+
+        FindBracket(renderTick, out SnapshotFrame left, out SnapshotFrame right, out float alpha);
+        if (!left.ContactIndices.TryGetValue(id, out int li) || !right.ContactIndices.TryGetValue(id, out int ri))
+            return latest.Altitude;
+
+        ref readonly ContactObservation leftContact = ref left.Contacts[li];
+        ref readonly ContactObservation rightContact = ref right.Contacts[ri];
+        if (leftContact.State != ContactState.Current || rightContact.State != ContactState.Current)
+            return latest.Altitude;
+
+        return leftContact.Altitude + (rightContact.Altitude - leftContact.Altitude) * alpha;
+    }
+
     private void FindBracket(double renderTick, out SnapshotFrame left, out SnapshotFrame right, out float alpha)
     {
         int oldest = (_next - _count + _frames.Length) % _frames.Length;

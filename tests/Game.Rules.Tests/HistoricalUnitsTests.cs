@@ -17,10 +17,19 @@ public sealed class HistoricalUnitsTests
             Assert.False(string.IsNullOrWhiteSpace(unit.Name), unit.Id);
             Assert.True(unit.Faction is not null && catalog.HasFaction(unit.Faction), unit.Id);
             Assert.NotNull(unit.Classification);
-            Assert.True(unit.SpeedOffroad > 0f, unit.Id);
-            Assert.Equal(unit.SpeedOffroad, unit.Speed);
-            Assert.True(unit.SpeedRoad > unit.SpeedOffroad, unit.Id);
-            Assert.InRange(unit.ReverseSpeed, 0.1f, unit.SpeedRoad);
+            if (unit.Flight is not null)
+            {
+                Assert.True(unit.Flight.CruiseSpeed > 0f, unit.Id);
+                Assert.True(unit.Flight.LowAltitudeSpeed > 0f && unit.Flight.LowAltitudeSpeed <= unit.Flight.CruiseSpeed, unit.Id);
+                Assert.Equal(unit.Flight.CruiseSpeed, unit.Speed);
+            }
+            else
+            {
+                Assert.True(unit.SpeedOffroad > 0f, unit.Id);
+                Assert.Equal(unit.SpeedOffroad, unit.Speed);
+                Assert.True(unit.SpeedRoad > unit.SpeedOffroad, unit.Id);
+                Assert.InRange(unit.ReverseSpeed, 0.1f, unit.SpeedRoad);
+            }
         }
 
         foreach (string faction in new[] { "soviet", "us" })
@@ -73,6 +82,7 @@ public sealed class HistoricalUnitsTests
         Assert.Equal(ScenarioContent.LoadCatalog("combat").ContentHash, CombatScenario.CreateMatchSetup().ContentHash);
         Assert.Equal(ScenarioContent.LoadCatalog("recon-raid").ContentHash, ReconRaidScenario.CreateMatchSetup().ContentHash);
         Assert.Equal(ScenarioContent.LoadCatalog("infantry-playground").ContentHash, InfantryPlaygroundScenario.CreateMatchSetup().ContentHash);
+        Assert.Equal(ScenarioContent.LoadCatalog("helicopter-playground").ContentHash, HelicopterPlaygroundScenario.CreateMatchSetup().ContentHash);
         Assert.Equal(ScenarioContent.LoadCatalog("prototype").ContentHash,
             PrototypeScenario.CreateMatchSetup(HeightMap.CreatePrototype()).ContentHash);
         Assert.NotEqual(ColdWarContent.LoadCatalog().ContentHash, PrototypeScenario.LoadCatalog().ContentHash);
@@ -89,6 +99,7 @@ public sealed class HistoricalUnitsTests
         Assert.Equal(500, catalog.GetAmmoCapacity(catalog.RequireDefinition("brdm2")));
         Assert.Equal(1000, catalog.GetAmmoCapacity(catalog.RequireDefinition("m151a2")));
         Assert.Equal(210, catalog.GetAmmoCapacity(catalog.RequireDefinition("us_rifleman")));
+        Assert.Equal(1200, catalog.GetAmmoCapacity(catalog.RequireDefinition("ch47d")));
     }
 
     [Fact]
@@ -97,6 +108,7 @@ public sealed class HistoricalUnitsTests
         UnitCatalog catalog = ColdWarContent.LoadCatalog();
         Assert.Equal(8, catalog.GetPassengerCapacity(catalog.RequireDefinition("btr70")));
         Assert.Equal(11, catalog.GetPassengerCapacity(catalog.RequireDefinition("m113a1")));
+        Assert.Equal(24, catalog.GetPassengerCapacity(catalog.RequireDefinition("ch47d")));
         Assert.Equal(0, catalog.GetPassengerCapacity(catalog.RequireDefinition("t62")));
         Assert.Equal(0, catalog.GetPassengerCapacity(catalog.RequireDefinition("m60a1")));
         Assert.Equal(0, catalog.GetPassengerCapacity(catalog.RequireDefinition("us_rifleman")));

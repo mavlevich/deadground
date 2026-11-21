@@ -106,7 +106,7 @@ public sealed class VehicleSeparationSystem
             if (otherIndex == selfUnitIndex) continue;
 
             UnitState other = world.GetUnitAt(otherIndex);
-            if (world.IsContained(other.Id)) continue;
+            if (world.IsContained(other.Id) || world.IsAirborne(other.Id) || world.IsSlung(other.Id)) continue;
             if (hasBoardingTarget && other.Id == boardingTarget) continue;
             if (world.TryGetBoardingTarget(other.Id, out EntityId otherTarget) && otherTarget == selfUnit.Id) continue;
             if (hasBoardingTarget && world.TryGetBoardingTarget(other.Id, out EntityId otherBoardTarget) && otherBoardTarget == boardingTarget) continue;
@@ -305,7 +305,7 @@ public sealed class VehicleSeparationSystem
             if (otherIndex == selfUnitIndex) continue;
 
             UnitState other = world.GetUnitAt(otherIndex);
-            if (world.IsContained(other.Id)) continue;
+            if (world.IsContained(other.Id) || world.IsAirborne(other.Id) || world.IsSlung(other.Id)) continue;
             if (hasBoardingTarget && other.Id == boardingTarget) continue;
             if (world.TryGetBoardingTarget(other.Id, out EntityId otherTarget) && otherTarget == selfUnit.Id) continue;
             if (hasBoardingTarget && world.TryGetBoardingTarget(other.Id, out EntityId otherBoardTarget) && otherBoardTarget == boardingTarget) continue;
@@ -485,7 +485,7 @@ public sealed class VehicleSeparationSystem
                     if (j == i) continue;
 
                     UnitState unitJ = world.GetUnitAt(j);
-                    if (world.IsContained(unitJ.Id)) continue;
+                    if (world.IsContained(unitJ.Id) || world.IsAirborne(unitJ.Id) || world.IsSlung(unitJ.Id)) continue;
                     if (world.TryGetBoardingTarget(unitI.Id, out EntityId bTargetI) && bTargetI == unitJ.Id) continue;
                     if (world.TryGetBoardingTarget(unitJ.Id, out EntityId bTargetJ) && bTargetJ == unitI.Id) continue;
 
