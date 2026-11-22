@@ -1,0 +1,189 @@
+{
+  "asset": "9K35 Strela-10SV (9A35M / SA-13 Gopher) tracked IR SAM launcher on MT-LB chassis",
+  "configuration": "Combat-ready raised turret configuration with glazed central operator cabin, 4 rectangular 9M37 launch containers on side trunnions, center 9S86 ranging radar housing, and 9S16 passive RWR pods",
+  "units": "meters",
+  "up": "+Y",
+  "forward": "-Z",
+  "right": "+X",
+  "ground_y": 0.0,
+  "node_scale": "1 on every node; no node rotation in the rest pose",
+  "color_authoring": "sRGB hex converted to linear glTF factors",
+  "vertex_colors": "rgb: tint x baked ambient occlusion, a: dirt mask",
+  "sources": [
+    "https://en.wikipedia.org/wiki/9K35_Strela-10",
+    "https://ru.wikipedia.org/wiki/%D0%A1%D1%82%D1%80%D0%B5%D0%BB%D0%B0-10",
+    "https://en.wikipedia.org/wiki/MT-LB",
+    "https://commons.wikimedia.org/wiki/Category:9K35_Strela-10"
+  ],
+  "reference_anchors": {
+    "overall_length_meters": 6.45,
+    "overall_width_meters": 2.85,
+    "hull_roof_height_meters": 1.865,
+    "ground_clearance_meters": 0.4,
+    "track_gauge_meters": 2.5,
+    "track_width_meters": 0.35,
+    "road_wheels_per_side": 6,
+    "container_length_meters": 2.2,
+    "missile_count": 4
+  },
+  "measured": {
+    "bounds_min": [
+      -1.473,
+      0.0,
+      -3.225
+    ],
+    "bounds_max": [
+      1.473,
+      3.8155,
+      3.4334
+    ],
+    "overall_length_meters": 6.6584,
+    "overall_width_meters": 2.946,
+    "combat_rest_height_meters": 3.8155,
+    "lowest_point_meters": 0.0
+  },
+  "rig": {
+    "TurretYaw": {
+      "role": "launcher turret ring",
+      "position": [
+        0.0,
+        1.865,
+        1.02
+      ],
+      "axis": "+Y",
+      "rotation_y_range_degrees": [
+        -180.0,
+        180.0
+      ],
+      "continuous_traverse": true,
+      "note": "positive rotation about +Y turns the turret to the left"
+    },
+    "GunPitch": {
+      "role": "missile container and 9S86 radar elevation trunnions",
+      "parent": "TurretYaw",
+      "local_position": [
+        0.0,
+        0.9,
+        0.06
+      ],
+      "rest_world_position": [
+        0.0,
+        2.765,
+        1.08
+      ],
+      "axis": "+X",
+      "rotation_x_range_degrees": [
+        -5.0,
+        80.0
+      ],
+      "note": "positive rotation about +X raises the container fronts skyward; clears hull roof over full 360-degree traverse"
+    },
+    "Muzzle": {
+      "parent": "GunPitch",
+      "role": "generic effect anchor at launcher front center",
+      "local_position": [
+        0.0,
+        0.0,
+        -1.55
+      ]
+    },
+    "launch_points": {
+      "parent": "GunPitch",
+      "count": 4,
+      "bore_axis": "-Z of GunPitch",
+      "points": [
+        {
+          "name": "Launch_01",
+          "local_position": [
+            -1.12,
+            0.0,
+            -1.55
+          ]
+        },
+        {
+          "name": "Launch_02",
+          "local_position": [
+            1.12,
+            0.0,
+            -1.55
+          ]
+        },
+        {
+          "name": "Launch_03",
+          "local_position": [
+            -0.75,
+            0.0,
+            -1.55
+          ]
+        },
+        {
+          "name": "Launch_04",
+          "local_position": [
+            0.75,
+            0.0,
+            -1.55
+          ]
+        }
+      ],
+      "firing_order": [
+        "Launch_01",
+        "Launch_02",
+        "Launch_03",
+        "Launch_04"
+      ]
+    },
+    "tracks": {
+      "left_parent": "LeftTrack",
+      "right_parent": "RightTrack",
+      "motion_mesh_pattern": "*_Motion_*"
+    }
+  },
+  "lods": [
+    {
+      "file": "strela10.glb",
+      "triangles": 20789,
+      "vertices": 30277,
+      "mesh_parts": 30,
+      "materials": 11,
+      "bytes": 1894744,
+      "lod": 0,
+      "triangle_budget": 21000,
+      "track_pattern_cycle": 0.25212151729593274,
+      "role": "close"
+    },
+    {
+      "file": "strela10_lod1.glb",
+      "triangles": 5195,
+      "vertices": 6461,
+      "mesh_parts": 26,
+      "materials": 11,
+      "bytes": 393936,
+      "lod": 1,
+      "triangle_budget": 5500,
+      "role": "rts"
+    },
+    {
+      "file": "strela10_lod2.glb",
+      "triangles": 1860,
+      "vertices": 2978,
+      "mesh_parts": 19,
+      "materials": 8,
+      "bytes": 169368,
+      "lod": 2,
+      "triangle_budget": 1900,
+      "role": "distant"
+    }
+  ],
+  "track_gauge_meters": 2.5,
+  "track_wrap_meters": 997.140600905414,
+  "simplifications": [
+    "Modeled in raised combat-ready turret pose; folding travel stowage animation is omitted.",
+    "Small external latches, spare track links, and periscope guards are simplified for RTS readability.",
+    "No reload missile crane or internal hull interior."
+  ],
+  "unsupported_motions": [
+    "Suspension travel and folding turret pedestal stowage.",
+    "Door and crew hatch opening.",
+    "No BarrelRecoil node: missile launch uses rocket exhaust/backblast rather than barrel recoil."
+  ]
+}
