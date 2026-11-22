@@ -36,6 +36,7 @@ public sealed class DetectionSystem : ISimulationSystem
     private readonly EntityId[] _unitIds;
     private readonly bool[] _unitHasSensor;
     private readonly float[] _unitSensorRange;
+    private readonly float[] _unitVisualSignatures;
     private readonly Vector3[] _unitEyePos;
     private readonly ContactClassification[] _unitClassifications;
     private readonly TargetObservationPoints?[] _unitTargetPoints;
@@ -115,6 +116,7 @@ public sealed class DetectionSystem : ISimulationSystem
         _unitIds = new EntityId[maxUnits];
         _unitHasSensor = new bool[maxUnits];
         _unitSensorRange = new float[maxUnits];
+        _unitVisualSignatures = new float[maxUnits];
         _unitClassifications = new ContactClassification[maxUnits];
         _unitEyePos = new Vector3[maxUnits];
         _unitTargetPoints = new TargetObservationPoints?[maxUnits];
@@ -146,6 +148,7 @@ public sealed class DetectionSystem : ISimulationSystem
         int unitCount = world.Count;
 
         // Copy unit state and precompute perception endpoints once per tick
+        float maxVisualSignature = 1.0f;
         for (int i = 0; i < unitCount; i++)
         {
             UnitState u = world.GetUnitAt(i);
@@ -175,6 +178,7 @@ public sealed class DetectionSystem : ISimulationSystem
             if (world.IsContained(u.Id))
             {
                 _unitHasSensor[i] = false;
+                _unitVisualSignatures[i] = 1.0f;
                 _unitClassifications[i] = ContactClassification.Infantry;
                 _unitTargetPoints[i] = null;
                 continue;
@@ -183,6 +187,15 @@ public sealed class DetectionSystem : ISimulationSystem
             if (_catalog.TryGetProfile(u.Definition, out UnitPerceptionProfile profile))
             {
                 _unitClassifications[i] = profile.Classification;
+                float signature = float.IsFinite(profile.VisualSignature) && profile.VisualSignature > 0f
+                    ? profile.VisualSignature
+                    : 1.0f;
+                _unitVisualSignatures[i] = signature;
+                if (signature > maxVisualSignature)
+                {
+                    maxVisualSignature = signature;
+                }
+
                 if (profile.Sensor is not null && flightPhase != FlightPhase.Crashing)
                 {
                     _unitHasSensor[i] = true;
@@ -208,6 +221,7 @@ public sealed class DetectionSystem : ISimulationSystem
             else
             {
                 _unitHasSensor[i] = false;
+                _unitVisualSignatures[i] = 1.0f;
                 _unitClassifications[i] = ContactClassification.Vehicle;
                 _unitTargetPoints[i] = null;
             }
@@ -254,10 +268,10 @@ public sealed class DetectionSystem : ISimulationSystem
             float sensorRange = _unitSensorRange[i];
             Vector2 obsPos = _unitPositions[i];
 
-            // Query hostile candidate targets within visual sensor range using spatial grid
+            // Query hostile candidate targets within maximum signature-scaled visual range using spatial grid
             int candidates = _spatialGrid.QueryHostileCandidates(
                 obsPos,
-                sensorRange,
+                sensorRange * maxVisualSignature,
                 _unitTeams[i],
                 _unitPositions.AsSpan(0, unitCount),
                 _unitTeams.AsSpan(0, unitCount),
@@ -278,6 +292,11 @@ public sealed class DetectionSystem : ISimulationSystem
 
                 TargetObservationPoints? points = _unitTargetPoints[targetUnitIndex];
                 if (points is null)
+                    continue;
+
+                // Apply target visual signature scaling before executing line-of-sight geometry checks
+                float effectiveRange = sensorRange * _unitVisualSignatures[targetUnitIndex];
+                if (Vector2.DistanceSquared(obsPos, _unitPositions[targetUnitIndex]) > effectiveRange * effectiveRange)
                     continue;
 
                 Vector3 topPoint = _unitTopTargetPoint[targetUnitIndex];
@@ -601,11 +620,14 @@ public sealed class DetectionSystem : ISimulationSystem
         float groundY = _geometry.GetSurfaceHeight(lkPos, supportSurface);
         bool hasProfile = _catalog.TryGetProfile(unitType, out UnitPerceptionProfile profile);
         TargetObservationPoints? points = hasProfile ? profile.TargetPoints : null;
+        float targetSignature = hasProfile && float.IsFinite(profile.VisualSignature) && profile.VisualSignature > 0f
+            ? profile.VisualSignature
+            : 1.0f;
 
         for (int o = 0; o < activeObsCount; o++)
         {
             int obsIndex = _activeObserverIndices[sideIndex * _maxUnits + o];
-            float range = _unitSensorRange[obsIndex];
+            float range = _unitSensorRange[obsIndex] * targetSignature;
             float rangeSq = range * range;
 
             if (Vector2.DistanceSquared(_unitPositions[obsIndex], lkPos) > rangeSq)
