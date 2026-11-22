@@ -729,6 +729,7 @@ public sealed class MotionSmoothingTests
         }
 
         // Measure allocations in steady-state loop
+        using NoGcAllocationWindow window = new();
         long beforeAllocated = GC.GetAllocatedBytesForCurrentThread();
         const int Iterations = 60;
         for (int i = 0; i < Iterations; i++)
@@ -736,9 +737,9 @@ public sealed class MotionSmoothingTests
             session.Advance(0.016667);
             session.Replica.SamplePosition(unitId, session.RenderTick, out int left, out int right, out float alpha);
         }
-        long afterAllocated = GC.GetAllocatedBytesForCurrentThread();
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - beforeAllocated;
 
-        Assert.Equal(0, afterAllocated - beforeAllocated);
+        Assert.True(allocated == 0, window.Describe(allocated));
     }
 
     [Fact]
