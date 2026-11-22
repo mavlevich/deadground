@@ -19,7 +19,7 @@ Gameplay tuning differences are marked "balance, revisit after play".
 | M113A1 | 2 + 11 [9] | 12.3 t [10] | 64 km/h, 17.8 m/s [9] | 35 km/h, 9.7 m/s, estimate | 15 km/h, 4.2 m/s, estimate | 5.8 km/h [10] | 36.0 deg/s, estimate | 22 / 15 / 15 mm RHA equiv, estimate [10] | 20 / 12 / 12 mm RHA equiv |
 | BRDM-2 | 4 [11] | 7.0 t [11] | 95 km/h, 26.4 m/s [11] | 40 km/h, 11.1 m/s, estimate | 15 km/h, 4.2 m/s, estimate | 10 km/h [11] | 45.0 deg/s, estimate | 14 / 7 / 5 mm [11] | 16 / 8 / 5 mm |
 | M151A2 | 1 + 3 | 1.1 t [14] | 106 km/h, 29.4 m/s, estimate | 50 km/h, 13.9 m/s, estimate | 15 km/h, 4.2 m/s, estimate | no | 60.0 deg/s, estimate | none (0 / 0 / 0 mm) [14] | none (0 / 0 / 0 mm) |
-| US Rifleman | 1 | 0.08 t, estimate | 14.4 km/h, 4.0 m/s, estimate | 11.5 km/h, 3.2 m/s, estimate | 5.4 km/h, 1.5 m/s, estimate | no | 360.0 deg/s, estimate | none (0 / 0 / 0 mm) | none (0 / 0 / 0 mm) |
+| US Rifleman | 1 | 0.08 t, estimate | 15.8 km/h, 4.4 m/s, estimate | 13.0 km/h, 3.6 m/s, estimate | 5.4 km/h, 1.5 m/s, estimate | no | 360.0 deg/s, estimate | none (0 / 0 / 0 mm) | none (0 / 0 / 0 mm) |
 
 ## Weapons
 

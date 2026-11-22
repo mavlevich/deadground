@@ -27,7 +27,7 @@ internal sealed class ContactViewSet(
     {
     }
 
-    internal void Sync(ClientReplica replica, double renderTick = 0)
+    internal void Sync(ClientReplica replica, double renderTick = 0, float deltaSeconds = Simulation.TickSeconds)
     {
         _present.Clear();
         foreach (ContactObservation contact in replica.Contacts)
@@ -47,7 +47,7 @@ internal sealed class ContactViewSet(
             float groundY = geometry is not null
                 ? geometry.GetSurfaceHeight(position, contact.SupportSurface)
                 : map.GetHeight(position.X, position.Y);
-            view.Update(contact, position, groundY, Selected.Contains(contact.Id), turretYaw, hullHeading, altitude, gunPitchRad);
+            view.Update(contact, position, groundY, Selected.Contains(contact.Id), turretYaw, hullHeading, altitude, gunPitchRad, deltaSeconds);
         }
 
         _removed.Clear();

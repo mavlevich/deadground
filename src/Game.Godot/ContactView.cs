@@ -147,18 +147,24 @@ internal sealed class ContactView
         Update(contact, contact.Position, groundY, isSelected, contact.TurretYaw, contact.HullHeading, contact.Altitude, contact.GunPitchRad);
 
     public void Update(ContactObservation contact, System.Numerics.Vector2 position, float groundY, bool isSelected,
-        float turretYaw, float hullHeading, float altitude = 0f, float gunPitchRad = 0f)
+        float turretYaw, float hullHeading, float altitude = 0f, float gunPitchRad = 0f,
+        float deltaSeconds = Simulation.TickSeconds)
     {
         Observation = contact;
         _altitude = MathF.Max(0f, altitude);
         _gunPitchRad = gunPitchRad;
+        float dt = deltaSeconds > 1e-4f ? deltaSeconds : Simulation.TickSeconds;
         Vector3 newPos = new(position.X, groundY, position.Y);
         float speed = 0f;
         if (_hasPrevPos)
         {
             Vector3 deltaPos = newPos - _prevPos;
             deltaPos.Y = 0;
-            speed = deltaPos.Length() / Simulation.TickSeconds;
+            float stepDist = deltaPos.Length();
+            if (stepDist <= 5.0f)
+            {
+                speed = stepDist / dt;
+            }
         }
         _prevPos = newPos;
         _hasPrevPos = true;
@@ -166,7 +172,7 @@ internal sealed class ContactView
 
         if (_aimingTimer > 0f)
         {
-            _aimingTimer = MathF.Max(0f, _aimingTimer - Simulation.TickSeconds);
+            _aimingTimer = MathF.Max(0f, _aimingTimer - dt);
         }
 
         bool isInfantry = contact.Classification == ContactClassification.Infantry;
@@ -271,21 +277,46 @@ internal sealed class ContactView
 
                 if (_animPlayer is not null)
                 {
-                    StringName targetAnimName = speed >= 2.2f ? AnimRun : (speed >= 0.15f ? AnimWalk : (isAiming ? AnimAimStanding : AnimIdle));
+                    StringName targetAnimName;
+                    string targetAnimStr;
+                    if (speed >= 0.15f)
+                    {
+                        if (_animPlayer.HasAnimation(AnimRun))
+                        {
+                            targetAnimName = AnimRun;
+                            targetAnimStr = "Run";
+                        }
+                        else
+                        {
+                            targetAnimName = AnimWalk;
+                            targetAnimStr = "Walk";
+                        }
+                    }
+                    else if (isAiming)
+                    {
+                        targetAnimName = AnimAimStanding;
+                        targetAnimStr = "AimStanding";
+                    }
+                    else
+                    {
+                        targetAnimName = AnimIdle;
+                        targetAnimStr = "Idle";
+                    }
+
                     if (_currentAnimName != targetAnimName && _animPlayer.HasAnimation(targetAnimName))
                     {
                         _animPlayer.Play(targetAnimName);
                         _currentAnimName = targetAnimName;
-                        _currentAnim = targetAnimName.ToString();
+                        _currentAnim = targetAnimStr;
                     }
 
-                    if (targetAnimName == AnimWalk)
+                    if (targetAnimName == AnimRun)
                     {
-                        _animPlayer.SpeedScale = MathF.Max(0.1f, speed / 1.5f);
+                        _animPlayer.SpeedScale = Math.Clamp(speed / 3.0f, 0.70f, 1.50f);
                     }
-                    else if (targetAnimName == AnimRun)
+                    else if (targetAnimName == AnimWalk)
                     {
-                        _animPlayer.SpeedScale = MathF.Max(0.1f, speed / 3.5f);
+                        _animPlayer.SpeedScale = Math.Clamp(speed / 1.5f, 0.50f, 1.50f);
                     }
                     else
                     {
