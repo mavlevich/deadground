@@ -302,6 +302,21 @@ public sealed class SimulationHost : IDisposable
                         DroppedCommandResults++;
                 }
             }
+            else if (kind == WireProtocol.DeployFlaresKind)
+            {
+                if (connectionId == 0 || _admittedConnectionIds[player - 1] != connectionId)
+                    continue;
+
+                if (WireProtocol.TryReadDeployFlares(_receive.AsSpan(0, length), out DeployFlaresCommand command))
+                {
+                    bool queued = _simulation.TryEnqueue(player, command);
+                    WireProtocol.WriteCommandResult(_reply, new CommandResult(command.Sequence, Tick, queued));
+                    if (_transport.TrySend(player, _reply.AsSpan(0, WireProtocol.CommandResultSize)))
+                        BytesSent += WireProtocol.CommandResultSize;
+                    else
+                        DroppedCommandResults++;
+                }
+            }
         }
 
         // Bound work per call, not elapsed time. Later calls drain the remaining debt.
@@ -451,7 +466,8 @@ public sealed class SimulationHost : IDisposable
             knowledge.Events,
             knowledge.Mission,
             knowledge.Wrecks,
-            knowledge.SmokeClouds);
+            knowledge.SmokeClouds,
+            knowledge.Missiles);
 
         bool sentSuccessfully = false;
         if (_transport is SinglePlayerServerTransport || length <= WireProtocol.MaxFragmentPayloadSize)

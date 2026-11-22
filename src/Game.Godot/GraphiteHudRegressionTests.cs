@@ -585,6 +585,7 @@ internal static class GraphiteHudRegressionTests
         public bool DeploySmoke(EntityId unit, bool hasTarget = false, System.Numerics.Vector2 target = default, uint targetSurface = 0) => false;
         public bool OrderHelicopter(EntityId unit, HelicopterOrderKind kind, AltitudeBand band = AltitudeBand.High, bool hasTarget = false, System.Numerics.Vector2 target = default, EntityId cargoUnit = default) => false;
         public bool FireMission(EntityId unit, System.Numerics.Vector2 target, bool cancel = false) => false;
+        public bool DeployFlares(EntityId unit, bool toggleAuto = false) => false;
         public void Advance(double elapsedSeconds) { }
         public void Dispose() { }
     }

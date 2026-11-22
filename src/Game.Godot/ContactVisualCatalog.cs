@@ -39,6 +39,7 @@ internal static class ContactVisualCatalog
                     ContactClassification.Infantry => "EnemyInfantryModel",
                     ContactClassification.Helicopter => "EnemyHelicopterModel",
                     ContactClassification.Artillery => "EnemyArtilleryModel",
+                    ContactClassification.AntiAir => "EnemyAntiAirModel",
                     _ => "EnemyVehicleModel"
                 };
                 AttachHostileAffiliationMarker(visual.Root, classification == ContactClassification.Infantry);
@@ -55,6 +56,7 @@ internal static class ContactVisualCatalog
             ContactClassification.Infantry => CreateEnemyVisual("contact_infantry", "EnemyInfantryModel", hostileFaction, initialCameraSize, isInfantry: true),
             ContactClassification.Helicopter => CreateEnemyVisual("contact_helicopter", "EnemyHelicopterModel", hostileFaction, initialCameraSize),
             ContactClassification.Artillery => CreateEnemyVisual("contact_artillery", "EnemyArtilleryModel", hostileFaction, initialCameraSize),
+            ContactClassification.AntiAir => CreateEnemyVisual("contact_anti_air", "EnemyAntiAirModel", hostileFaction, initialCameraSize),
             ContactClassification.Vehicle => new ContactVisualHandle(CreateEnemyGenericVehicleModel(), null),
             _ => null
         };

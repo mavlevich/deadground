@@ -45,6 +45,7 @@ internal sealed partial class RoleBadgeOverlay : Control
                 "infantry" => ContactClassification.Infantry,
                 "helicopter" => ContactClassification.Helicopter,
                 "artillery" or "mlrs" => ContactClassification.Artillery,
+                "anti_air" or "antiair" or "sam" or "aa" => ContactClassification.AntiAir,
                 "command_vehicle" or "command" => ContactClassification.CommandVehicle,
                 _ => ContactClassification.Vehicle
             };
@@ -310,6 +311,7 @@ internal sealed partial class RoleBadgeOverlay : Control
             ContactClassification.Infantry => "INF",
             ContactClassification.Helicopter => "HELI",
             ContactClassification.Artillery => "ARTY",
+            ContactClassification.AntiAir => "AA",
             _ => "UNIT"
         };
     }
@@ -329,6 +331,7 @@ internal sealed partial class RoleBadgeOverlay : Control
                 "infantry" => "INF",
                 "helicopter" => "HELI",
                 "artillery" or "mlrs" => "ARTY",
+                "anti_air" or "antiair" or "sam" or "aa" => "AA",
                 _ => def.Classification.ToUpperInvariant()
             };
         }

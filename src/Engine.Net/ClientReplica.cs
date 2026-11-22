@@ -23,6 +23,8 @@ public sealed class ClientReplica
     public int WreckCount => _count == 0 ? 0 : Latest.WreckCount;
     public ReadOnlySpan<SmokeCloudObservation> SmokeClouds => _count == 0 ? [] : Latest.SmokeClouds.AsSpan(0, Latest.SmokeCount);
     public int SmokeCloudCount => _count == 0 ? 0 : Latest.SmokeCount;
+    public ReadOnlySpan<GuidedMissileObservation> Missiles => _count == 0 ? [] : Latest.Missiles.AsSpan(0, Latest.MissileCount);
+    public int MissileCount => _count == 0 ? 0 : Latest.MissileCount;
     public ReadOnlySpan<CombatEventObservation> Events
     {
         get
@@ -373,6 +375,50 @@ public sealed class ClientReplica
             return latest.GunPitchRad;
 
         return leftContact.GunPitchRad + (rightContact.GunPitchRad - leftContact.GunPitchRad) * alpha;
+    }
+
+    public bool TryGetMissile(uint missileId, out GuidedMissileObservation missile)
+    {
+        if (_count == 0 || !Latest.MissileIndices.TryGetValue(missileId, out int index))
+        {
+            missile = default;
+            return false;
+        }
+        missile = Latest.Missiles[index];
+        return true;
+    }
+
+    public bool SampleMissilePose(
+        uint missileId,
+        double renderTick,
+        out Vector3 position,
+        out Vector3 velocity,
+        out GuidedMissileFlags flags)
+    {
+        position = default;
+        velocity = default;
+        flags = GuidedMissileFlags.None;
+        if (_count == 0 || !Latest.MissileIndices.TryGetValue(missileId, out int latestIdx))
+            return false;
+
+        ref readonly GuidedMissileObservation latest = ref Latest.Missiles[latestIdx];
+        FindBracket(renderTick, out SnapshotFrame left, out SnapshotFrame right, out float alpha);
+        if (left.MissileIndices.TryGetValue(missileId, out int li) && right.MissileIndices.TryGetValue(missileId, out int ri))
+        {
+            ref readonly GuidedMissileObservation lm = ref left.Missiles[li];
+            ref readonly GuidedMissileObservation rm = ref right.Missiles[ri];
+            position = Vector3.Lerp(lm.Position, rm.Position, alpha);
+            velocity = Vector3.Lerp(lm.Velocity, rm.Velocity, alpha);
+            flags = alpha >= 0.5f ? rm.Flags : lm.Flags;
+            return true;
+        }
+
+        // Smooth velocity-based fallback for a newly launched missile present only in the latest bracket
+        float dtTicks = (float)Math.Clamp(renderTick - Latest.Tick, -2.0, 1.0);
+        position = latest.Position + latest.Velocity * (dtTicks * Simulation.TickSeconds);
+        velocity = latest.Velocity;
+        flags = latest.Flags;
+        return true;
     }
 
     private void FindBracket(double renderTick, out SnapshotFrame left, out SnapshotFrame right, out float alpha)

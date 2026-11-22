@@ -24,7 +24,8 @@ public enum WeaponPresentationKind : byte
     Cannon = 1,
     MachineGun = 2,
     Rifle = 3,
-    RocketArtillery = 4
+    RocketArtillery = 4,
+    SurfaceToAirMissile = 5
 }
 
 public static class WeaponPresentation
@@ -41,6 +42,7 @@ public static class WeaponPresentation
             (byte)WeaponPresentationKind.MachineGun => WeaponPresentationKind.MachineGun,
             (byte)WeaponPresentationKind.Rifle => WeaponPresentationKind.Rifle,
             (byte)WeaponPresentationKind.RocketArtillery => WeaponPresentationKind.RocketArtillery,
+            (byte)WeaponPresentationKind.SurfaceToAirMissile => WeaponPresentationKind.SurfaceToAirMissile,
             _ => WeaponPresentationKind.None
         };
     }
@@ -56,6 +58,9 @@ public static class WeaponPresentation
 
     public static bool IsRocketArtillery(ushort presentationId) =>
         GetKind(presentationId) == WeaponPresentationKind.RocketArtillery;
+
+    public static bool IsSurfaceToAirMissile(ushort presentationId) =>
+        GetKind(presentationId) == WeaponPresentationKind.SurfaceToAirMissile;
 }
 
 public readonly record struct AccuracyPoint(float Range, float HitProbability);
@@ -91,8 +96,16 @@ public sealed record WeaponDefinition(
     float SplashRadius = 0f,
     float ProjectileSpeed = ArtilleryBallistics.DefaultRocketSpeed,
     int SetupTicks = 0,
-    float ElevationDegrees = 0f)
+    float ElevationDegrees = 0f,
+    MissileGuidanceKind GuidanceKind = MissileGuidanceKind.None,
+    bool AirTargetsOnly = false,
+    float MissileMaxTurnRateDegPerSec = 0f,
+    float MissileProximityFuzeRadius = 6.0f,
+    float IrCountermeasureResistance = 0f,
+    int MissileMaxFlightTicks = 160,
+    int MissileMotorBurnTicks = 50)
 {
+    public bool IsGuidedMissile => GuidanceKind != MissileGuidanceKind.None;
     public float Dispersion => DispersionMils;
 
     public float GetAccuracyAt(float distance)

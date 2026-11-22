@@ -135,7 +135,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
             }
         }
 
-        return true;
+        return !weapon.AirTargetsOnly;
     }
 
     /// <summary>
@@ -332,6 +332,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
     {
         ContactClassification.Tank => 0,
         ContactClassification.Artillery => 1,
+        ContactClassification.AntiAir => 1,
         ContactClassification.Apc => 2,
         ContactClassification.Helicopter => 3,
         ContactClassification.Recon => 4,
@@ -427,6 +428,8 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         in ContactObservation contact,
         IUnitCombatCatalog catalog)
     {
+        if (weapon.IsGuidedMissile)
+            return true;
         if (!catalog.TryGetProfile(contact.Type, out UnitCombatProfile targetProfile))
             return true;
 
@@ -769,10 +772,15 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                 float dist = Vector2.Distance(attacker.Position, targetUnit.Position);
 
                 // Check if within weapon range
-                if (dist <= weapon.Range + RangeToleranceMargin)
+                if (dist <= weapon.Range + RangeToleranceMargin &&
+                    (!weapon.IsGuidedMissile || dist >= weapon.MinRange))
                 {
                     if (HasLineOfSightToTarget(attacker, weapon, targetUnit, world, out Vector3 hitPoint, out Vector3 muzzlePos))
                     {
+                        if (weapon.IsGuidedMissile)
+                        {
+                            UpdateGuidedLauncherPitch(world, attacker.Id, muzzlePos, hitPoint);
+                        }
                         // Within range and clear line of sight: stop moving and engage
                         if (attacker.Moving)
                         {
@@ -856,6 +864,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                         world.AreHostile(attacker.Owner, currentTargetUnit.Owner) &&
                         CanEngageTargetAltitude(weapon, world, cs.TargetEntityId) &&
                         Vector2.Distance(attacker.Position, currentTargetUnit.Position) <= weapon.Range + RangeToleranceMargin &&
+                        (!weapon.IsGuidedMissile || Vector2.Distance(attacker.Position, currentTargetUnit.Position) >= weapon.MinRange) &&
                         (cs.Stance != FireStance.ReturnFire || (cs.LastTookFireAttacker.Value != 0 && cs.TargetEntityId.Value == cs.LastTookFireAttacker.Value)) &&
                         CanPenetrateObservedContact(attacker.Position, weapon, currentContact, _combatCatalog) &&
                         HasLineOfSightToTarget(attacker, weapon, currentTargetUnit, world, out currentHitPoint, out currentMuzzlePos))
@@ -931,6 +940,8 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                         float distToCandidate = Vector2.Distance(attacker.Position, candidateUnit.Position);
                         if (distToCandidate > weapon.Range + RangeToleranceMargin)
                             continue;
+                        if (weapon.IsGuidedMissile && distToCandidate < weapon.MinRange)
+                            continue;
 
                         if (cs.Stance == FireStance.ReturnFire && (cs.LastTookFireAttacker.Value == 0 || candidateEntityId.Value != cs.LastTookFireAttacker.Value))
                             continue;
@@ -989,6 +1000,10 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                     ActiveAttackersCount++;
                     world.TryGetUnit(cs.TargetEntityId, out UnitState targetUnit);
                     TurnTurret(ref cs, attacker.Position, targetUnit.Position, profile.TurretTraverseRate);
+                    if (weapon.IsGuidedMissile)
+                    {
+                        UpdateGuidedLauncherPitch(world, attacker.Id, currentMuzzlePos, currentHitPoint);
+                    }
 
                     if (cs.Ammunition <= 0)
                     {
@@ -1026,6 +1041,10 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                 else
                 {
                     ReturnTurretToFront(ref cs, profile.TurretTraverseRate);
+                    if (weapon.IsGuidedMissile)
+                    {
+                        UpdateGuidedLauncherPitch(world, attacker.Id, Vector3.Zero, null);
+                    }
                     world.SetCombatState(attacker.Id, cs);
                     continue;
                 }
@@ -1130,6 +1149,12 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         float visibleShare = ComputeVisibleShare(attacker, targetUnit, world);
         if (visibleShare <= 0f)
         {
+            return;
+        }
+
+        if (weapon.IsGuidedMissile)
+        {
+            ExecuteGuidedMissileLaunch(tick, attacker, weapon, targetUnit, muzzlePos, hitPoint, ref cs, world);
             return;
         }
 
@@ -1556,6 +1581,330 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                 DestroyUnit(_crashSplashKilledBuffer[k], world, tick);
             }
         }
+    }
+
+    private static void UpdateGuidedLauncherPitch(
+        WorldState world,
+        EntityId unitId,
+        Vector3 muzzlePos,
+        Vector3? targetPos)
+    {
+        if (!world.TryGetArtilleryState(unitId, out WorldState.UnitArtilleryState art))
+            return;
+
+        // Idle alert search pitch (+12 deg) when no air target is tracked; otherwise aim at target
+        const float minPitchRad = -5f * MathF.PI / 180f;
+        const float maxPitchRad = 80f * MathF.PI / 180f;
+        const float idlePitchRad = 12f * MathF.PI / 180f;
+        const float maxStepRad = (55f * MathF.PI / 180f) * Simulation.TickSeconds;
+
+        float desiredPitch = idlePitchRad;
+        if (targetPos.HasValue)
+        {
+            Vector3 delta = targetPos.Value - muzzlePos;
+            float horizDist = MathF.Sqrt(delta.X * delta.X + delta.Z * delta.Z);
+            if (horizDist > 0.5f)
+            {
+                desiredPitch = Math.Clamp(MathF.Atan2(delta.Y, horizDist), minPitchRad, maxPitchRad);
+            }
+        }
+
+        float diff = desiredPitch - art.GunPitchRad;
+        float nextPitch = MathF.Abs(diff) <= maxStepRad
+            ? desiredPitch
+            : art.GunPitchRad + MathF.Sign(diff) * maxStepRad;
+
+        if (MathF.Abs(nextPitch - art.GunPitchRad) > 1e-5f)
+        {
+            art.GunPitchRad = nextPitch;
+            world.SetArtilleryState(unitId, art);
+        }
+    }
+
+    private void ExecuteGuidedMissileLaunch(
+        int tick,
+        UnitState attacker,
+        WeaponDefinition weapon,
+        UnitState targetUnit,
+        Vector3 muzzlePos,
+        Vector3 hitPoint,
+        ref WorldState.CombatState cs,
+        WorldState world)
+    {
+        cs.Ammunition = Math.Max(0, cs.Ammunition - 1);
+        cs.ReloadTicksRemaining = weapon.ReloadDurationTicks;
+        cs.HasSwitchedTargetThisReload = false;
+        cs.Status = AttackExecutionStatus.Aiming;
+        cs.LastTargetEntityId = targetUnit.Id;
+        cs.LastTargetPosition = targetUnit.Position;
+        world.SetCombatState(attacker.Id, cs);
+
+        TotalShotsFired++;
+        float shotDistance = Vector2.Distance(attacker.Position, targetUnit.Position);
+        if (FirstShotTick < 0)
+        {
+            FirstShotTick = tick;
+            FirstShotDistance = shotDistance;
+        }
+
+        // Launch cleanly above the Strela-10 canister rack toward the target
+        Vector3 launchOrigin = muzzlePos + new Vector3(0f, 1.35f, 0f);
+        Vector3 toTarget = hitPoint - launchOrigin;
+        float dist3D = toTarget.Length();
+        Vector3 launchDir = dist3D > 0.1f ? toTarget / dist3D : new Vector3(MathF.Cos(cs.TurretYaw), 0.25f, MathF.Sin(cs.TurretYaw));
+        launchDir = Vector3.Normalize(launchDir);
+
+        float speed = weapon.ProjectileSpeed > 1f ? weapon.ProjectileSpeed : 135f;
+        float maxTurnRad = (weapon.MissileMaxTurnRateDegPerSec > 0f ? weapon.MissileMaxTurnRateDegPerSec : 52f) * MathF.PI / 180f;
+        float fuzeRadius = weapon.MissileProximityFuzeRadius > 0.5f ? weapon.MissileProximityFuzeRadius : 11f;
+        int maxFlightTicks = weapon.MissileMaxFlightTicks > 0 ? weapon.MissileMaxFlightTicks : 320;
+        int motorBurnTicks = weapon.MissileMotorBurnTicks > 0 ? weapon.MissileMotorBurnTicks : 150;
+
+        GuidedMissileState missile = new()
+        {
+            Owner = attacker.Owner,
+            ShooterId = attacker.Id,
+            ShooterDefinition = attacker.Definition,
+            TargetId = targetUnit.Id,
+            PresentationId = weapon.PresentationId,
+            Guidance = weapon.GuidanceKind != MissileGuidanceKind.None ? weapon.GuidanceKind : MissileGuidanceKind.Infrared,
+            Position = launchOrigin,
+            Velocity = launchDir * speed,
+            Speed = speed,
+            MaxTurnRateRadPerSec = maxTurnRad,
+            Damage = weapon.Damage,
+            SplashRadius = weapon.SplashRadius,
+            ProximityFuzeRadius = fuzeRadius,
+            IrCountermeasureResistance = Math.Clamp(weapon.IrCountermeasureResistance, 0f, 1f),
+            LaunchedTick = tick,
+            MaxFlightTicks = maxFlightTicks,
+            MotorBurnTicks = motorBurnTicks,
+            Decoyed = false,
+            DecoyTargetPos = Vector3.Zero,
+            FlareEvaluatedBurstTick = -10000
+        };
+
+        if (world.TryAddGuidedMissile(missile, out _))
+        {
+            RecordMissileLaunchedEvent(
+                tick,
+                weapon.PresentationId,
+                attacker.Id,
+                attacker.Owner,
+                targetUnit.Id,
+                targetUnit.Owner,
+                launchOrigin,
+                hitPoint);
+        }
+    }
+
+    private void RecordMissileLaunchedEvent(
+        int tick,
+        ushort presentationId,
+        EntityId shooterId,
+        int shooterOwner,
+        EntityId targetId,
+        int targetOwner,
+        Vector3 origin,
+        Vector3 target)
+    {
+        uint eventId = _nextEventId++;
+        if (_nextEventId == 0) _nextEventId = 1;
+
+        for (int p = 1; p <= _maxSides; p++)
+        {
+            if (p == shooterOwner)
+            {
+                CombatEventObservation ev = new(
+                    eventId,
+                    tick,
+                    CombatEventKind.MissileLaunched,
+                    presentationId,
+                    origin,
+                    target,
+                    shooterId,
+                    HitResult.None);
+                AppendEvent(p, ev);
+            }
+            else if (_detection.IsEntityObservedBy(p, shooterId))
+            {
+                CombatEventObservation ev = new(
+                    eventId,
+                    tick,
+                    CombatEventKind.MissileLaunched,
+                    presentationId,
+                    origin,
+                    target,
+                    default,
+                    HitResult.None);
+                AppendEvent(p, ev);
+            }
+            else if (p == targetOwner || _detection.IsEntityObservedBy(p, targetId))
+            {
+                // Target owner hears/sees the bright SAM booster plume launching in the sky,
+                // without disclosing exact hidden launcher entity ID.
+                CombatEventObservation ev = new(
+                    eventId,
+                    tick,
+                    CombatEventKind.MissileLaunched,
+                    presentationId,
+                    origin,
+                    target,
+                    default,
+                    HitResult.None);
+                AppendEvent(p, ev);
+            }
+        }
+    }
+
+    public void RecordFlaresDeployedEvent(
+        WorldState world,
+        int tick,
+        EntityId unitId,
+        ushort definition,
+        Vector3 origin,
+        Vector3 encodedVelocityAndHeading)
+    {
+        if (!world.TryGetUnit(unitId, out UnitState unit))
+            return;
+
+        uint eventId = _nextEventId++;
+        if (_nextEventId == 0) _nextEventId = 1;
+
+        for (int p = 1; p <= _maxSides; p++)
+        {
+            if (p == unit.Owner)
+            {
+                CombatEventObservation ev = new(
+                    eventId,
+                    tick,
+                    CombatEventKind.FlaresDeployed,
+                    definition,
+                    origin,
+                    encodedVelocityAndHeading,
+                    unitId,
+                    HitResult.None);
+                AppendEvent(p, ev);
+            }
+            else if (_detection.IsEntityObservedBy(p, unitId))
+            {
+                CombatEventObservation ev = new(
+                    eventId,
+                    tick,
+                    CombatEventKind.FlaresDeployed,
+                    definition,
+                    origin,
+                    encodedVelocityAndHeading,
+                    default,
+                    HitResult.None);
+                AppendEvent(p, ev);
+            }
+        }
+    }
+
+    public void ResolveMissileDetonation(WorldState world, int tick, GuidedMissileState missile, bool hitTarget)
+    {
+        uint eventId = _nextEventId++;
+        if (_nextEventId == 0) _nextEventId = 1;
+
+        HitResult result = hitTarget ? HitResult.Penetrated : HitResult.Miss;
+        Vector3 detOrigin = missile.Position - (missile.Velocity.LengthSquared() > 1f
+            ? Vector3.Normalize(missile.Velocity) * 6f
+            : Vector3.Zero);
+
+        for (int p = 1; p <= _maxSides; p++)
+        {
+            bool visible = (p == missile.Owner);
+            if (!visible && missile.TargetId.Value != 0 && world.TryGetUnit(missile.TargetId, out UnitState targetCheck))
+            {
+                visible = (p == targetCheck.Owner) || _detection.IsEntityObservedBy(p, missile.TargetId);
+            }
+            if (!visible)
+            {
+                // Airborne missile detonations are bright and audible across nearby units
+                Vector2 det2D = new(missile.Position.X, missile.Position.Z);
+                const float HearRadiusSq = 650f * 650f;
+                for (int i = 0; i < world.Count; i++)
+                {
+                    UnitState u = world.GetUnitAt(i);
+                    if (u.Owner == p && !world.IsContained(u.Id) &&
+                        Vector2.DistanceSquared(u.Position, det2D) <= HearRadiusSq)
+                    {
+                        visible = true;
+                        break;
+                    }
+                }
+            }
+
+            if (visible)
+            {
+                CombatEventObservation ev = new(
+                    eventId,
+                    tick,
+                    CombatEventKind.MissileDetonated,
+                    missile.PresentationId,
+                    detOrigin,
+                    missile.Position,
+                    default,
+                    result);
+                AppendEvent(p, ev);
+            }
+        }
+
+        if (!hitTarget || missile.TargetId.Value == 0)
+            return;
+
+        if (!world.TryGetUnit(missile.TargetId, out UnitState victim) ||
+            world.IsContained(victim.Id) ||
+            world.IsCrashing(victim.Id))
+        {
+            return;
+        }
+
+        int damage = Math.Max(1, missile.Damage);
+        world.ApplyDamage(victim.Id, damage, out bool killed);
+        TotalDamageApplied += damage;
+
+        if (world.TryGetCombatState(victim.Id, out WorldState.CombatState victimCs))
+        {
+            victimCs.LastTookFireTick = tick;
+            victimCs.LastTookFireAttacker = missile.ShooterId;
+            world.SetCombatState(victim.Id, victimCs);
+        }
+
+        if (!killed)
+            return;
+
+        float shotDistance = Vector2.Distance(
+            new Vector2(detOrigin.X, detOrigin.Z),
+            victim.Position);
+
+        if (_flight is not null && world.IsAirborne(victim.Id) &&
+            _flight.TryBeginCrash(
+                world,
+                victim.Id,
+                missile.ShooterId,
+                missile.ShooterDefinition,
+                missile.Owner,
+                shotDistance))
+        {
+            return;
+        }
+
+        TotalUnitsDestroyed++;
+        if (missile.ShooterId.Value != 0 && _killCount < _kills.Length)
+        {
+            _kills[_killCount++] = new CombatKillRecord(
+                tick,
+                missile.ShooterId,
+                missile.ShooterDefinition,
+                missile.Owner,
+                victim.Id,
+                victim.Definition,
+                victim.Owner,
+                shotDistance);
+        }
+        DestroyUnit(victim.Id, world, tick);
     }
 
     public void RecordRocketLaunchedEvent(

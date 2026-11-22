@@ -175,6 +175,64 @@ public sealed class WorldState : IDisposable
         _artilleryProjectileCount = 0;
     }
 
+    public const int MaxGuidedMissiles = 64;
+    private readonly GuidedMissileState[] _guidedMissiles = new GuidedMissileState[MaxGuidedMissiles];
+    private int _guidedMissileCount;
+    private uint _nextGuidedMissileId = 1;
+
+    public int GuidedMissileCount => _guidedMissileCount;
+    public ReadOnlySpan<GuidedMissileState> GuidedMissiles => _guidedMissiles.AsSpan(0, _guidedMissileCount);
+
+    public bool TryAddGuidedMissile(GuidedMissileState missile, out uint assignedId)
+    {
+        assignedId = 0;
+        if (_guidedMissileCount >= _guidedMissiles.Length)
+            return false;
+        uint id = _nextGuidedMissileId++;
+        if (_nextGuidedMissileId == 0) _nextGuidedMissileId = 1;
+        missile.MissileId = id;
+        _guidedMissiles[_guidedMissileCount++] = missile;
+        assignedId = id;
+        return true;
+    }
+
+    public ref GuidedMissileState GetGuidedMissileRef(int index) => ref _guidedMissiles[index];
+
+    public void RemoveGuidedMissileAt(int index)
+    {
+        if ((uint)index >= (uint)_guidedMissileCount)
+            return;
+        int remaining = _guidedMissileCount - index - 1;
+        if (remaining > 0)
+        {
+            Array.Copy(_guidedMissiles, index + 1, _guidedMissiles, index, remaining);
+        }
+        _guidedMissileCount--;
+        _guidedMissiles[_guidedMissileCount] = default;
+    }
+
+    public void ClearGuidedMissiles()
+    {
+        _guidedMissileCount = 0;
+        _nextGuidedMissileId = 1;
+    }
+
+    public int CopyGuidedMissileObservations(int currentTick, Span<GuidedMissileObservation> destination)
+    {
+        int count = Math.Min(_guidedMissileCount, destination.Length);
+        for (int i = 0; i < count; i++)
+        {
+            ref readonly GuidedMissileState m = ref _guidedMissiles[i];
+            GuidedMissileFlags flags = GuidedMissileFlags.None;
+            if (currentTick - m.LaunchedTick < m.MotorBurnTicks)
+                flags |= GuidedMissileFlags.MotorBurning;
+            if (m.Decoyed)
+                flags |= GuidedMissileFlags.Decoyed;
+            destination[i] = new GuidedMissileObservation(m.MissileId, m.PresentationId, m.Position, m.Velocity, flags);
+        }
+        return count;
+    }
+
     private record struct Identity(EntityId Id, int Owner, ushort Definition);
 
     public sealed class ContainerData
@@ -301,6 +359,16 @@ public sealed class WorldState : IDisposable
         float GunPitchRad,
         int NextTubeIndex);
 
+    public record struct UnitCountermeasureState(
+        bool Initialized,
+        bool HasFlares,
+        int ChargesRemaining,
+        int CooldownTicksRemaining,
+        int ActiveTicksRemaining,
+        bool AutoFlaresEnabled,
+        bool MissileWarningActive,
+        int LastFlareBurstTick);
+
     public EntityId CreateUnit(
         int owner,
         ushort definition,
@@ -335,7 +403,7 @@ public sealed class WorldState : IDisposable
             initialTurretYaw,
             initialTurretYaw);
         Entity entity = _storage.Create(new Identity(id, owner, definition),
-            new Position(position), new Motion(position, speed, false, initialSupportSurface), combat, default(UnitSmokeState), default(UnitFlightState), default(UnitArtilleryState));
+            new Position(position), new Motion(position, speed, false, initialSupportSurface), combat, default(UnitSmokeState), default(UnitFlightState), default(UnitArtilleryState), default(UnitCountermeasureState));
         _entities[Count] = entity;
         _indices.Add(id, Count++);
 
@@ -748,6 +816,38 @@ public sealed class WorldState : IDisposable
         if (!_indices.TryGetValue(id, out int index)) return false;
         _storage.Get<UnitArtilleryState>(_entities[index]) = artillery;
         return true;
+    }
+
+    public bool TryGetCountermeasureState(EntityId id, out UnitCountermeasureState cm)
+    {
+        if (_indices.TryGetValue(id, out int index))
+        {
+            cm = _storage.Get<UnitCountermeasureState>(_entities[index]);
+            return true;
+        }
+        cm = default;
+        return false;
+    }
+
+    public bool SetCountermeasureState(EntityId id, in UnitCountermeasureState cm)
+    {
+        if (!_indices.TryGetValue(id, out int index)) return false;
+        _storage.Get<UnitCountermeasureState>(_entities[index]) = cm;
+        return true;
+    }
+
+    public CountermeasureFlags GetCountermeasureFlags(EntityId id)
+    {
+        if (!TryGetCountermeasureState(id, out UnitCountermeasureState cm) || !cm.HasFlares)
+            return CountermeasureFlags.None;
+        CountermeasureFlags flags = CountermeasureFlags.HasFlares;
+        if (cm.ActiveTicksRemaining > 0)
+            flags |= CountermeasureFlags.FlaresActive;
+        if (cm.AutoFlaresEnabled)
+            flags |= CountermeasureFlags.AutoFlares;
+        if (cm.MissileWarningActive)
+            flags |= CountermeasureFlags.MissileWarning;
+        return flags;
     }
 
     public bool ClearFireMission(EntityId id)

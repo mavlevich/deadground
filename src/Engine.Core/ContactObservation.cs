@@ -26,7 +26,8 @@ public enum ContactClassification : byte
     Apc = 5,
     Infantry = 6,
     Helicopter = 7,
-    Artillery = 8
+    Artillery = 8,
+    AntiAir = 9
 }
 
 /// <summary>

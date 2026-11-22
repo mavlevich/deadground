@@ -393,8 +393,8 @@ public sealed class BattleMatchResultTests
     {
         StaticGeometry geometry = BattleScenario.CreateStaticGeometry();
         MatchSetup serverSetup = BattleScenario.CreateMatchSetup(geometry);
-        Assert.Equal(29, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(29, serverSetup.ProtocolVersion);
+        Assert.Equal(30, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(30, serverSetup.ProtocolVersion);
 
         using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
         int port = serverTransport.Port;
@@ -422,8 +422,8 @@ public sealed class BattleMatchResultTests
     {
         StaticGeometry geometry = BattleScenario.CreateStaticGeometry();
         MatchSetup serverSetup = BattleScenario.CreateMatchSetup(geometry);
-        Assert.Equal(29, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(29, serverSetup.ProtocolVersion);
+        Assert.Equal(30, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(30, serverSetup.ProtocolVersion);
 
         using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
         int port = serverTransport.Port;
@@ -451,8 +451,8 @@ public sealed class BattleMatchResultTests
     {
         StaticGeometry geometry = BattleScenario.CreateStaticGeometry();
         MatchSetup serverSetup = BattleScenario.CreateMatchSetup(geometry);
-        Assert.Equal(29, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(29, serverSetup.ProtocolVersion);
+        Assert.Equal(30, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(30, serverSetup.ProtocolVersion);
 
         using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
         int port = serverTransport.Port;
@@ -509,7 +509,7 @@ public sealed class BattleMatchResultTests
 
         // Legacy v22 client snapshot validator checked statusByte <= (byte)MissionStatus.Defeat (3).
         // Since statusByte for Draw is 4, legacy client rejected the entire snapshot frame.
-        ReadOnlySpan<byte> missionRecord = buffer.AsSpan(20, WireProtocol.MissionSize);
+        ReadOnlySpan<byte> missionRecord = buffer.AsSpan(22, WireProtocol.MissionSize);
         byte statusByte = missionRecord[2];
         Assert.Equal((byte)MissionStatus.Draw, statusByte);
         Assert.True(statusByte > (byte)MissionStatus.Defeat, "Draw status byte must exceed legacy Defeat upper bound (3).");

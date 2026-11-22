@@ -617,6 +617,12 @@ public partial class Main : Node3D
                 _map = scenarioGeometry.HeightMap;
                 setup = ArtilleryPlaygroundScenario.CreateMatchSetup(scenarioGeometry);
             }
+            else if (_scenario == "air-defense-playground")
+            {
+                scenarioGeometry = AirDefensePlaygroundScenario.CreateStaticGeometry();
+                _map = scenarioGeometry.HeightMap;
+                setup = AirDefensePlaygroundScenario.CreateMatchSetup(scenarioGeometry);
+            }
             else if (_scenario == "tank-battle")
             {
                 scenarioGeometry = TankBattleScenario.CreateStaticGeometry();
@@ -667,6 +673,7 @@ public partial class Main : Node3D
                     "infantry-transport" => InfantryTransportScenario.CreateSimulation(scenarioGeometry!),
                     "helicopter-playground" => HelicopterPlaygroundScenario.CreateSimulation(scenarioGeometry!),
                     "artillery-playground" => ArtilleryPlaygroundScenario.CreateSimulation(scenarioGeometry!),
+                    "air-defense-playground" => AirDefensePlaygroundScenario.CreateSimulation(scenarioGeometry!),
                     "tank-battle" => TankBattleScenario.CreateSimulation(scenarioGeometry!),
                     _ => PrototypeScenario.Create(_map)
                 };
@@ -813,6 +820,7 @@ public partial class Main : Node3D
             "infantry-transport" => 120,
             "helicopter-playground" => 180,
             "artillery-playground" => 220,
+            "air-defense-playground" => 440,
             "tank-battle" => 160,
             _ => 112
         };
@@ -834,6 +842,7 @@ public partial class Main : Node3D
             "infantry-transport" => new Vector3(128f, 0f, 195f),
             "helicopter-playground" => new Vector3(HelicopterPlaygroundScenario.ChinookAlphaPos.X + 20f, 2f, HelicopterPlaygroundScenario.ChinookAlphaPos.Y),
             "artillery-playground" => new Vector3(1024f, 4f, ArtilleryPlaygroundScenario.GradAlphaPos.Y),
+            "air-defense-playground" => new Vector3(1024f, 12f, 920f),
             "tank-battle" => new Vector3(TankBattleScenario.Center.X - TankBattleScenario.StartOffset, 4f, TankBattleScenario.Center.Y),
             _ => new Vector3(64, 0, 64)
         };
@@ -841,7 +850,7 @@ public partial class Main : Node3D
         _initialSpawnFocus = initialFocus;
         _initialSpawnSize = initialCameraSize;
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
-        if (_scenario == "ustye-ground" || _scenario == "ustye-raid" || _scenario == "tank-battle" || _scenario == "artillery-playground")
+        if (_scenario == "ustye-ground" || _scenario == "ustye-raid" || _scenario == "tank-battle" || _scenario == "artillery-playground" || _scenario == "air-defense-playground")
         {
             _cameraRig.Model.SetSizeLimits(30f, 5500f);
             _cameraRig.FarClipMargin = 3000f;
@@ -1328,7 +1337,9 @@ public partial class Main : Node3D
         _unitViews.UpdateRecoil(delta);
         _unitViews.UpdateEffects(delta);
         _combatEffects.Update(delta);
+        _combatEffects.SyncGuidedMissiles(_session.Replica, _session.RenderTick, (float)delta);
         _combatEffects.ProcessEvents(_session.Replica.Events, _unitViews, _session.Tick, _contactViews);
+        _combatEffects.UpdateMissileWarningAudio(_session.Replica, (float)delta);
         _wreckViews.ProcessEvents(_session.Replica.Events, _session.Tick);
         _smokeView?.Update((float)delta, _session.Replica, _session.RenderTick);
         _combatEffects.UpdateListener(_cameraRig.Focus);
@@ -1860,6 +1871,7 @@ public partial class Main : Node3D
                     "infantry-transport" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 5,
                     "helicopter-playground" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 6,
                     "artillery-playground" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 4,
+                    "air-defense-playground" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length >= 3,
                     _ => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
                         _session.Replica.OwnUnits[0].Position.Y > 24
                 };
@@ -1879,6 +1891,7 @@ public partial class Main : Node3D
                     "infantry-transport" => "INFANTRY_TRANSPORT_SMOKE",
                     "helicopter-playground" => "HELICOPTER_PLAYGROUND_SMOKE",
                     "artillery-playground" => "ARTILLERY_PLAYGROUND_SMOKE",
+                    "air-defense-playground" => "AIR_DEFENSE_PLAYGROUND_SMOKE",
                     _ => "M0_CLIENT_SMOKE"
                 };
                 string token = prefix + (ok ? "_OK" : "_FAILED");
@@ -2616,7 +2629,24 @@ public partial class Main : Node3D
 
             if ((key.Keycode == Key.G || key.PhysicalKeycode == Key.G) && _unitViews.Selected.Count > 0)
             {
-                OnDeploySmokeRequested();
+                bool hasFlaresSelected = false;
+                foreach (EntityId id in _unitViews.Selected)
+                {
+                    if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) &&
+                        (obs.CountermeasureFlags & CountermeasureFlags.HasFlares) != 0)
+                    {
+                        hasFlaresSelected = true;
+                        break;
+                    }
+                }
+                if (hasFlaresSelected)
+                {
+                    OnDeployFlaresRequested();
+                }
+                else
+                {
+                    OnDeploySmokeRequested();
+                }
                 GetViewport().SetInputAsHandled();
                 return;
             }
@@ -3929,6 +3959,54 @@ public partial class Main : Node3D
         }
     }
 
+    internal void OnDeployFlaresRequested()
+    {
+        int deployed = 0;
+        foreach (EntityId id in _unitViews.Selected)
+        {
+            if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) &&
+                (obs.CountermeasureFlags & CountermeasureFlags.HasFlares) != 0 &&
+                obs.FlareCharges > 0 &&
+                obs.FlareCooldownTicks == 0 &&
+                obs.FlightPhase is FlightPhase.Airborne or FlightPhase.TakingOff or FlightPhase.Landing)
+            {
+                if (_session.DeployFlares(id, toggleAuto: false))
+                    deployed++;
+            }
+        }
+        if (deployed > 0)
+        {
+            string msg = deployed == 1 ? "Flares deployed!" : $"Flares deployed ({deployed} aircraft)";
+            _orderNotification?.ShowNotification(msg);
+            _status.Text = msg;
+        }
+    }
+
+    internal void OnToggleAutoFlaresRequested()
+    {
+        int toggled = 0;
+        bool turningOn = false;
+        foreach (EntityId id in _unitViews.Selected)
+        {
+            if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) &&
+                (obs.CountermeasureFlags & CountermeasureFlags.HasFlares) != 0)
+            {
+                if (_session.DeployFlares(id, toggleAuto: true))
+                {
+                    if ((obs.CountermeasureFlags & CountermeasureFlags.AutoFlares) == 0)
+                        turningOn = true;
+                    toggled++;
+                }
+            }
+        }
+        if (toggled > 0)
+        {
+            string msg = turningOn ? "Auto-flares enabled" : "Auto-flares disabled (manual [G])";
+            _orderNotification?.ShowNotification(msg);
+            _status.Text = msg;
+        }
+    }
+
     private bool TryGetUnitIndirectWeapon(ushort definition, out WeaponData? weapon)
     {
         weapon = null;
@@ -4520,6 +4598,8 @@ public partial class Main : Node3D
         _contextActionPanel.HelicopterToggleFlightRequested += OnHelicopterToggleFlightRequested;
         _contextActionPanel.HelicopterToggleAltitudeRequested += OnHelicopterToggleAltitudeRequested;
         _contextActionPanel.CancelFireMissionRequested += OnCancelFireMissionRequested;
+        _contextActionPanel.DeployFlaresRequested += OnDeployFlaresRequested;
+        _contextActionPanel.ToggleAutoFlaresRequested += OnToggleAutoFlaresRequested;
         canvas.AddChild(_contextActionPanel);
 
         _commandPanel = new UnitCommandPanel(_catalog);
@@ -4922,6 +5002,17 @@ public partial class Main : Node3D
             Simulation localSimulation = ArtilleryPlaygroundScenario.CreateSimulation(scenarioGeometry);
             _session = new LocalSession(localSimulation, player: 1);
         }
+        else if (scenarioName == "air-defense-playground")
+        {
+            scenarioGeometry = AirDefensePlaygroundScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = AirDefensePlaygroundScenario.CreateMatchSetup(scenarioGeometry);
+            _matchSetup = setup;
+            _scenarioGeometry = scenarioGeometry;
+            _catalog = ScenarioContent.LoadCatalog("air-defense-playground");
+            Simulation localSimulation = AirDefensePlaygroundScenario.CreateSimulation(scenarioGeometry);
+            _session = new LocalSession(localSimulation, player: 1);
+        }
         else if (scenarioName == "ustye-ground")
         {
             scenarioGeometry = UstyeGroundScenario.CreateStaticGeometry();
@@ -4955,6 +5046,7 @@ public partial class Main : Node3D
             "infantry-transport" => new Vector3(128f, 0f, 195f),
             "helicopter-playground" => new Vector3(HelicopterPlaygroundScenario.ChinookAlphaPos.X + 20f, 2f, HelicopterPlaygroundScenario.ChinookAlphaPos.Y),
             "artillery-playground" => new Vector3(1024f, 4f, ArtilleryPlaygroundScenario.GradAlphaPos.Y),
+            "air-defense-playground" => new Vector3(1024f, 12f, 920f),
             _ => new Vector3(64, 0, 64)
         };
         float initialCameraSize = scenarioName switch
@@ -4968,6 +5060,7 @@ public partial class Main : Node3D
             "infantry-transport" => 120f,
             "helicopter-playground" => 180f,
             "artillery-playground" => 220f,
+            "air-defense-playground" => 440f,
             _ => 112f
         };
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
@@ -5185,6 +5278,7 @@ public partial class Main : Node3D
             "infantry-transport" => "INFANTRY TRANSPORT PROVING GROUND",
             "helicopter-playground" => "HELICOPTER FLIGHT PROVING GROUND",
             "artillery-playground" => "BM-21 GRAD ROCKET ARTILLERY PROVING GROUND",
+            "air-defense-playground" => "9K35 STRELA-10 AIR DEFENSE & FLARES PROVING GROUND",
             _ => "M0 NETWORK TEST"
         };
         return $"DEAD GROUND   /   SIDE {assignedSide}   /   {name}";
@@ -5257,6 +5351,11 @@ public partial class Main : Node3D
         if (scenario == "artillery-playground")
         {
             return new Vector3(1024f, 4f, ArtilleryPlaygroundScenario.GradAlphaPos.Y);
+        }
+
+        if (scenario == "air-defense-playground")
+        {
+            return new Vector3(1024f, 12f, 920f);
         }
 
         return fallbackFocus;
