@@ -248,7 +248,8 @@ public sealed record UnitDefinition(
     float CargoWeightKg = 0f,
     int InternalCargoSlots = 0,
     bool CanInternalLoad = false,
-    bool CanSlingLoad = false);
+    bool CanSlingLoad = false,
+    float VisualSignature = 1.0f);
 
 public sealed record FactionData(string Id, string? Name = null);
 
@@ -336,7 +337,7 @@ public sealed class OpsPerceptionCatalog : IUnitPerceptionCatalog
                 ? new TargetObservationPoints(unit.TargetPoints)
                 : null;
             ContactClassification classification = ParseClassification(unit.Classification, unit.Id);
-            _profiles[i] = new UnitPerceptionProfile(sensor, points, classification);
+            _profiles[i] = new UnitPerceptionProfile(sensor, points, classification, unit.VisualSignature);
         }
     }
 
@@ -880,6 +881,8 @@ public static class PrototypeScenario
                 throw new InvalidOperationException("Invalid sensor range.");
             if (!float.IsFinite(unit.EyeHeight) || unit.EyeHeight <= 0)
                 throw new InvalidOperationException("Invalid eye height.");
+            if (!float.IsFinite(unit.VisualSignature) || unit.VisualSignature <= 0)
+                throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid visual signature.");
             if (unit.MaxHealth <= 0 || unit.MaxHealth > ushort.MaxValue)
                 throw new InvalidOperationException("Invalid unit max health.");
             if (unit.Weapon is not null && !weaponNames.Contains(unit.Weapon))
