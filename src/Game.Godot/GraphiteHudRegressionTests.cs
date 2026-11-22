@@ -486,6 +486,7 @@ internal static class GraphiteHudRegressionTests
         Require(main.ContextActionPanel.BoardButton.FocusMode == Control.FocusModeEnum.None, "Board button must not steal focus.");
         Require(main.ContextActionPanel.DisembarkHereButton.FocusMode == Control.FocusModeEnum.None, "Unload here button must not steal focus.");
         Require(main.ContextActionPanel.DisembarkButton.FocusMode == Control.FocusModeEnum.None, "Unload at button must not steal focus.");
+        Require(main.CommandPanel.StopButton.FocusMode == Control.FocusModeEnum.None, "Stop button must not steal focus.");
 
         // 3. Cursor overlay renders above the minimap
         Require(main.OrderCursorOverlay.ZIndex > main.Minimap.ZIndex || main.OrderCursorOverlay.GetIndex() > main.Minimap.GetIndex(),
@@ -545,6 +546,30 @@ internal static class GraphiteHudRegressionTests
             Require(main.HelpPanel.IsOpen, "F1 must open ControlsHelpPanel.");
             main._UnhandledInput(f1);
             Require(!main.HelpPanel.IsOpen, "F1 while Help is open must close ControlsHelpPanel.");
+
+            // 6. STOP [E] button and E hotkey dispatch StopCommand through session and cancel targeting
+            IGameSession savedForStop = main.Session;
+            RecordingSession stopRec = new(main.Session.Replica);
+            try
+            {
+                main.Session = stopRec;
+                main.UpdateSelectionPresentation();
+                Require(!main.CommandPanel.StopButton.Disabled, "STOP [E] button must be enabled when an own unit is selected.");
+
+                main.CommandPanel.MoveButton.EmitSignal(BaseButton.SignalName.Pressed);
+                Require(main.CommandTargetingMode == HudTargetingMode.Move, "Precondition: Move targeting active before Stop.");
+                main.CommandPanel.StopButton.EmitSignal(BaseButton.SignalName.Pressed);
+                Require(stopRec.StopCount == 1, $"STOP button must issue 1 stop command, got {stopRec.StopCount}.");
+                Require(main.CommandTargetingMode == HudTargetingMode.None, "STOP button must cancel active targeting mode.");
+
+                using InputEventKey stopKey = new() { Keycode = Key.E, Pressed = true };
+                main._UnhandledInput(stopKey);
+                Require(stopRec.StopCount == 2, $"Pressing E must issue a stop command, got {stopRec.StopCount}.");
+            }
+            finally
+            {
+                main.Session = savedForStop;
+            }
         }
         finally
         {
@@ -585,6 +610,8 @@ internal static class GraphiteHudRegressionTests
         public bool DeploySmoke(EntityId unit, bool hasTarget = false, System.Numerics.Vector2 target = default, uint targetSurface = 0) => false;
         public bool OrderHelicopter(EntityId unit, HelicopterOrderKind kind, AltitudeBand band = AltitudeBand.High, bool hasTarget = false, System.Numerics.Vector2 target = default, EntityId cargoUnit = default) => false;
         public bool FireMission(EntityId unit, System.Numerics.Vector2 target, bool cancel = false) => false;
+        public int StopCount { get; private set; }
+        public bool Stop(EntityId unit) { StopCount++; return true; }
         public void Advance(double elapsedSeconds) { }
         public void Dispose() { }
     }

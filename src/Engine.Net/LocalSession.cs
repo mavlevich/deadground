@@ -52,6 +52,7 @@ public sealed class LocalSession : IGameSession
     public bool DeploySmoke(EntityId unit, bool hasTarget = false, Vector2 target = default, uint targetSurface = 0) => _client.DeploySmoke(unit, hasTarget, target, targetSurface);
     public bool OrderHelicopter(EntityId unit, HelicopterOrderKind kind, AltitudeBand altitudeBand = AltitudeBand.High, bool hasTarget = false, Vector2 target = default, EntityId targetUnit = default) => _client.OrderHelicopter(unit, kind, altitudeBand, hasTarget, target, targetUnit);
     public bool FireMission(EntityId unit, Vector2 target, bool cancel = false) => _client.FireMission(unit, target, cancel);
+    public bool Stop(EntityId unit) => _client.Stop(unit);
 
     public void Dispose()
     {
