@@ -1316,7 +1316,7 @@ public partial class Main : Node3D
         long fogStart = collectBench ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         _fogOfWar?.Update((float)delta, _session.Replica, _catalog);
         long viewsStart = collectBench ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
-        UpdateViews();
+        UpdateViews(delta);
         _unitViews.FaceHealthBars(_camera.GlobalTransform.Basis);
         int lodInstantiationBudget = _lodBudgetPerFrame;
         int lodSwitches = 0;
@@ -4039,13 +4039,13 @@ public partial class Main : Node3D
         UpdateSelectionPresentation();
     }
 
-    internal void UpdateViews()
+    internal void UpdateViews(double deltaSeconds = Simulation.TickSeconds)
     {
         _unitViews.SetRangeIndicatorsVisible(_showRangeRings);
         int selectedUnits = _unitViews.Selected.Count;
         int selectedContacts = _contactViews.Selected.Count;
         _unitViews.Sync(_session.Replica, _session.RenderTick);
-        _contactViews.Sync(_session.Replica, _session.RenderTick);
+        _contactViews.Sync(_session.Replica, _session.RenderTick, (float)deltaSeconds);
         _wreckViews.Sync(_session.Replica);
         if (selectedUnits != _unitViews.Selected.Count || selectedContacts != _contactViews.Selected.Count)
         {

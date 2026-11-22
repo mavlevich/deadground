@@ -57,18 +57,17 @@ internal static class InfantryPlaygroundRegressionTests
             Require(view.CurrentAnimation == "Idle", $"Expected Idle animation but got '{view.CurrentAnimation}'");
             Require(MathF.Abs(view.AnimationPlayer!.SpeedScale - 1.0f) < 0.01f, $"Expected Idle SpeedScale 1.0 but got {view.AnimationPlayer.SpeedScale}");
 
-            // 2. Walk state (speed 1.0 m/s: 0.15 <= speed < 2.2)
+            // 2. Slow movement state (speed 1.0 m/s >= 0.15): infantry still runs instead of walking
             view.SetDustSpeedForTesting(1.0f);
             view.UpdateEffects(0.016);
-            Require(view.CurrentAnimation == "Walk", $"Expected Walk animation but got '{view.CurrentAnimation}'");
-            float expectedWalkScale = 1.0f / 1.5f;
-            Require(MathF.Abs(view.AnimationPlayer!.SpeedScale - expectedWalkScale) < 0.05f, $"Expected Walk SpeedScale around {expectedWalkScale:F2} but got {view.AnimationPlayer.SpeedScale}");
+            Require(view.CurrentAnimation == "Run", $"Expected Run animation at 1.0 m/s but got '{view.CurrentAnimation}'");
+            Require(MathF.Abs(view.AnimationPlayer!.SpeedScale - 0.70f) < 0.05f, $"Expected clamped Run SpeedScale around 0.70 but got {view.AnimationPlayer.SpeedScale}");
 
-            // 3. Run state (speed 3.2 m/s: speed >= 2.2)
-            view.SetDustSpeedForTesting(3.2f);
+            // 3. Cruise combat run state (speed 3.6 m/s)
+            view.SetDustSpeedForTesting(3.6f);
             view.UpdateEffects(0.016);
             Require(view.CurrentAnimation == "Run", $"Expected Run animation but got '{view.CurrentAnimation}'");
-            float expectedRunScale = 3.2f / 3.5f;
+            float expectedRunScale = 3.6f / 3.0f;
             Require(MathF.Abs(view.AnimationPlayer!.SpeedScale - expectedRunScale) < 0.05f, $"Expected Run SpeedScale around {expectedRunScale:F2} but got {view.AnimationPlayer.SpeedScale}");
 
             // 4. AimStanding state (speed 0, aiming active)
@@ -108,21 +107,21 @@ internal static class InfantryPlaygroundRegressionTests
             Require(contactView.AnimationPlayer is not null, "Contact view must load its AnimationPlayer.");
             Require(MathF.Abs(contactView.AnimationPlayer!.SpeedScale - 1.0f) < 0.01f, $"Expected contact Idle SpeedScale 1.0 but got {contactView.AnimationPlayer.SpeedScale}");
 
-            // Step 2: Move distance 0.05m in 0.05s -> speed 1.0 m/s -> Walk
+            // Step 2: Move distance 0.05m in 0.05s -> speed 1.0 m/s -> Run (infantry runs when moving)
             obs = obs with { Position = new NumericsVector2(50.05f, 50f) };
             contactView.Update(obs, obs.Position, 0f, false, 0f, 0f);
-            Require(contactView.CurrentAnimation == "Walk", $"Expected contact Walk animation but got '{contactView.CurrentAnimation}'");
-            Require(MathF.Abs(contactView.AnimationPlayer!.SpeedScale - (1.0f / 1.5f)) < 0.1f, $"Expected contact Walk SpeedScale near {1.0f / 1.5f:F2} but got {contactView.AnimationPlayer.SpeedScale}");
+            Require(contactView.CurrentAnimation == "Run", $"Expected contact Run animation at 1.0 m/s but got '{contactView.CurrentAnimation}'");
+            Require(MathF.Abs(contactView.AnimationPlayer!.SpeedScale - 0.70f) < 0.1f, $"Expected contact clamped Run SpeedScale near 0.70 but got {contactView.AnimationPlayer.SpeedScale}");
 
-            // Step 3: Move distance 0.16m in 0.05s -> speed 3.2 m/s -> Run
-            obs = obs with { Position = new NumericsVector2(50.21f, 50f) };
-            contactView.Update(obs, obs.Position, 0f, false, 0f, 0f);
-            Require(contactView.CurrentAnimation == "Run", $"Expected contact Run animation but got '{contactView.CurrentAnimation}'");
-            Require(MathF.Abs(contactView.AnimationPlayer!.SpeedScale - (3.2f / 3.5f)) < 0.1f, $"Expected contact Run SpeedScale near {3.2f / 3.5f:F2} but got {contactView.AnimationPlayer.SpeedScale}");
+            // Step 3: Move at 3.6 m/s sampled at 60 FPS frame delta (0.06m in 1/60s) -> Run with accurate cadence
+            obs = obs with { Position = new NumericsVector2(50.11f, 50f) };
+            contactView.Update(obs, obs.Position, 0f, false, 0f, 0f, deltaSeconds: 1f / 60f);
+            Require(contactView.CurrentAnimation == "Run", $"Expected contact Run animation at 60 FPS but got '{contactView.CurrentAnimation}'");
+            Require(MathF.Abs(contactView.AnimationPlayer!.SpeedScale - (3.6f / 3.0f)) < 0.1f, $"Expected contact Run SpeedScale near {3.6f / 3.0f:F2} but got {contactView.AnimationPlayer.SpeedScale}");
 
             // Step 4: Stand still and aim -> AimStanding
             contactView.SetAiming(true);
-            obs = obs with { Position = new NumericsVector2(50.21f, 50f) };
+            obs = obs with { Position = new NumericsVector2(50.11f, 50f) };
             contactView.Update(obs, obs.Position, 0f, false, 0f, 0f);
             Require(contactView.CurrentAnimation == "AimStanding", $"Expected contact AimStanding animation but got '{contactView.CurrentAnimation}'");
             Require(MathF.Abs(contactView.AnimationPlayer!.SpeedScale - 1.0f) < 0.01f, $"Expected contact AimStanding SpeedScale 1.0 but got {contactView.AnimationPlayer.SpeedScale}");

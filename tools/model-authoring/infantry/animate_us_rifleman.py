@@ -210,13 +210,50 @@ def pose_gait(t, stride, lift, drop, bob, lean_deg, twist):
     place_hands(carried_rifle(), CARRY_POLES)
 
 
+def pose_run(t):
+    """Athletic combat run: spring-mass bounce, high rear heel kick, forward knee drive, and combat lean."""
+    reset()
+    ph = math.tau * t
+    # Running is spring-mass: pelvis is lowest at mid-stance absorption (p = pi/2, 3*pi/2)
+    # and highest at push-off/flight (p = 0, pi), the opposite phase of walking.
+    drop = 0.095
+    bob = 0.042
+    move("pelvis", Vector((0.0, 0.0, -(drop - bob * math.cos(2 * ph)))))
+    turn("pelvis", UP, 9.0 * math.sin(ph))
+    turn("pelvis", FWD, 2.5 * math.cos(ph))
+    stride = 0.48
+    for s, p in (("l", ph), ("r", ph + math.pi)):
+        base = HEAD0["foot_" + s]
+        u = (p % math.tau) / math.tau  # 0: front contact, 0.25: mid-stance, 0.5: rear toe-off, 0.75: mid-swing
+        y_off = stride * math.cos(p)
+        if u < 0.42:
+            # Grounded stance phase: planted foot sweeps from front to rear under the hip
+            lift = 0.0
+            toe_down = -0.025 * max(0.0, 1.0 - u / 0.12) + 0.055 * max(0.0, (u - 0.30) / 0.12)
+        else:
+            # Airborne swing phase: sharp rear heel kick followed by high forward knee drive
+            su = (u - 0.42) / 0.58  # 0..1 across swing
+            kick = math.sin(math.pi * su)
+            rear_peak = math.sin(math.pi * min(1.0, su / 0.65)) if su < 0.65 else 0.0
+            lift = 0.20 * kick + 0.16 * (rear_peak ** 1.4)
+            toe_down = 0.065 * (1.0 - su) - 0.02 * su
+        a = Vector((base.x, base.y + y_off, 0.075 + lift))
+        leg(s, a, flat_ball(a, toe_down=toe_down), FWD)
+    lean("spine_01", 12.0)
+    lean("spine_02", 8.0)
+    turn("spine_02", UP, -12.0 * math.sin(ph))
+    lean("neck_01", -8.0)
+    lean("head", -7.0)
+    place_hands(carried_rifle(), CARRY_POLES)
+
+
 CLIPS = [
     ("Idle", 60, pose_idle),
     ("AimStanding", 40, pose_stand_aim),
     ("AimKneeling", 40, pose_kneel_aim),
     ("AimProne", 40, pose_prone_aim),
     ("Walk", 32, lambda t: pose_gait(t, 0.27, 0.07, 0.02, 0.012, 3, 4)),
-    ("Run", 20, lambda t: pose_gait(t, 0.4, 0.16, 0.07, 0.025, 11, 6)),
+    ("Run", 20, pose_run),
 ]
 KEY_STEP = {"Idle": 10, "AimStanding": 10, "AimKneeling": 10, "AimProne": 10, "Walk": 2, "Run": 2}
 

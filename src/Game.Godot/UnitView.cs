@@ -1424,18 +1424,21 @@ internal sealed class UnitView
         {
             StringName targetAnimName;
             string targetAnimStr;
-            float authoredSpeed = 1.0f;
-            if (_dustSpeed >= 2.2f)
+            float authoredSpeed = 3.0f;
+            if (_dustSpeed >= 0.15f)
             {
-                targetAnimName = AnimRun;
-                targetAnimStr = "Run";
-                authoredSpeed = 3.5f;
-            }
-            else if (_dustSpeed >= 0.15f)
-            {
-                targetAnimName = AnimWalk;
-                targetAnimStr = "Walk";
-                authoredSpeed = 1.5f;
+                if (animPlayer.HasAnimation(AnimRun))
+                {
+                    targetAnimName = AnimRun;
+                    targetAnimStr = "Run";
+                    authoredSpeed = 3.0f;
+                }
+                else
+                {
+                    targetAnimName = AnimWalk;
+                    targetAnimStr = "Walk";
+                    authoredSpeed = 1.5f;
+                }
             }
             else if (_aimingTimer > 0f || _hasAim)
             {
@@ -1455,9 +1458,13 @@ internal sealed class UnitView
                 _currentAnim = targetAnimStr;
             }
 
-            if (targetAnimName == AnimWalk || targetAnimName == AnimRun)
+            if (targetAnimName == AnimRun)
             {
-                animPlayer.SpeedScale = MathF.Max(0.1f, _dustSpeed / authoredSpeed);
+                animPlayer.SpeedScale = Math.Clamp(_dustSpeed / authoredSpeed, 0.70f, 1.50f);
+            }
+            else if (targetAnimName == AnimWalk)
+            {
+                animPlayer.SpeedScale = Math.Clamp(_dustSpeed / authoredSpeed, 0.50f, 1.50f);
             }
             else
             {
