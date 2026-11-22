@@ -37,12 +37,6 @@ internal sealed partial class ContextActionPanel : PanelContainer
     private readonly Label _statusLabel;
     private UnitCatalog _catalog;
 
-    public void SetCatalog(UnitCatalog catalog)
-    {
-        _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
-        _cachedSelectionCount = -1;
-    }
-
     public ContextTargetingMode TargetingMode { get; private set; } = ContextTargetingMode.None;
 
     internal Button BoardButton => _boardButton;
@@ -95,142 +89,134 @@ internal sealed partial class ContextActionPanel : PanelContainer
     public ContextActionPanel(UnitCatalog catalog)
     {
         _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+        Theme = HudTheme.Shared;
         MouseFilter = MouseFilterEnum.Stop;
-        CustomMinimumSize = new Vector2(360, 48);
+        CustomMinimumSize = new Vector2(HudLayout.CardWidth, HudLayout.ContextHeight);
 
-        StyleBoxFlat style = new()
-        {
-            BgColor = new Color(0.12f, 0.14f, 0.18f, 0.92f),
-            BorderWidthLeft = 1,
-            BorderWidthRight = 1,
-            BorderWidthTop = 1,
-            BorderWidthBottom = 1,
-            BorderColor = new Color(0.40f, 0.50f, 0.65f, 0.80f),
-            CornerRadiusTopLeft = 4,
-            CornerRadiusTopRight = 4,
-            CornerRadiusBottomLeft = 4,
-            CornerRadiusBottomRight = 4,
-            ContentMarginLeft = 10,
-            ContentMarginRight = 10,
-            ContentMarginTop = 6,
-            ContentMarginBottom = 6
-        };
+        StyleBoxFlat style = HudTheme.CreatePanel(padding: 4, topRail: true);
+        style.ContentMarginLeft = 10;
+        style.ContentMarginRight = 10;
         AddThemeStyleboxOverride("panel", style);
 
+        VBoxContainer column = new() { MouseFilter = MouseFilterEnum.Ignore };
+        column.AddThemeConstantOverride("separation", 2);
+        AddChild(column);
         HBoxContainer hbox = new()
         {
             MouseFilter = MouseFilterEnum.Ignore
         };
-        hbox.AddThemeConstantOverride("separation", 10);
-        AddChild(hbox);
+        hbox.AddThemeConstantOverride("separation", 6);
+        column.AddChild(hbox);
 
         _boardButton = new Button
         {
             Text = "BOARD TRANSPORT",
-            MouseFilter = MouseFilterEnum.Stop,
+            ThemeTypeVariation = "CompactButton",
+            ToggleMode = true,
             FocusMode = FocusModeEnum.None,
-            CustomMinimumSize = new Vector2(140, 32)
+            MouseFilter = MouseFilterEnum.Stop,
+            CustomMinimumSize = new Vector2(110, 22)
         };
-        _boardButton.AddThemeFontSizeOverride("font_size", 11);
         _boardButton.Pressed += OnBoardButtonPressed;
         hbox.AddChild(_boardButton);
 
         _disembarkHereButton = new Button
         {
-            Text = "DISEMBARK HERE",
-            MouseFilter = MouseFilterEnum.Stop,
+            Text = "UNLOAD HERE",
+            ThemeTypeVariation = "CompactButton",
             FocusMode = FocusModeEnum.None,
-            CustomMinimumSize = new Vector2(130, 32)
+            MouseFilter = MouseFilterEnum.Stop,
+            CustomMinimumSize = new Vector2(88, 22)
         };
-        _disembarkHereButton.AddThemeFontSizeOverride("font_size", 11);
         _disembarkHereButton.Pressed += () => DisembarkHereRequested?.Invoke();
         hbox.AddChild(_disembarkHereButton);
 
         _disembarkButton = new Button
         {
             Text = "UNLOAD AT...",
-            MouseFilter = MouseFilterEnum.Stop,
+            ThemeTypeVariation = "CompactButton",
+            ToggleMode = true,
             FocusMode = FocusModeEnum.None,
-            CustomMinimumSize = new Vector2(120, 32)
+            MouseFilter = MouseFilterEnum.Stop,
+            CustomMinimumSize = new Vector2(88, 22)
         };
-        _disembarkButton.AddThemeFontSizeOverride("font_size", 11);
         _disembarkButton.Pressed += OnDisembarkButtonPressed;
         hbox.AddChild(_disembarkButton);
 
         _smokeButton = new Button
         {
             Text = "SMOKE [G]",
+            ThemeTypeVariation = "CompactButton",
             MouseFilter = MouseFilterEnum.Stop,
             FocusMode = FocusModeEnum.None,
-            CustomMinimumSize = new Vector2(130, 32)
+            CustomMinimumSize = new Vector2(86, 22)
         };
-        _smokeButton.AddThemeFontSizeOverride("font_size", 11);
         _smokeButton.Pressed += () => DeploySmokeRequested?.Invoke();
         hbox.AddChild(_smokeButton);
 
         _flightToggleButton = new Button
         {
             Text = "TAKE OFF [L]",
+            ThemeTypeVariation = "CompactButton",
             MouseFilter = MouseFilterEnum.Stop,
             FocusMode = FocusModeEnum.None,
-            CustomMinimumSize = new Vector2(120, 32)
+            CustomMinimumSize = new Vector2(86, 22)
         };
-        _flightToggleButton.AddThemeFontSizeOverride("font_size", 11);
         _flightToggleButton.Pressed += () => HelicopterToggleFlightRequested?.Invoke();
         hbox.AddChild(_flightToggleButton);
 
         _landAtButton = new Button
         {
             Text = "LAND AT...",
+            ThemeTypeVariation = "CompactButton",
             MouseFilter = MouseFilterEnum.Stop,
             FocusMode = FocusModeEnum.None,
-            CustomMinimumSize = new Vector2(105, 32)
+            CustomMinimumSize = new Vector2(78, 22)
         };
-        _landAtButton.AddThemeFontSizeOverride("font_size", 11);
         _landAtButton.Pressed += OnLandAtButtonPressed;
         hbox.AddChild(_landAtButton);
 
         _altitudeBandButton = new Button
         {
             Text = "ALT: HIGH [H]",
+            ThemeTypeVariation = "CompactButton",
             MouseFilter = MouseFilterEnum.Stop,
             FocusMode = FocusModeEnum.None,
-            CustomMinimumSize = new Vector2(115, 32)
+            CustomMinimumSize = new Vector2(86, 22)
         };
-        _altitudeBandButton.AddThemeFontSizeOverride("font_size", 11);
         _altitudeBandButton.Pressed += () => HelicopterToggleAltitudeRequested?.Invoke();
         hbox.AddChild(_altitudeBandButton);
 
         _fastRopeButton = new Button
         {
             Text = "FAST-ROPE [F]",
+            ThemeTypeVariation = "CompactButton",
             MouseFilter = MouseFilterEnum.Stop,
             FocusMode = FocusModeEnum.None,
-            CustomMinimumSize = new Vector2(115, 32)
+            CustomMinimumSize = new Vector2(88, 22)
         };
-        _fastRopeButton.AddThemeFontSizeOverride("font_size", 11);
         _fastRopeButton.Pressed += OnFastRopeButtonPressed;
         hbox.AddChild(_fastRopeButton);
 
         _slingButton = new Button
         {
             Text = "SLING PICKUP [K]",
+            ThemeTypeVariation = "CompactButton",
             MouseFilter = MouseFilterEnum.Stop,
             FocusMode = FocusModeEnum.None,
-            CustomMinimumSize = new Vector2(125, 32)
+            CustomMinimumSize = new Vector2(96, 22)
         };
-        _slingButton.AddThemeFontSizeOverride("font_size", 11);
         _slingButton.Pressed += OnSlingButtonPressed;
         hbox.AddChild(_slingButton);
 
         _fireMissionButton = new Button
         {
             Text = "FIRE BARRAGE [B]",
+            ThemeTypeVariation = "CompactButton",
             MouseFilter = MouseFilterEnum.Stop,
             FocusMode = FocusModeEnum.None,
-            CustomMinimumSize = new Vector2(138, 32)
+            CustomMinimumSize = new Vector2(106, 22)
         };
-        _fireMissionButton.AddThemeFontSizeOverride("font_size", 11);
         _fireMissionButton.Pressed += OnFireMissionButtonPressed;
         hbox.AddChild(_fireMissionButton);
 
@@ -239,19 +225,46 @@ internal sealed partial class ContextActionPanel : PanelContainer
             MouseFilter = MouseFilterEnum.Ignore,
             VerticalAlignment = VerticalAlignment.Center
         };
-        _passengerLabel.AddThemeFontSizeOverride("font_size", 11);
-        _passengerLabel.AddThemeColorOverride("font_color", new Color("edc76b"));
+        HudTheme.ApplyMono(_passengerLabel);
+        _passengerLabel.AddThemeFontSizeOverride("font_size", 10);
+        _passengerLabel.AddThemeColorOverride("font_color", HudTheme.Accent);
         hbox.AddChild(_passengerLabel);
 
         _statusLabel = new Label
         {
             MouseFilter = MouseFilterEnum.Ignore,
+            TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis,
             VerticalAlignment = VerticalAlignment.Center
         };
         _statusLabel.AddThemeFontSizeOverride("font_size", 10);
-        _statusLabel.AddThemeColorOverride("font_color", new Color("a0a8b0"));
-        hbox.AddChild(_statusLabel);
+        _statusLabel.AddThemeColorOverride("font_color", HudTheme.Muted);
+        column.AddChild(_statusLabel);
 
+        Visible = false;
+        _boardButton.Visible = false;
+        _disembarkHereButton.Visible = false;
+        _disembarkButton.Visible = false;
+        _smokeButton.Visible = false;
+        _flightToggleButton.Visible = false;
+        _landAtButton.Visible = false;
+        _altitudeBandButton.Visible = false;
+        _fastRopeButton.Visible = false;
+        _slingButton.Visible = false;
+        _fireMissionButton.Visible = false;
+        _passengerLabel.Visible = false;
+        _statusLabel.Visible = false;
+    }
+
+    public void SetCatalog(UnitCatalog catalog)
+    {
+        _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+        CancelTargeting();
+        _cachedSelectionCount = -1;
+        _cachedSelectionHash = 0;
+        _cachedTargetingMode = (ContextTargetingMode)(-1);
+        _cachedPassengerCount = -1;
+        _cachedPassengerCapacity = -1;
+        _cachedTransportId = default;
         Visible = false;
         _boardButton.Visible = false;
         _disembarkHereButton.Visible = false;
@@ -330,6 +343,8 @@ internal sealed partial class ContextActionPanel : PanelContainer
     {
         if (TargetingMode == mode) return;
         TargetingMode = mode;
+        _boardButton.SetPressedNoSignal(mode == ContextTargetingMode.BoardTransport);
+        _disembarkButton.SetPressedNoSignal(mode == ContextTargetingMode.Disembark);
         TargetingModeChanged?.Invoke(mode);
     }
 

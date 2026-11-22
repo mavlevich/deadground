@@ -18,22 +18,18 @@ internal sealed partial class PauseMenu : CanvasLayer
     {
         Layer = 9;
 
-        _backdrop = new Control
-        {
-            Visible = false,
-            MouseFilter = Control.MouseFilterEnum.Stop
-        };
-        _backdrop.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+        _backdrop = HudTheme.CreateModalBackdrop(visible: false);
         AddChild(_backdrop);
 
         _card = new PanelContainer
         {
+            Theme = HudTheme.Shared,
             Visible = false,
             CustomMinimumSize = new Vector2(320, 240),
             MouseFilter = Control.MouseFilterEnum.Stop
         };
-        _card.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.Center);
-        _card.AddThemeStyleboxOverride("panel", CardStyle());
+        HudTheme.CenterModal(_card);
+        _card.AddThemeStyleboxOverride("panel", HudTheme.CreatePanel(accented: true, padding: 2, topRail: true, modal: true));
         AddChild(_card);
 
         MarginContainer margin = new();
@@ -53,7 +49,7 @@ internal sealed partial class PauseMenu : CanvasLayer
             HorizontalAlignment = HorizontalAlignment.Center
         };
         title.AddThemeFontSizeOverride("font_size", 20);
-        title.AddThemeColorOverride("font_color", new Color("edc76b"));
+        title.AddThemeColorOverride("font_color", HudTheme.Accent);
         stack.AddChild(title);
 
         Control spacer = new() { CustomMinimumSize = new Vector2(0, 6) };
@@ -88,6 +84,7 @@ internal sealed partial class PauseMenu : CanvasLayer
     {
         _backdrop.Visible = true;
         _card.Visible = true;
+        HudTheme.CenterModal(_card);
     }
 
     public void Close()
@@ -118,69 +115,7 @@ internal sealed partial class PauseMenu : CanvasLayer
             CustomMinimumSize = new Vector2(0, 36),
             MouseFilter = Control.MouseFilterEnum.Stop
         };
-        btn.AddThemeStyleboxOverride("normal", ButtonNormalStyle());
-        btn.AddThemeStyleboxOverride("hover", ButtonHoverStyle());
-        btn.AddThemeStyleboxOverride("pressed", ButtonPressedStyle());
         btn.AddThemeFontSizeOverride("font_size", 13);
-        btn.AddThemeColorOverride("font_color", new Color("d5ded0"));
-        btn.AddThemeColorOverride("font_hover_color", new Color("ffffff"));
-        btn.AddThemeColorOverride("font_pressed_color", new Color("edc76b"));
         return btn;
     }
-
-    private static StyleBoxFlat CardStyle() => new()
-    {
-        BgColor = new Color(0.04f, 0.06f, 0.05f, 0.96f),
-        BorderColor = new Color("46533e"),
-        BorderWidthBottom = 2,
-        BorderWidthTop = 2,
-        BorderWidthLeft = 2,
-        BorderWidthRight = 2,
-        CornerRadiusBottomLeft = 8,
-        CornerRadiusBottomRight = 8,
-        CornerRadiusTopLeft = 8,
-        CornerRadiusTopRight = 8
-    };
-
-    private static StyleBoxFlat ButtonNormalStyle() => new()
-    {
-        BgColor = new Color(0.10f, 0.14f, 0.11f, 0.92f),
-        BorderColor = new Color("46533e"),
-        BorderWidthBottom = 1,
-        BorderWidthTop = 1,
-        BorderWidthLeft = 1,
-        BorderWidthRight = 1,
-        CornerRadiusBottomLeft = 4,
-        CornerRadiusBottomRight = 4,
-        CornerRadiusTopLeft = 4,
-        CornerRadiusTopRight = 4
-    };
-
-    private static StyleBoxFlat ButtonHoverStyle() => new()
-    {
-        BgColor = new Color(0.16f, 0.22f, 0.17f, 0.95f),
-        BorderColor = new Color("edc76b"),
-        BorderWidthBottom = 1,
-        BorderWidthTop = 1,
-        BorderWidthLeft = 1,
-        BorderWidthRight = 1,
-        CornerRadiusBottomLeft = 4,
-        CornerRadiusBottomRight = 4,
-        CornerRadiusTopLeft = 4,
-        CornerRadiusTopRight = 4
-    };
-
-    private static StyleBoxFlat ButtonPressedStyle() => new()
-    {
-        BgColor = new Color(0.08f, 0.11f, 0.09f, 0.98f),
-        BorderColor = new Color("77dd77"),
-        BorderWidthBottom = 1,
-        BorderWidthTop = 1,
-        BorderWidthLeft = 1,
-        BorderWidthRight = 1,
-        CornerRadiusBottomLeft = 4,
-        CornerRadiusBottomRight = 4,
-        CornerRadiusTopLeft = 4,
-        CornerRadiusTopRight = 4
-    };
 }

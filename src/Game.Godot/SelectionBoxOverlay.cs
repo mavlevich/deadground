@@ -5,8 +5,8 @@ namespace DeadGround.Client;
 // Draws the translucent selection rectangle during left-button box drag without per-frame allocations.
 internal sealed partial class SelectionBoxOverlay : Control
 {
-    private static readonly Color FillColor = new(0.93f, 0.78f, 0.42f, 0.16f);
-    private static readonly Color OutlineColor = new(0.93f, 0.78f, 0.42f, 0.88f);
+    private static readonly Color FillColor = new(HudTheme.Accent, 0.16f);
+    private static readonly Color OutlineColor = new(HudTheme.Accent, 0.88f);
 
     private Rect2 _boxRect;
 

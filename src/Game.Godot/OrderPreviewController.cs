@@ -197,7 +197,8 @@ internal sealed class OrderPreviewController
         bool isPointerOccluded,
         bool hasEnemyContactUnderMouse,
         UnitViewSet unitViews,
-        ClientReplica replica)
+        ClientReplica replica,
+        MoveMode? modeOverride = null)
     {
         if (_isFacingGestureActive)
         {
@@ -230,7 +231,7 @@ internal sealed class OrderPreviewController
         System.Numerics.Vector2 target2D = new(hitPoint3D.X, hitPoint3D.Z);
         _profileCacheCount = 0;
 
-        bool isReverse = _isFacingGestureActive
+        bool isReverse = modeOverride.HasValue ? modeOverride.Value == MoveMode.Reverse : _isFacingGestureActive
             ? _facingGestureMode == MoveMode.Reverse
             : Input.IsKeyPressed(Key.R);
 

@@ -333,7 +333,7 @@ internal sealed class UnitView
             Position = new Vector3(0, 0.15f, 0),
             MaterialOverride = new StandardMaterial3D
             {
-                AlbedoColor = new Color("edc76b"),
+                AlbedoColor = HudTheme.Accent,
                 ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
                 DisableFog = true
             },
@@ -365,7 +365,7 @@ internal sealed class UnitView
             Position = new Vector3(0, 0, 0.03f),
             MaterialOverride = new StandardMaterial3D
             {
-                AlbedoColor = new Color("44bb44"),
+                AlbedoColor = HudTheme.Text,
                 ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
                 DisableFog = true
             },
@@ -406,7 +406,7 @@ internal sealed class UnitView
 
     private static readonly StandardMaterial3D WeaponRangeMaterial = new()
     {
-        AlbedoColor = new Color(0.9294118f, 0.7803922f, 0.41960785f, 0.8f),
+        AlbedoColor = new Color(HudTheme.Accent, 0.8f),
         Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
         ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
         CullMode = BaseMaterial3D.CullModeEnum.Disabled,
@@ -415,7 +415,7 @@ internal sealed class UnitView
 
     private static readonly StandardMaterial3D SensorRangeMaterial = new()
     {
-        AlbedoColor = new Color(0.60784316f, 0.76862746f, 0.8862745f, 0.35f),
+        AlbedoColor = new Color(HudTheme.Text, 0.45f),
         Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
         ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
         CullMode = BaseMaterial3D.CullModeEnum.Disabled,
@@ -428,6 +428,7 @@ internal sealed class UnitView
     internal MeshInstance3D HealthBarFill => _healthBarFg;
 
     internal void FaceHealthBar(Basis cameraBasis) => _healthBarRoot.GlobalBasis = cameraBasis;
+    internal void SetWorldHealthBarVisible(bool visible) => _healthBarRoot.Visible = visible;
     private readonly MeshInstance3D _healthBarFg;
     private readonly MeshInstance3D _weaponRangeRing;
     private readonly MeshInstance3D _sensorRangeRing;
@@ -439,6 +440,7 @@ internal sealed class UnitView
     private Vector3 _lastDrapedPosition;
     private bool _ringsDraped;
     private bool _isSelected;
+    private bool _rangeIndicatorsVisible = true;
     private readonly Vector3[] _ringVertices = new Vector3[144];
     internal const float MinRedrapeDistance = 3.0f;
     private const float MinRedrapeDistanceSquared = MinRedrapeDistance * MinRedrapeDistance;
@@ -458,15 +460,15 @@ internal sealed class UnitView
         _ringsDraped = false;
         if (_isSelected)
         {
-            _weaponRangeRing.Visible = _weaponRange > 0f;
-            _sensorRangeRing.Visible = _sensorRange > 0f;
+            _weaponRangeRing.Visible = _rangeIndicatorsVisible && _weaponRange > 0f;
+            _sensorRangeRing.Visible = _rangeIndicatorsVisible && _sensorRange > 0f;
             DrapeRings();
         }
     }
 
     private void DrapeRings()
     {
-        if (!_isSelected) return;
+        if (!_isSelected || !_rangeIndicatorsVisible) return;
         if (_weaponRange > 0f)
         {
             BuildRing(_weaponRangeMesh, WeaponRangeMaterial, _weaponRange);
@@ -542,6 +544,7 @@ internal sealed class UnitView
 
         for (int i = 0; i < segments; i++)
         {
+            if (ReferenceEquals(material, SensorRangeMaterial) && (i & 1) == 1) continue;
             float theta0 = i * step;
             float theta1 = (i + 1) * step;
             float wx0 = cx + radius * Mathf.Cos(theta0);
@@ -1500,12 +1503,19 @@ internal sealed class UnitView
     {
         _isSelected = selected;
         _selection.Visible = selected;
-        _weaponRangeRing.Visible = selected && _weaponRange > 0f;
-        _sensorRangeRing.Visible = selected && _sensorRange > 0f;
-        if (selected && (!_ringsDraped || (Root.Position - _lastDrapedPosition).LengthSquared() >= MinRedrapeDistanceSquared))
+        _weaponRangeRing.Visible = selected && _rangeIndicatorsVisible && _weaponRange > 0f;
+        _sensorRangeRing.Visible = selected && _rangeIndicatorsVisible && _sensorRange > 0f;
+        if (selected && _rangeIndicatorsVisible && (!_ringsDraped || (Root.Position - _lastDrapedPosition).LengthSquared() >= MinRedrapeDistanceSquared))
         {
             DrapeRings();
         }
+    }
+
+    internal void SetRangeIndicatorsVisible(bool visible)
+    {
+        if (_rangeIndicatorsVisible == visible) return;
+        _rangeIndicatorsVisible = visible;
+        SetSelected(_isSelected);
     }
 
     internal void SetContainedHidden()

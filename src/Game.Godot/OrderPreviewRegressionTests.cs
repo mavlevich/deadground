@@ -1530,6 +1530,11 @@ internal static class OrderPreviewRegressionTests
             };
             Vector2 screenPos = camera.UnprojectPosition(new Vector3(20, 0, 35));
 
+            controller.UpdateHover(camera, screenPos, camera.GetViewport().GetVisibleRect().Size, false, false, unitViews, replica, MoveMode.Reverse);
+            Require(overlay.CurrentIsReverse, "HUD reverse targeting must preview reverse without requiring the R key.");
+            controller.UpdateHover(camera, screenPos, camera.GetViewport().GetVisibleRect().Size, false, false, unitViews, replica, MoveMode.Forward);
+            Require(!overlay.CurrentIsReverse, "HUD move targeting must explicitly preview forward movement.");
+
             Require(controller.BeginFacingGesture(camera, screenPos, unitViews, session, out _, MoveMode.Reverse), "Reverse BeginFacingGesture should succeed for unit");
             Require(controller.GestureMode == MoveMode.Reverse, "Gesture mode should be Reverse");
 

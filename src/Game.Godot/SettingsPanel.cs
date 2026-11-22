@@ -45,21 +45,17 @@ internal sealed partial class SettingsPanel : CanvasLayer
     {
         Layer = 10;
 
-        _backdrop = new Control
-        {
-            Visible = false,
-            MouseFilter = Control.MouseFilterEnum.Stop
-        };
-        _backdrop.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+        _backdrop = HudTheme.CreateModalBackdrop(visible: false);
         AddChild(_backdrop);
 
         _container = new PanelContainer
         {
+            Theme = HudTheme.Shared,
             Visible = false,
             CustomMinimumSize = new Vector2(420, 420)
         };
-        _container.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.Center);
-        _container.AddThemeStyleboxOverride("panel", PanelStyle());
+        HudTheme.CenterModal(_container);
+        _container.AddThemeStyleboxOverride("panel", HudTheme.CreatePanel(accented: true, padding: 2, topRail: true, modal: true));
         AddChild(_container);
 
         MarginContainer margin = new();
@@ -79,14 +75,14 @@ internal sealed partial class SettingsPanel : CanvasLayer
             HorizontalAlignment = HorizontalAlignment.Center
         };
         title.AddThemeFontSizeOverride("font_size", 18);
-        title.AddThemeColorOverride("font_color", new Color("edc76b"));
+        title.AddThemeColorOverride("font_color", HudTheme.Accent);
         stack.AddChild(title);
 
         // Environment Profile Row
         HBoxContainer profileRow = new();
         profileRow.AddThemeConstantOverride("separation", 12);
         Label profileLabel = new() { Text = "Environment:", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-        profileLabel.AddThemeColorOverride("font_color", new Color("d5ded0"));
+        profileLabel.AddThemeColorOverride("font_color", HudTheme.Text);
         _profileOptions = new OptionButton();
         _profileOptions.AddItem("Overcast Autumn (Ustye)", 0);
         _profileOptions.AddItem("Clear Afternoon", 1);
@@ -99,7 +95,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
         HBoxContainer qualityRow = new();
         qualityRow.AddThemeConstantOverride("separation", 12);
         Label qualityLabel = new() { Text = "Graphics Quality:", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-        qualityLabel.AddThemeColorOverride("font_color", new Color("d5ded0"));
+        qualityLabel.AddThemeColorOverride("font_color", HudTheme.Text);
         _qualityOptions = new OptionButton();
         _qualityOptions.AddItem("Low", 0);
         _qualityOptions.AddItem("Medium", 1);
@@ -113,7 +109,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
         HBoxContainer renderScaleRow = new();
         renderScaleRow.AddThemeConstantOverride("separation", 12);
         Label renderScaleLabel = new() { Text = "3D Render Scale:", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-        renderScaleLabel.AddThemeColorOverride("font_color", new Color("d5ded0"));
+        renderScaleLabel.AddThemeColorOverride("font_color", HudTheme.Text);
         _renderScaleOptions = new OptionButton();
         _renderScaleOptions.AddItem("Auto (Pixel Budget)", 0);
         _renderScaleOptions.AddItem("100% (Native)", 1);
@@ -129,7 +125,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
         HBoxContainer aaRow = new();
         aaRow.AddThemeConstantOverride("separation", 12);
         Label aaLabel = new() { Text = "Anti-aliasing:", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-        aaLabel.AddThemeColorOverride("font_color", new Color("d5ded0"));
+        aaLabel.AddThemeColorOverride("font_color", HudTheme.Text);
         _antiAliasingOptions = new OptionButton();
         _antiAliasingOptions.AddItem("Auto (MSAA + FXAA)", 0);
         _antiAliasingOptions.AddItem("Off", 1);
@@ -145,7 +141,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
         HBoxContainer ssaoRow = new();
         ssaoRow.AddThemeConstantOverride("separation", 12);
         Label ssaoLabel = new() { Text = "Ambient Occlusion (SSAO):", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-        ssaoLabel.AddThemeColorOverride("font_color", new Color("d5ded0"));
+        ssaoLabel.AddThemeColorOverride("font_color", HudTheme.Text);
         _ssaoOptions = new OptionButton();
         _ssaoOptions.AddItem("Auto (Off on HiDPI)", 0);
         _ssaoOptions.AddItem("Off", 1);
@@ -159,7 +155,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
         HBoxContainer vsyncRow = new();
         vsyncRow.AddThemeConstantOverride("separation", 12);
         Label vsyncLabel = new() { Text = "Vertical Sync (VSync):", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-        vsyncLabel.AddThemeColorOverride("font_color", new Color("d5ded0"));
+        vsyncLabel.AddThemeColorOverride("font_color", HudTheme.Text);
         _vsyncButton = new CheckButton { Text = "Enabled" };
         _vsyncButton.Toggled += OnVsyncToggled;
         vsyncRow.AddChild(vsyncLabel);
@@ -170,7 +166,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
         HBoxContainer fpsRow = new();
         fpsRow.AddThemeConstantOverride("separation", 12);
         Label fpsLabel = new() { Text = "Frame Rate Cap:", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-        fpsLabel.AddThemeColorOverride("font_color", new Color("d5ded0"));
+        fpsLabel.AddThemeColorOverride("font_color", HudTheme.Text);
         _fpsOptions = new OptionButton();
         _fpsOptions.AddItem("Unlimited (0)", 0);
         _fpsOptions.AddItem("30 FPS", 1);
@@ -190,7 +186,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
             HorizontalAlignment = HorizontalAlignment.Center
         };
         _statusLabel.AddThemeFontSizeOverride("font_size", 12);
-        _statusLabel.AddThemeColorOverride("font_color", new Color("889988"));
+        _statusLabel.AddThemeColorOverride("font_color", HudTheme.Muted);
         stack.AddChild(_statusLabel);
 
         // Action Buttons Row
@@ -229,7 +225,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
         if (cliOverridesVsync || cliOverridesMaxFps || cliOverridesProfile || cliOverridesQuality || cliOverridesRenderScale || cliOverridesAntiAliasing || cliOverridesSsao)
         {
             _statusLabel.Text = "Some settings are overridden via command-line arguments";
-            _statusLabel.AddThemeColorOverride("font_color", new Color("edc76b"));
+            _statusLabel.AddThemeColorOverride("font_color", HudTheme.Accent);
         }
     }
 
@@ -241,6 +237,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
         UpdateUiFromSettings();
         _backdrop.Visible = true;
         _container.Visible = true;
+        HudTheme.CenterModal(_container);
     }
 
     public void Close()
@@ -410,7 +407,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
         SettingsChanged?.Invoke(_effectiveSettings);
         bool hasAnyOverride = _cliOverridesVsync || _cliOverridesMaxFps || _cliOverridesProfile || _cliOverridesQuality || _cliOverridesRenderScale || _cliOverridesAntiAliasing || _cliOverridesSsao;
         _statusLabel.Text = hasAnyOverride ? $"{message} (other CLI overrides active)" : message;
-        _statusLabel.AddThemeColorOverride("font_color", hasAnyOverride ? new Color("edc76b") : new Color("889988"));
+        _statusLabel.AddThemeColorOverride("font_color", hasAnyOverride ? HudTheme.Accent : HudTheme.Muted);
     }
 
     private static Vector2I ResolveRawWindowPixelSize(Viewport? viewport, Vector2I? windowSizeOverride = null)
@@ -612,18 +609,4 @@ internal sealed partial class SettingsPanel : CanvasLayer
             GD.PushWarning($"Failed to save display settings: {ex.Message}");
         }
     }
-
-    private static StyleBoxFlat PanelStyle() => new()
-    {
-        BgColor = new Color(0.055f, 0.08f, 0.065f, 0.96f),
-        BorderColor = new Color("46533e"),
-        BorderWidthBottom = 2,
-        BorderWidthTop = 2,
-        BorderWidthLeft = 2,
-        BorderWidthRight = 2,
-        CornerRadiusBottomLeft = 8,
-        CornerRadiusBottomRight = 8,
-        CornerRadiusTopLeft = 8,
-        CornerRadiusTopRight = 8
-    };
 }

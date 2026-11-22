@@ -1,6 +1,7 @@
 using DeadGround.Engine;
 using DeadGround.Engine.Net;
 using DeadGround.Rules.Ops;
+using DeadGround.Sandbox;
 using Godot;
 
 namespace DeadGround.Client;
@@ -12,13 +13,50 @@ internal sealed partial class RoleBadgeOverlay : Control
     private readonly List<EntityId> _removedUnits = new();
     private readonly List<ContactId> _removedContacts = new();
     private readonly List<Rect2> _cachedPanels = new();
-    private readonly UnitCatalog _catalog;
+    private readonly List<Rect2> _placedBadges = new();
+    private UnitCatalog _catalog = null!;
+    private string[] _roleTexts = Array.Empty<string>();
+    private int[] _reloadDurations = Array.Empty<int>();
+    private ContactClassification[] _classifications = Array.Empty<ContactClassification>();
 
     public RoleBadgeOverlay(UnitCatalog catalog)
     {
-        _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+        SetCatalog(catalog);
         MouseFilter = MouseFilterEnum.Ignore;
         SetAnchorsPreset(LayoutPreset.FullRect);
+    }
+
+    internal void SetCatalog(UnitCatalog catalog)
+    {
+        _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+        Clear();
+        _roleTexts = new string[catalog.Units.Length];
+        _reloadDurations = new int[catalog.Units.Length];
+        _classifications = new ContactClassification[catalog.Units.Length];
+        for (int i = 0; i < catalog.Units.Length; i++)
+        {
+            UnitDefinition def = catalog.Units[i];
+            _roleTexts[i] = FormatRoleText(def);
+            _classifications[i] = def.Classification?.ToLowerInvariant() switch
+            {
+                "tank" => ContactClassification.Tank,
+                "recon" => ContactClassification.Recon,
+                "apc" => ContactClassification.Apc,
+                "infantry" => ContactClassification.Infantry,
+                "helicopter" => ContactClassification.Helicopter,
+                "artillery" or "mlrs" => ContactClassification.Artillery,
+                "command_vehicle" or "command" => ContactClassification.CommandVehicle,
+                _ => ContactClassification.Vehicle
+            };
+            foreach (WeaponData weapon in catalog.Weapons ?? Array.Empty<WeaponData>())
+            {
+                if (weapon.Id != def.Weapon) continue;
+                _reloadDurations[i] = weapon.ReloadDurationTicks > 0
+                    ? weapon.ReloadDurationTicks
+                    : (int)Math.Round(weapon.ReloadSeconds / Simulation.TickSeconds);
+                break;
+            }
+        }
     }
 
     public void UpdateBadges(
@@ -34,6 +72,7 @@ internal sealed partial class RoleBadgeOverlay : Control
         float opacity = Mathf.Clamp((cameraSize - 20f) / 15f, 0.2f, 1.0f);
 
         _cachedPanels.Clear();
+        _placedBadges.Clear();
         for (int i = 0; i < occludingPanels.Length; i++)
         {
             if (occludingPanels[i].Size.X > 0 && occludingPanels[i].Size.Y > 0)
@@ -78,9 +117,28 @@ internal sealed partial class RoleBadgeOverlay : Control
 
             string roleText = GetOwnUnitRoleText(obs.Definition);
             int groupNumber = unitViews.GetLowestControlGroup(id);
-            badge.BindUnit(id, roleText, groupNumber);
+            bool hasDefinition = obs.Definition < _catalog.Units.Length;
+            UnitDefinition? definition = hasDefinition ? _catalog.Units[obs.Definition] : null;
+            badge.BindUnit(id, roleText, groupNumber, hasDefinition ? _classifications[obs.Definition] : ContactClassification.Unknown);
+            WeaponReadinessPresentation readiness = WeaponReadinessPresentation.From(
+                definition?.Weapon is not null, obs.Ammunition, obs.ReloadTicksRemaining,
+                hasDefinition ? _reloadDurations[obs.Definition] : 0);
+            bool selected = unitViews.Selected.Contains(id);
+            bool needsAttention = obs.Health < (definition?.MaxHealth ?? 100) || readiness.State is WeaponReadinessState.Reloading or WeaponReadinessState.Empty;
+            bool showLabel = !view.IsInfantry || selected || cameraSize >= 55f;
+            badge.UpdateOwnReadiness(
+                obs.Health / (float)Math.Max(1, definition?.MaxHealth ?? 100),
+                readiness,
+                selected || (cameraSize <= 60f && needsAttention),
+                selected,
+                showLabel,
+                obs.Stance,
+                obs.PassengerCount,
+                obs.PassengerCapacity);
+            // This overlay owns the screen-space indicators in the main client.
+            view.SetWorldHealthBarVisible(false);
 
-            float badgeElevation = (view.IsHelicopter ? 6.2f : 2.8f) + view.Altitude;
+            float badgeElevation = (view.IsHelicopter ? 6.2f : (view.IsInfantry ? 2.2f : 3.4f)) + view.Altitude;
             Vector3 worldPos = view.Root.Position + Vector3.Up * badgeElevation;
             if (camera.IsPositionBehind(worldPos))
             {
@@ -90,8 +148,10 @@ internal sealed partial class RoleBadgeOverlay : Control
 
             Vector2 screenPos = camera.UnprojectPosition(worldPos);
             Vector2 badgeSize = badge.GetCombinedMinimumSize();
-            float width = Math.Max(40f, badgeSize.X);
-            float height = Math.Max(18f, badgeSize.Y);
+            float width = Math.Max(28f, badgeSize.X);
+            float height = Math.Max(14f, badgeSize.Y);
+            screenPos.Y -= height * 0.5f + 4f;
+            screenPos = ResolveOverlap(screenPos, width, height);
             Rect2 badgeRect = new(screenPos.X - width * 0.5f, screenPos.Y - height * 0.5f, width, height);
             if (IsOffscreenOrOccluded(badgeRect, viewportSize, occludingPanels))
             {
@@ -99,8 +159,9 @@ internal sealed partial class RoleBadgeOverlay : Control
                 continue;
             }
 
+            _placedBadges.Add(badgeRect);
             badge.Visible = true;
-            badge.UpdateScreenPosition(screenPos, opacity);
+            badge.UpdateScreenPosition(screenPos, selected ? 1f : opacity);
         }
 
         // 2. Update enemy contact badges
@@ -144,8 +205,10 @@ internal sealed partial class RoleBadgeOverlay : Control
 
             Vector2 screenPos = camera.UnprojectPosition(worldPos);
             Vector2 badgeSize = badge.GetCombinedMinimumSize();
-            float width = Math.Max(40f, badgeSize.X);
-            float height = Math.Max(18f, badgeSize.Y);
+            float width = Math.Max(28f, badgeSize.X);
+            float height = Math.Max(14f, badgeSize.Y);
+            screenPos.Y -= height * 0.5f + 4f;
+            screenPos = ResolveOverlap(screenPos, width, height);
             Rect2 badgeRect = new(screenPos.X - width * 0.5f, screenPos.Y - height * 0.5f, width, height);
             if (IsOffscreenOrOccluded(badgeRect, viewportSize, occludingPanels))
             {
@@ -153,6 +216,7 @@ internal sealed partial class RoleBadgeOverlay : Control
                 continue;
             }
 
+            _placedBadges.Add(badgeRect);
             badge.Visible = true;
             badge.UpdateScreenPosition(screenPos, opacity);
         }
@@ -205,6 +269,28 @@ internal sealed partial class RoleBadgeOverlay : Control
         _removedUnits.Clear();
         _removedContacts.Clear();
         _cachedPanels.Clear();
+        _placedBadges.Clear();
+    }
+
+    private Vector2 ResolveOverlap(Vector2 center, float width, float height)
+    {
+        // Nudge clustered badges upward in small steps so dense squads stay readable.
+        for (int attempt = 0; attempt < 4; attempt++)
+        {
+            Rect2 candidate = new(center.X - width * 0.5f, center.Y - height * 0.5f, width, height);
+            bool overlaps = false;
+            for (int i = 0; i < _placedBadges.Count; i++)
+            {
+                if (_placedBadges[i].Intersects(candidate))
+                {
+                    overlaps = true;
+                    break;
+                }
+            }
+            if (!overlaps) break;
+            center.Y -= height + 2f;
+        }
+        return center;
     }
 
     // Units show their real type ("T-62"); prototype units show their role.
@@ -212,26 +298,7 @@ internal sealed partial class RoleBadgeOverlay : Control
     {
         if (definition < _catalog.Units.Length)
         {
-            UnitDefinition def = _catalog.Units[definition];
-            if (def.Name is not null)
-                return def.Name.ToUpperInvariant();
-            if (!string.IsNullOrEmpty(def.Classification))
-            {
-                return def.Classification.ToLowerInvariant() switch
-                {
-                    "tank" => "TANK",
-                    "recon" => "RECON",
-                    "apc" => "APC",
-                    "command_vehicle" => "CMD",
-                    "infantry" => "INF",
-                    "helicopter" => "HELI",
-                    "artillery" or "mlrs" => "ARTY",
-                    _ => def.Classification.ToUpperInvariant()
-                };
-            }
-            if (def.Id.Contains("tank", StringComparison.OrdinalIgnoreCase)) return "TANK";
-            if (def.Id.Contains("recon", StringComparison.OrdinalIgnoreCase)) return "RECON";
-            if (def.Id.Contains("command", StringComparison.OrdinalIgnoreCase)) return "CMD";
+            return _roleTexts[definition];
         }
         return fallbackClassification switch
         {
@@ -245,6 +312,30 @@ internal sealed partial class RoleBadgeOverlay : Control
             ContactClassification.Artillery => "ARTY",
             _ => "UNIT"
         };
+    }
+
+    private static string FormatRoleText(UnitDefinition def)
+    {
+        if (def.Name is not null)
+            return def.Name.ToUpperInvariant();
+        if (!string.IsNullOrEmpty(def.Classification))
+        {
+            return def.Classification.ToLowerInvariant() switch
+            {
+                "tank" => "TANK",
+                "recon" => "RECON",
+                "apc" => "APC",
+                "command_vehicle" => "CMD",
+                "infantry" => "INF",
+                "helicopter" => "HELI",
+                "artillery" or "mlrs" => "ARTY",
+                _ => def.Classification.ToUpperInvariant()
+            };
+        }
+        if (def.Id.Contains("tank", StringComparison.OrdinalIgnoreCase)) return "TANK";
+        if (def.Id.Contains("recon", StringComparison.OrdinalIgnoreCase)) return "RECON";
+        if (def.Id.Contains("command", StringComparison.OrdinalIgnoreCase)) return "CMD";
+        return "UNIT";
     }
 
     internal string GetOwnUnitRoleText(ushort definition) => GetRoleText(definition);

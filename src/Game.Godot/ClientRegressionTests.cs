@@ -49,10 +49,11 @@ internal static class ClientRegressionTests
             InfantryTransportRegressionTests.Run(scene);
             EnvironmentProfileRegressionTests.Run(scene);
             ViewportAspectRegressionTests.Run(scene);
+            GraphiteHudRegressionTests.Run(scene);
             SmokeRegressionTests.Run(scene);
             HelicopterFlightRegressionTests.Run(scene);
             ArtilleryRegressionTests.Run(scene);
-            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability combat_feedback vehicle_preview faction_vehicles rts_selection vehicle_effects cannon_sound historical_units seen_means_known fog_of_war relief contact_turrets infantry_assets order_preview visual_prewarm tactical_minimap vehicle_wrecks network_session_ui forest_visibility_startup infantry_playable infantry_transport environment_profile viewport_aspect tactical_smoke helicopter_flight bm21_artillery");
+            GD.Print("M0_CLIENT_REGRESSIONS_OK view_lifecycle contact_lifecycle hud_assignment rectangular_grids combat_effects configured_health vehicle_models camera_rig display_settings combat_frame_pacing mission_panel combat_readability combat_feedback vehicle_preview faction_vehicles rts_selection vehicle_effects cannon_sound historical_units seen_means_known fog_of_war relief contact_turrets infantry_assets order_preview visual_prewarm tactical_minimap vehicle_wrecks network_session_ui forest_visibility_startup infantry_playable infantry_transport environment_profile viewport_aspect graphite_hud tactical_smoke helicopter_flight bm21_artillery");
             return true;
         }
         catch (Exception exception)
@@ -932,9 +933,11 @@ internal static class ClientRegressionTests
                 ReloadTicksRemaining: 16,
                 AttackStatus: AttackExecutionStatus.NoAmmo);
             card.UpdateSingleOwnUnit(tankZeroAmmo);
-            Require(card.Line2Text.Contains("Depleted"), "Tank with 0 ammo must be formatted as Depleted.");
-            Require(card.Line2Text.Contains("0.8s"), "Reload timer in ticks must convert to seconds.");
+            Require(card.Line2Text.Contains("0 /"), "Tank with 0 ammo must show an empty ammunition count.");
+            Require(card.ReadinessText == "NO AMMO", "An empty weapon must show NO AMMO even if its reload counter is nonzero.");
             Require(card.Line3Text.Contains("Out of Ammo"), "Status should show out of ammunition.");
+            card.UpdateSingleOwnUnit(tankZeroAmmo with { Ammunition = 1 });
+            Require(card.ReadinessText.Contains("0.8s"), "A loaded weapon's reload timer in ticks must convert to seconds.");
 
             // Moving unit with No attack order (AttackExecutionStatus.None must not say Idle)
             OwnUnitObservation movingUnitNoAttack = new(
@@ -948,7 +951,7 @@ internal static class ClientRegressionTests
                 ReloadTicksRemaining: 0,
                 AttackStatus: AttackExecutionStatus.None);
             card.UpdateSingleOwnUnit(movingUnitNoAttack);
-            Require(card.Line3Text.Contains("No attack order"), "Moving unit with None attack status must display No attack order.");
+            Require(card.Line3Text == "Fire at will", "A unit without an attack order must show its stance without an invented activity.");
             Require(!card.Line3Text.Contains("Idle"), "Attack status must not say Idle.");
 
             // Multiple units

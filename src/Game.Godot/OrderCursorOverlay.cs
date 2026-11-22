@@ -12,10 +12,10 @@ internal sealed partial class OrderCursorOverlay : Control
 {
     private sealed partial class OrderIconControl : Control
     {
-        private static readonly Color ColorBlocked = new("ff4d4d");
-        private static readonly Color ColorValid = new("5cb85c");
-        private static readonly Color ColorAdjusted = new("edc76b");
-        private static readonly Color ColorMixed = new("f0ad4e");
+        private static readonly Color ColorBlocked = HudTheme.Danger;
+        private static readonly Color ColorValid = HudTheme.Text;
+        private static readonly Color ColorAdjusted = HudTheme.Accent;
+        private static readonly Color ColorMixed = HudTheme.Accent;
 
         public DestinationValidity Validity { get; set; } = DestinationValidity.Valid;
         public bool IsMixed { get; set; }
@@ -77,6 +77,7 @@ internal sealed partial class OrderCursorOverlay : Control
     private bool _lastIsReverse;
 
     internal bool IsPanelVisible => _panel.Visible;
+    internal Rect2 PanelRect => _panel.GetGlobalRect();
     internal DestinationValidity CurrentValidity => _lastValidity;
     internal DestinationBlockReason CurrentReason => _lastReason;
     internal string CurrentText => _label.Text;
@@ -85,26 +86,14 @@ internal sealed partial class OrderCursorOverlay : Control
 
     public OrderCursorOverlay()
     {
+        Theme = HudTheme.Shared;
         MouseFilter = MouseFilterEnum.Ignore;
+        ZIndex = 50;
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
 
-        StyleBoxFlat style = new()
-        {
-            BgColor = new Color(0.11f, 0.13f, 0.17f, 0.94f),
-            BorderWidthLeft = 1,
-            BorderWidthRight = 1,
-            BorderWidthTop = 1,
-            BorderWidthBottom = 1,
-            BorderColor = new Color(0.35f, 0.45f, 0.55f, 0.75f),
-            CornerRadiusTopLeft = 4,
-            CornerRadiusTopRight = 4,
-            CornerRadiusBottomLeft = 4,
-            CornerRadiusBottomRight = 4,
-            ContentMarginLeft = 8,
-            ContentMarginRight = 10,
-            ContentMarginTop = 4,
-            ContentMarginBottom = 4
-        };
+        StyleBoxFlat style = HudTheme.CreatePanel(padding: 4);
+        style.ContentMarginLeft = 8;
+        style.ContentMarginRight = 10;
 
         _panel = new PanelContainer
         {
@@ -128,7 +117,7 @@ internal sealed partial class OrderCursorOverlay : Control
             VerticalAlignment = VerticalAlignment.Center
         };
         _label.AddThemeFontSizeOverride("font_size", 12);
-        _label.AddThemeColorOverride("font_color", new Color("f0f2f5"));
+        _label.AddThemeColorOverride("font_color", HudTheme.Text);
         hbox.AddChild(_label);
 
         _panel.AddChild(hbox);
@@ -223,6 +212,7 @@ internal sealed partial class OrderCursorOverlay : Control
         if (!_panel.Visible) return;
 
         Vector2 panelSize = _panel.GetCombinedMinimumSize();
+        _panel.Size = panelSize;
         float posX = mousePos.X + 18f;
         float posY = mousePos.Y + 18f;
 
@@ -236,7 +226,9 @@ internal sealed partial class OrderCursorOverlay : Control
             posY = mousePos.Y - panelSize.Y - 8f;
         }
 
-        _panel.Position = new Vector2(MathF.Max(4f, posX), MathF.Max(4f, posY));
+        _panel.Position = new Vector2(
+            Mathf.Clamp(posX, 4f, MathF.Max(4f, viewportSize.X - panelSize.X - 10f)),
+            Mathf.Clamp(posY, 4f, MathF.Max(4f, viewportSize.Y - panelSize.Y - 10f)));
     }
 
     public void HideTooltip()
