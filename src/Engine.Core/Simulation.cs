@@ -55,7 +55,8 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         DeploySmoke = 6,
         Helicopter = 7,
         FireMission = 8,
-        DeployFlares = 9
+        Stop = 9,
+        DeployFlares = 10
     }
 
     private readonly record struct QueuedCommand(
@@ -70,37 +71,41 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         DeploySmokeCommand DeploySmoke,
         HelicopterCommand Helicopter,
         FireMissionCommand FireMission,
+        StopCommand Stop,
         DeployFlaresCommand DeployFlares)
     {
         public static QueuedCommand CreateMove(int player, MoveCommand move) =>
-            new(player, CommandKind.Move, move, default, default, default, default, default, default, default, default, default);
+            new(player, CommandKind.Move, move, default, default, default, default, default, default, default, default, default, default);
 
         public static QueuedCommand CreateAttack(int player, AttackCommand attack) =>
-            new(player, CommandKind.Attack, default, attack, default, default, default, default, default, default, default, default);
+            new(player, CommandKind.Attack, default, attack, default, default, default, default, default, default, default, default, default);
 
         public static QueuedCommand CreateSetFireStance(int player, SetFireStanceCommand stance) =>
-            new(player, CommandKind.SetFireStance, default, default, stance, default, default, default, default, default, default, default);
+            new(player, CommandKind.SetFireStance, default, default, stance, default, default, default, default, default, default, default, default);
 
         public static QueuedCommand CreateGroupMove(int player, GroupMoveCommand groupMove) =>
-            new(player, CommandKind.GroupMove, default, default, default, groupMove, default, default, default, default, default, default);
+            new(player, CommandKind.GroupMove, default, default, default, groupMove, default, default, default, default, default, default, default);
 
         public static QueuedCommand CreateBoardTransport(int player, BoardTransportCommand board) =>
-            new(player, CommandKind.BoardTransport, default, default, default, default, board, default, default, default, default, default);
+            new(player, CommandKind.BoardTransport, default, default, default, default, board, default, default, default, default, default, default);
 
         public static QueuedCommand CreateDisembark(int player, DisembarkCommand disembark) =>
-            new(player, CommandKind.Disembark, default, default, default, default, default, disembark, default, default, default, default);
+            new(player, CommandKind.Disembark, default, default, default, default, default, disembark, default, default, default, default, default);
 
         public static QueuedCommand CreateDeploySmoke(int player, DeploySmokeCommand deploySmoke) =>
-            new(player, CommandKind.DeploySmoke, default, default, default, default, default, default, deploySmoke, default, default, default);
+            new(player, CommandKind.DeploySmoke, default, default, default, default, default, default, deploySmoke, default, default, default, default);
 
         public static QueuedCommand CreateHelicopter(int player, HelicopterCommand helicopter) =>
-            new(player, CommandKind.Helicopter, default, default, default, default, default, default, default, helicopter, default, default);
+            new(player, CommandKind.Helicopter, default, default, default, default, default, default, default, helicopter, default, default, default);
 
         public static QueuedCommand CreateFireMission(int player, FireMissionCommand fireMission) =>
-            new(player, CommandKind.FireMission, default, default, default, default, default, default, default, default, fireMission, default);
+            new(player, CommandKind.FireMission, default, default, default, default, default, default, default, default, fireMission, default, default);
+
+        public static QueuedCommand CreateStop(int player, StopCommand stop) =>
+            new(player, CommandKind.Stop, default, default, default, default, default, default, default, default, default, stop, default);
 
         public static QueuedCommand CreateDeployFlares(int player, DeployFlaresCommand deployFlares) =>
-            new(player, CommandKind.DeployFlares, default, default, default, default, default, default, default, default, default, deployFlares);
+            new(player, CommandKind.DeployFlares, default, default, default, default, default, default, default, default, default, default, deployFlares);
     }
 
     public ulong MatchSeed { get; }
@@ -396,6 +401,22 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         _world.ClearBoardingOrder(command.Unit);
         _world.ClearPendingDisembark(command.Unit);
         _commands[_commandCount++] = QueuedCommand.CreateFireMission(player, command);
+        _lastAccepted[player - 1] = command.Sequence;
+        return true;
+    }
+
+    public bool TryEnqueue(int player, StopCommand command)
+    {
+        if (IsMissionFinished) return false;
+        if (player < 1 || player > _lastAccepted.Length || command.Sequence == 0 ||
+            command.Sequence <= _lastAccepted[player - 1] || _commandCount == _commands.Length)
+            return false;
+
+        if (!_world.TryGetUnit(command.Unit, out UnitState unit) || unit.Owner != player ||
+            _world.IsContained(command.Unit) || _world.IsCrashing(command.Unit) || _world.IsSlung(command.Unit))
+            return false;
+
+        _commands[_commandCount++] = QueuedCommand.CreateStop(player, command);
         _lastAccepted[player - 1] = command.Sequence;
         return true;
     }
@@ -701,6 +722,27 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
                 _world.ClearBoardingOrder(queued.FireMission.Unit);
                 _world.ClearPendingDisembark(queued.FireMission.Unit);
                 _artillery?.TryOrderFireMission(queued.Player, queued.FireMission, _world);
+            }
+            else if (queued.Kind == CommandKind.Stop)
+            {
+                EntityId unitId = queued.Stop.Unit;
+                if (_world.TryGetUnit(unitId, out UnitState unit) && unit.Owner == queued.Player &&
+                    !_world.IsContained(unitId) && !_world.IsCrashing(unitId) && !_world.IsSlung(unitId))
+                {
+                    _world.ClearAttackOrder(unitId);
+                    _world.ClearFireMission(unitId);
+                    _world.ClearBoardingOrder(unitId);
+                    _world.ClearPendingDisembark(unitId);
+                    if (_flight is not null && _world.IsAircraft(unitId))
+                    {
+                        _flight.HoldPosition(_world, unitId);
+                    }
+                    else
+                    {
+                        _navigation?.ClearUnit(unitId);
+                        _world.UpdateUnitNavigation(unitId, unit.Position, unit.Position, false);
+                    }
+                }
             }
             else if (queued.Kind == CommandKind.DeployFlares)
             {

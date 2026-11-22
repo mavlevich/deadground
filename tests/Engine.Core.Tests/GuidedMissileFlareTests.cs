@@ -346,10 +346,10 @@ public sealed class GuidedMissileFlareTests
     }
 
     [Fact]
-    public void WireProtocolV30_RoundTripsFlaresAndGuidedMissiles_AndRejectsV29Handshake()
+    public void WireProtocolV31_RoundTripsFlaresAndGuidedMissiles_AndRejectsV30Handshake()
     {
-        Assert.Equal(30, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(30, WireProtocol.Version);
+        Assert.Equal(31, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(31, WireProtocol.Version);
         Assert.Equal(73, WireProtocol.UnitSize);
         Assert.Equal(31, WireProtocol.MissileSize);
         Assert.Equal(15, WireProtocol.DeployFlaresSize);
@@ -361,8 +361,8 @@ public sealed class GuidedMissileFlareTests
         Assert.True(WireProtocol.TryReadDeployFlares(cmdBuf, out DeployFlaresCommand decodedCmd));
         Assert.Equal(cmd, decodedCmd);
 
-        // Reject outdated v29 packet and invalid toggle byte
-        cmdBuf[0] = 29;
+        // Reject outdated v30 packet and invalid toggle byte
+        cmdBuf[0] = 30;
         Assert.False(WireProtocol.TryReadDeployFlares(cmdBuf, out _));
         cmdBuf[0] = WireProtocol.Version;
         cmdBuf[14] = 2;
@@ -419,7 +419,7 @@ public sealed class GuidedMissileFlareTests
         Assert.InRange(midPos.Z, 785.5f, 786.5f);
         Assert.True((midFlags & GuidedMissileFlags.MotorBurning) != 0);
 
-        // 3. Handshake rejects v29 client connecting to v30 server
+        // 3. Handshake rejects v30 client connecting to v31 server
         HeightMap map = new(17, 17, 8f, 0.01f, new ushort[17 * 17]);
         StaticGeometry geo = new(map, []);
         MatchSetup serverSetup = new(MatchSetup.CurrentProtocolVersion, 12345UL, MatchSetup.ComputeMapHash(geo), "AirDefense");
@@ -428,8 +428,8 @@ public sealed class GuidedMissileFlareTests
         using Simulation sim = new(world, new RuleSet(new MovementSystem()));
         using SimulationHost host = new(sim, serverTransport, serverSetup);
 
-        MatchSetup v29ClientSetup = serverSetup with { ProtocolVersion = 29 };
-        using ClientSession client = ClientSession.Connect("127.0.0.1", serverTransport.Port, v29ClientSetup);
+        MatchSetup v30ClientSetup = serverSetup with { ProtocolVersion = 30 };
+        using ClientSession client = ClientSession.Connect("127.0.0.1", serverTransport.Port, v30ClientSetup);
         for (int i = 0; i < 150 && client.State != SessionConnectionState.Failed; i++)
         {
             host.Advance(Simulation.TickSeconds);

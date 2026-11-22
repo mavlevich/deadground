@@ -262,6 +262,16 @@ public sealed class ClientSession : IGameSession
         return true;
     }
 
+    public bool Stop(EntityId unit)
+    {
+        if (State != SessionConnectionState.Connected) return false;
+        StopCommand command = new(_nextCommand, Replica.LatestTick, unit);
+        WireProtocol.WriteStop(_command, command);
+        if (!_transport.TrySend(_command.AsSpan(0, WireProtocol.StopSize))) return false;
+        _nextCommand = checked(_nextCommand + 1);
+        return true;
+    }
+
     public bool DeployFlares(EntityId unit, bool toggleAuto = false)
     {
         if (State != SessionConnectionState.Connected) return false;

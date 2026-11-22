@@ -534,14 +534,17 @@ public sealed class FramePacingTests
         metrics.Record(12.0f, 1.0f, 5.0f, in phase);
         metrics.Reset();
 
-        long allocBefore = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 1000; i++)
+        using (NoGcAllocationWindow window = new())
         {
-            float ms = i == 999 ? 45.0f : (i % 2 == 0 ? 12.0f : 24.0f);
-            metrics.Record(ms, 2.0f, 6.0f, in phase);
+            long allocBefore = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 1000; i++)
+            {
+                float ms = i == 999 ? 45.0f : (i % 2 == 0 ? 12.0f : 24.0f);
+                metrics.Record(ms, 2.0f, 6.0f, in phase);
+            }
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
+            Assert.True(allocated == 0, window.Describe(allocated));
         }
-        long allocAfter = GC.GetAllocatedBytesForCurrentThread();
-        Assert.Equal(0L, allocAfter - allocBefore);
 
         // Buffer stores exact capacity for percentiles while streaming stats never drop samples silently
         Assert.Equal(64, metrics.Capacity);
@@ -569,13 +572,16 @@ public sealed class FramePacingTests
         FramePacingMetrics sustained = new(capacity: 36_000);
         sustained.Record(16.0f, 1.0f, 5.0f, in phase);
         sustained.Reset();
-        long sustainedBefore = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 36_000; i++)
+        using (NoGcAllocationWindow window = new())
         {
-            sustained.Record(16.0f, 1.0f, 5.0f, in phase);
+            long sustainedBefore = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 36_000; i++)
+            {
+                sustained.Record(16.0f, 1.0f, 5.0f, in phase);
+            }
+            long sustainedAllocated = GC.GetAllocatedBytesForCurrentThread() - sustainedBefore;
+            Assert.True(sustainedAllocated == 0, window.Describe(sustainedAllocated));
         }
-        long sustainedAfter = GC.GetAllocatedBytesForCurrentThread();
-        Assert.Equal(0L, sustainedAfter - sustainedBefore);
         Assert.False(sustained.IsBufferSaturated);
         Assert.Equal(36_000, sustained.TotalCount);
     }

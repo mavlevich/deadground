@@ -260,8 +260,8 @@ public sealed class ArtilleryRocketTests
     [Fact]
     public void WireProtocolV29_RoundTripsFireMissionArtillerySnapshotAndRejectsV28Handshake()
     {
-        Assert.Equal(30, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(30, WireProtocol.Version);
+        Assert.Equal(31, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(31, WireProtocol.Version);
         Assert.Equal(73, WireProtocol.UnitSize);
         Assert.Equal(35, WireProtocol.ContactSize);
 

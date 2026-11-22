@@ -1145,6 +1145,29 @@ internal sealed class OrderPreviewController
         return true;
     }
 
+    public void ClearTrackedOrdersForUnits(HashSet<EntityId> units)
+    {
+        if (units is null || units.Count == 0 || _trackedOrderCount == 0) return;
+        int writeIdx = 0;
+        for (int i = 0; i < _trackedOrderCount; i++)
+        {
+            if (!units.Contains(_trackedOrders[i].UnitId))
+            {
+                _trackedOrders[writeIdx++] = _trackedOrders[i];
+            }
+        }
+        if (writeIdx != _trackedOrderCount)
+        {
+            _trackedOrderCount = writeIdx;
+            if (_trackedOrderCount == 0)
+            {
+                _orderOutcomeHandled = true;
+                _destinationView.ClearSubmittedMarker();
+                _destinationView.ClearGroupSlots();
+            }
+        }
+    }
+
     public void UpdateOrders(IGameSession session, double delta)
     {
         _destinationView.Update(delta);

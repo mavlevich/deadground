@@ -51,6 +51,7 @@ public static class WireProtocol
     public const int DeploySmokeSize = 27;
     public const int HelicopterSize = 29;
     public const int FireMissionSize = 23;
+    public const int StopSize = 14;
     public const int DeployFlaresSize = 15;
 
     public const byte MoveKind = 1;
@@ -69,7 +70,8 @@ public static class WireProtocol
     public const byte DeploySmokeKind = 14;
     public const byte HelicopterKind = 15;
     public const byte FireMissionKind = 16;
-    public const byte DeployFlaresKind = 17;
+    public const byte StopKind = 17;
+    public const byte DeployFlaresKind = 18;
 
     // Yaw in 65536 steps over a full turn: code 32768 is exactly 0, and the quarter turns are exact too.
     // +pi and -pi share code 0.
@@ -635,6 +637,28 @@ public static class WireProtocol
         bool cancel = cancelByte == 1;
         if (!cancel && (!float.IsFinite(targetX) || !float.IsFinite(targetY))) return false;
         command = new FireMissionCommand(sequence, tick, new EntityId(unitId), cancel ? default : new Vector2(targetX, targetY), cancel);
+        return true;
+    }
+
+    public static void WriteStop(Span<byte> bytes, StopCommand command)
+    {
+        if (bytes.Length < StopSize) throw new ArgumentException("Stop buffer is too small.");
+        bytes[0] = Version;
+        bytes[1] = StopKind;
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[2..], command.Sequence);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[6..], command.ClientTick);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[10..], command.Unit.Value);
+    }
+
+    public static bool TryReadStop(ReadOnlySpan<byte> bytes, out StopCommand command)
+    {
+        command = default;
+        if (bytes.Length != StopSize || bytes[0] != Version || bytes[1] != StopKind) return false;
+        uint sequence = BinaryPrimitives.ReadUInt32LittleEndian(bytes[2..]);
+        int tick = BinaryPrimitives.ReadInt32LittleEndian(bytes[6..]);
+        uint unitId = BinaryPrimitives.ReadUInt32LittleEndian(bytes[10..]);
+        if (sequence == 0 || tick < 0 || unitId == 0) return false;
+        command = new StopCommand(sequence, tick, new EntityId(unitId));
         return true;
     }
 

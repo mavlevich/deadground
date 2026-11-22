@@ -49,6 +49,8 @@ public readonly record struct GroupMoveResult(
 
 public readonly record struct AttackCommand(uint Sequence, int ClientTick, EntityId Unit, ContactId Target);
 
+public readonly record struct StopCommand(uint Sequence, int ClientTick, EntityId Unit);
+
 public readonly record struct BoardTransportCommand(
     uint Sequence,
     int ClientTick,
