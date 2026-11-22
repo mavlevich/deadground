@@ -109,3 +109,36 @@ rely on these points only:
   `track_wrap_meters` from the manifest for the `visuals.json` entry.
 - Node names and transforms of the rig and all launch points are identical in every LOD, so LOD
   switches never move an effect anchor.
+
+## 9K35 Strela-10SV (IR SAM launcher asset)
+
+`Strela10/` holds a procedural 9K35 Strela-10SV (9A35M / SA-13 Gopher) tracked short-range IR SAM
+launcher on an MT-LB chassis. Dimensions follow published MT-LB and 9A35M figures (hull length
+6.45 m, width 2.85 m, hull roof height 1.865 m, ground clearance 0.40 m, track gauge 2.50 m,
+6 stamped road wheels per side with front drive sprockets and no return rollers). The launcher is
+modeled in its raised combat-ready turret configuration with a central glazed operator cabin, four
+2.20 m rectangular 9M37 missile containers mounted in side pairs on high trunnions, a central 9S86
+passive ranging radar housing ("Snap Shot"), and hull-corner 9S16 passive RWR pods.
+
+Regenerate from the repository root with `python3 tools/model-authoring/build_strela10.py`. The
+output is deterministic. Run the checks with
+`python3 -B -m unittest tools/model-authoring/test_strela10.py`.
+
+| LOD | File | Triangle budget |
+| --- | --- | --- |
+| 0 | `strela10.glb` | 21,000 |
+| 1 | `strela10_lod1.glb` | 5,500 |
+| 2 | `strela10_lod2.glb` | 1,900 |
+
+### Integration contract
+
+- Axes and scale: meters, +Y up, -Z forward, +X right, ground at Y=0. All nodes have unit scale and
+  no rotation in the rest pose. Visual scale in `visuals.json` should stay 0.75 like other vehicles.
+- `TurretYaw`: launcher turret ring, continuous 360-degree rotation about +Y.
+- `GunPitch`: child of `TurretYaw`, high side trunnions, rotates about +X (-5 to +80 degrees).
+  Clears the hull roof at all traverse and elevation angles.
+- `Launch_01` to `Launch_04`: children of `GunPitch` at each missile container front mouth, bore
+  along local -Z (outer left, outer right, inner left, inner right).
+- `Muzzle`: child of `GunPitch` at launcher front center for generic fallback effects.
+- Running gear meshes are `*_Motion_*` under `LeftTrack` and `RightTrack`. Use `track_gauge_meters`
+  and `track_wrap_meters` from `Strela10/manifest.json` when wiring `visuals.json`.
