@@ -4427,10 +4427,20 @@ public partial class Main : Node3D
         _title.AddThemeFontSizeOverride("font_size", 12);
         _title.AddThemeColorOverride("font_color", HudTheme.Muted);
         stack.AddChild(_title);
-        _subtitle = new Label { Text = _session.StatusDescription, MouseFilter = Control.MouseFilterEnum.Ignore };
+        _subtitle = new Label
+        {
+            Text = _session.StatusDescription,
+            CustomMinimumSize = new Vector2(0, 20),
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
         _subtitle.AddThemeColorOverride("font_color", HudTheme.Muted);
         stack.AddChild(_subtitle);
-        _stats = new Label { Text = "Starting session...", MouseFilter = Control.MouseFilterEnum.Ignore };
+        _stats = new Label
+        {
+            Text = "Starting session...",
+            CustomMinimumSize = new Vector2(0, 44),
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
         _stats.AddThemeFontSizeOverride("font_size", 14);
         stack.AddChild(_stats);
         margin.AddChild(stack); top.AddChild(margin); canvas.AddChild(top);
