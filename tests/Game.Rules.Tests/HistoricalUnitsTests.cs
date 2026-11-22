@@ -60,6 +60,8 @@ public sealed class HistoricalUnitsTests
     [InlineData("\"speed_road\": 10.0, \"speed_offroad\": 5.0, \"reverse_speed\": 10.0", "reverses as fast")]
     [InlineData("\"speed\": 5.0, \"faction\": \"nowhere\"", "unknown faction")]
     [InlineData("\"speed\": 5.0, \"name\": \" \"", "blank name")]
+    [InlineData("\"speed\": 5.0, \"visual_signature\": 0.0", "invalid visual signature")]
+    [InlineData("\"speed\": 5.0, \"visual_signature\": -0.5", "invalid visual signature")]
     public void InvalidPeriodData_IsRejected(string fields, string message)
     {
         string json = $$"""
@@ -173,5 +175,37 @@ public sealed class HistoricalUnitsTests
         PlayerKnowledge knowledge = new(1);
         sim.UpdateKnowledge(knowledge);
         Assert.Equal(expectedContacts, knowledge.ContactCount);
+    }
+
+    [Fact]
+    public void TargetVisualSignature_DistinguishesInfantryFromTanksAndHelicopters()
+    {
+        UnitCatalog catalog = ColdWarContent.LoadCatalog();
+        UnitDefinition t62 = catalog.RequireDefinition("t62");
+        UnitDefinition rifleman = catalog.RequireDefinition("us_rifleman");
+        UnitDefinition helicopter = catalog.RequireDefinition("ch47d");
+
+        Assert.True(rifleman.VisualSignature < t62.VisualSignature);
+        Assert.True(helicopter.VisualSignature > t62.VisualSignature);
+
+        const int size = 351;
+        HeightMap flat = new(size, size, 10f, 0.01f, new ushort[size * size]);
+        StaticGeometry geometry = new(flat, []);
+        WorldState world = new(flat);
+
+        // T-62 observer (2000m sensor range): spots rifleman at 700m, tank at 2000m, CH-47D at 2800m
+        world.CreateUnit(1, catalog.RequireDefinitionIndex("t62"), new Vector2(200f, 1500f), t62.Speed);
+        // Rifleman at 1000m: inside tank's raw 2000m range, but hidden by 0.35 signature (700m effective)
+        world.CreateUnit(2, catalog.RequireDefinitionIndex("us_rifleman"), new Vector2(1200f, 1500f), rifleman.Speed);
+        // CH-47D at 2400m: beyond raw 2000m range, but spotted by 1.40 signature (2800m effective)
+        world.CreateUnit(2, catalog.RequireDefinitionIndex("ch47d"), new Vector2(2600f, 1500f), helicopter.Speed);
+
+        using Simulation sim = new(world, new OpsRules(geometry, new OpsPerceptionCatalog(catalog), PrototypeScenario.CreateDetectionTuning(catalog)));
+        for (int i = 0; i < 10; i++) sim.Step();
+
+        PlayerKnowledge knowledge = new(1);
+        sim.UpdateKnowledge(knowledge);
+        Assert.Equal(1, knowledge.ContactCount);
+        Assert.Equal(ContactClassification.Helicopter, knowledge.Contacts[0].Classification);
     }
 }

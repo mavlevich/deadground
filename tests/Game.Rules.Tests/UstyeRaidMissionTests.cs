@@ -542,6 +542,7 @@ public sealed class UstyeRaidMissionTests
         bool leadOrderedAcross = false;
         bool trailOrderedAcross = false;
         bool advanceSouthOrdered = false;
+        bool trailTookLead = false;
         bool approachedDepotNorth = false;
         bool depotPushOrdered = false;
         bool enteredDepot = false;
@@ -630,8 +631,9 @@ public sealed class UstyeRaidMissionTests
                 }
                 else if (crossedNorthLead && crossedNorthTrail)
                 {
+                    bool tank1Alive = session.Replica.TryGetOwnUnit(tank1Id, out _);
                     session.Move(tank1Id, new Vector2(3450f, 2050f));
-                    session.Move(tank2Id, new Vector2(3300f, 1200f));
+                    session.Move(tank2Id, tank1Alive ? new Vector2(3300f, 1200f) : new Vector2(3450f, 2050f));
                 }
             }
 
@@ -656,6 +658,14 @@ public sealed class UstyeRaidMissionTests
                 session.Move(tank1Id, new Vector2(3450f, 2050f));
                 session.Move(tank2Id, new Vector2(3300f, 1200f));
                 advanceSouthOrdered = true;
+            }
+            else if (advanceSouthOrdered && !trailTookLead && !approachedDepotNorth && !wasInCombat &&
+                     !session.Replica.TryGetOwnUnit(tank1Id, out _) &&
+                     session.Replica.TryGetOwnUnit(tank2Id, out _))
+            {
+                // If lead tank falls in the northern flank firefight, trail tank continues the push south
+                session.Move(tank2Id, new Vector2(3450f, 2050f));
+                trailTookLead = true;
             }
 
             if (crossedNorthLead && crossedNorthTrail && !approachedDepotNorth)

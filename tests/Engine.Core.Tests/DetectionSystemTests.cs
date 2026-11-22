@@ -10,9 +10,14 @@ public sealed class DetectionSystemTests
     {
         private readonly Dictionary<ushort, UnitPerceptionProfile> _profiles = new();
 
-        public void Register(ushort definition, VisualSensorProfile? sensor, TargetObservationPoints? points, ContactClassification classification = ContactClassification.Vehicle)
+        public void Register(
+            ushort definition,
+            VisualSensorProfile? sensor,
+            TargetObservationPoints? points,
+            ContactClassification classification = ContactClassification.Vehicle,
+            float visualSignature = 1.0f)
         {
-            _profiles[definition] = new UnitPerceptionProfile(sensor, points, classification);
+            _profiles[definition] = new UnitPerceptionProfile(sensor, points, classification, visualSignature);
         }
 
         public bool TryGetProfile(ushort definition, out UnitPerceptionProfile profile) =>
@@ -1336,5 +1341,88 @@ public sealed class DetectionSystemTests
         Assert.Contains(contacts.ToArray(), c => c.Id == originalId && c.State == ContactState.LastKnown);
         // And late detection creates Current contact
         Assert.Contains(contacts.ToArray(), c => c.Id != originalId && c.State == ContactState.Current);
+    }
+
+    [Fact]
+    public void TargetVisualSignature_ScalesEffectiveDetectionRangeForSmallAndLargeTargets()
+    {
+        HeightMap map = CreateFlatMap(size: 120, cellSize: 2.0f);
+        StaticGeometry geometry = new(map, []);
+        TestCatalog catalog = new();
+        // Def 0: tank observer (sensor 100m, baseline signature 1.0)
+        catalog.Register(0, new VisualSensorProfile(range: 100.0f, eyeHeight: 2.0f), new TargetObservationPoints(0.8f, 2.0f), ContactClassification.Tank, visualSignature: 1.0f);
+        // Def 1: infantry target (signature 0.35 -> effective spotting range 35m)
+        catalog.Register(1, new VisualSensorProfile(range: 50.0f, eyeHeight: 1.6f), new TargetObservationPoints(0.6f, 1.4f), ContactClassification.Infantry, visualSignature: 0.35f);
+        // Def 2: heavy helicopter target (signature 1.4 -> effective spotting range 140m)
+        catalog.Register(2, new VisualSensorProfile(range: 80.0f, eyeHeight: 2.5f), new TargetObservationPoints(1.5f, 4.0f), ContactClassification.Helicopter, visualSignature: 1.4f);
+
+        DetectionSystem detection = new(geometry, catalog, new DetectionTuning(evaluationIntervalTicks: 2));
+        WorldState world = new(map);
+
+        world.CreateUnit(1, 0, new Vector2(20f, 100f), 5.0f);
+        // Infantry at 50m (> 35m effective range, < 100m raw sensor range): must stay hidden
+        EntityId infantry = world.CreateUnit(2, 1, new Vector2(70f, 100f), 3.0f);
+        // Helicopter at 130m (> 100m raw sensor range, < 140m effective range): must be detected
+        world.CreateUnit(2, 2, new Vector2(150f, 100f), 20.0f);
+
+        detection.Update(world, tick: 1);
+        detection.Update(world, tick: 2);
+
+        ReadOnlySpan<ContactObservation> contacts = detection.GetContacts(1);
+        Assert.Equal(1, contacts.Length);
+        Assert.Equal(ContactClassification.Helicopter, contacts[0].Classification);
+
+        // Move infantry inside effective range (30m < 35m): now detected
+        Assert.True(world.SetPosition(infantry, new Vector2(50f, 100f)));
+        detection.Update(world, tick: 3);
+        detection.Update(world, tick: 4);
+
+        contacts = detection.GetContacts(1);
+        Assert.Equal(2, contacts.Length);
+        Assert.Contains(contacts.ToArray(), c => c.Classification == ContactClassification.Infantry && c.State == ContactState.Current);
+    }
+
+    [Fact]
+    public void TargetVisualSignature_LastKnownEmptyConfirmationRespectsTargetSignature()
+    {
+        HeightMap map = CreateFlatMap(size: 120, cellSize: 2.0f);
+        StaticGeometry geometry = new(map, []);
+        TestCatalog catalog = new();
+        catalog.Register(0, new VisualSensorProfile(range: 100.0f, eyeHeight: 2.0f), new TargetObservationPoints(0.8f, 2.0f), ContactClassification.Tank, visualSignature: 1.0f);
+        catalog.Register(1, new VisualSensorProfile(range: 50.0f, eyeHeight: 1.6f), new TargetObservationPoints(0.6f, 1.4f), ContactClassification.Infantry, visualSignature: 0.35f);
+
+        DetectionSystem detection = new(geometry, catalog, new DetectionTuning(memoryDurationTicks: 60, evaluationIntervalTicks: 2));
+        WorldState world = new(map);
+
+        EntityId observer = world.CreateUnit(1, 0, new Vector2(20f, 100f), 5.0f);
+        EntityId infantry = world.CreateUnit(2, 1, new Vector2(45f, 100f), 3.0f); // 25m < 35m
+
+        detection.Update(world, tick: 1);
+        detection.Update(world, tick: 2);
+        Assert.Equal(1, detection.GetContacts(1).Length);
+        Assert.Equal(ContactState.Current, detection.GetContacts(1)[0].State);
+
+        // Observer pulls back to 60m from the infantry position (inside 100m raw range, outside 35m infantry signature range)
+        // and infantry moves away. Observer must NOT falsely confirm the position empty from 60m!
+        Assert.True(world.SetPosition(observer, new Vector2(105f, 100f)));
+        Assert.True(world.SetPosition(infantry, new Vector2(20f, 20f)));
+        detection.Update(world, tick: 3);
+        detection.Update(world, tick: 4);
+
+        ReadOnlySpan<ContactObservation> contacts = detection.GetContacts(1);
+        Assert.Equal(1, contacts.Length);
+        Assert.Equal(ContactState.LastKnown, contacts[0].State);
+        Assert.Equal(0, detection.ConfirmedEmptyPositionsCount);
+
+        // Once observer moves back within 35m (25m away), empty position is confirmed and cleared
+        Assert.True(world.SetPosition(observer, new Vector2(70f, 100f)));
+        int confirmedEmpty = 0;
+        detection.Update(world, tick: 5);
+        confirmedEmpty += detection.ConfirmedEmptyPositionsCount;
+        detection.Update(world, tick: 6);
+        confirmedEmpty += detection.ConfirmedEmptyPositionsCount;
+
+        Assert.Equal(0, detection.GetContacts(1).Length);
+        Assert.Equal(1, confirmedEmpty);
     }
 }
