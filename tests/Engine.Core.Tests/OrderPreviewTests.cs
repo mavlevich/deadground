@@ -1,4 +1,5 @@
 using System.Numerics;
+using DeadGround.Rules.Tests;
 using Xunit;
 
 namespace DeadGround.Engine.Tests;
@@ -328,6 +329,7 @@ public sealed class OrderPreviewTests
             evaluator.Evaluate(target, 1.0f, TraversabilityCapabilities.DefaultVehicle, 0);
         }
 
+        using NoGcAllocationWindow window = new();
         long beforeAllocated = GC.GetAllocatedBytesForCurrentThread();
 
         for (int i = 0; i < 500; i++)
@@ -335,8 +337,8 @@ public sealed class OrderPreviewTests
             evaluator.Evaluate(target, 1.0f, TraversabilityCapabilities.DefaultVehicle, 0);
         }
 
-        long afterAllocated = GC.GetAllocatedBytesForCurrentThread();
-        Assert.Equal(0, afterAllocated - beforeAllocated);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - beforeAllocated;
+        Assert.True(allocated == 0, window.Describe(allocated));
     }
 
     [Fact]

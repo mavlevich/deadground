@@ -1,5 +1,6 @@
 using System.Numerics;
 using DeadGround.Engine;
+using DeadGround.Rules.Tests;
 using Xunit;
 
 namespace DeadGround.Engine.Tests;
@@ -299,6 +300,7 @@ public sealed class SmokeTests
             _ = geometry.CheckLineOfSight(new Vector3(50f, 2f, 100f), new Vector3(150f, 2f, 100f), losCtx);
         }
 
+        using NoGcAllocationWindow window = new();
         long before = GC.GetAllocatedBytesForCurrentThread();
         for (int t = 0; t < 100; t++)
         {
@@ -309,7 +311,7 @@ public sealed class SmokeTests
         }
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-        Assert.Equal(0L, allocated);
+        Assert.True(allocated == 0, window.Describe(allocated));
     }
 
     [Fact]

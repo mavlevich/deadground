@@ -4,11 +4,13 @@ namespace DeadGround.Rules.Tests;
 
 /// <summary>
 /// A window for zero allocation checks that no garbage collection can interrupt.
-/// Zero allocation tests failed at random on x64 CI runners (712 and 800 bytes) and never on arm64,
-/// with the same deterministic simulation. The likely cause is a collection started by another thread
-/// in the test process (test host, network tests) landing inside the measured span. The window
-/// collects first, then holds a no GC region for its lifetime, so that cannot happen. Real
-/// allocations on this thread still count, and a failure message reports any collections.
+/// Zero allocation tests failed at random on x64 CI runners (712 and 800 bytes) and later on macOS
+/// arm64 and Ubuntu x64 too (helicopter tests, 2 to 7 KB), with the same deterministic simulation.
+/// The cause is a background collection started by another thread in the test process suspending
+/// this thread inside the measured span. The window collects first, then holds a no GC region for
+/// its lifetime, so that cannot happen. Real allocations on this thread still count, and a failure
+/// message reports any collections.
+/// Engine.Core.Tests compiles this file too, through a linked source file.
 /// </summary>
 internal sealed class NoGcAllocationWindow : IDisposable
 {

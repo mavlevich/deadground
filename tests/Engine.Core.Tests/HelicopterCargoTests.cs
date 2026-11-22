@@ -1,6 +1,7 @@
 using System.Numerics;
 using DeadGround.Engine;
 using DeadGround.Engine.Net;
+using DeadGround.Rules.Tests;
 using Xunit;
 
 namespace DeadGround.Engine.Tests;
@@ -324,11 +325,12 @@ public sealed class HelicopterCargoTests
             Assert.True(sim.TryEnqueue(1, new MoveCommand(2, 0, heli, new Vector2(400f, 300f))));
             for (int i = 0; i < 10; i++) sim.Step();
 
+            using NoGcAllocationWindow window = new();
             long before = GC.GetAllocatedBytesForCurrentThread();
             for (int i = 0; i < 40; i++) sim.Step();
-            long after = GC.GetAllocatedBytesForCurrentThread();
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-            Assert.Equal(0L, after - before);
+            Assert.True(allocated == 0, window.Describe(allocated));
         }
     }
 }

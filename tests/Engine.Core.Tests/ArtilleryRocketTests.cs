@@ -1,6 +1,7 @@
 using System.Numerics;
 using DeadGround.Engine;
 using DeadGround.Engine.Net;
+using DeadGround.Rules.Tests;
 using Xunit;
 
 namespace DeadGround.Engine.Tests;
@@ -242,6 +243,7 @@ public sealed class ArtilleryRocketTests
         // Warm up JIT
         for (int t = 0; t < 30; t++) sim.Step();
 
+        using NoGcAllocationWindow window = new();
         long before = GC.GetAllocatedBytesForCurrentThread();
         for (int t = 0; t < 200; t++)
         {
@@ -251,7 +253,7 @@ public sealed class ArtilleryRocketTests
         }
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-        Assert.Equal(0L, allocated);
+        Assert.True(allocated == 0, window.Describe(allocated));
         Assert.Equal(6, sim.Artillery!.TotalRocketsFired);
     }
 
