@@ -1513,7 +1513,7 @@ avoidance, a network spectator protocol, unlimited ammunition, artillery or airc
 
 - Animated 3D presentation:
   - First playable infantry unit uses the low-poly animated asset `res://Assets/Infantry/US/us_rifleman.glb`.
-  - Driven by the unit view and contact view via the model's `AnimationPlayer`, switching clips based on movement and combat state: `Idle`, `Walk` (speed >= 0.15 m/s), `Run` (speed >= 2.2 m/s), and `AimStanding` (while aiming or holding an engaged target bearing).
+  - Driven by the unit view and contact view via the model's `AnimationPlayer`, switching clips based on movement and combat state: `Idle`, `Run` (any movement speed >= 0.15 m/s, scaled to speed with a combat-run cadence; falls back to `Walk` only if a rig lacks `Run`), and `AimStanding` (while aiming or holding an engaged target bearing).
   - Model rotations align the soldier's body heading with the movement direction while moving, or with the target azimuth when firing or aiming (`AimStanding`).
   - Vehicle suspension rocking, track travel, and hull recoil are suppressed on infantry views.
 - RTS readability and scaling:
