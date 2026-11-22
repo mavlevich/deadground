@@ -2614,6 +2614,13 @@ public partial class Main : Node3D
                 return;
             }
 
+            if ((key.Keycode == Key.E || key.PhysicalKeycode == Key.E) && _unitViews.Selected.Count > 0)
+            {
+                OnStopRequested();
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
             if ((key.Keycode == Key.G || key.PhysicalKeycode == Key.G) && _unitViews.Selected.Count > 0)
             {
                 OnDeploySmokeRequested();
@@ -3929,6 +3936,32 @@ public partial class Main : Node3D
         }
     }
 
+    internal void OnStopRequested()
+    {
+        if (IsCommandSessionFinished || _unitViews.Selected.Count == 0) return;
+        CancelHudTargeting();
+        _contextActionPanel?.CancelTargeting();
+        int stopped = 0;
+        foreach (EntityId id in _unitViews.Selected)
+        {
+            if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) &&
+                obs.ContainerId.Value == 0 && obs.Health > 0 && obs.FlightPhase != FlightPhase.Crashing && obs.SlungById.Value == 0)
+            {
+                if (_session.Stop(id))
+                    stopped++;
+            }
+        }
+
+        if (stopped > 0)
+        {
+            _previewController?.ClearTrackedOrdersForUnits(_unitViews.Selected);
+            string msg = stopped == 1 ? "Unit stopped" : $"Stopped {stopped} units";
+            _orderNotification?.ShowNotification(msg);
+            _status.Text = msg;
+            UpdateSelectionPresentation();
+        }
+    }
+
     private bool TryGetUnitIndirectWeapon(ushort definition, out WeaponData? weapon)
     {
         weapon = null;
@@ -4531,6 +4564,7 @@ public partial class Main : Node3D
         _commandPanel.OffsetBottom = -HudLayout.Margin;
         _commandPanel.TargetRequested += BeginHudTargeting;
         _commandPanel.StanceRequested += OnHudStanceRequested;
+        _commandPanel.StopRequested += OnStopRequested;
         _commandPanel.RangeToggleRequested += ToggleRangeLimits;
         _commandPanel.SetRangesVisible(_showRangeRings);
 

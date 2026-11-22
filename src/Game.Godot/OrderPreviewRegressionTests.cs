@@ -1760,5 +1760,6 @@ internal static class OrderPreviewRegressionTests
         }
 
         public bool FireMission(EntityId unit, NumericsVector2 target, bool cancel = false) => true;
+        public bool Stop(EntityId unit) => true;
     }
 }

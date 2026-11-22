@@ -393,8 +393,8 @@ public sealed class BattleMatchResultTests
     {
         StaticGeometry geometry = BattleScenario.CreateStaticGeometry();
         MatchSetup serverSetup = BattleScenario.CreateMatchSetup(geometry);
-        Assert.Equal(29, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(29, serverSetup.ProtocolVersion);
+        Assert.Equal(30, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(30, serverSetup.ProtocolVersion);
 
         using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
         int port = serverTransport.Port;
@@ -422,8 +422,8 @@ public sealed class BattleMatchResultTests
     {
         StaticGeometry geometry = BattleScenario.CreateStaticGeometry();
         MatchSetup serverSetup = BattleScenario.CreateMatchSetup(geometry);
-        Assert.Equal(29, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(29, serverSetup.ProtocolVersion);
+        Assert.Equal(30, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(30, serverSetup.ProtocolVersion);
 
         using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
         int port = serverTransport.Port;
@@ -451,8 +451,8 @@ public sealed class BattleMatchResultTests
     {
         StaticGeometry geometry = BattleScenario.CreateStaticGeometry();
         MatchSetup serverSetup = BattleScenario.CreateMatchSetup(geometry);
-        Assert.Equal(29, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(29, serverSetup.ProtocolVersion);
+        Assert.Equal(30, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(30, serverSetup.ProtocolVersion);
 
         using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 1);
         int port = serverTransport.Port;

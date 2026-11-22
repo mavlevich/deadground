@@ -178,11 +178,12 @@ public sealed class HelicopterScenarioTests
         // Warmup through takeoff into active airborne cruise + separation + detection + combat
         for (int i = 0; i < 140; i++) sim.Step();
 
+        using NoGcAllocationWindow window = new();
         long before = GC.GetAllocatedBytesForCurrentThread();
         for (int i = 0; i < 40; i++) sim.Step();
-        long after = GC.GetAllocatedBytesForCurrentThread();
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-        Assert.Equal(0L, after - before);
+        Assert.True(allocated == 0, window.Describe(allocated));
     }
 
     [Fact]

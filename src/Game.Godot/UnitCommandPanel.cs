@@ -13,6 +13,7 @@ internal sealed partial class UnitCommandPanel : PanelContainer
     internal Button MoveButton { get; }
     internal Button ReverseButton { get; }
     internal Button AttackButton { get; }
+    internal Button StopButton { get; }
     internal Button RangeButton { get; }
     private readonly Button[] _stanceButtons;
     private readonly Label _heading;
@@ -23,6 +24,7 @@ internal sealed partial class UnitCommandPanel : PanelContainer
     private HudTargetingMode _mode = (HudTargetingMode)(-1);
     public event Action<HudTargetingMode>? TargetRequested;
     public event Action<FireStance>? StanceRequested;
+    public event Action? StopRequested;
     public event Action? RangeToggleRequested;
 
     public UnitCommandPanel(UnitCatalog catalog)
@@ -42,8 +44,19 @@ internal sealed partial class UnitCommandPanel : PanelContainer
         _heading.AddThemeColorOverride("font_color", HudTheme.Muted);
 
         HBoxContainer headingRow = new() { MouseFilter = MouseFilterEnum.Ignore };
+        headingRow.AddThemeConstantOverride("separation", 5);
         _heading.SizeFlagsHorizontal = SizeFlags.ExpandFill;
         headingRow.AddChild(_heading);
+
+        StopButton = new Button
+        {
+            Text = "STOP [E]",
+            ThemeTypeVariation = "CompactButton",
+            FocusMode = FocusModeEnum.None,
+            TooltipText = "E: stop selected units and clear active move, attack, boarding, or barrage orders."
+        };
+        StopButton.Pressed += OnStop;
+        headingRow.AddChild(StopButton);
 
         RangeButton = new Button
         {
@@ -96,7 +109,7 @@ internal sealed partial class UnitCommandPanel : PanelContainer
         _lastMixedStance = false;
         _mode = (HudTargetingMode)(-1);
         SetTargetingMode(HudTargetingMode.None);
-        SetAvailable(false, false, false, false, 0);
+        SetAvailable(false, false, false, false, false, 0);
     }
 
     private static Button CreateButton(string text, string tooltip, bool toggle = false)
@@ -140,14 +153,15 @@ internal sealed partial class UnitCommandPanel : PanelContainer
             _lastMixedStance = mixedStance;
             UpdateHeading();
         }
-        SetAvailable(!finished && move, !finished && reverse, !finished && attack, !finished && armed, stanceMask);
+        SetAvailable(!finished && move, !finished && reverse, !finished && attack, !finished && armed, !finished && count > 0, stanceMask);
     }
 
-    private void SetAvailable(bool move, bool reverse, bool attack, bool armed, int stanceMask)
+    private void SetAvailable(bool move, bool reverse, bool attack, bool armed, bool stop, int stanceMask)
     {
         MoveButton.Disabled = !move;
         ReverseButton.Disabled = !reverse;
         AttackButton.Disabled = !attack;
+        StopButton.Disabled = !stop;
         for (int i = 0; i < _stanceButtons.Length; i++)
         {
             _stanceButtons[i].Disabled = !armed;
@@ -201,5 +215,6 @@ internal sealed partial class UnitCommandPanel : PanelContainer
     private void OnFireAtWill() => StanceRequested?.Invoke(FireStance.FireAtWill);
     private void OnReturnFire() => StanceRequested?.Invoke(FireStance.ReturnFire);
     private void OnHoldFire() => StanceRequested?.Invoke(FireStance.HoldFire);
+    private void OnStop() => StopRequested?.Invoke();
     private void OnRangeToggle() => RangeToggleRequested?.Invoke();
 }

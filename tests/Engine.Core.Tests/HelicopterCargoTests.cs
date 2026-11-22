@@ -248,8 +248,8 @@ public sealed class HelicopterCargoTests
     [Fact]
     public void WireProtocol_V28_RoundTripsCargoCommandsAndSlingState_AndRejectsV27Handshake()
     {
-        Assert.Equal(29, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(29, WireProtocol.Version);
+        Assert.Equal(30, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(30, WireProtocol.Version);
         Assert.Equal(69, WireProtocol.UnitSize);
         Assert.Equal(29, WireProtocol.HelicopterSize);
 

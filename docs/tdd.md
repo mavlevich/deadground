@@ -1898,6 +1898,10 @@ Helicopters, off-map air support, SAM, radar and EW, engineers and mines, destru
 - Wire protocol v29 (`MatchSetup.CurrentProtocolVersion = 29`): adds `FireMissionKind = 16` (`FireMissionSize = 23`), `ContactClassification.Artillery = 8`, `WeaponPresentationKind.RocketArtillery = 4`, `CombatEventKind.RocketLaunched = 4`, and `CombatEventKind.ArtilleryImpact = 5`; extends `OwnUnitObservation` (`UnitSize = 69`) with quantized `GunPitchRad` and `ArtilleryFlags`, and extends `ContactObservation` (`ContactSize = 35`) with quantized `GunPitchRad`. Handshake rejects legacy v28 clients with `HandshakeReason.ProtocolVersionMismatch`.
 - Client presentation and audio (`Game.Godot`): 3-LOD BM-21 Grad visual with `GunPitch` elevation and 40 balanced ripple launch tubes (`Launch_01` to `Launch_40`), pooled zero-allocation 3D parabolic rockets with exhaust flames, rear backblast flash/smoke, curved white flight smoke trails, multi-layer 122 mm HE explosions (fireball, expanding ground shockwave ring, rising dirt/smoke plumes, persistent scorched craters), procedural rocket launch roar and 122 mm impact detonation audio, `FIRE BARRAGE [B]` / `STOP BARRAGE [B]` HUD controls, terrain-draped dispersion circle preview, and the playable `artillery-playground` scenario (`--scenario artillery-playground`).
 
+### Unit STOP order (protocol v30)
+- Authoritative `StopCommand` (`StopKind = 17`, `StopSize = 14`, `MatchSetup.CurrentProtocolVersion = 30`): cancels active movement, clears explicit attack targets, cancels pending transport boarding and releases reserved seats, cancels pending disembarks and active artillery barrages, and transitions airborne helicopters into an in-place hover with zero managed heap allocations per tick.
+- Client controls (`Game.Godot`): adds `STOP [E]` button in `UnitCommandPanel`, `E` hotkey in `Main` (non-conflicting with `WASD` camera pan), immediate cancellation of active targeting modes and tracked order markers, and updated `F1` help overlay.
+
 ## 23. Code rules
 
 - No gameplay logic in Godot nodes.
