@@ -33,6 +33,8 @@ internal sealed partial class ContextActionPanel : PanelContainer
     private readonly Button _fastRopeButton;
     private readonly Button _slingButton;
     private readonly Button _fireMissionButton;
+    private readonly Button _flareButton;
+    private readonly Button _autoFlareButton;
     private readonly Label _passengerLabel;
     private readonly Label _statusLabel;
     private UnitCatalog _catalog;
@@ -49,6 +51,8 @@ internal sealed partial class ContextActionPanel : PanelContainer
     internal Button FastRopeButton => _fastRopeButton;
     internal Button SlingButton => _slingButton;
     internal Button FireMissionButton => _fireMissionButton;
+    internal Button FlareButton => _flareButton;
+    internal Button AutoFlareButton => _autoFlareButton;
     internal Label PassengerLabel => _passengerLabel;
     internal Label StatusLabel => _statusLabel;
 
@@ -58,6 +62,8 @@ internal sealed partial class ContextActionPanel : PanelContainer
     public event Action? HelicopterToggleFlightRequested;
     public event Action? HelicopterToggleAltitudeRequested;
     public event Action? CancelFireMissionRequested;
+    public event Action? DeployFlaresRequested;
+    public event Action? ToggleAutoFlaresRequested;
 
     // Cached state for zero-allocation steady-state updates
     private int _cachedSelectionCount = -1;
@@ -84,6 +90,13 @@ internal sealed partial class ContextActionPanel : PanelContainer
     private int _cachedArtillerySettingUpCount = -1;
     private int _cachedArtilleryAmmoTotal = -1;
     private int _cachedArtilleryMinReloadSec = -1;
+    private int _cachedFlareCapableCount = -1;
+    private int _cachedFlareReadyCount = -1;
+    private int _cachedFlareActiveCount = -1;
+    private int _cachedFlareChargesTotal = -1;
+    private int _cachedFlareMinCooldownSec = -1;
+    private int _cachedAutoFlaresOnCount = -1;
+    private int _cachedMissileWarningCount = -1;
     private bool _cachedAllBoardable;
 
     public ContextActionPanel(UnitCatalog catalog)
@@ -220,6 +233,28 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _fireMissionButton.Pressed += OnFireMissionButtonPressed;
         hbox.AddChild(_fireMissionButton);
 
+        _flareButton = new Button
+        {
+            Text = "FLARES [G]",
+            ThemeTypeVariation = "CompactButton",
+            MouseFilter = MouseFilterEnum.Stop,
+            FocusMode = FocusModeEnum.None,
+            CustomMinimumSize = new Vector2(88, 22)
+        };
+        _flareButton.Pressed += () => DeployFlaresRequested?.Invoke();
+        hbox.AddChild(_flareButton);
+
+        _autoFlareButton = new Button
+        {
+            Text = "AUTO: ON",
+            ThemeTypeVariation = "CompactButton",
+            MouseFilter = MouseFilterEnum.Stop,
+            FocusMode = FocusModeEnum.None,
+            CustomMinimumSize = new Vector2(78, 22)
+        };
+        _autoFlareButton.Pressed += () => ToggleAutoFlaresRequested?.Invoke();
+        hbox.AddChild(_autoFlareButton);
+
         _passengerLabel = new Label
         {
             MouseFilter = MouseFilterEnum.Ignore,
@@ -248,6 +283,8 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _flightToggleButton.Visible = false;
         _landAtButton.Visible = false;
         _altitudeBandButton.Visible = false;
+        _flareButton.Visible = false;
+        _autoFlareButton.Visible = false;
         _fastRopeButton.Visible = false;
         _slingButton.Visible = false;
         _fireMissionButton.Visible = false;
@@ -273,6 +310,8 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _flightToggleButton.Visible = false;
         _landAtButton.Visible = false;
         _altitudeBandButton.Visible = false;
+        _flareButton.Visible = false;
+        _autoFlareButton.Visible = false;
         _fastRopeButton.Visible = false;
         _slingButton.Visible = false;
         _fireMissionButton.Visible = false;
@@ -390,6 +429,13 @@ internal sealed partial class ContextActionPanel : PanelContainer
                 _cachedArtillerySettingUpCount = -1;
                 _cachedArtilleryAmmoTotal = -1;
                 _cachedArtilleryMinReloadSec = -1;
+                _cachedFlareCapableCount = -1;
+                _cachedFlareReadyCount = -1;
+                _cachedFlareActiveCount = -1;
+                _cachedFlareChargesTotal = -1;
+                _cachedFlareMinCooldownSec = -1;
+                _cachedAutoFlaresOnCount = -1;
+                _cachedMissileWarningCount = -1;
                 _cachedAllBoardable = false;
                 Visible = false;
             }
@@ -419,6 +465,13 @@ internal sealed partial class ContextActionPanel : PanelContainer
         int artillerySettingUpCount = 0;
         int artilleryAmmoTotal = 0;
         int artilleryMinReloadTicks = int.MaxValue;
+        int flareCapableCount = 0;
+        int flareReadyCount = 0;
+        int flareActiveCount = 0;
+        int flareChargesTotal = 0;
+        int flareMinCooldownTicks = int.MaxValue;
+        int autoFlaresOnCount = 0;
+        int missileWarningCount = 0;
 
         foreach (EntityId id in selectedUnits)
         {
@@ -505,6 +558,29 @@ internal sealed partial class ContextActionPanel : PanelContainer
                 }
             }
 
+            if ((obs.CountermeasureFlags & CountermeasureFlags.HasFlares) != 0)
+            {
+                flareCapableCount++;
+                flareChargesTotal += obs.FlareCharges;
+                if ((obs.CountermeasureFlags & CountermeasureFlags.AutoFlares) != 0)
+                    autoFlaresOnCount++;
+                if ((obs.CountermeasureFlags & CountermeasureFlags.MissileWarning) != 0)
+                    missileWarningCount++;
+                if ((obs.CountermeasureFlags & CountermeasureFlags.FlaresActive) != 0)
+                {
+                    flareActiveCount++;
+                }
+                else if (obs.FlightPhase is FlightPhase.Airborne or FlightPhase.TakingOff or FlightPhase.Landing &&
+                         obs.FlareCharges > 0 && obs.FlareCooldownTicks == 0)
+                {
+                    flareReadyCount++;
+                }
+                else if (obs.FlareCharges > 0 && obs.FlareCooldownTicks > 0 && obs.FlareCooldownTicks < flareMinCooldownTicks)
+                {
+                    flareMinCooldownTicks = obs.FlareCooldownTicks;
+                }
+            }
+
             WeaponData? weaponData = FindWeaponData(def?.Weapon);
             if (weaponData is not null && weaponData.IsIndirectFire)
             {
@@ -532,6 +608,9 @@ internal sealed partial class ContextActionPanel : PanelContainer
         int artilleryMinReloadSec = artilleryMinReloadTicks < int.MaxValue
             ? (int)MathF.Ceiling(artilleryMinReloadTicks * Simulation.TickSeconds)
             : 0;
+        int flareMinCooldownSec = flareMinCooldownTicks < int.MaxValue
+            ? (int)MathF.Ceiling(flareMinCooldownTicks * Simulation.TickSeconds)
+            : 0;
 
         // Skip layout/string updates if unchanged
         if (_cachedSelectionCount == count &&
@@ -558,6 +637,13 @@ internal sealed partial class ContextActionPanel : PanelContainer
             _cachedArtillerySettingUpCount == artillerySettingUpCount &&
             _cachedArtilleryAmmoTotal == artilleryAmmoTotal &&
             _cachedArtilleryMinReloadSec == artilleryMinReloadSec &&
+            _cachedFlareCapableCount == flareCapableCount &&
+            _cachedFlareReadyCount == flareReadyCount &&
+            _cachedFlareActiveCount == flareActiveCount &&
+            _cachedFlareChargesTotal == flareChargesTotal &&
+            _cachedFlareMinCooldownSec == flareMinCooldownSec &&
+            _cachedAutoFlaresOnCount == autoFlaresOnCount &&
+            _cachedMissileWarningCount == missileWarningCount &&
             _cachedAllBoardable == allBoardable)
         {
             return;
@@ -587,6 +673,13 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _cachedArtillerySettingUpCount = artillerySettingUpCount;
         _cachedArtilleryAmmoTotal = artilleryAmmoTotal;
         _cachedArtilleryMinReloadSec = artilleryMinReloadSec;
+        _cachedFlareCapableCount = flareCapableCount;
+        _cachedFlareReadyCount = flareReadyCount;
+        _cachedFlareActiveCount = flareActiveCount;
+        _cachedFlareChargesTotal = flareChargesTotal;
+        _cachedFlareMinCooldownSec = flareMinCooldownSec;
+        _cachedAutoFlaresOnCount = autoFlaresOnCount;
+        _cachedMissileWarningCount = missileWarningCount;
         _cachedAllBoardable = allBoardable;
 
         bool hasArtilleryUi = artilleryCount > 0;
@@ -643,6 +736,43 @@ internal sealed partial class ContextActionPanel : PanelContainer
 
         bool hasHeliUi = heliCount > 0;
         bool allCrashing = hasHeliUi && heliCrashingCount == heliCount;
+
+        bool hasFlareUi = flareCapableCount > 0;
+        _flareButton.Visible = hasFlareUi;
+        _autoFlareButton.Visible = hasFlareUi;
+        if (hasFlareUi)
+        {
+            _autoFlareButton.Disabled = allCrashing;
+            _autoFlareButton.Text = autoFlaresOnCount > 0 ? "AUTO: ON" : "AUTO: OFF";
+            if (flareActiveCount > 0)
+            {
+                _flareButton.Disabled = true;
+                _flareButton.Text = $"FLARES ACTIVE ({flareChargesTotal})";
+            }
+            else if (flareReadyCount > 0)
+            {
+                _flareButton.Disabled = false;
+                _flareButton.Text = missileWarningCount > 0
+                    ? $"! FLARES [G] ({flareChargesTotal}) !"
+                    : $"FLARES [G] ({flareChargesTotal})";
+            }
+            else if (flareChargesTotal > 0 && flareMinCooldownSec > 0)
+            {
+                _flareButton.Disabled = true;
+                _flareButton.Text = $"FLARES CD {flareMinCooldownSec}s";
+            }
+            else if (flareChargesTotal > 0 && heliAirborneCount == 0)
+            {
+                _flareButton.Disabled = true;
+                _flareButton.Text = $"FLARES ({flareChargesTotal})";
+            }
+            else
+            {
+                _flareButton.Disabled = true;
+                _flareButton.Text = "FLARES (0)";
+            }
+        }
+
         _flightToggleButton.Visible = hasHeliUi;
         _landAtButton.Visible = hasHeliUi;
         _altitudeBandButton.Visible = hasHeliUi;

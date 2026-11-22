@@ -98,7 +98,10 @@ public enum CombatEventKind : byte
     UnitDestroyed = 2,
     TookFire = 3,
     RocketLaunched = 4,
-    ArtilleryImpact = 5
+    ArtilleryImpact = 5,
+    MissileLaunched = 6,
+    MissileDetonated = 7,
+    FlaresDeployed = 8
 }
 
 public enum HitResult : byte
@@ -176,7 +179,10 @@ public readonly record struct OwnUnitObservation(
     EntityId SlungById = default,
     FlightStateFlags FlightFlags = FlightStateFlags.None,
     float GunPitchRad = 0f,
-    ArtilleryFlags ArtilleryFlags = ArtilleryFlags.None);
+    ArtilleryFlags ArtilleryFlags = ArtilleryFlags.None,
+    byte FlareCharges = 0,
+    ushort FlareCooldownTicks = 0,
+    CountermeasureFlags CountermeasureFlags = CountermeasureFlags.None);
 
 public interface ISimulationRules
 {

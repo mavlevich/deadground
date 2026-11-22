@@ -22,7 +22,8 @@ internal sealed class ContactView
         Node3D? RearRotor,
         Node3D? FrontRotorBlur,
         Node3D? RearRotorBlur,
-        Node3D? RearRamp);
+        Node3D? RearRamp,
+        Node3D[] LaunchTubes);
 
     private readonly MeshInstance3D _ghostBase;
     private readonly MeshInstance3D _selection;
@@ -41,6 +42,8 @@ internal sealed class ContactView
     private Node3D? _frontRotorBlur;
     private Node3D? _rearRotorBlur;
     private Node3D? _rearRamp;
+    private Node3D[] _launchTubes = Array.Empty<Node3D>();
+    private int _nextLaunchTubeIdx;
     private float _altitude;
     private float _rotorAngle;
     private string _currentAnim = "";
@@ -351,6 +354,18 @@ internal sealed class ContactView
         return false;
     }
 
+    public bool TryGetNextLaunchTubeTransform(out Transform3D transform)
+    {
+        if (_enemyModel is not null && _enemyModel.Visible && _launchTubes.Length > 0)
+        {
+            Node3D tube = _launchTubes[_nextLaunchTubeIdx % _launchTubes.Length];
+            _nextLaunchTubeIdx++;
+            transform = tube.GlobalTransform;
+            return true;
+        }
+        return TryGetMuzzleTransform(out transform);
+    }
+
     internal bool UpdateLod(float cameraSize)
     {
         int unlimited = int.MaxValue;
@@ -434,7 +449,22 @@ internal sealed class ContactView
         {
             gunPitch.Rotation = new Vector3(_gunPitchRad, 0, 0);
         }
-        rig = new ContactRig(turret, gunPitch, muzzle, animPlayer, frontRotor, rearRotor, frontRotorBlur, rearRotorBlur, rearRamp);
+        List<Node3D>? tubes = null;
+        for (int t = 1; t <= 40; t++)
+        {
+            string tubeName = t < 10 ? $"Launch_0{t}" : $"Launch_{t}";
+            if (lodNode.FindChild(tubeName, recursive: true, owned: false) is Node3D tube)
+            {
+                tubes ??= new List<Node3D>(4);
+                tubes.Add(tube);
+            }
+            else if (t > 4 && tubes is not null)
+            {
+                break;
+            }
+        }
+        Node3D[] launchTubes = tubes is not null ? tubes.ToArray() : Array.Empty<Node3D>();
+        rig = new ContactRig(turret, gunPitch, muzzle, animPlayer, frontRotor, rearRotor, frontRotorBlur, rearRotorBlur, rearRamp, launchTubes);
         _rigs[lod] = rig;
         return rig;
     }
@@ -450,6 +480,7 @@ internal sealed class ContactView
         _frontRotorBlur = rig.FrontRotorBlur;
         _rearRotorBlur = rig.RearRotorBlur;
         _rearRamp = rig.RearRamp;
+        _launchTubes = rig.LaunchTubes;
     }
 
     private void ClearEnemyModel()
@@ -471,6 +502,8 @@ internal sealed class ContactView
             _frontRotorBlur = null;
             _rearRotorBlur = null;
             _rearRamp = null;
+            _launchTubes = Array.Empty<Node3D>();
+            _nextLaunchTubeIdx = 0;
             _altitude = 0f;
             _rotorAngle = 0f;
             _currentAnim = "";

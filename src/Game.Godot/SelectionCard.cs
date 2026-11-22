@@ -248,6 +248,9 @@ internal sealed partial class SelectionCard : PanelContainer
     private EntityId _cachedSingleSlingLoadId;
     private EntityId _cachedSingleSlungById;
     private FlightStateFlags _cachedSingleFlightFlags;
+    private byte _cachedSingleFlareCharges;
+    private int _cachedSingleFlareCooldownSec = -1;
+    private CountermeasureFlags _cachedSingleCmFlags;
 
     // Multiple units cached state
     private int _cachedMultiTotal = -1;
@@ -289,6 +292,9 @@ internal sealed partial class SelectionCard : PanelContainer
     public void UpdateSingleOwnUnit(OwnUnitObservation ownUnit, int controlGroup = 0)
     {
         int altMeters = ownUnit.HasFlightCapability ? (int)MathF.Round(ownUnit.Altitude) : 0;
+        int flareCooldownSec = ownUnit.FlareCooldownTicks > 0
+            ? (int)MathF.Ceiling(ownUnit.FlareCooldownTicks * Simulation.TickSeconds)
+            : 0;
         if (_mode == DisplayMode.SingleUnit &&
             _cachedSingleId == ownUnit.Id &&
             _cachedSingleDef == ownUnit.Definition &&
@@ -308,7 +314,10 @@ internal sealed partial class SelectionCard : PanelContainer
             _cachedSingleAltMeters == altMeters &&
             _cachedSingleSlingLoadId == ownUnit.SlingLoadId &&
             _cachedSingleSlungById == ownUnit.SlungById &&
-            _cachedSingleFlightFlags == ownUnit.FlightFlags)
+            _cachedSingleFlightFlags == ownUnit.FlightFlags &&
+            _cachedSingleFlareCharges == ownUnit.FlareCharges &&
+            _cachedSingleFlareCooldownSec == flareCooldownSec &&
+            _cachedSingleCmFlags == ownUnit.CountermeasureFlags)
         {
             return;
         }
@@ -334,6 +343,9 @@ internal sealed partial class SelectionCard : PanelContainer
         _cachedSingleSlingLoadId = ownUnit.SlingLoadId;
         _cachedSingleSlungById = ownUnit.SlungById;
         _cachedSingleFlightFlags = ownUnit.FlightFlags;
+        _cachedSingleFlareCharges = ownUnit.FlareCharges;
+        _cachedSingleFlareCooldownSec = flareCooldownSec;
+        _cachedSingleCmFlags = ownUnit.CountermeasureFlags;
 
         UnitDefinition? def = ownUnit.Definition < _catalog.Units.Length ? _catalog.Units[ownUnit.Definition] : null;
         string name = def is not null ? FormatUnitName(def) : $"Unit #{ownUnit.Id.Value}";
@@ -366,17 +378,30 @@ internal sealed partial class SelectionCard : PanelContainer
                 : ownUnit.SlingLoadId != default
                     ? $" | Sling #{ownUnit.SlingLoadId.Value}"
                     : string.Empty;
-            _line1Label.Text = $"{ownUnit.Health} / {maxHealth} HP ({hpPct}%) | Flight: {phaseStr} ({altMeters}m AGL, {bandStr}){cargoExtra}";
+            bool hasFlares = (ownUnit.CountermeasureFlags & CountermeasureFlags.HasFlares) != 0;
+            bool missileWarning = (ownUnit.CountermeasureFlags & CountermeasureFlags.MissileWarning) != 0;
+            string flareExtra = string.Empty;
+            if (hasFlares)
+            {
+                int maxFlares = def?.Flares?.Charges ?? ownUnit.FlareCharges;
+                string autoTag = (ownUnit.CountermeasureFlags & CountermeasureFlags.AutoFlares) != 0 ? "AUTO" : "MAN";
+                flareExtra = missileWarning
+                    ? $" | MISSILE WARNING! FLARES {ownUnit.FlareCharges}/{maxFlares}"
+                    : $" | Flares {ownUnit.FlareCharges}/{maxFlares} ({autoTag})";
+            }
+            _line1Label.Text = $"{ownUnit.Health} / {maxHealth} HP ({hpPct}%) | {phaseStr} ({altMeters}m, {bandStr}){cargoExtra}{flareExtra}";
+            SetLabelColor(_line1Label, (hpPct <= 25 || missileWarning) ? HudTheme.Danger : HudTheme.Text);
         }
         else if (ownUnit.SlungById != default)
         {
             _line1Label.Text = $"{ownUnit.Health} / {maxHealth} HP ({hpPct}%) | External Sling Cargo (Carrier #{ownUnit.SlungById.Value})";
+            SetLabelColor(_line1Label, hpPct <= 25 ? HudTheme.Danger : HudTheme.Text);
         }
         else
         {
             _line1Label.Text = $"{ownUnit.Health} / {maxHealth} HP ({hpPct}%)";
+            SetLabelColor(_line1Label, hpPct <= 25 ? HudTheme.Danger : HudTheme.Text);
         }
-        SetLabelColor(_line1Label, hpPct <= 25 ? HudTheme.Danger : HudTheme.Text);
 
         WeaponData? ownWeapon = def?.Weapon is null ? null : FindWeapon(def.Weapon);
         int reloadDuration = ownWeapon is null ? 0 : ownWeapon.ReloadDurationTicks > 0
@@ -817,6 +842,7 @@ internal sealed partial class SelectionCard : PanelContainer
         "command_vehicle" or "command" => ContactClassification.CommandVehicle,
         "helicopter" => ContactClassification.Helicopter,
         "artillery" or "mlrs" => ContactClassification.Artillery,
+        "anti_air" or "antiair" or "sam" or "aa" => ContactClassification.AntiAir,
         _ => ContactClassification.Vehicle
     };
 
@@ -840,6 +866,7 @@ internal sealed partial class SelectionCard : PanelContainer
         "infantry" => "INFANTRY",
         "helicopter" => "HELI",
         "artillery" or "mlrs" => "ARTY",
+        "anti_air" or "antiair" or "sam" or "aa" => "AA",
         _ => "UNIT"
     };
 
@@ -855,6 +882,8 @@ internal sealed partial class SelectionCard : PanelContainer
                 "command_vehicle" => "Command Vehicle",
                 "infantry" => "Infantry",
                 "helicopter" => "Transport Helicopter",
+                "artillery" or "mlrs" => "Rocket Artillery",
+                "anti_air" or "antiair" or "sam" or "aa" => "Surface-to-Air Missile",
                 _ => def.Classification
             };
         }
@@ -884,6 +913,8 @@ internal sealed partial class SelectionCard : PanelContainer
         "mg_7_62mm_m60" => "7.62mm M60 MG",
         "mg_7_62mm_m60d" => "Twin 7.62mm M60D Door Guns",
         "rifle_5_56mm_m16a1" => "5.56mm M16A1 Rifle",
+        "rocket_122mm_9m22u" => "122mm 9M22U Rockets",
+        "sam_9m37" => "9M37M IR SAM",
         _ => id
     };
 
@@ -896,6 +927,7 @@ internal sealed partial class SelectionCard : PanelContainer
         ContactClassification.Infantry => "Infantry",
         ContactClassification.Helicopter => "Helicopter",
         ContactClassification.Artillery => "Artillery",
+        ContactClassification.AntiAir => "Air Defense SAM",
         ContactClassification.Vehicle => "Vehicle",
         _ => "Unknown"
     };

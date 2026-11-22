@@ -26,6 +26,9 @@ internal partial class CombatEffects : Node3D
     public const int MaxArtilleryBursts = 16;
     public const int MaxImpactSparkBursts = 8;
     public const int MaxFlashLights = 8;
+    public const int MaxGuidedMissiles = 32;
+    public const int MaxFlares = 96;
+    public const int MaxAirbursts = 16;
     public const int EventHistorySize = 256;
 
     public const float TracerSpeed = 160f;
@@ -66,12 +69,15 @@ internal partial class CombatEffects : Node3D
     private readonly GpuParticles3D[] _artilleryGroundDustRings = new GpuParticles3D[MaxArtilleryBursts];
     private readonly GpuParticles3D[] _artilleryDirtPlumes = new GpuParticles3D[MaxArtilleryBursts];
     private readonly GpuParticles3D[] _impactSparkBursts = new GpuParticles3D[MaxImpactSparkBursts];
+    private readonly GpuParticles3D[] _airburstSmokePuffs = new GpuParticles3D[MaxAirbursts];
+    private readonly GpuParticles3D[] _airburstShrapnelSparks = new GpuParticles3D[MaxAirbursts];
     private readonly TimedLight[] _flashLights = new TimedLight[MaxFlashLights];
     private int _nextBlastDust;
     private int _nextBarrelSmoke;
     private int _nextRocketBackblast;
     private int _nextArtilleryBurst;
     private int _nextImpactSparkBurst;
+    private int _nextAirburst;
 
     public Action<Vector3, float>? OnBlastImpulse { get; set; }
 
@@ -128,6 +134,35 @@ internal partial class CombatEffects : Node3D
         public bool Active;
     }
 
+    internal struct TrackedGuidedMissile
+    {
+        public uint MissileId;
+        public Node3D Root;
+        public MeshInstance3D BodyMesh;
+        public MeshInstance3D FlameMesh;
+        public MeshInstance3D GlowMesh;
+        public GpuParticles3D Contrail;
+        public float TrailLingerRemaining;
+        public bool SeenThisFrame;
+        public bool Active;
+    }
+
+    internal struct TimedFlare
+    {
+        public Node3D Root;
+        public MeshInstance3D CoreMesh;
+        public GpuParticles3D SmokeTrail;
+        public Vector3 SpawnPosition;
+        public Vector3 Velocity;
+        public float DelayRemaining;
+        public float BurnLifetime;
+        public float MaxBurnLifetime;
+        public float LingerRemaining;
+        public float BaseScale;
+        public bool Launched;
+        public bool Active;
+    }
+
     private struct TimedLight
     {
         public OmniLight3D Light;
@@ -177,6 +212,8 @@ internal partial class CombatEffects : Node3D
     internal TimedMesh[] Shockwaves => _shockwaves;
     internal TimedMesh[] ArtilleryPlumes => _artilleryPlumes;
     internal TimedRocket[] Rockets => _rockets;
+    internal TrackedGuidedMissile[] GuidedMissiles => _guidedMissiles;
+    internal TimedFlare[] Flares => _flares;
     internal TimedMesh[] Residues => _residues;
     internal PendingImpact[] PendingImpactsQueue => _pendingImpacts;
     internal AudioStreamPlayer3D[] AudioPlayers => _audioPlayers;
@@ -190,6 +227,8 @@ internal partial class CombatEffects : Node3D
     private readonly TimedMesh[] _shockwaves = new TimedMesh[MaxShockwaves];
     private readonly TimedMesh[] _artilleryPlumes = new TimedMesh[MaxArtilleryPlumes];
     private readonly TimedRocket[] _rockets = new TimedRocket[MaxRockets];
+    private readonly TrackedGuidedMissile[] _guidedMissiles = new TrackedGuidedMissile[MaxGuidedMissiles];
+    private readonly TimedFlare[] _flares = new TimedFlare[MaxFlares];
     private readonly TimedMesh[] _residues = new TimedMesh[MaxResidues];
     private readonly TimedDecal[] _artilleryCraters = new TimedDecal[MaxArtilleryCraters];
     private readonly PendingImpact[] _pendingImpacts = new PendingImpact[MaxPendingImpacts];
@@ -197,6 +236,8 @@ internal partial class CombatEffects : Node3D
     private readonly AudioStreamPlayer3D[] _audioPlayers = new AudioStreamPlayer3D[MaxAudioPlayers];
     private readonly ActiveVoice[] _activeVoices = new ActiveVoice[MaxAudioPlayers];
     private readonly AudioListener3D _audioListener;
+    private readonly AudioStreamPlayer _warningAudioPlayer;
+    private float _warningCooldownRemaining;
     // A few seeds of the same gun report, so a series of shots does not repeat one sample.
     public const int CannonVariantCount = 3;
     private readonly AudioStreamWav[] _cannonVariants = new AudioStreamWav[CannonVariantCount];
@@ -216,6 +257,16 @@ internal partial class CombatEffects : Node3D
     public const int RocketIncomingVariantCount = 3;
     private readonly AudioStreamWav[] _rocketIncomingVariants = new AudioStreamWav[RocketIncomingVariantCount];
     internal AudioStreamWav[] RocketIncomingVariants => _rocketIncomingVariants;
+    public const int SamLaunchVariantCount = 3;
+    private readonly AudioStreamWav[] _samLaunchVariants = new AudioStreamWav[SamLaunchVariantCount];
+    internal AudioStreamWav[] SamLaunchVariants => _samLaunchVariants;
+    public const int FlarePopVariantCount = 3;
+    private readonly AudioStreamWav[] _flarePopVariants = new AudioStreamWav[FlarePopVariantCount];
+    internal AudioStreamWav[] FlarePopVariants => _flarePopVariants;
+    public const int AirburstVariantCount = 3;
+    private readonly AudioStreamWav[] _airburstVariants = new AudioStreamWav[AirburstVariantCount];
+    internal AudioStreamWav[] AirburstVariants => _airburstVariants;
+    private AudioStreamWav? _missileWarningAudio;
     internal SoundPriority GetVoicePriority(int index) => _activeVoices[index].Priority;
     private AudioStreamWav? _tookFireAudio;
     private AudioStreamWav? _groundImpactAudio;
@@ -238,6 +289,8 @@ internal partial class CombatEffects : Node3D
     public int ActiveShockwavesCount => CountActiveMeshPool(_shockwaves);
     public int ActiveArtilleryPlumesCount => CountActiveMeshPool(_artilleryPlumes);
     public int ActiveRocketsCount => CountActiveRockets();
+    public int ActiveGuidedMissilesCount => CountActiveGuidedMissiles();
+    public int ActiveFlaresCount => CountActiveFlares();
     public int ActiveResiduesCount => CountActiveMeshPool(_residues);
     public int ActiveArtilleryCratersCount => CountActiveDecalPool(_artilleryCraters);
     public int PendingImpactsCount => CountActivePendingImpacts();
@@ -262,6 +315,8 @@ internal partial class CombatEffects : Node3D
         InitShockwaves();
         InitArtilleryPlumes();
         InitRockets();
+        InitGuidedMissiles();
+        InitFlares();
         InitResidues();
         InitArtilleryCraters();
         for (int i = 0; i < MaxBlastDust; i++)
@@ -301,10 +356,19 @@ internal partial class CombatEffects : Node3D
             _impactSparkBursts[i] = ParticleEffects.CreateImpactSparksParticles();
             AddChild(_impactSparkBursts[i]);
         }
+        for (int i = 0; i < MaxAirbursts; i++)
+        {
+            _airburstSmokePuffs[i] = ParticleEffects.CreateAirburstSmokePuff();
+            AddChild(_airburstSmokePuffs[i]);
+            _airburstShrapnelSparks[i] = ParticleEffects.CreateAirburstShrapnelSparks();
+            AddChild(_airburstShrapnelSparks[i]);
+        }
         InitFlashLights();
 
         _audioListener = new AudioListener3D { Name = "CombatAudioListener" };
         AddChild(_audioListener);
+        _warningAudioPlayer = new AudioStreamPlayer { Name = "MissileWarningPlayer", VolumeDb = -4.0f };
+        AddChild(_warningAudioPlayer);
         try
         {
             _audioListener.MakeCurrent();
@@ -735,6 +799,162 @@ void fragment() {
         }
     }
 
+    private void InitGuidedMissiles()
+    {
+        StandardMaterial3D bodyMat = new()
+        {
+            AlbedoColor = new Color(0.84f, 0.85f, 0.82f),
+            Roughness = 0.45f,
+            Metallic = 0.25f
+        };
+        Shader flameShader = new()
+        {
+            Code = """
+shader_type spatial;
+render_mode unshaded, blend_add, cull_disabled, depth_draw_never, fog_disabled;
+varying vec3 v_local;
+void vertex() {
+    v_local = VERTEX;
+}
+void fragment() {
+    float along = clamp(v_local.y + 0.5, 0.0, 1.0);
+    float core = pow(along, 2.0);
+    float diamonds = 0.82 + 0.18 * pow(0.5 + 0.5 * cos(along * 28.0 - TIME * 54.0), 2.0);
+    float flicker = (0.90 + 0.10 * sin(TIME * 88.0 + along * 16.0)) * diamonds;
+    vec3 col = mix(vec3(3.0, 1.15, 0.22), vec3(6.2, 5.4, 3.8), core) * flicker;
+    ALBEDO = col;
+    ALPHA = pow(along, 0.78) * 0.96;
+}
+"""
+        };
+        ShaderMaterial flameMat = new() { Shader = flameShader };
+        StandardMaterial3D glowHaloMat = new()
+        {
+            AlbedoColor = new Color(4.5f, 2.8f, 1.1f, 0.90f),
+            AlbedoTexture = ParticleEffects.HotGlow,
+            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+            BlendMode = BaseMaterial3D.BlendModeEnum.Add,
+            DepthDrawMode = BaseMaterial3D.DepthDrawModeEnum.Disabled,
+            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+            BillboardMode = BaseMaterial3D.BillboardModeEnum.Enabled,
+            BillboardKeepScale = true,
+            DisableFog = true
+        };
+        CylinderMesh bodyMesh = new() { TopRadius = 0.085f, BottomRadius = 0.105f, Height = 2.35f, RadialSegments = 8 };
+        CylinderMesh flameMesh = new() { TopRadius = 0.24f, BottomRadius = 0.02f, Height = 2.6f, RadialSegments = 10 };
+        QuadMesh glowQuad = new() { Size = new Vector2(2.4f, 2.4f) };
+
+        for (int i = 0; i < MaxGuidedMissiles; i++)
+        {
+            Node3D root = new() { Name = $"GuidedMissile_{i}", Visible = false };
+            MeshInstance3D body = new()
+            {
+                Mesh = bodyMesh,
+                MaterialOverride = bodyMat,
+                Rotation = new Vector3(Mathf.Pi * 0.5f, 0f, 0f),
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
+            };
+            MeshInstance3D flame = new()
+            {
+                Mesh = flameMesh,
+                MaterialOverride = flameMat,
+                Position = new Vector3(0f, 0f, 2.35f),
+                Rotation = new Vector3(-Mathf.Pi * 0.5f, 0f, 0f),
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
+            };
+            MeshInstance3D glow = new()
+            {
+                Mesh = glowQuad,
+                MaterialOverride = glowHaloMat,
+                Position = new Vector3(0f, 0f, 1.35f),
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
+            };
+            GpuParticles3D contrail = ParticleEffects.CreateSamContrail();
+            contrail.Position = new Vector3(0f, 0f, 1.30f);
+            root.AddChild(body);
+            root.AddChild(flame);
+            root.AddChild(glow);
+            root.AddChild(contrail);
+            AddChild(root);
+            _guidedMissiles[i] = new TrackedGuidedMissile
+            {
+                Root = root,
+                BodyMesh = body,
+                FlameMesh = flame,
+                GlowMesh = glow,
+                Contrail = contrail,
+                Active = false
+            };
+        }
+    }
+
+    private void InitFlares()
+    {
+        // Dazzling incandescent magnesium decoy flare shader: blinding white-gold starburst + flicker.
+        Shader flareShader = new()
+        {
+            Code = """
+shader_type spatial;
+render_mode unshaded, blend_add, cull_disabled, depth_draw_never, fog_disabled;
+void vertex() {
+    mat4 mat_world = mat4(
+        normalize(INV_VIEW_MATRIX[0]),
+        normalize(INV_VIEW_MATRIX[1]),
+        normalize(INV_VIEW_MATRIX[2]),
+        MODEL_MATRIX[3]
+    );
+    vec3 scale_vec = vec3(
+        length(MODEL_MATRIX[0].xyz),
+        length(MODEL_MATRIX[1].xyz),
+        length(MODEL_MATRIX[2].xyz)
+    );
+    float s = max(scale_vec.x, max(scale_vec.y, scale_vec.z));
+    mat_world[0] *= s;
+    mat_world[1] *= s;
+    mat_world[2] *= s;
+    MODELVIEW_MATRIX = VIEW_MATRIX * mat_world;
+}
+void fragment() {
+    vec2 p = UV * 2.0 - 1.0;
+    float r = length(p);
+    float ang = atan(p.y, p.x);
+    float rays = 0.55 + 0.45 * pow(abs(cos(ang * 3.0 + TIME * 1.4)), 4.0);
+    float flicker = 0.88 + 0.12 * sin(TIME * 52.0);
+    float core = exp(-r * r * 18.0);
+    float halo = exp(-r * r * 3.8) * 0.62 + exp(-pow(r / max(0.22, rays), 2.0) * 6.5) * 0.45;
+    float intensity = clamp((core + halo) * flicker, 0.0, 1.0);
+    vec3 col = mix(vec3(3.4, 1.85, 0.48), vec3(7.5, 6.9, 5.4), clamp(core * 1.5, 0.0, 1.0));
+    ALBEDO = col;
+    ALPHA = intensity * 0.96;
+}
+"""
+        };
+        ShaderMaterial flareMat = new() { Shader = flareShader };
+        QuadMesh flareQuad = new() { Size = new Vector2(3.6f, 3.6f) };
+
+        for (int i = 0; i < MaxFlares; i++)
+        {
+            Node3D root = new() { Name = $"DecoyFlare_{i}", Visible = false };
+            MeshInstance3D core = new()
+            {
+                Mesh = flareQuad,
+                MaterialOverride = flareMat,
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
+            };
+            GpuParticles3D smokeTrail = ParticleEffects.CreateFlareSmokeTrail();
+            root.AddChild(core);
+            root.AddChild(smokeTrail);
+            AddChild(root);
+            _flares[i] = new TimedFlare
+            {
+                Root = root,
+                CoreMesh = core,
+                SmokeTrail = smokeTrail,
+                Active = false
+            };
+        }
+    }
+
     private void InitResidues()
     {
         ShaderMaterial residueMat = ParticleEffects.CreateCraterMaterial();
@@ -793,6 +1013,13 @@ void fragment() {
             _artilleryImpactVariants[i] = CannonSound.CreateArtilleryImpactStream(5000 + i * 37);
         for (int i = 0; i < RocketIncomingVariantCount; i++)
             _rocketIncomingVariants[i] = CannonSound.CreateRocketIncomingStream(6000 + i * 41);
+        for (int i = 0; i < SamLaunchVariantCount; i++)
+            _samLaunchVariants[i] = CannonSound.CreateSamLaunchStream(7000 + i * 43);
+        for (int i = 0; i < FlarePopVariantCount; i++)
+            _flarePopVariants[i] = CannonSound.CreateFlarePopStream(8000 + i * 47);
+        for (int i = 0; i < AirburstVariantCount; i++)
+            _airburstVariants[i] = CannonSound.CreateAirburstStream(9000 + i * 53);
+        _missileWarningAudio = CannonSound.CreateMissileWarningStream();
         _tookFireAudio = SynthesizeTookFireSound();
         _groundImpactAudio = CannonSound.CreateGroundImpactStream(1337);
         _explosionAudio = SynthesizeExplosionSound();
@@ -1274,6 +1501,115 @@ void fragment() {
                         SoundPriority.Explosion,
                         maxDistance: 1350f,
                         unitSize: 72f);
+                }
+            }
+            else if (ev.Kind == CombatEventKind.MissileLaunched)
+            {
+                if (ageSeconds >= 2.5f)
+                    continue;
+
+                Vector3 launchOrigin = origin;
+                Vector3 backblastPos = origin - shotDir * 2.1f;
+                Basis tubeBasis = Basis.Identity;
+                bool hasBackblast = false;
+
+                if (ev.ShooterUnitId.Value != 0 && unitViews.Views.TryGetValue(ev.ShooterUnitId, out UnitView? shooter))
+                {
+                    if (shooter.TryGetNextLaunchTubeTransform(out Transform3D tubeXform))
+                    {
+                        launchOrigin = tubeXform.Origin;
+                        tubeBasis = tubeXform.Basis.Orthonormalized();
+                        backblastPos = tubeXform.Origin + tubeBasis.Z * 2.2f;
+                        hasBackblast = true;
+                    }
+                }
+                else if (contactViews is not null)
+                {
+                    foreach (ContactView cv in contactViews.Views.Values)
+                    {
+                        if (cv.Observation.IsCurrent && cv.Root.Position.DistanceTo(new Vector3(origin.X, cv.Root.Position.Y, origin.Z)) < 5.0f)
+                        {
+                            if (cv.TryGetNextLaunchTubeTransform(out Transform3D tubeXform))
+                            {
+                                launchOrigin = tubeXform.Origin;
+                                tubeBasis = tubeXform.Basis.Orthonormalized();
+                                backblastPos = tubeXform.Origin + tubeBasis.Z * 2.2f;
+                                hasBackblast = true;
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                if (ageSeconds < MuzzleFlashLifetime * 2.5f)
+                {
+                    SpawnMuzzleFlash(launchOrigin, shotDir, isMachineGun: false, isRifle: false, elapsedOffset: ageSeconds * 0.45f);
+                    SpawnFlashLight(launchOrigin + new Vector3(0f, 1.0f, 0f), energy: 6.2f, range: 28f, lifetime: 0.24f);
+                    if (hasBackblast)
+                    {
+                        SpawnMuzzleFlash(backblastPos, tubeBasis.Z, isMachineGun: false, isRifle: false, elapsedOffset: ageSeconds * 0.45f);
+                        SpawnRocketBackblastParticles(backblastPos, tubeBasis, ageSeconds);
+                    }
+                }
+
+                if (ageSeconds < SmokePuffLifetime)
+                {
+                    SpawnRocketTrailSmoke(launchOrigin, initialScale: 0.85f, targetScale: 3.6f, lifetime: 2.8f, elapsedOffset: ageSeconds);
+                    if (hasBackblast)
+                    {
+                        SpawnRocketTrailSmoke(backblastPos, initialScale: 1.15f, targetScale: 4.5f, lifetime: 3.8f, elapsedOffset: ageSeconds);
+                    }
+                }
+
+                if (ageSeconds < 0.25f)
+                {
+                    PlaySound(
+                        _samLaunchVariants[_presentationRng.Next(SamLaunchVariantCount)],
+                        launchOrigin,
+                        SoundPriority.Cannon,
+                        maxDistance: 1200f,
+                        unitSize: 60f);
+                }
+            }
+            else if (ev.Kind == CombatEventKind.MissileDetonated)
+            {
+                if (ageSeconds >= 2.0f)
+                    continue;
+
+                bool hit = ev.Result == HitResult.Penetrated;
+                SpawnAirburst(target, hit, ageSeconds);
+                if (ageSeconds < 0.25f)
+                {
+                    PlaySound(
+                        _airburstVariants[_presentationRng.Next(AirburstVariantCount)],
+                        target,
+                        SoundPriority.Explosion,
+                        maxDistance: 1300f,
+                        unitSize: 68f);
+                    if (hit)
+                    {
+                        OnBlastImpulse?.Invoke(target, 0.55f);
+                    }
+                }
+            }
+            else if (ev.Kind == CombatEventKind.FlaresDeployed)
+            {
+                if (ageSeconds >= 3.2f)
+                    continue;
+
+                // Target carries encoded (velX, headingRad, velZ) for exact FlareBallistics sync with server
+                float headingRad = ev.Target.Y;
+                System.Numerics.Vector2 aircraftVel2D = new(ev.Target.X, ev.Target.Z);
+                SpawnFlareBurst(ev.Origin, headingRad, aircraftVel2D, ageSeconds);
+
+                if (ageSeconds < 0.30f)
+                {
+                    PlaySound(
+                        _flarePopVariants[_presentationRng.Next(FlarePopVariantCount)],
+                        origin,
+                        SoundPriority.Cannon,
+                        maxDistance: 1100f,
+                        unitSize: 55f);
                 }
             }
         }
@@ -2154,6 +2490,37 @@ void fragment() {
             dirt.Emitting = false;
         foreach (GpuParticles3D impSparks in _impactSparkBursts)
             impSparks.Emitting = false;
+        foreach (GpuParticles3D puff in _airburstSmokePuffs)
+            puff.Emitting = false;
+        foreach (GpuParticles3D shrap in _airburstShrapnelSparks)
+            shrap.Emitting = false;
+
+        for (int i = 0; i < MaxGuidedMissiles; i++)
+        {
+            _guidedMissiles[i].Active = false;
+            _guidedMissiles[i].MissileId = 0;
+            _guidedMissiles[i].TrailLingerRemaining = 0f;
+            _guidedMissiles[i].SeenThisFrame = false;
+            _guidedMissiles[i].Root.Visible = false;
+            _guidedMissiles[i].BodyMesh.Visible = false;
+            _guidedMissiles[i].FlameMesh.Visible = false;
+            _guidedMissiles[i].GlowMesh.Visible = false;
+            _guidedMissiles[i].Contrail.Emitting = false;
+        }
+        for (int i = 0; i < MaxFlares; i++)
+        {
+            _flares[i].Active = false;
+            _flares[i].Launched = false;
+            _flares[i].DelayRemaining = 0f;
+            _flares[i].BurnLifetime = 0f;
+            _flares[i].LingerRemaining = 0f;
+            _flares[i].Root.Visible = false;
+            _flares[i].CoreMesh.Visible = false;
+            _flares[i].SmokeTrail.Emitting = false;
+        }
+        if (_warningAudioPlayer.Playing)
+            _warningAudioPlayer.Stop();
+        _warningCooldownRemaining = 0f;
 
         for (int i = 0; i < MaxAudioPlayers; i++)
         {
@@ -2192,6 +2559,7 @@ void fragment() {
 
         UpdateTracers(dt);
         UpdateRockets(dt);
+        UpdateFlares(dt);
         UpdateMeshPool(_muzzleFlashes, dt);
         UpdateMeshPool(_smokePuffs, dt);
         UpdateMeshPool(_sparks, dt);
@@ -2414,6 +2782,8 @@ void fragment() {
     {
         return CountActiveTracers() +
                CountActiveRockets() +
+               CountActiveGuidedMissiles() +
+               CountActiveFlares() +
                CountActiveMeshPool(_muzzleFlashes) +
                CountActiveMeshPool(_smokePuffs) +
                CountActiveMeshPool(_sparks) +
@@ -2535,5 +2905,351 @@ void fragment() {
             if (_rockets[i].Active) count++;
         }
         return count;
+    }
+
+    private int CountActiveGuidedMissiles()
+    {
+        int count = 0;
+        for (int i = 0; i < MaxGuidedMissiles; i++)
+        {
+            if (_guidedMissiles[i].Active && _guidedMissiles[i].MissileId != 0) count++;
+        }
+        return count;
+    }
+
+    private int CountActiveFlares()
+    {
+        int count = 0;
+        for (int i = 0; i < MaxFlares; i++)
+        {
+            if (_flares[i].Active && (_flares[i].DelayRemaining > 0f || _flares[i].BurnLifetime > 0f)) count++;
+        }
+        return count;
+    }
+
+    /// <summary>
+    /// Synchronizes pooled 3D guided missiles with authoritative replicated state using
+    /// smooth ClientReplica interpolation. Zero steady-state allocations.
+    /// </summary>
+    public void SyncGuidedMissiles(ClientReplica replica, double renderTick, float dt)
+    {
+        for (int i = 0; i < MaxGuidedMissiles; i++)
+        {
+            _guidedMissiles[i].SeenThisFrame = false;
+        }
+
+        ReadOnlySpan<GuidedMissileObservation> missiles = replica.Missiles;
+        for (int m = 0; m < missiles.Length; m++)
+        {
+            uint id = missiles[m].MissileId;
+            if (id == 0) continue;
+
+            if (!replica.SampleMissilePose(id, renderTick, out System.Numerics.Vector3 simPos, out System.Numerics.Vector3 simVel, out GuidedMissileFlags flags))
+                continue;
+
+            int slot = FindOrAllocateGuidedMissileSlot(id);
+            if (slot < 0)
+            {
+                _droppedMeshEffectsCount++;
+                continue;
+            }
+
+            ref TrackedGuidedMissile tracked = ref _guidedMissiles[slot];
+            bool isNew = !tracked.Active || tracked.MissileId != id;
+            tracked.MissileId = id;
+            tracked.Active = true;
+            tracked.SeenThisFrame = true;
+            tracked.TrailLingerRemaining = 4.6f;
+
+            Vector3 pos = new(simPos.X, simPos.Y, simPos.Z);
+            Vector3 vel = new(simVel.X, simVel.Y, simVel.Z);
+            tracked.Root.Visible = true;
+            tracked.Root.Position = pos;
+            if (vel.LengthSquared() > 0.25f)
+            {
+                Vector3 fwd = vel.Normalized();
+                Vector3 up = MathF.Abs(fwd.Y) > 0.96f ? Vector3.Right : Vector3.Up;
+                tracked.Root.LookAt(pos + fwd * 12f, up);
+            }
+
+            bool burning = (flags & GuidedMissileFlags.MotorBurning) != 0;
+            tracked.BodyMesh.Visible = true;
+            tracked.FlameMesh.Visible = burning;
+            tracked.GlowMesh.Visible = burning;
+            tracked.Contrail.AmountRatio = burning ? 1.0f : 0.35f;
+            if (isNew)
+            {
+                tracked.Contrail.Restart();
+            }
+            tracked.Contrail.Emitting = true;
+        }
+
+        // Let contrails of finished/detonated missiles drift and fade naturally before recycling
+        for (int i = 0; i < MaxGuidedMissiles; i++)
+        {
+            ref TrackedGuidedMissile tracked = ref _guidedMissiles[i];
+            if (!tracked.Active || tracked.SeenThisFrame)
+                continue;
+
+            tracked.MissileId = 0;
+            tracked.BodyMesh.Visible = false;
+            tracked.FlameMesh.Visible = false;
+            tracked.GlowMesh.Visible = false;
+            tracked.Contrail.Emitting = false;
+            tracked.TrailLingerRemaining -= dt;
+            if (tracked.TrailLingerRemaining <= 0f)
+            {
+                tracked.Active = false;
+                tracked.Root.Visible = false;
+            }
+        }
+    }
+
+    private int FindOrAllocateGuidedMissileSlot(uint missileId)
+    {
+        int freeSlot = -1;
+        int lingeringSlot = -1;
+        float lowestLinger = float.MaxValue;
+        for (int i = 0; i < MaxGuidedMissiles; i++)
+        {
+            if (_guidedMissiles[i].Active && _guidedMissiles[i].MissileId == missileId)
+                return i;
+            if (!_guidedMissiles[i].Active && freeSlot < 0)
+                freeSlot = i;
+            else if (_guidedMissiles[i].Active && _guidedMissiles[i].MissileId == 0 &&
+                     _guidedMissiles[i].TrailLingerRemaining < lowestLinger)
+            {
+                lowestLinger = _guidedMissiles[i].TrailLingerRemaining;
+                lingeringSlot = i;
+            }
+        }
+        return freeSlot >= 0 ? freeSlot : lingeringSlot;
+    }
+
+    public void UpdateMissileWarningAudio(ClientReplica replica, float dt)
+    {
+        if (_warningCooldownRemaining > 0f)
+        {
+            _warningCooldownRemaining = MathF.Max(0f, _warningCooldownRemaining - dt);
+        }
+
+        bool anyWarning = false;
+        ReadOnlySpan<OwnUnitObservation> units = replica.OwnUnits;
+        for (int i = 0; i < units.Length; i++)
+        {
+            if ((units[i].CountermeasureFlags & CountermeasureFlags.MissileWarning) != 0)
+            {
+                anyWarning = true;
+                break;
+            }
+        }
+
+        if (anyWarning && _warningCooldownRemaining <= 0f && _missileWarningAudio is not null)
+        {
+            _warningCooldownRemaining = 1.45f;
+            try
+            {
+                _warningAudioPlayer.Stream = _missileWarningAudio;
+                _warningAudioPlayer.Play();
+            }
+            catch
+            {
+                // Headless dummy audio fallback
+            }
+        }
+    }
+
+    private void SpawnAirburst(Vector3 pos, bool hitTarget, float ageSeconds)
+    {
+        float scale = hitTarget ? 1.15f : 0.85f;
+        if (ageSeconds < 0.22f)
+        {
+            SpawnExplosion(pos, ageSeconds);
+            SpawnFlashLight(pos, energy: hitTarget ? 9.5f : 6.8f, range: 44f, lifetime: 0.22f);
+        }
+
+        int slot = _nextAirburst;
+        _nextAirburst = (_nextAirburst + 1) % MaxAirbursts;
+
+        GpuParticles3D puff = _airburstSmokePuffs[slot];
+        puff.Position = pos;
+        puff.Scale = Vector3.One * scale;
+        puff.Restart();
+        puff.Emitting = true;
+
+        if (ageSeconds < 0.30f)
+        {
+            GpuParticles3D shrap = _airburstShrapnelSparks[slot];
+            shrap.Position = pos;
+            shrap.Scale = Vector3.One * scale;
+            shrap.Restart();
+            shrap.Emitting = true;
+        }
+    }
+
+    private void SpawnFlareBurst(
+        System.Numerics.Vector3 burstOrigin,
+        float headingRad,
+        System.Numerics.Vector2 aircraftVel2D,
+        float ageSeconds)
+    {
+        Vector3 originG = new(burstOrigin.X, burstOrigin.Y, burstOrigin.Z);
+        if (ageSeconds < 0.35f)
+        {
+            SpawnFlashLight(originG + new Vector3(0f, -1.5f, 0f), energy: 7.5f, range: 36f, lifetime: 0.72f);
+        }
+
+        // Eject 4 staggered twin-cartridge M130 pairs (8 flares) using shared FlareBallistics
+        // so visual flare positions match server-authoritative decoy tracking to the meter.
+        for (int f = 0; f < FlareBallistics.FlaresPerBurst; f++)
+        {
+            int slot = FindAvailableFlareSlot();
+            if (slot < 0)
+            {
+                _droppedMeshEffectsCount++;
+                break;
+            }
+
+            FlareBallistics.ComputeFlareLaunch(
+                burstOrigin,
+                headingRad,
+                aircraftVel2D,
+                f,
+                out float delaySec,
+                out System.Numerics.Vector3 simSpawnPos,
+                out System.Numerics.Vector3 simVel,
+                out float maxBurn);
+
+            float remainingDelay = delaySec - ageSeconds;
+            float elapsedBurn = 0f;
+            if (remainingDelay < 0f)
+            {
+                elapsedBurn = -remainingDelay;
+                remainingDelay = 0f;
+            }
+
+            float remainingBurn = maxBurn - elapsedBurn;
+            if (remainingBurn <= 0.05f) continue;
+
+            // Step forward if this cartridge already ejected slightly before this client frame
+            if (elapsedBurn > 0f)
+            {
+                int steps = Math.Max(1, (int)MathF.Ceiling(elapsedBurn / Simulation.TickSeconds));
+                float stepDt = elapsedBurn / steps;
+                for (int s = 0; s < steps; s++)
+                {
+                    float gY = _map.GetHeight(simSpawnPos.X, simSpawnPos.Z);
+                    FlareBallistics.StepFlare(ref simSpawnPos, ref simVel, stepDt, gY);
+                }
+            }
+
+            Vector3 spawnPos = new(simSpawnPos.X, simSpawnPos.Y, simSpawnPos.Z);
+            Vector3 velocity = new(simVel.X, simVel.Y, simVel.Z);
+
+            ref TimedFlare flare = ref _flares[slot];
+            flare.Active = true;
+            flare.SpawnPosition = spawnPos;
+            flare.Velocity = velocity;
+            flare.DelayRemaining = remainingDelay;
+            flare.MaxBurnLifetime = maxBurn;
+            flare.BurnLifetime = remainingBurn;
+            flare.LingerRemaining = 2.7f;
+            flare.BaseScale = 0.90f + (f % 3) * 0.12f;
+
+            if (remainingDelay <= 0f)
+            {
+                flare.Launched = true;
+                flare.Root.Visible = true;
+                flare.Root.Position = spawnPos;
+                flare.CoreMesh.Visible = true;
+                flare.CoreMesh.Scale = Vector3.One * flare.BaseScale;
+                flare.SmokeTrail.Restart();
+                flare.SmokeTrail.Emitting = true;
+            }
+            else
+            {
+                flare.Launched = false;
+                flare.Root.Visible = false;
+                flare.CoreMesh.Visible = false;
+                flare.SmokeTrail.Emitting = false;
+            }
+        }
+    }
+
+    private int FindAvailableFlareSlot()
+    {
+        int lingeringSlot = -1;
+        float lowestLinger = float.MaxValue;
+        for (int i = 0; i < MaxFlares; i++)
+        {
+            if (!_flares[i].Active) return i;
+            if (_flares[i].Launched && _flares[i].BurnLifetime <= 0f && _flares[i].LingerRemaining < lowestLinger)
+            {
+                lowestLinger = _flares[i].LingerRemaining;
+                lingeringSlot = i;
+            }
+        }
+        return lingeringSlot;
+    }
+
+    private void UpdateFlares(float dt)
+    {
+        for (int i = 0; i < MaxFlares; i++)
+        {
+            ref TimedFlare flare = ref _flares[i];
+            if (!flare.Active) continue;
+
+            if (!flare.Launched)
+            {
+                flare.DelayRemaining -= dt;
+                if (flare.DelayRemaining > 0f)
+                    continue;
+
+                flare.DelayRemaining = 0f;
+                flare.Launched = true;
+                flare.Root.Visible = true;
+                flare.Root.Position = flare.SpawnPosition;
+                flare.CoreMesh.Visible = true;
+                flare.CoreMesh.Scale = Vector3.One * flare.BaseScale;
+                flare.SmokeTrail.Restart();
+                flare.SmokeTrail.Emitting = true;
+                if (i % 2 == 0)
+                {
+                    SpawnFlashLight(flare.SpawnPosition, energy: 5.5f, range: 28f, lifetime: 0.18f);
+                }
+            }
+
+            if (flare.BurnLifetime > 0f)
+            {
+                flare.BurnLifetime -= dt;
+                System.Numerics.Vector3 simPos = new(flare.Root.Position.X, flare.Root.Position.Y, flare.Root.Position.Z);
+                System.Numerics.Vector3 simVel = new(flare.Velocity.X, flare.Velocity.Y, flare.Velocity.Z);
+                float groundY = _map.GetHeight(simPos.X, simPos.Z);
+                FlareBallistics.StepFlare(ref simPos, ref simVel, dt, groundY);
+                flare.Root.Position = new Vector3(simPos.X, simPos.Y, simPos.Z);
+                flare.Velocity = new Vector3(simVel.X, simVel.Y, simVel.Z);
+
+                float ratio = Math.Clamp(flare.BurnLifetime / flare.MaxBurnLifetime, 0f, 1f);
+                float pulse = 0.88f + 0.16f * MathF.Sin((flare.MaxBurnLifetime - flare.BurnLifetime) * 34f + i);
+                float scale = flare.BaseScale * (0.45f + 0.55f * MathF.Sqrt(ratio)) * pulse;
+                flare.CoreMesh.Scale = Vector3.One * scale;
+
+                if (flare.BurnLifetime <= 0f)
+                {
+                    flare.CoreMesh.Visible = false;
+                    flare.SmokeTrail.Emitting = false;
+                }
+            }
+            else
+            {
+                flare.LingerRemaining -= dt;
+                if (flare.LingerRemaining <= 0f)
+                {
+                    flare.Active = false;
+                    flare.Launched = false;
+                    flare.Root.Visible = false;
+                }
+            }
+        }
     }
 }

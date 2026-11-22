@@ -28,5 +28,6 @@ public interface IGameSession : IDisposable
     bool OrderHelicopter(EntityId unit, HelicopterOrderKind kind, AltitudeBand altitudeBand = AltitudeBand.High, bool hasTarget = false, System.Numerics.Vector2 target = default, EntityId targetUnit = default);
     bool FireMission(EntityId unit, System.Numerics.Vector2 target, bool cancel = false);
     bool Stop(EntityId unit);
+    bool DeployFlares(EntityId unit, bool toggleAuto = false);
     void Advance(double elapsedSeconds);
 }

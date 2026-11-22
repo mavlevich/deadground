@@ -32,12 +32,13 @@ public sealed class OpsRules : RuleSet
         DeterministicRandom? combatRandom = null,
         NavigationBuildLimits? buildLimits = null,
         IUnitSmokeCatalog? smokeCatalog = null,
-        IUnitFlightCatalog? flightCatalog = null)
-        : base(CreateSystems(geometry, perceptionCatalog, movementCatalog, combatCatalog, navTuning, detTuning, combatRandom, buildLimits, mission: null, smokeCatalog: smokeCatalog, flightCatalog: flightCatalog))
+        IUnitFlightCatalog? flightCatalog = null,
+        IUnitCountermeasureCatalog? countermeasureCatalog = null)
+        : base(CreateSystems(geometry, perceptionCatalog, movementCatalog, combatCatalog, navTuning, detTuning, combatRandom, buildLimits, mission: null, smokeCatalog: smokeCatalog, flightCatalog: flightCatalog, countermeasureCatalog: countermeasureCatalog))
     { }
 
     public OpsRules(StaticGeometry geometry, UnitCatalog catalog, DeterministicRandom? combatRandom = null)
-        : this(geometry, new OpsPerceptionCatalog(catalog), new OpsMovementCatalog(catalog), new OpsCombatCatalog(catalog), null, PrototypeScenario.CreateDetectionTuning(catalog), combatRandom, null, new OpsSmokeCatalog(catalog), new OpsFlightCatalog(catalog)) { }
+        : this(geometry, new OpsPerceptionCatalog(catalog), new OpsMovementCatalog(catalog), new OpsCombatCatalog(catalog), null, PrototypeScenario.CreateDetectionTuning(catalog), combatRandom, null, new OpsSmokeCatalog(catalog), new OpsFlightCatalog(catalog), new OpsCountermeasureCatalog(catalog)) { }
 
     public OpsRules(StaticGeometry geometry, UnitCatalog catalog, NavigationTuning? navTuning, DetectionTuning? detTuning = null, DeterministicRandom? combatRandom = null, NavigationBuildLimits? buildLimits = null)
         : this(
@@ -50,7 +51,8 @@ public sealed class OpsRules : RuleSet
             combatRandom,
             buildLimits,
             new OpsSmokeCatalog(catalog),
-            new OpsFlightCatalog(catalog))
+            new OpsFlightCatalog(catalog),
+            new OpsCountermeasureCatalog(catalog))
     { }
 
     public static OpsRules CreateWithMission(
@@ -64,6 +66,7 @@ public sealed class OpsRules : RuleSet
         OpsCombatCatalog combatCatalog = new(catalog);
         OpsSmokeCatalog smokeCatalog = new(catalog);
         OpsFlightCatalog flightCatalog = new(catalog);
+        OpsCountermeasureCatalog countermeasureCatalog = new(catalog);
         DetectionTuning detTuning = PrototypeScenario.CreateDetectionTuning(catalog);
         ISimulationSystem[] systems = CreateSystems(
             geometry,
@@ -76,7 +79,8 @@ public sealed class OpsRules : RuleSet
             buildLimits: null,
             mission: mission,
             smokeCatalog: smokeCatalog,
-            flightCatalog: flightCatalog);
+            flightCatalog: flightCatalog,
+            countermeasureCatalog: countermeasureCatalog);
         return new OpsRules(systems);
     }
 
@@ -91,7 +95,8 @@ public sealed class OpsRules : RuleSet
         NavigationBuildLimits? buildLimits = null,
         IMissionSystem? mission = null,
         IUnitSmokeCatalog? smokeCatalog = null,
-        IUnitFlightCatalog? flightCatalog = null)
+        IUnitFlightCatalog? flightCatalog = null,
+        IUnitCountermeasureCatalog? countermeasureCatalog = null)
     {
         FlightSystem? flight = flightCatalog is not null ? new FlightSystem(geometry, flightCatalog) : null;
         NavigationSystem nav = new(new NavigationGrid(geometry, navTuning?.CellSize ?? NavigationTuning.DefaultCellSize, enableHierarchical: true, buildLimits: buildLimits, sectorSize: navTuning?.SectorSize ?? NavigationTuning.DefaultSectorSize), movementCatalog, navTuning);
@@ -104,8 +109,11 @@ public sealed class OpsRules : RuleSet
         ArtillerySystem? artillery = combatCatalog is not null
             ? new ArtillerySystem(geometry, combatCatalog, nav)
             : null;
+        GuidedMissileSystem? guidedMissiles = (combatCatalog is not null || countermeasureCatalog is not null)
+            ? new GuidedMissileSystem(geometry, countermeasureCatalog, combatCatalog)
+            : null;
 
-        List<ISimulationSystem> list = new(8);
+        List<ISimulationSystem> list = new(9);
         if (flight is not null) list.Add(flight);
         list.Add(nav);
         list.Add(container);
@@ -113,6 +121,7 @@ public sealed class OpsRules : RuleSet
         list.Add(det);
         if (combat is not null) list.Add(combat);
         if (artillery is not null) list.Add(artillery);
+        if (guidedMissiles is not null) list.Add(guidedMissiles);
         if (mission is not null) list.Add(mission);
         return list.ToArray();
     }
@@ -160,7 +169,24 @@ public sealed record WeaponData(
     float ProjectileSpeed = ArtilleryBallistics.DefaultRocketSpeed,
     float SetupSeconds = 0f,
     int SetupTicks = 0,
-    float ElevationDegrees = 0f);
+    float ElevationDegrees = 0f,
+    string? GuidanceKind = null,
+    bool AirTargetsOnly = false,
+    float MissileMaxTurnRateDegPerSec = 52f,
+    float MissileProximityFuzeRadius = 11f,
+    float IrCountermeasureResistance = 0.25f,
+    int MissileMaxFlightTicks = 320,
+    int MissileMotorBurnTicks = 150);
+
+public sealed record FlareData(
+    int Charges,
+    float CooldownSeconds = 0f,
+    int CooldownTicks = 0,
+    float ActiveDurationSeconds = 0f,
+    int ActiveDurationTicks = 0,
+    float DecoyRadius = 65f,
+    float IrSpoofProbability = 0.65f,
+    bool DefaultAutoFlares = true);
 
 public sealed record FlightData(
     float CruiseSpeed,
@@ -245,6 +271,7 @@ public sealed record UnitDefinition(
     int ContainerDestructionDamage = 50,
     SmokeData? Smoke = null,
     FlightData? Flight = null,
+    FlareData? Flares = null,
     float CargoWeightKg = 0f,
     int InternalCargoSlots = 0,
     bool CanInternalLoad = false,
@@ -354,6 +381,7 @@ public sealed class OpsPerceptionCatalog : IUnitPerceptionCatalog
                 "infantry" => ContactClassification.Infantry,
                 "helicopter" or "rotorcraft" => ContactClassification.Helicopter,
                 "artillery" or "mlrs" => ContactClassification.Artillery,
+                "anti_air" or "antiair" or "sam" or "aa" => ContactClassification.AntiAir,
                 "vehicle" => ContactClassification.Vehicle,
                 _ => ContactClassification.Vehicle
             };
@@ -447,7 +475,11 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
                             ? WeaponPresentationKind.Rifle
                             : string.Equals(w.PresentationKind, "rocket_artillery", StringComparison.OrdinalIgnoreCase)
                                 ? WeaponPresentationKind.RocketArtillery
-                                : throw new InvalidOperationException($"Unsupported presentation_kind '{w.PresentationKind}'.");
+                                : string.Equals(w.PresentationKind, "surface_to_air_missile", StringComparison.OrdinalIgnoreCase)
+                                    ? WeaponPresentationKind.SurfaceToAirMissile
+                                    : throw new InvalidOperationException($"Unsupported presentation_kind '{w.PresentationKind}'.");
+
+                MissileGuidanceKind guidanceKind = ParseGuidanceKind(w.GuidanceKind);
 
                 ushort presId = WeaponPresentation.MakeId(kind, presIdCounter++);
 
@@ -493,7 +525,14 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
                     w.SplashRadius,
                     w.ProjectileSpeed > 0f ? w.ProjectileSpeed : ArtilleryBallistics.DefaultRocketSpeed,
                     setupTicks,
-                    w.ElevationDegrees);
+                    w.ElevationDegrees,
+                    guidanceKind,
+                    w.AirTargetsOnly,
+                    w.MissileMaxTurnRateDegPerSec,
+                    w.MissileProximityFuzeRadius,
+                    w.IrCountermeasureResistance,
+                    w.MissileMaxFlightTicks,
+                    w.MissileMotorBurnTicks);
             }
         }
 
@@ -520,6 +559,19 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
                 leavesWreck,
                 unit.ContainerDestructionDamage > 0 ? unit.ContainerDestructionDamage : 50);
         }
+    }
+
+    internal static MissileGuidanceKind ParseGuidanceKind(string? guidance)
+    {
+        if (string.IsNullOrWhiteSpace(guidance)) return MissileGuidanceKind.None;
+        return guidance.ToLowerInvariant() switch
+        {
+            "infrared" or "ir" => MissileGuidanceKind.Infrared,
+            "radar" => MissileGuidanceKind.Radar,
+            "optical" => MissileGuidanceKind.Optical,
+            "none" => MissileGuidanceKind.None,
+            _ => throw new InvalidOperationException($"Unsupported guidance_kind '{guidance}'.")
+        };
     }
 
     public bool TryGetProfile(ushort definition, out UnitCombatProfile profile)
@@ -713,12 +765,59 @@ public sealed class OpsFlightCatalog : IUnitFlightCatalog
     }
 }
 
+public sealed class OpsCountermeasureCatalog : IUnitCountermeasureCatalog
+{
+    private readonly FlareProfile[] _profiles;
+    private readonly bool[] _hasProfile;
+
+    public OpsCountermeasureCatalog(UnitCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        _profiles = new FlareProfile[catalog.Units.Length];
+        _hasProfile = new bool[catalog.Units.Length];
+
+        for (int i = 0; i < catalog.Units.Length; i++)
+        {
+            FlareData? f = catalog.Units[i].Flares;
+            if (f is null) continue;
+
+            int cooldownTicks = OpsSmokeCatalog.ResolveTicks(f.CooldownTicks, f.CooldownSeconds);
+            int activeTicks = OpsSmokeCatalog.ResolveTicks(f.ActiveDurationTicks, f.ActiveDurationSeconds);
+            FlareProfile profile = new(
+                (byte)Math.Clamp(f.Charges, 0, byte.MaxValue),
+                (ushort)Math.Clamp(cooldownTicks, 0, ushort.MaxValue),
+                (ushort)Math.Clamp(activeTicks, 0, ushort.MaxValue),
+                f.DecoyRadius,
+                f.IrSpoofProbability,
+                f.DefaultAutoFlares);
+
+            if (profile.IsValid)
+            {
+                _profiles[i] = profile;
+                _hasProfile[i] = true;
+            }
+        }
+    }
+
+    public bool TryGetFlareProfile(ushort definition, out FlareProfile profile)
+    {
+        if (definition < _profiles.Length && _hasProfile[definition])
+        {
+            profile = _profiles[definition];
+            return true;
+        }
+        profile = default;
+        return false;
+    }
+}
+
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
     ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true)]
 [JsonSerializable(typeof(UnitCatalog))]
 [JsonSerializable(typeof(UnitDefinition))]
 [JsonSerializable(typeof(SmokeData))]
 [JsonSerializable(typeof(FlightData))]
+[JsonSerializable(typeof(FlareData))]
 [JsonSerializable(typeof(DetectionSettings))]
 [JsonSerializable(typeof(WeaponData))]
 [JsonSerializable(typeof(WeaponData[]))]
@@ -794,7 +893,8 @@ public static class PrototypeScenario
                 if (!string.Equals(weapon.PresentationKind, "cannon", StringComparison.OrdinalIgnoreCase) &&
                     !string.Equals(weapon.PresentationKind, "machine_gun", StringComparison.OrdinalIgnoreCase) &&
                     !string.Equals(weapon.PresentationKind, "rifle", StringComparison.OrdinalIgnoreCase) &&
-                    !string.Equals(weapon.PresentationKind, "rocket_artillery", StringComparison.OrdinalIgnoreCase))
+                    !string.Equals(weapon.PresentationKind, "rocket_artillery", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(weapon.PresentationKind, "surface_to_air_missile", StringComparison.OrdinalIgnoreCase))
                 {
                     throw new InvalidOperationException($"Unknown weapon presentation_kind '{weapon.PresentationKind}'.");
                 }
@@ -865,6 +965,17 @@ public static class PrototypeScenario
                 }
                 if (weapon.IsIndirectFire && (weapon.SplashRadius <= 0f || weapon.DispersionRadius <= 0f))
                     throw new InvalidOperationException("Indirect-fire weapon requires positive splash_radius and dispersion_radius.");
+                if (!string.IsNullOrWhiteSpace(weapon.GuidanceKind))
+                {
+                    _ = OpsCombatCatalog.ParseGuidanceKind(weapon.GuidanceKind);
+                    if (!float.IsFinite(weapon.MissileMaxTurnRateDegPerSec) || weapon.MissileMaxTurnRateDegPerSec <= 0f ||
+                        !float.IsFinite(weapon.MissileProximityFuzeRadius) || weapon.MissileProximityFuzeRadius <= 0f ||
+                        !float.IsFinite(weapon.IrCountermeasureResistance) || weapon.IrCountermeasureResistance < 0f || weapon.IrCountermeasureResistance > 1f ||
+                        weapon.MissileMaxFlightTicks <= 0 || weapon.MissileMotorBurnTicks <= 0)
+                    {
+                        throw new InvalidOperationException($"Weapon '{weapon.Id}' has invalid guided missile parameters.");
+                    }
+                }
             }
         }
 
@@ -1017,6 +1128,20 @@ public static class PrototypeScenario
                     !float.IsFinite(f.SlingSpeedPenaltyAtMax) || f.SlingSpeedPenaltyAtMax < 0f || f.SlingSpeedPenaltyAtMax > 0.85f)
                 {
                     throw new InvalidOperationException($"Unit '{unit.Id}' has invalid flight parameters.");
+                }
+            }
+            if (unit.Flares is not null)
+            {
+                FlareData fl = unit.Flares;
+                int cooldownTicks = OpsSmokeCatalog.ResolveTicks(fl.CooldownTicks, fl.CooldownSeconds);
+                int activeTicks = OpsSmokeCatalog.ResolveTicks(fl.ActiveDurationTicks, fl.ActiveDurationSeconds);
+                if (fl.Charges <= 0 || fl.Charges > byte.MaxValue ||
+                    cooldownTicks < 0 || cooldownTicks > ushort.MaxValue ||
+                    activeTicks <= 0 || activeTicks > ushort.MaxValue ||
+                    !float.IsFinite(fl.DecoyRadius) || fl.DecoyRadius <= 0f ||
+                    !float.IsFinite(fl.IrSpoofProbability) || fl.IrSpoofProbability < 0f || fl.IrSpoofProbability > 1f)
+                {
+                    throw new InvalidOperationException($"Unit '{unit.Id}' has invalid flare countermeasure parameters.");
                 }
             }
         }

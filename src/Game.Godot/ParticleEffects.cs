@@ -50,6 +50,10 @@ internal static class ParticleEffects
     private static ParticleProcessMaterial? _artilleryEjectaJetsProcess;
     private static ParticleProcessMaterial? _artilleryGroundDustRingProcess;
     private static ParticleProcessMaterial? _impactSparksProcess;
+    private static ParticleProcessMaterial? _samContrailProcess;
+    private static ParticleProcessMaterial? _flareSmokeTrailProcess;
+    private static ParticleProcessMaterial? _airburstSmokeProcess;
+    private static ParticleProcessMaterial? _airburstShrapnelProcess;
 
     private static CurveTexture? _movementDustSize;
     private static CurveTexture? _wreckFireSize;
@@ -658,6 +662,177 @@ void fragment() {
         },
         AdditiveSparkDrawPass,
         visibilityHalfExtent: 25f);
+
+    // Dense, crisp sunlit white-silver contrail left across the sky by a 9M37M SAM motor.
+    internal static GpuParticles3D CreateSamContrail() => CreateEmitter(
+        "SamContrail",
+        oneShot: false,
+        amount: 190,
+        lifetime: 5.5f,
+        explosiveness: 0f,
+        _samContrailProcess ??= new ParticleProcessMaterial
+        {
+            Direction = new Vector3(0f, 0f, 1f),
+            Spread = 10f,
+            InitialVelocityMin = 1.0f,
+            InitialVelocityMax = 3.0f,
+            DampingMin = 2.8f,
+            DampingMax = 4.6f,
+            Gravity = new Vector3(0.35f, 0.22f, 0.18f),
+            AngleMin = -180f,
+            AngleMax = 180f,
+            AngularVelocityMin = -16f,
+            AngularVelocityMax = 16f,
+            TurbulenceEnabled = true,
+            TurbulenceNoiseStrength = 0.95f,
+            TurbulenceNoiseScale = 3.4f,
+            TurbulenceInfluenceMin = 0.05f,
+            TurbulenceInfluenceMax = 0.15f,
+            ScaleMin = 1.05f,
+            ScaleMax = 4.0f,
+            ScaleCurve = Grow(0.28f),
+            ColorRamp = CreateSamContrailRamp(),
+            EmissionShape = ParticleProcessMaterial.EmissionShapeEnum.Sphere,
+            EmissionSphereRadius = 0.18f,
+        },
+        LitCloudDrawPass,
+        visibilityHalfExtent: 640f);
+
+    // Curling sunlit white magnesium smoke ribbon trailing behind each falling decoy flare.
+    internal static GpuParticles3D CreateFlareSmokeTrail() => CreateEmitter(
+        "FlareSmokeTrail",
+        oneShot: false,
+        amount: 40,
+        lifetime: 2.6f,
+        explosiveness: 0f,
+        _flareSmokeTrailProcess ??= new ParticleProcessMaterial
+        {
+            Direction = new Vector3(0f, 0.35f, 0f),
+            Spread = 32f,
+            InitialVelocityMin = 0.4f,
+            InitialVelocityMax = 1.6f,
+            DampingMin = 2.0f,
+            DampingMax = 3.6f,
+            Gravity = new Vector3(0.38f, 0.35f, 0.18f),
+            AngleMin = -180f,
+            AngleMax = 180f,
+            AngularVelocityMin = -24f,
+            AngularVelocityMax = 24f,
+            TurbulenceEnabled = true,
+            TurbulenceNoiseStrength = 1.0f,
+            TurbulenceNoiseScale = 3.6f,
+            TurbulenceInfluenceMin = 0.05f,
+            TurbulenceInfluenceMax = 0.16f,
+            ScaleMin = 0.95f,
+            ScaleMax = 3.2f,
+            ScaleCurve = Grow(0.28f),
+            ColorRamp = CreateFlareSmokeRamp(),
+            EmissionShape = ParticleProcessMaterial.EmissionShapeEnum.Sphere,
+            EmissionSphereRadius = 0.16f,
+        },
+        LitCloudDrawPass,
+        visibilityHalfExtent: 140f);
+
+    // Characteristic mid-air dark-gray AA proximity-fuze HE-Frag flak cloud.
+    internal static GpuParticles3D CreateAirburstSmokePuff() => CreateEmitter(
+        "AirburstSmokePuff",
+        oneShot: true,
+        amount: 26,
+        lifetime: 4.8f,
+        explosiveness: 0.95f,
+        _airburstSmokeProcess ??= new ParticleProcessMaterial
+        {
+            Direction = new Vector3(0f, 0.15f, 0f),
+            Spread = 180f,
+            InitialVelocityMin = 4.5f,
+            InitialVelocityMax = 15.5f,
+            DampingMin = 4.8f,
+            DampingMax = 7.6f,
+            Gravity = new Vector3(0.55f, 0.35f, 0.25f),
+            AngleMin = -180f,
+            AngleMax = 180f,
+            AngularVelocityMin = -25f,
+            AngularVelocityMax = 25f,
+            TurbulenceEnabled = true,
+            TurbulenceNoiseStrength = 1.6f,
+            TurbulenceNoiseScale = 3.8f,
+            TurbulenceInfluenceMin = 0.08f,
+            TurbulenceInfluenceMax = 0.24f,
+            ScaleMin = 2.6f,
+            ScaleMax = 7.2f,
+            ScaleCurve = Grow(0.36f),
+            ColorRamp = CreateAirburstFlakRamp(),
+            EmissionShape = ParticleProcessMaterial.EmissionShapeEnum.Sphere,
+            EmissionSphereRadius = 1.1f,
+        },
+        LitCloudDrawPass,
+        visibilityHalfExtent: 45f);
+
+    // 360-degree incandescent white-gold shrapnel needle burst for SAM airbursts.
+    internal static GpuParticles3D CreateAirburstShrapnelSparks() => CreateEmitter(
+        "AirburstShrapnelSparks",
+        oneShot: true,
+        amount: 42,
+        lifetime: 0.52f,
+        explosiveness: 0.98f,
+        _airburstShrapnelProcess ??= new ParticleProcessMaterial
+        {
+            ParticleFlagAlignY = true,
+            Direction = new Vector3(0f, 0f, 0f),
+            Spread = 180f,
+            InitialVelocityMin = 18f,
+            InitialVelocityMax = 44f,
+            DampingMin = 3.5f,
+            DampingMax = 5.5f,
+            Gravity = new Vector3(0f, -12f, 0f),
+            ScaleMin = 0.55f,
+            ScaleMax = 1.25f,
+            ScaleCurve = Shrink(0.16f),
+            ColorRamp = CreateSparksRamp(),
+            EmissionShape = ParticleProcessMaterial.EmissionShapeEnum.Sphere,
+            EmissionSphereRadius = 0.6f,
+        },
+        AdditiveSparkDrawPass,
+        visibilityHalfExtent: 38f);
+
+    private static GradientTexture1D MakeGradient(params (float Offset, Color Color)[] stops)
+    {
+        float[] offsets = new float[stops.Length];
+        Color[] colors = new Color[stops.Length];
+        for (int i = 0; i < stops.Length; i++)
+        {
+            offsets[i] = stops[i].Offset;
+            colors[i] = stops[i].Color;
+        }
+        return new GradientTexture1D
+        {
+            Gradient = new Gradient
+            {
+                Offsets = offsets,
+                Colors = colors
+            }
+        };
+    }
+
+    private static GradientTexture1D CreateSamContrailRamp() => MakeGradient(
+        (0.00f, new Color(0.98f, 0.96f, 0.92f, 0.88f)),
+        (0.18f, new Color(0.93f, 0.92f, 0.90f, 0.72f)),
+        (0.55f, new Color(0.86f, 0.86f, 0.85f, 0.44f)),
+        (0.85f, new Color(0.82f, 0.83f, 0.84f, 0.16f)),
+        (1.00f, new Color(0.80f, 0.82f, 0.84f, 0.00f)));
+
+    private static GradientTexture1D CreateFlareSmokeRamp() => MakeGradient(
+        (0.00f, new Color(1.00f, 0.97f, 0.88f, 0.84f)),
+        (0.22f, new Color(0.95f, 0.94f, 0.90f, 0.62f)),
+        (0.65f, new Color(0.88f, 0.89f, 0.88f, 0.28f)),
+        (1.00f, new Color(0.84f, 0.86f, 0.87f, 0.00f)));
+
+    private static GradientTexture1D CreateAirburstFlakRamp() => MakeGradient(
+        (0.00f, new Color(0.88f, 0.82f, 0.74f, 0.88f)),
+        (0.14f, new Color(0.32f, 0.30f, 0.29f, 0.84f)),
+        (0.52f, new Color(0.24f, 0.24f, 0.25f, 0.62f)),
+        (0.82f, new Color(0.30f, 0.31f, 0.32f, 0.26f)),
+        (1.00f, new Color(0.36f, 0.37f, 0.38f, 0.00f)));
 
     private static GpuParticles3D CreateEmitter(
         string name,

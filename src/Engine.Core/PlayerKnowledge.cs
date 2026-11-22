@@ -6,11 +6,13 @@ public sealed class PlayerKnowledge
     public const int DefaultEventCapacity = 64;
     public const int DefaultWreckCapacity = 128;
     public const int DefaultSmokeCapacity = WorldState.MaxSmokeClouds;
+    public const int DefaultMissileCapacity = WorldState.MaxGuidedMissiles;
     private readonly OwnUnitObservation[] _ownUnits;
     private readonly ContactObservation[] _contacts;
     private readonly CombatEventObservation[] _events;
     private readonly WreckObservation[] _wrecks;
     private readonly SmokeCloudObservation[] _smokeClouds;
+    private readonly GuidedMissileObservation[] _missiles;
 
     public int Player { get; }
     public int Count { get; private set; }
@@ -18,6 +20,7 @@ public sealed class PlayerKnowledge
     public int EventCount { get; private set; }
     public int WreckCount { get; private set; }
     public int SmokeCloudCount { get; private set; }
+    public int MissileCount { get; private set; }
     public MissionObservation Mission { get; set; }
 
     public ReadOnlySpan<OwnUnitObservation> OwnUnits => _ownUnits.AsSpan(0, Count);
@@ -25,6 +28,7 @@ public sealed class PlayerKnowledge
     public ReadOnlySpan<CombatEventObservation> Events => _events.AsSpan(0, EventCount);
     public ReadOnlySpan<WreckObservation> Wrecks => _wrecks.AsSpan(0, WreckCount);
     public ReadOnlySpan<SmokeCloudObservation> SmokeClouds => _smokeClouds.AsSpan(0, SmokeCloudCount);
+    public ReadOnlySpan<GuidedMissileObservation> Missiles => _missiles.AsSpan(0, MissileCount);
 
     public PlayerKnowledge(
         int player,
@@ -32,7 +36,8 @@ public sealed class PlayerKnowledge
         int contactCapacity = DefaultContactCapacity,
         int eventCapacity = DefaultEventCapacity,
         int wreckCapacity = DefaultWreckCapacity,
-        int smokeCapacity = DefaultSmokeCapacity)
+        int smokeCapacity = DefaultSmokeCapacity,
+        int missileCapacity = DefaultMissileCapacity)
     {
         if (player < 1) throw new ArgumentOutOfRangeException(nameof(player));
         Player = player;
@@ -41,6 +46,7 @@ public sealed class PlayerKnowledge
         _events = new CombatEventObservation[eventCapacity];
         _wrecks = new WreckObservation[wreckCapacity];
         _smokeClouds = new SmokeCloudObservation[smokeCapacity];
+        _missiles = new GuidedMissileObservation[missileCapacity];
     }
 
     internal void Refresh(WorldState world) => Refresh(world, [], null, []);
@@ -57,7 +63,8 @@ public sealed class PlayerKnowledge
         ReadOnlySpan<CombatEventObservation> events,
         MissionObservation mission = default,
         ReadOnlySpan<WreckObservation> wrecks = default,
-        ReadOnlySpan<SmokeCloudObservation> smokeClouds = default)
+        ReadOnlySpan<SmokeCloudObservation> smokeClouds = default,
+        int currentTick = 0)
     {
         int count = 0;
         for (int i = 0; i < world.Count; i++)
@@ -126,6 +133,16 @@ public sealed class PlayerKnowledge
                 artilleryFlags = world.GetArtilleryFlags(unit.Id);
             }
 
+            byte flareCharges = 0;
+            ushort flareCooldown = 0;
+            CountermeasureFlags countermeasureFlags = CountermeasureFlags.None;
+            if (world.TryGetCountermeasureState(unit.Id, out WorldState.UnitCountermeasureState cmState) && cmState.HasFlares)
+            {
+                flareCharges = (byte)Math.Clamp(cmState.ChargesRemaining, 0, byte.MaxValue);
+                flareCooldown = (ushort)Math.Clamp(cmState.CooldownTicksRemaining, 0, ushort.MaxValue);
+                countermeasureFlags = world.GetCountermeasureFlags(unit.Id);
+            }
+
             if (world.TryGetCombatState(unit.Id, out WorldState.CombatState combat))
             {
                 _ownUnits[count++] = new OwnUnitObservation(
@@ -160,7 +177,10 @@ public sealed class PlayerKnowledge
                     slungById,
                     flightFlags,
                     gunPitchRad,
-                    artilleryFlags);
+                    artilleryFlags,
+                    flareCharges,
+                    flareCooldown,
+                    countermeasureFlags);
             }
             else
             {
@@ -190,7 +210,10 @@ public sealed class PlayerKnowledge
                     SlungById: slungById,
                     FlightFlags: flightFlags,
                     GunPitchRad: gunPitchRad,
-                    ArtilleryFlags: artilleryFlags);
+                    ArtilleryFlags: artilleryFlags,
+                    FlareCharges: flareCharges,
+                    FlareCooldownTicks: flareCooldown,
+                    CountermeasureFlags: countermeasureFlags);
             }
         }
         Count = count;
@@ -218,6 +241,8 @@ public sealed class PlayerKnowledge
 
         smokeClouds.CopyTo(_smokeClouds.AsSpan(0, smokeClouds.Length));
         SmokeCloudCount = smokeClouds.Length;
+
+        MissileCount = world.CopyGuidedMissileObservations(currentTick, _missiles);
 
         Mission = mission;
     }

@@ -626,6 +626,208 @@ internal static class CannonSound
         return output;
     }
 
+    internal const float SamLaunchDuration = 1.15f;
+    internal const float FlarePopDuration = 0.92f;
+    internal const float AirburstDuration = 0.90f;
+    internal const float MissileWarningDuration = 0.28f;
+
+    internal static AudioStreamWav CreateSamLaunchStream(int seed) => CreateWavFromSamples(RenderSamLaunch(seed));
+    internal static AudioStreamWav CreateFlarePopStream(int seed) => CreateWavFromSamples(RenderFlarePop(seed));
+    internal static AudioStreamWav CreateAirburstStream(int seed) => CreateWavFromSamples(RenderAirburst(seed));
+    internal static AudioStreamWav CreateMissileWarningStream() => CreateWavFromSamples(RenderMissileWarning());
+
+    private static AudioStreamWav CreateWavFromSamples(float[] samples)
+    {
+        byte[] data = new byte[samples.Length * 2];
+        for (int i = 0; i < samples.Length; i++)
+        {
+            short pcm = (short)MathF.Round(Math.Clamp(samples[i], -1f, 1f) * 32767f);
+            data[i * 2] = (byte)(pcm & 0xFF);
+            data[i * 2 + 1] = (byte)((pcm >> 8) & 0xFF);
+        }
+        return new AudioStreamWav
+        {
+            Format = AudioStreamWav.FormatEnum.Format16Bits,
+            MixRate = SampleRate,
+            Stereo = false,
+            Data = data
+        };
+    }
+
+    // 9M37M Strela-10 SAM launch: sharp canister ejection pop + high-velocity supersonic solid-booster shriek.
+    internal static float[] RenderSamLaunch(int seed)
+    {
+        int count = (int)(SampleRate * SamLaunchDuration);
+        Random rand = new(seed);
+        float[] output = new float[count];
+
+        float lp1 = 0f, lp2 = 0f;
+        float hp = 0f, hpPrev = 0f;
+        float roar1 = 0f, roar2 = 0f;
+        float phase = 0f;
+
+        for (int i = 0; i < count; i++)
+        {
+            float t = (float)i / SampleRate;
+            float white = (float)rand.NextDouble() * 2f - 1f;
+
+            // 1. Sharp pneumatic canister uncorking pop (0 - 35ms)
+            float popFreq = 190f + 520f * MathF.Exp(-t / 0.012f);
+            phase += MathF.Tau * popFreq / SampleRate;
+            float pop = (MathF.Sin(phase) * 0.7f + white * 0.6f) * MathF.Exp(-t / 0.024f) * 1.9f;
+
+            // 2. Scorching high-frequency supersonic rocket shriek (20ms - 1.15s)
+            float burnEnv = (1f - MathF.Exp(-t / 0.018f)) * MathF.Exp(-t / 0.42f);
+            float hiCut = 1100f + 2600f * MathF.Exp(-t / 0.25f);
+            float kHi = Coefficient(hiCut);
+            lp1 += (white - lp1) * kHi;
+            lp2 += (lp1 - lp2) * kHi;
+            hp = 0.89f * (hp + lp2 - hpPrev);
+            hpPrev = lp2;
+
+            // 3. Tight mid-bass booster exhaust roar
+            float kRoar = Coefficient(380f + 300f * MathF.Exp(-t / 0.20f));
+            roar1 += (white - roar1) * kRoar;
+            roar2 += (roar1 - roar2) * kRoar;
+
+            output[i] = pop + hp * burnEnv * 2.2f + roar2 * burnEnv * 1.45f;
+        }
+
+        int fade = (int)(0.16f * SampleRate);
+        for (int i = count - fade; i < count; i++)
+            output[i] *= (float)(count - i) / fade;
+
+        NormalizeSoftClip(output, driveFactor: 1.45f, targetPeak: Peak * 0.88f);
+        return output;
+    }
+
+    // M130 aircraft flare dispenser salvo: 4 staggered twin-cartridge pairs every 0.20s with pyrotechnic hiss.
+    internal static float[] RenderFlarePop(int seed)
+    {
+        int count = (int)(SampleRate * FlarePopDuration);
+        Random rand = new(seed);
+        float[] output = new float[count];
+
+        ReadOnlySpan<float> burstTimes = [0.00f, 0.025f, 0.20f, 0.225f, 0.40f, 0.425f, 0.60f, 0.625f];
+        for (int b = 0; b < burstTimes.Length; b++)
+        {
+            int start = (int)(burstTimes[b] * SampleRate);
+            float gain = 0.82f + 0.18f * (float)rand.NextDouble();
+            float baseFreq = 260f + 90f * (float)rand.NextDouble();
+            float lp = 0f, hp = 0f, hpPrev = 0f;
+            float phase = 0f;
+            int popSamples = Math.Min(count - start, (int)(0.18f * SampleRate));
+
+            for (int i = 0; i < popSamples; i++)
+            {
+                float t = (float)i / SampleRate;
+                float white = (float)rand.NextDouble() * 2f - 1f;
+                float freq = baseFreq + 420f * MathF.Exp(-t / 0.006f);
+                phase += MathF.Tau * freq / SampleRate;
+
+                float thump = MathF.Sin(phase) * MathF.Exp(-t / 0.011f) * 1.25f;
+                lp += (white - lp) * Coefficient(2800f);
+                hp = 0.82f * (hp + lp - hpPrev);
+                hpPrev = lp;
+                float crack = hp * MathF.Exp(-t / 0.016f) * 1.65f;
+                float hiss = lp * MathF.Exp(-t / 0.085f) * 0.45f;
+
+                output[start + i] += (thump + crack + hiss) * gain;
+            }
+        }
+
+        int fade = (int)(0.06f * SampleRate);
+        for (int i = count - fade; i < count; i++)
+            output[i] *= (float)(count - i) / fade;
+
+        NormalizeSoftClip(output, driveFactor: 1.35f, targetPeak: Peak * 0.72f);
+        return output;
+    }
+
+    // High-altitude proximity-fuze HE-Frag SAM airburst: razor-sharp sky crack + hollow atmospheric echo.
+    internal static float[] RenderAirburst(int seed)
+    {
+        int count = (int)(SampleRate * AirburstDuration);
+        Random rand = new(seed);
+        float[] output = new float[count];
+
+        float bp1 = 0f, bp2 = 0f;
+        float hp = 0f, hpPrev = 0f;
+        float r1 = 0f, r2 = 0f;
+        float phase = 0f;
+
+        for (int i = 0; i < count; i++)
+        {
+            float t = (float)i / SampleRate;
+            float white = (float)rand.NextDouble() * 2f - 1f;
+
+            // Razor-sharp shock crack (0 - 30ms)
+            float snapFreq = 125f + 620f * MathF.Exp(-t / 0.009f);
+            phase += MathF.Tau * snapFreq / SampleRate;
+            float snap = (MathF.Sin(phase) * 0.75f + white * 0.9f) * MathF.Exp(-t / 0.022f) * 2.4f;
+
+            // High-velocity shrapnel tear (mid-high band)
+            float kBp = Coefficient(900f + 1600f * MathF.Exp(-t / 0.07f));
+            bp1 += (white - bp1) * kBp;
+            bp2 += (bp1 - bp2) * kBp;
+            hp = 0.88f * (hp + bp2 - hpPrev);
+            hpPrev = bp2;
+            float frag = hp * MathF.Exp(-t / 0.14f) * 1.8f;
+
+            // Crisp sky echo tail (lighter than ground blast, cleaner decay)
+            float kR = Coefficient(210f + 350f * MathF.Exp(-t / 0.25f));
+            r1 += (white - r1) * kR;
+            r2 += (r1 - r2) * kR;
+            float skyTail = r2 * (1f - MathF.Exp(-t / 0.025f)) * MathF.Exp(-t / 0.38f) * 1.5f;
+
+            output[i] = snap + frag + skyTail;
+        }
+
+        int fade = (int)(0.14f * SampleRate);
+        for (int i = count - fade; i < count; i++)
+            output[i] *= (float)(count - i) / fade;
+
+        NormalizeSoftClip(output, driveFactor: 1.45f, targetPeak: Peak * 0.86f);
+        return output;
+    }
+
+    // Crisp dual-pip Cold War cockpit missile warning tone.
+    internal static float[] RenderMissileWarning()
+    {
+        int count = (int)(SampleRate * MissileWarningDuration);
+        float[] output = new float[count];
+        for (int i = 0; i < count; i++)
+        {
+            float t = (float)i / SampleRate;
+            float env = 0f;
+            float freq = 1280f;
+            if (t < 0.085f)
+            {
+                env = MathF.Sin(Math.Clamp(t / 0.085f, 0f, 1f) * MathF.PI);
+                freq = 1240f;
+            }
+            else if (t >= 0.135f && t < 0.235f)
+            {
+                env = MathF.Sin(Math.Clamp((t - 0.135f) / 0.10f, 0f, 1f) * MathF.PI);
+                freq = 1620f;
+            }
+            float tone = MathF.Sin(MathF.Tau * freq * t) * 0.78f + MathF.Sin(MathF.Tau * freq * 2f * t) * 0.22f;
+            output[i] = tone * env * 0.22f;
+        }
+        return output;
+    }
+
+    private static void NormalizeSoftClip(float[] output, float driveFactor, float targetPeak)
+    {
+        float peak = 0.0001f;
+        for (int i = 0; i < output.Length; i++)
+            peak = MathF.Max(peak, MathF.Abs(output[i]));
+        float drive = driveFactor / peak;
+        float norm = targetPeak / MathF.Tanh(driveFactor);
+        for (int i = 0; i < output.Length; i++)
+            output[i] = MathF.Tanh(output[i] * drive) * norm;
+    }
+
     // One-pole low-pass coefficient for a cutoff in Hz.
     private static float Coefficient(float cutoff) => 1f - MathF.Exp(-MathF.Tau * cutoff / SampleRate);
 }

@@ -612,6 +612,7 @@ internal static class GraphiteHudRegressionTests
         public bool FireMission(EntityId unit, System.Numerics.Vector2 target, bool cancel = false) => false;
         public int StopCount { get; private set; }
         public bool Stop(EntityId unit) { StopCount++; return true; }
+        public bool DeployFlares(EntityId unit, bool toggleAuto = false) => false;
         public void Advance(double elapsedSeconds) { }
         public void Dispose() { }
     }

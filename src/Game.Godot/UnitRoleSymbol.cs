@@ -88,6 +88,13 @@ internal sealed partial class UnitRoleSymbol : Control
                 DrawLine(new Vector2(9f, 2f), new Vector2(9f, 10f), color, 1.1f);
                 DrawLine(new Vector2(4.5f, 6f), new Vector2(13.5f, 6f), color, 1.1f);
                 break;
+            case ContactClassification.Artillery:
+                DrawCircle(new Vector2(9f, 6f), 2.1f, color);
+                break;
+            case ContactClassification.AntiAir:
+                // Classic NATO Air Defense lower dome arc
+                DrawArc(new Vector2(9f, 10.5f), 5.2f, Mathf.Pi, Mathf.Tau, 10, color, 1.2f);
+                break;
         }
     }
 }

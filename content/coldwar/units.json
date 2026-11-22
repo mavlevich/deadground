@@ -226,6 +226,34 @@
       "projectile_speed": 160.0,
       "setup_seconds": 2.0,
       "elevation_degrees": 32.0
+    },
+    {
+      "id": "sam_9m37",
+      "range": 2200.0,
+      "min_range": 180.0,
+      "reload_seconds": 4.0,
+      "damage": 120,
+      "ammo_capacity": 8,
+      "muzzle_height": 2.6,
+      "presentation_id": "sam_9m37",
+      "presentation_kind": "surface_to_air_missile",
+      "penetration_near": 35.0,
+      "penetration_far": 35.0,
+      "penetration_near_range": 0.0,
+      "penetration_far_range": 2200.0,
+      "rounds_per_burst": 1,
+      "dispersion_mils": 1.0,
+      "can_target_air": true,
+      "max_air_target_altitude": 350.0,
+      "air_targets_only": true,
+      "guidance_kind": "infrared",
+      "projectile_speed": 145.0,
+      "splash_radius": 12.0,
+      "missile_max_turn_rate_deg_per_sec": 54.0,
+      "missile_proximity_fuze_radius": 11.5,
+      "ir_countermeasure_resistance": 0.25,
+      "missile_max_flight_ticks": 360,
+      "missile_motor_burn_ticks": 140
     }
   ],
   "units": [
@@ -542,6 +570,14 @@
         "max_sling_weight_kg": 12700.0,
         "sling_cable_length": 10.0,
         "sling_speed_penalty_at_max": 0.45
+      },
+      "flares": {
+        "charges": 8,
+        "cooldown_seconds": 4.5,
+        "active_duration_seconds": 2.6,
+        "decoy_radius": 70.0,
+        "ir_spoof_probability": 0.78,
+        "default_auto_flares": true
       }
     },
     {
@@ -571,6 +607,37 @@
       "armor_side": 0.0,
       "armor_rear": 0.0,
       "cargo_weight_kg": 13700.0,
+      "can_internal_load": false,
+      "can_sling_load": false
+    },
+    {
+      "id": "strela10",
+      "name": "9K35 Strela-10",
+      "faction": "soviet",
+      "classification": "anti_air",
+      "speed_road": 16.7,
+      "speed_offroad": 8.3,
+      "reverse_speed": 2.5,
+      "water_speed": 1.5,
+      "sensor_range": 2400.0,
+      "visual_signature": 0.95,
+      "eye_height": 2.5,
+      "target_points": [0.9, 2.5],
+      "radius": 1.5,
+      "collision_radius": 3.5,
+      "height": 2.8,
+      "max_health": 55,
+      "weapon": "sam_9m37",
+      "turret_traverse_rate": 70.0,
+      "turn_rate": 34.0,
+      "can_pivot": true,
+      "min_turn_radius": 0.0,
+      "acceleration": 2.2,
+      "deceleration": 4.2,
+      "armor_front": 14.0,
+      "armor_side": 7.0,
+      "armor_rear": 7.0,
+      "cargo_weight_kg": 12100.0,
       "can_internal_load": false,
       "can_sling_load": false
     }

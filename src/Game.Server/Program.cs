@@ -99,7 +99,8 @@ string[] validScenarios =
     "infantry-playground",
     "infantry-transport",
     "helicopter-playground",
-    "artillery-playground"
+    "artillery-playground",
+    "air-defense-playground"
 ];
 
 if (!validScenarios.Contains(scenario))
@@ -131,6 +132,7 @@ StaticGeometry? scenarioGeometry = scenario switch
     "infantry-transport" => InfantryTransportScenario.CreateStaticGeometry(),
     "helicopter-playground" => HelicopterPlaygroundScenario.CreateStaticGeometry(),
     "artillery-playground" => ArtilleryPlaygroundScenario.CreateStaticGeometry(),
+    "air-defense-playground" => AirDefensePlaygroundScenario.CreateStaticGeometry(),
     "prototype" => null,
     _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
 };
@@ -156,6 +158,7 @@ MatchSetup setup = scenario switch
     "infantry-transport" => InfantryTransportScenario.CreateMatchSetup(scenarioGeometry!),
     "helicopter-playground" => HelicopterPlaygroundScenario.CreateMatchSetup(scenarioGeometry!),
     "artillery-playground" => ArtilleryPlaygroundScenario.CreateMatchSetup(scenarioGeometry!),
+    "air-defense-playground" => AirDefensePlaygroundScenario.CreateMatchSetup(scenarioGeometry!),
     "prototype" => PrototypeScenario.CreateMatchSetup(map),
     _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
 };
@@ -193,6 +196,7 @@ Simulation CreateSimulation(ulong seed = 0)
         "infantry-transport" => InfantryTransportScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "helicopter-playground" => HelicopterPlaygroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "artillery-playground" => ArtilleryPlaygroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
+        "air-defense-playground" => AirDefensePlaygroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "prototype" => PrototypeScenario.Create(map),
         _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
     };
@@ -427,6 +431,45 @@ if (smokeTest)
         }
 
         Console.WriteLine($"ARTILLERY_PLAYGROUND_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} launches={launchesSeen} impacts={impactsSeen} ammo_remaining={gradObs.Ammunition}");
+        return;
+    }
+
+    if (scenario == "air-defense-playground")
+    {
+        for (int i = 0; i < 20; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.Replica.OwnUnits.Length != 8)
+            throw new InvalidOperationException($"Air-defense-playground smoke test: expected 8 own units, got {session.Replica.OwnUnits.Length}.");
+
+        EntityId alphaChinookId = session.Replica.OwnUnits[0].Id;
+        int launchesSeen = 0;
+        int flaresSeen = 0;
+        int detonationsSeen = 0;
+        int maxActiveMissiles = 0;
+        uint lastEvId = 0;
+        for (int i = 0; i < 320; i++)
+        {
+            session.Advance(1d / Simulation.TickRate);
+            if (session.Replica.MissileCount > maxActiveMissiles)
+                maxActiveMissiles = session.Replica.MissileCount;
+
+            ReadOnlySpan<CombatEventObservation> events = session.Replica.Events;
+            for (int e = 0; e < events.Length; e++)
+            {
+                if (events[e].EventId <= lastEvId) continue;
+                lastEvId = events[e].EventId;
+                if (events[e].Kind == CombatEventKind.MissileLaunched) launchesSeen++;
+                else if (events[e].Kind == CombatEventKind.FlaresDeployed) flaresSeen++;
+                else if (events[e].Kind == CombatEventKind.MissileDetonated) detonationsSeen++;
+            }
+        }
+
+        if (launchesSeen < 1 || flaresSeen < 1 || detonationsSeen < 1 || maxActiveMissiles < 1)
+        {
+            throw new InvalidOperationException(
+                $"Air-defense-playground smoke test failed: launches={launchesSeen} flares={flaresSeen} detonations={detonationsSeen} max_missiles={maxActiveMissiles}");
+        }
+
+        Console.WriteLine($"AIR_DEFENSE_PLAYGROUND_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} launches={launchesSeen} flares={flaresSeen} detonations={detonationsSeen} max_missiles={maxActiveMissiles} alpha_id={alphaChinookId.Value}");
         return;
     }
 

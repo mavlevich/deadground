@@ -583,5 +583,6 @@ internal static class TacticalMinimapRegressionTests
 
         public bool FireMission(EntityId unit, NumericsVector2 target, bool cancel = false) => true;
         public bool Stop(EntityId unit) => true;
+        public bool DeployFlares(EntityId unit, bool toggleAuto = false) => true;
     }
 }
