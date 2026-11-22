@@ -1,0 +1,71 @@
+{
+  "asset": "CH-47D Chinook tandem-rotor heavy-lift transport helicopter (Dead Ground v3 production study)",
+  "configuration": "Official Boeing CH-47D / TM 55-1520-240-10 proportions with integral smooth radome, thin-mullion aquarium cockpit, hollow openable cargo bay & interior, aerodynamic rear pylon, EAPS/heat-shielded T55 turbines, twin M60D door guns, translucent RTS rotor blur discs, frame-aligned CARC skin, baked vertex AO/oil/soot, and US Army stencil decals",
+  "units": "meters",
+  "up": "+Y",
+  "forward": "-Z",
+  "authoring_tool": "Blender 5.2.2 LTS",
+  "vertex_colors": "rgb: baked ambient occlusion x transmission oil streaks x T55 exhaust soot x belly grime",
+  "articulated_nodes": [
+    "Fuselage",
+    "FrontRotor",
+    "RearRotor",
+    "FrontRotorBlur",
+    "RearRotorBlur",
+    "RearRamp"
+  ],
+  "animation_hints": {
+    "FrontRotor": "spin around local +Y; hide or fade during fast cruise",
+    "RearRotor": "counter-spin around local -Y; hide or fade during fast cruise",
+    "FrontRotorBlur": "show and spin around local +Y during flight",
+    "RearRotorBlur": "show and counter-spin around local -Y during flight",
+    "RearRamp": "rotate around local +X from 0 deg (closed) to +42 deg (ground loading)"
+  },
+  "reference_anchors": {
+    "fuselage_length_meters": 15.54,
+    "cabin_width_meters": 2.52,
+    "width_over_sponsons_meters": 3.78,
+    "belly_clearance_meters": 0.72,
+    "height_to_rear_rotor_hub_meters": 5.77,
+    "height_to_front_rotor_hub_meters": 4.72,
+    "rotor_diameter_meters": 18.29,
+    "rotor_hub_spacing_meters": 11.94,
+    "forward_mast_tilt_deg": 9.0,
+    "rear_mast_tilt_deg": 4.0,
+    "wheelbase_meters": 7.87,
+    "front_track_meters": 3.2,
+    "rear_track_meters": 3.56
+  },
+  "lods": [
+    {
+      "file": "ch47.glb",
+      "triangles": 9462,
+      "vertices": 9552,
+      "mesh_parts": 6,
+      "materials": 20,
+      "bytes": 1085096,
+      "lod": 0,
+      "role": "close"
+    },
+    {
+      "file": "ch47_lod1.glb",
+      "triangles": 6650,
+      "vertices": 6548,
+      "mesh_parts": 6,
+      "materials": 20,
+      "bytes": 906200,
+      "lod": 1,
+      "role": "rts"
+    },
+    {
+      "file": "ch47_lod2.glb",
+      "triangles": 4374,
+      "vertices": 4320,
+      "mesh_parts": 6,
+      "materials": 17,
+      "bytes": 687088,
+      "lod": 2,
+      "role": "distant"
+    }
+  ]
+}

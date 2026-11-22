@@ -94,7 +94,9 @@ public enum CombatEventKind : byte
     None = 0,
     ShotFired = 1,
     UnitDestroyed = 2,
-    TookFire = 3
+    TookFire = 3,
+    RocketLaunched = 4,
+    ArtilleryImpact = 5
 }
 
 public enum HitResult : byte
@@ -157,7 +159,22 @@ public readonly record struct OwnUnitObservation(
     uint NavOrderSequence = 0,
     EntityId ContainerId = default,
     byte PassengerCount = 0,
-    byte PassengerCapacity = 0);
+    byte PassengerCapacity = 0,
+    byte SmokeCharges = 0,
+    ushort SmokeCooldownTicks = 0,
+    bool HasSmokeCapability = false,
+    bool SmokeActive = false,
+    float Altitude = 0f,
+    FlightPhase FlightPhase = FlightPhase.Ground,
+    AltitudeBand AltitudeBand = AltitudeBand.High,
+    float PitchRad = 0f,
+    float RollRad = 0f,
+    bool HasFlightCapability = false,
+    EntityId SlingLoadId = default,
+    EntityId SlungById = default,
+    FlightStateFlags FlightFlags = FlightStateFlags.None,
+    float GunPitchRad = 0f,
+    ArtilleryFlags ArtilleryFlags = ArtilleryFlags.None);
 
 public interface ISimulationRules
 {

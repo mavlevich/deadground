@@ -443,6 +443,11 @@ public sealed class StaticGeometry
             return false;
         }
 
+        if (context is not null && context.SmokeVolumeCount > 0 && !SmokeLos.IsSmokeClear(start, end, context.ActiveSmoke))
+        {
+            return false;
+        }
+
         return true;
     }
 
@@ -598,6 +603,16 @@ public sealed class StaticGeometry
             }
         }
 
+        if (context is not null && context.SmokeVolumeCount > 0 &&
+            SmokeLos.TryTraceSmoke(start, delta, totalDistance, context.ActiveSmoke, out float smokeHitT))
+        {
+            if (smokeHitT <= closestT + VolumeEpsilon)
+            {
+                closestT = smokeHitT;
+                closestKind = ObstructionKind.Smoke;
+            }
+        }
+
         diagnostics = new LineOfSightDiagnostics(visitedTerrainCells, visitedStructureCells, testedStructures);
 
         if (closestKind == ObstructionKind.None)
@@ -613,6 +628,7 @@ public sealed class StaticGeometry
             ObstructionKind.Terrain => LineOfSightResult.BlockedByTerrain(hitPoint, hitDistance, closestT),
             ObstructionKind.Structure => LineOfSightResult.BlockedByStructure(closestStructureId, hitPoint, hitDistance, closestT),
             ObstructionKind.Vegetation => LineOfSightResult.BlockedByVegetation(hitPoint, hitDistance, closestT),
+            ObstructionKind.Smoke => LineOfSightResult.BlockedBySmoke(hitPoint, hitDistance, closestT),
             _ => LineOfSightResult.Clear(end, totalDistance)
         };
     }

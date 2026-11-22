@@ -42,10 +42,12 @@ internal sealed class ContactViewSet(
             }
             System.Numerics.Vector2 position = replica.SampleContactPosition(contact.Id, renderTick);
             replica.SampleContactYaws(contact.Id, renderTick, out float turretYaw, out float hullHeading);
+            float altitude = replica.SampleContactAltitude(contact.Id, renderTick);
+            float gunPitchRad = replica.SampleContactGunPitch(contact.Id, renderTick);
             float groundY = geometry is not null
                 ? geometry.GetSurfaceHeight(position, contact.SupportSurface)
                 : map.GetHeight(position.X, position.Y);
-            view.Update(contact, position, groundY, Selected.Contains(contact.Id), turretYaw, hullHeading);
+            view.Update(contact, position, groundY, Selected.Contains(contact.Id), turretYaw, hullHeading, altitude, gunPitchRad);
         }
 
         _removed.Clear();

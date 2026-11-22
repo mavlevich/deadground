@@ -20,7 +20,10 @@ public sealed class SideContactTracker
         ushort Type = 0,
         float TurretYaw = 0f,
         float HullHeading = 0f,
-        uint SupportSurface = 0);
+        uint SupportSurface = 0,
+        float Altitude = 0f,
+        FlightPhase FlightPhase = FlightPhase.Ground,
+        float GunPitchRad = 0f);
 
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     private static int CompareTargets(in ObservedTarget a, in ObservedTarget b)
@@ -153,6 +156,9 @@ public sealed class SideContactTracker
         public float TurretYaw;
         public float HullHeading;
         public uint SupportSurface;
+        public float Altitude;
+        public FlightPhase FlightPhase;
+        public float GunPitchRad;
     }
 
     private readonly Entry[] _entries;
@@ -276,6 +282,9 @@ public sealed class SideContactTracker
                 entry.TurretYaw = target.TurretYaw;
                 entry.HullHeading = target.HullHeading;
                 entry.SupportSurface = target.SupportSurface;
+                entry.Altitude = target.Altitude;
+                entry.FlightPhase = target.FlightPhase;
+                entry.GunPitchRad = target.GunPitchRad;
                 entry.ObservedThisStep = true;
             }
             else
@@ -350,6 +359,9 @@ public sealed class SideContactTracker
                 correlated.TurretYaw = target.TurretYaw;
                 correlated.HullHeading = target.HullHeading;
                 correlated.SupportSurface = target.SupportSurface;
+                correlated.Altitude = target.Altitude;
+                correlated.FlightPhase = target.FlightPhase;
+                correlated.GunPitchRad = target.GunPitchRad;
                 correlated.ObservedThisStep = true;
                 correlated.HasBoundEntity = true;
                 correlated.BoundEntityId = target.Id;
@@ -463,7 +475,10 @@ public sealed class SideContactTracker
             BoundEntityId = target.Id,
             TurretYaw = target.TurretYaw,
             HullHeading = target.HullHeading,
-            SupportSurface = target.SupportSurface
+            SupportSurface = target.SupportSurface,
+            Altitude = target.Altitude,
+            FlightPhase = target.FlightPhase,
+            GunPitchRad = target.GunPitchRad
         };
         _entityToContactIndex[target.Id] = assignedIndex;
         _count++;
@@ -532,7 +547,10 @@ public sealed class SideContactTracker
                 entry.LastSeenTick,
                 entry.TurretYaw,
                 entry.HullHeading,
-                entry.SupportSurface);
+                entry.SupportSurface,
+                entry.Altitude,
+                entry.FlightPhase,
+                entry.GunPitchRad);
         }
 
         // Canonical sort by ContactId to avoid publication order variations
@@ -551,7 +569,7 @@ public sealed class SideContactTracker
             if (_entries[i].Id.Value == id.Value)
             {
                 ref Entry e = ref _entries[i];
-                contact = new ContactObservation(e.Id, e.State, e.Classification, e.Type, e.Position, e.LastSeenTick, e.TurretYaw, e.HullHeading, e.SupportSurface);
+                contact = new ContactObservation(e.Id, e.State, e.Classification, e.Type, e.Position, e.LastSeenTick, e.TurretYaw, e.HullHeading, e.SupportSurface, e.Altitude, e.FlightPhase, e.GunPitchRad);
                 return true;
             }
         }
@@ -593,7 +611,7 @@ public sealed class SideContactTracker
             contactIndex >= 0 && contactIndex < _count)
         {
             ref Entry e = ref _entries[contactIndex];
-            contact = new ContactObservation(e.Id, e.State, e.Classification, e.Type, e.Position, e.LastSeenTick, e.TurretYaw, e.HullHeading, e.SupportSurface);
+            contact = new ContactObservation(e.Id, e.State, e.Classification, e.Type, e.Position, e.LastSeenTick, e.TurretYaw, e.HullHeading, e.SupportSurface, e.Altitude, e.FlightPhase, e.GunPitchRad);
             return true;
         }
         contact = default;

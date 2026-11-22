@@ -365,6 +365,23 @@ internal sealed class OrderPreviewController
             }
 
             totalCount++;
+            if (own.HasFlightCapability)
+            {
+                if (_geometry.HeightMap.Contains(target2D))
+                {
+                    validCount++;
+                    if (combinedValidity != DestinationValidity.Adjusted)
+                    {
+                        combinedValidity = DestinationValidity.Valid;
+                    }
+                }
+                else if (primaryReason == DestinationBlockReason.None)
+                {
+                    primaryReason = DestinationBlockReason.OutsideMapBounds;
+                }
+                continue;
+            }
+
             float radius = 1.0f;
             TraversabilityCapabilities capabilities = TraversabilityCapabilities.DefaultVehicle;
             float reverseSpeed = 2.5f;
@@ -530,6 +547,23 @@ internal sealed class OrderPreviewController
         {
             if (!replica.TryGetOwnUnit(unitId, out OwnUnitObservation own))
             {
+                continue;
+            }
+
+            if (own.HasFlightCapability)
+            {
+                if (_geometry.HeightMap.Contains(target2D))
+                {
+                    if (validCount == 0)
+                    {
+                        primaryAdjusted = target2D;
+                    }
+                    validCount++;
+                }
+                else if (primaryBlockedReason == DestinationBlockReason.None)
+                {
+                    primaryBlockedReason = DestinationBlockReason.OutsideMapBounds;
+                }
                 continue;
             }
 
@@ -845,6 +879,37 @@ internal sealed class OrderPreviewController
         {
             if (!replica.TryGetOwnUnit(unitId, out OwnUnitObservation own))
             {
+                continue;
+            }
+
+            if (own.HasFlightCapability)
+            {
+                if (_geometry.HeightMap.Contains(target2D))
+                {
+                    if (validCount < _validUnitsBuffer.Length)
+                    {
+                        _validUnitsBuffer[validCount++] = new ValidUnitOrder
+                        {
+                            UnitId = unitId,
+                            Target = target2D
+                        };
+                    }
+                    else
+                    {
+                        overflowCount++;
+                    }
+                }
+                else
+                {
+                    if (skippedCount < _skippedUnitsBuffer.Length)
+                    {
+                        _skippedUnitsBuffer[skippedCount++] = unitId;
+                    }
+                    if (primaryBlockedReason == DestinationBlockReason.None)
+                    {
+                        primaryBlockedReason = DestinationBlockReason.OutsideMapBounds;
+                    }
+                }
                 continue;
             }
 

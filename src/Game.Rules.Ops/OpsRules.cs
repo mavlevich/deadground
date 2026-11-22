@@ -30,12 +30,14 @@ public sealed class OpsRules : RuleSet
         NavigationTuning? navTuning = null,
         DetectionTuning? detTuning = null,
         DeterministicRandom? combatRandom = null,
-        NavigationBuildLimits? buildLimits = null)
-        : base(CreateSystems(geometry, perceptionCatalog, movementCatalog, combatCatalog, navTuning, detTuning, combatRandom, buildLimits))
+        NavigationBuildLimits? buildLimits = null,
+        IUnitSmokeCatalog? smokeCatalog = null,
+        IUnitFlightCatalog? flightCatalog = null)
+        : base(CreateSystems(geometry, perceptionCatalog, movementCatalog, combatCatalog, navTuning, detTuning, combatRandom, buildLimits, mission: null, smokeCatalog: smokeCatalog, flightCatalog: flightCatalog))
     { }
 
     public OpsRules(StaticGeometry geometry, UnitCatalog catalog, DeterministicRandom? combatRandom = null)
-        : this(geometry, new OpsPerceptionCatalog(catalog), new OpsMovementCatalog(catalog), new OpsCombatCatalog(catalog), null, PrototypeScenario.CreateDetectionTuning(catalog), combatRandom) { }
+        : this(geometry, new OpsPerceptionCatalog(catalog), new OpsMovementCatalog(catalog), new OpsCombatCatalog(catalog), null, PrototypeScenario.CreateDetectionTuning(catalog), combatRandom, null, new OpsSmokeCatalog(catalog), new OpsFlightCatalog(catalog)) { }
 
     public OpsRules(StaticGeometry geometry, UnitCatalog catalog, NavigationTuning? navTuning, DetectionTuning? detTuning = null, DeterministicRandom? combatRandom = null, NavigationBuildLimits? buildLimits = null)
         : this(
@@ -46,7 +48,9 @@ public sealed class OpsRules : RuleSet
             navTuning,
             detTuning ?? PrototypeScenario.CreateDetectionTuning(catalog),
             combatRandom,
-            buildLimits)
+            buildLimits,
+            new OpsSmokeCatalog(catalog),
+            new OpsFlightCatalog(catalog))
     { }
 
     public static OpsRules CreateWithMission(
@@ -58,6 +62,8 @@ public sealed class OpsRules : RuleSet
         OpsPerceptionCatalog perceptionCatalog = new(catalog);
         OpsMovementCatalog movementCatalog = new(catalog);
         OpsCombatCatalog combatCatalog = new(catalog);
+        OpsSmokeCatalog smokeCatalog = new(catalog);
+        OpsFlightCatalog flightCatalog = new(catalog);
         DetectionTuning detTuning = PrototypeScenario.CreateDetectionTuning(catalog);
         ISimulationSystem[] systems = CreateSystems(
             geometry,
@@ -68,7 +74,9 @@ public sealed class OpsRules : RuleSet
             detTuning: detTuning,
             combatRandom: combatRandom,
             buildLimits: null,
-            mission: mission);
+            mission: mission,
+            smokeCatalog: smokeCatalog,
+            flightCatalog: flightCatalog);
         return new OpsRules(systems);
     }
 
@@ -81,17 +89,32 @@ public sealed class OpsRules : RuleSet
         DetectionTuning? detTuning,
         DeterministicRandom? combatRandom = null,
         NavigationBuildLimits? buildLimits = null,
-        IMissionSystem? mission = null)
+        IMissionSystem? mission = null,
+        IUnitSmokeCatalog? smokeCatalog = null,
+        IUnitFlightCatalog? flightCatalog = null)
     {
+        FlightSystem? flight = flightCatalog is not null ? new FlightSystem(geometry, flightCatalog) : null;
         NavigationSystem nav = new(new NavigationGrid(geometry, navTuning?.CellSize ?? NavigationTuning.DefaultCellSize, enableHierarchical: true, buildLimits: buildLimits, sectorSize: navTuning?.SectorSize ?? NavigationTuning.DefaultSectorSize), movementCatalog, navTuning);
         ContainerSystem container = new(nav);
-        DetectionSystem det = new(geometry, perceptionCatalog, detTuning);
-        if (combatCatalog is not null)
-        {
-            CombatSystem combat = new(geometry, combatCatalog, perceptionCatalog, det, nav, combatRandom: combatRandom);
-            return mission is not null ? [nav, container, det, combat, mission] : [nav, container, det, combat];
-        }
-        return mission is not null ? [nav, container, det, mission] : [nav, container, det];
+        SmokeSystem? smoke = smokeCatalog is not null ? new SmokeSystem(geometry, smokeCatalog) : null;
+        DetectionSystem det = new(geometry, perceptionCatalog, detTuning, smokeSystem: smoke);
+        CombatSystem? combat = combatCatalog is not null
+            ? new CombatSystem(geometry, combatCatalog, perceptionCatalog, det, nav, combatRandom: combatRandom, flight: flight)
+            : null;
+        ArtillerySystem? artillery = combatCatalog is not null
+            ? new ArtillerySystem(geometry, combatCatalog, nav)
+            : null;
+
+        List<ISimulationSystem> list = new(8);
+        if (flight is not null) list.Add(flight);
+        list.Add(nav);
+        list.Add(container);
+        if (smoke is not null) list.Add(smoke);
+        list.Add(det);
+        if (combat is not null) list.Add(combat);
+        if (artillery is not null) list.Add(artillery);
+        if (mission is not null) list.Add(mission);
+        return list.ToArray();
     }
 }
 
@@ -124,7 +147,67 @@ public sealed record WeaponData(
     float Dispersion = 0f,
     float TargetMovementPenalty = 0.20f,
     float RangingBonus = 0.08f,
-    float MaxRangingBonus = 0.24f);
+    float MaxRangingBonus = 0.24f,
+    bool CanTargetAir = false,
+    float MaxAirTargetAltitude = 0f,
+    bool IsIndirectFire = false,
+    float MinRange = 0f,
+    int SalvoCount = 1,
+    float SalvoIntervalSeconds = 0f,
+    int SalvoIntervalTicks = 0,
+    float DispersionRadius = 0f,
+    float SplashRadius = 0f,
+    float ProjectileSpeed = ArtilleryBallistics.DefaultRocketSpeed,
+    float SetupSeconds = 0f,
+    int SetupTicks = 0,
+    float ElevationDegrees = 0f);
+
+public sealed record FlightData(
+    float CruiseSpeed,
+    float LowAltitudeSpeed,
+    float Acceleration,
+    float Deceleration,
+    float YawRate,
+    float ClimbRate,
+    float DescentRate,
+    float LowAltitude,
+    float HighAltitude,
+    float LandingClearanceRadius = 10.0f,
+    float MaxLandingSlopeDegrees = 12.0f,
+    float CrashDescentRate = 14.0f,
+    float CrashSpinRate = 180.0f,
+    float CrashSplashRadius = 12.0f,
+    int CrashSplashDamage = 60,
+    bool StartAirborne = false,
+    bool CanLoadInternalVehicles = false,
+    bool CanFastRope = false,
+    float FastRopeAltitude = 18.0f,
+    int FastRopeIntervalTicks = 10,
+    float MaxSlingWeightKg = 0.0f,
+    float SlingCableLength = 10.0f,
+    float SlingSpeedPenaltyAtMax = 0.45f);
+
+public sealed record SmokeData(
+    string Kind,
+    int Charges,
+    float CooldownSeconds = 0f,
+    int CooldownTicks = 0,
+    float EmitDurationSeconds = 0f,
+    int EmitDurationTicks = 0,
+    float EmitIntervalSeconds = 0f,
+    int EmitIntervalTicks = 0,
+    float MinCloudSpacing = 10.0f,
+    float CloudRadius = 16.0f,
+    float CloudHeight = 7.0f,
+    float CloudDurationSeconds = 105.0f,
+    int CloudDurationTicks = 0,
+    float BloomSeconds = 3.0f,
+    int BloomTicks = 0,
+    float FadeSeconds = 15.0f,
+    int FadeTicks = 0,
+    float OpticalDensity = 0.25f,
+    float ExhaustOffset = 3.5f,
+    float Range = 0f);
 
 public sealed record UnitDefinition(
     string Id,
@@ -159,7 +242,13 @@ public sealed record UnitDefinition(
     float CollisionRadius = 0f,
     float Height = 0f,
     int PassengerCapacity = 0,
-    int ContainerDestructionDamage = 50);
+    int ContainerDestructionDamage = 50,
+    SmokeData? Smoke = null,
+    FlightData? Flight = null,
+    float CargoWeightKg = 0f,
+    int InternalCargoSlots = 0,
+    bool CanInternalLoad = false,
+    bool CanSlingLoad = false);
 
 public sealed record FactionData(string Id, string? Name = null);
 
@@ -262,6 +351,8 @@ public sealed class OpsPerceptionCatalog : IUnitPerceptionCatalog
                 "recon" or "recon_vehicle" => ContactClassification.Recon,
                 "apc" => ContactClassification.Apc,
                 "infantry" => ContactClassification.Infantry,
+                "helicopter" or "rotorcraft" => ContactClassification.Helicopter,
+                "artillery" or "mlrs" => ContactClassification.Artillery,
                 "vehicle" => ContactClassification.Vehicle,
                 _ => ContactClassification.Vehicle
             };
@@ -353,7 +444,9 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
                         ? WeaponPresentationKind.Cannon
                         : string.Equals(w.PresentationKind, "rifle", StringComparison.OrdinalIgnoreCase)
                             ? WeaponPresentationKind.Rifle
-                            : throw new InvalidOperationException($"Unsupported presentation_kind '{w.PresentationKind}'.");
+                            : string.Equals(w.PresentationKind, "rocket_artillery", StringComparison.OrdinalIgnoreCase)
+                                ? WeaponPresentationKind.RocketArtillery
+                                : throw new InvalidOperationException($"Unsupported presentation_kind '{w.PresentationKind}'.");
 
                 ushort presId = WeaponPresentation.MakeId(kind, presIdCounter++);
 
@@ -362,6 +455,13 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
                 float penNearRange = w.PenetrationNearRange;
                 float penFarRange = w.PenetrationFarRange > 0f ? w.PenetrationFarRange : w.Range;
                 int burst = Math.Max(1, w.RoundsPerBurst);
+
+                int salvoIntervalTicks = w.SalvoIntervalTicks > 0
+                    ? w.SalvoIntervalTicks
+                    : (w.SalvoIntervalSeconds > 0f ? Math.Max(1, (int)MathF.Round(w.SalvoIntervalSeconds * Simulation.TickRate)) : 1);
+                int setupTicks = w.SetupTicks > 0
+                    ? w.SetupTicks
+                    : (w.SetupSeconds > 0f ? (int)MathF.Round(w.SetupSeconds * Simulation.TickRate) : 0);
 
                 float dispersion = w.DispersionMils > 0f ? w.DispersionMils : (w.Dispersion > 0f ? w.Dispersion : 3.0f);
                 weapons[w.Id] = new WeaponDefinition(
@@ -381,7 +481,18 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
                     dispersion,
                     w.TargetMovementPenalty,
                     w.RangingBonus,
-                    w.MaxRangingBonus);
+                    w.MaxRangingBonus,
+                    w.CanTargetAir,
+                    w.MaxAirTargetAltitude,
+                    w.IsIndirectFire,
+                    w.MinRange,
+                    Math.Max(1, w.SalvoCount),
+                    salvoIntervalTicks,
+                    w.DispersionRadius,
+                    w.SplashRadius,
+                    w.ProjectileSpeed > 0f ? w.ProjectileSpeed : ArtilleryBallistics.DefaultRocketSpeed,
+                    setupTicks,
+                    w.ElevationDegrees);
             }
         }
 
@@ -422,10 +533,191 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
     }
 }
 
+public sealed class OpsSmokeCatalog : IUnitSmokeCatalog
+{
+    private readonly SmokeProfile[] _profiles;
+    private readonly bool[] _hasProfile;
+
+    public OpsSmokeCatalog(UnitCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        _profiles = new SmokeProfile[catalog.Units.Length];
+        _hasProfile = new bool[catalog.Units.Length];
+
+        for (int i = 0; i < catalog.Units.Length; i++)
+        {
+            SmokeData? s = catalog.Units[i].Smoke;
+            if (s is null)
+            {
+                continue;
+            }
+
+            SmokeDeliveryKind kind = ParseDeliveryKind(s.Kind);
+            if (kind == SmokeDeliveryKind.None)
+            {
+                continue;
+            }
+
+            int cooldownTicks = ResolveTicks(s.CooldownTicks, s.CooldownSeconds);
+            int emitDurationTicks = ResolveTicks(s.EmitDurationTicks, s.EmitDurationSeconds);
+            int emitIntervalTicks = ResolveTicks(s.EmitIntervalTicks, s.EmitIntervalSeconds);
+            int cloudDurationTicks = ResolveTicks(s.CloudDurationTicks, s.CloudDurationSeconds);
+            int bloomTicks = ResolveTicks(s.BloomTicks, s.BloomSeconds);
+            int fadeTicks = ResolveTicks(s.FadeTicks, s.FadeSeconds);
+
+            SmokeProfile profile = new(
+                kind,
+                s.Charges,
+                cooldownTicks,
+                emitDurationTicks,
+                emitIntervalTicks,
+                s.MinCloudSpacing,
+                s.CloudRadius,
+                s.CloudHeight,
+                cloudDurationTicks,
+                bloomTicks,
+                fadeTicks,
+                s.OpticalDensity,
+                s.ExhaustOffset,
+                s.Range);
+
+            if (profile.IsValid)
+            {
+                _profiles[i] = profile;
+                _hasProfile[i] = true;
+            }
+        }
+    }
+
+    internal static SmokeDeliveryKind ParseDeliveryKind(string? kind)
+    {
+        if (string.IsNullOrWhiteSpace(kind)) return SmokeDeliveryKind.None;
+        return kind.ToLowerInvariant() switch
+        {
+            "engine_screen" => SmokeDeliveryKind.EngineScreen,
+            "discharger" => SmokeDeliveryKind.Discharger,
+            "grenade" => SmokeDeliveryKind.Grenade,
+            _ => SmokeDeliveryKind.None
+        };
+    }
+
+    internal static int ResolveTicks(int explicitTicks, float seconds) =>
+        explicitTicks > 0 ? explicitTicks : (seconds > 0f ? (int)MathF.Round(seconds * Simulation.TickRate) : 0);
+
+    public bool TryGetSmokeProfile(ushort definition, out SmokeProfile profile)
+    {
+        if (definition < _profiles.Length && _hasProfile[definition])
+        {
+            profile = _profiles[definition];
+            return true;
+        }
+        profile = default;
+        return false;
+    }
+}
+
+public sealed class OpsFlightCatalog : IUnitFlightCatalog
+{
+    private readonly FlightProfile[] _profiles;
+    private readonly bool[] _hasProfile;
+    private readonly CargoProfile[] _cargoProfiles;
+
+    public OpsFlightCatalog(UnitCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        _profiles = new FlightProfile[catalog.Units.Length];
+        _hasProfile = new bool[catalog.Units.Length];
+        _cargoProfiles = new CargoProfile[catalog.Units.Length];
+
+        for (int i = 0; i < catalog.Units.Length; i++)
+        {
+            UnitDefinition u = catalog.Units[i];
+            bool isInfantry = string.Equals(u.Classification, "infantry", StringComparison.OrdinalIgnoreCase);
+            if (isInfantry)
+            {
+                _cargoProfiles[i] = new CargoProfile(
+                    u.CargoWeightKg > 0f ? u.CargoWeightKg : 100f,
+                    u.InternalCargoSlots > 0 ? u.InternalCargoSlots : 1,
+                    CanInternalLoad: true,
+                    CanSlingLoad: u.CanSlingLoad,
+                    IsInfantry: true);
+            }
+            else
+            {
+                _cargoProfiles[i] = new CargoProfile(
+                    u.CargoWeightKg,
+                    u.InternalCargoSlots,
+                    u.CanInternalLoad,
+                    u.CanSlingLoad,
+                    IsInfantry: false);
+            }
+
+            FlightData? f = u.Flight;
+            if (f is null)
+                continue;
+
+            FlightProfile profile = new(
+                f.CruiseSpeed,
+                f.LowAltitudeSpeed,
+                f.Acceleration,
+                f.Deceleration,
+                f.YawRate,
+                f.ClimbRate,
+                f.DescentRate,
+                f.LowAltitude,
+                f.HighAltitude,
+                f.LandingClearanceRadius,
+                f.MaxLandingSlopeDegrees,
+                f.CrashDescentRate,
+                f.CrashSpinRate,
+                f.CrashSplashRadius,
+                f.CrashSplashDamage,
+                f.StartAirborne,
+                f.CanLoadInternalVehicles,
+                f.CanFastRope,
+                f.FastRopeAltitude,
+                f.FastRopeIntervalTicks,
+                f.MaxSlingWeightKg,
+                f.SlingCableLength,
+                f.SlingSpeedPenaltyAtMax);
+
+            if (profile.IsValid)
+            {
+                _profiles[i] = profile;
+                _hasProfile[i] = true;
+            }
+        }
+    }
+
+    public bool TryGetFlightProfile(ushort definition, out FlightProfile profile)
+    {
+        if (definition < _profiles.Length && _hasProfile[definition])
+        {
+            profile = _profiles[definition];
+            return true;
+        }
+        profile = default;
+        return false;
+    }
+
+    public bool TryGetCargoProfile(ushort definition, out CargoProfile cargo)
+    {
+        if (definition < _cargoProfiles.Length)
+        {
+            cargo = _cargoProfiles[definition];
+            return true;
+        }
+        cargo = CargoProfile.NonTransportable;
+        return false;
+    }
+}
+
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
     ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true)]
 [JsonSerializable(typeof(UnitCatalog))]
 [JsonSerializable(typeof(UnitDefinition))]
+[JsonSerializable(typeof(SmokeData))]
+[JsonSerializable(typeof(FlightData))]
 [JsonSerializable(typeof(DetectionSettings))]
 [JsonSerializable(typeof(WeaponData))]
 [JsonSerializable(typeof(WeaponData[]))]
@@ -500,7 +792,8 @@ public static class PrototypeScenario
                     throw new InvalidOperationException("Missing required weapon presentation_kind.");
                 if (!string.Equals(weapon.PresentationKind, "cannon", StringComparison.OrdinalIgnoreCase) &&
                     !string.Equals(weapon.PresentationKind, "machine_gun", StringComparison.OrdinalIgnoreCase) &&
-                    !string.Equals(weapon.PresentationKind, "rifle", StringComparison.OrdinalIgnoreCase))
+                    !string.Equals(weapon.PresentationKind, "rifle", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(weapon.PresentationKind, "rocket_artillery", StringComparison.OrdinalIgnoreCase))
                 {
                     throw new InvalidOperationException($"Unknown weapon presentation_kind '{weapon.PresentationKind}'.");
                 }
@@ -554,6 +847,23 @@ public static class PrototypeScenario
                     throw new InvalidOperationException("Invalid ranging bonus.");
                 if (!float.IsFinite(weapon.MaxRangingBonus) || weapon.MaxRangingBonus < 0f || weapon.MaxRangingBonus > 1f)
                     throw new InvalidOperationException("Invalid max ranging bonus.");
+                if (!float.IsFinite(weapon.MaxAirTargetAltitude) || weapon.MaxAirTargetAltitude < 0f)
+                    throw new InvalidOperationException("Invalid max air target altitude.");
+                if (weapon.CanTargetAir && weapon.MaxAirTargetAltitude <= 0f)
+                    throw new InvalidOperationException("Weapon with can_target_air requires positive max_air_target_altitude.");
+                if (!float.IsFinite(weapon.MinRange) || weapon.MinRange < 0f || weapon.MinRange >= weapon.Range)
+                    throw new InvalidOperationException("Invalid weapon min_range.");
+                if (weapon.SalvoCount < 1 || weapon.SalvoCount > ushort.MaxValue)
+                    throw new InvalidOperationException("Invalid weapon salvo_count.");
+                if (!float.IsFinite(weapon.DispersionRadius) || weapon.DispersionRadius < 0f ||
+                    !float.IsFinite(weapon.SplashRadius) || weapon.SplashRadius < 0f ||
+                    !float.IsFinite(weapon.ProjectileSpeed) || weapon.ProjectileSpeed <= 0f ||
+                    !float.IsFinite(weapon.ElevationDegrees) || weapon.ElevationDegrees < 0f || weapon.ElevationDegrees > 85f)
+                {
+                    throw new InvalidOperationException("Invalid indirect-fire artillery weapon parameters.");
+                }
+                if (weapon.IsIndirectFire && (weapon.SplashRadius <= 0f || weapon.DispersionRadius <= 0f))
+                    throw new InvalidOperationException("Indirect-fire weapon requires positive splash_radius and dispersion_radius.");
             }
         }
 
@@ -626,6 +936,86 @@ public static class PrototypeScenario
             {
                 throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid armor sector angle.");
             }
+            if (unit.Smoke is not null)
+            {
+                SmokeData s = unit.Smoke;
+                SmokeDeliveryKind kind = OpsSmokeCatalog.ParseDeliveryKind(s.Kind);
+                if (kind == SmokeDeliveryKind.None)
+                    throw new InvalidOperationException($"Unit '{unit.Id}' has an unsupported smoke kind '{s.Kind}'.");
+                if (s.Charges <= 0 || s.Charges > byte.MaxValue)
+                    throw new InvalidOperationException($"Unit '{unit.Id}' has an invalid smoke charges count.");
+                if (!float.IsFinite(s.CooldownSeconds) || s.CooldownSeconds < 0f || s.CooldownTicks < 0 ||
+                    !float.IsFinite(s.EmitDurationSeconds) || s.EmitDurationSeconds < 0f || s.EmitDurationTicks < 0 ||
+                    !float.IsFinite(s.EmitIntervalSeconds) || s.EmitIntervalSeconds < 0f || s.EmitIntervalTicks < 0 ||
+                    !float.IsFinite(s.MinCloudSpacing) || s.MinCloudSpacing < 0f ||
+                    !float.IsFinite(s.CloudRadius) || s.CloudRadius <= 0f ||
+                    !float.IsFinite(s.CloudHeight) || s.CloudHeight <= 0f ||
+                    !float.IsFinite(s.CloudDurationSeconds) || s.CloudDurationSeconds < 0f || s.CloudDurationTicks < 0 ||
+                    !float.IsFinite(s.BloomSeconds) || s.BloomSeconds < 0f || s.BloomTicks < 0 ||
+                    !float.IsFinite(s.FadeSeconds) || s.FadeSeconds < 0f || s.FadeTicks < 0 ||
+                    !float.IsFinite(s.OpticalDensity) || s.OpticalDensity <= 0f ||
+                    !float.IsFinite(s.ExhaustOffset) || s.ExhaustOffset < 0f ||
+                    !float.IsFinite(s.Range) || s.Range < 0f)
+                {
+                    throw new InvalidOperationException($"Unit '{unit.Id}' has invalid smoke parameters.");
+                }
+
+                int cooldownTicks = OpsSmokeCatalog.ResolveTicks(s.CooldownTicks, s.CooldownSeconds);
+                int emitDurationTicks = OpsSmokeCatalog.ResolveTicks(s.EmitDurationTicks, s.EmitDurationSeconds);
+                int emitIntervalTicks = OpsSmokeCatalog.ResolveTicks(s.EmitIntervalTicks, s.EmitIntervalSeconds);
+                int cloudDurationTicks = OpsSmokeCatalog.ResolveTicks(s.CloudDurationTicks, s.CloudDurationSeconds);
+                int bloomTicks = OpsSmokeCatalog.ResolveTicks(s.BloomTicks, s.BloomSeconds);
+                int fadeTicks = OpsSmokeCatalog.ResolveTicks(s.FadeTicks, s.FadeSeconds);
+
+                if (cooldownTicks > ushort.MaxValue || bloomTicks > ushort.MaxValue || fadeTicks > ushort.MaxValue)
+                    throw new InvalidOperationException($"Unit '{unit.Id}' smoke tick parameters exceed wire protocol bounds.");
+                if (cloudDurationTicks <= 0 || bloomTicks + fadeTicks > cloudDurationTicks)
+                    throw new InvalidOperationException($"Unit '{unit.Id}' smoke cloud duration must exceed bloom + fade.");
+                if (kind == SmokeDeliveryKind.EngineScreen && (emitDurationTicks <= 0 || emitIntervalTicks <= 0))
+                    throw new InvalidOperationException($"Unit '{unit.Id}' engine_screen smoke requires positive emit duration and interval.");
+                if (kind != SmokeDeliveryKind.EngineScreen && s.Range <= 0f)
+                    throw new InvalidOperationException($"Unit '{unit.Id}' targeted smoke requires positive range.");
+            }
+            if (!float.IsFinite(unit.CargoWeightKg) || unit.CargoWeightKg < 0f || unit.InternalCargoSlots < 0)
+            {
+                throw new InvalidOperationException($"Unit '{unit.Id}' has invalid cargo parameters.");
+            }
+            if (unit.CanInternalLoad && !string.Equals(unit.Classification, "infantry", StringComparison.OrdinalIgnoreCase) && unit.InternalCargoSlots <= 0)
+            {
+                throw new InvalidOperationException($"Unit '{unit.Id}' with can_internal_load requires positive internal_cargo_slots.");
+            }
+            if (unit.CanSlingLoad && unit.CargoWeightKg <= 0f)
+            {
+                throw new InvalidOperationException($"Unit '{unit.Id}' with can_sling_load requires positive cargo_weight_kg.");
+            }
+            if (unit.Flight is not null)
+            {
+                FlightData f = unit.Flight;
+                if (!float.IsFinite(f.CruiseSpeed) || f.CruiseSpeed <= 0f ||
+                    !float.IsFinite(f.LowAltitudeSpeed) || f.LowAltitudeSpeed <= 0f ||
+                    f.LowAltitudeSpeed > f.CruiseSpeed ||
+                    !float.IsFinite(f.Acceleration) || f.Acceleration <= 0f ||
+                    !float.IsFinite(f.Deceleration) || f.Deceleration <= 0f ||
+                    !float.IsFinite(f.YawRate) || f.YawRate <= 0f ||
+                    !float.IsFinite(f.ClimbRate) || f.ClimbRate <= 0f ||
+                    !float.IsFinite(f.DescentRate) || f.DescentRate <= 0f ||
+                    !float.IsFinite(f.LowAltitude) || f.LowAltitude <= 0f ||
+                    !float.IsFinite(f.HighAltitude) || f.HighAltitude < f.LowAltitude ||
+                    !float.IsFinite(f.LandingClearanceRadius) || f.LandingClearanceRadius <= 0f ||
+                    !float.IsFinite(f.MaxLandingSlopeDegrees) || f.MaxLandingSlopeDegrees <= 0f ||
+                    !float.IsFinite(f.CrashDescentRate) || f.CrashDescentRate <= 0f ||
+                    !float.IsFinite(f.CrashSpinRate) || f.CrashSpinRate <= 0f ||
+                    !float.IsFinite(f.CrashSplashRadius) || f.CrashSplashRadius < 0f ||
+                    f.CrashSplashDamage < 0 ||
+                    !float.IsFinite(f.FastRopeAltitude) || f.FastRopeAltitude <= 0f ||
+                    f.FastRopeIntervalTicks < 1 ||
+                    !float.IsFinite(f.MaxSlingWeightKg) || f.MaxSlingWeightKg < 0f ||
+                    !float.IsFinite(f.SlingCableLength) || f.SlingCableLength <= 0f ||
+                    !float.IsFinite(f.SlingSpeedPenaltyAtMax) || f.SlingSpeedPenaltyAtMax < 0f || f.SlingSpeedPenaltyAtMax > 0.85f)
+                {
+                    throw new InvalidOperationException($"Unit '{unit.Id}' has invalid flight parameters.");
+                }
+            }
         }
         return data;
     }
@@ -672,6 +1062,10 @@ public static class PrototypeScenario
                 if (unit.Speed != 0f)
                     throw new InvalidOperationException($"Unit '{unit.Id}' gives both speed and speed_offroad.");
                 unit = unit with { Speed = unit.SpeedOffroad };
+            }
+            else if (unit.Speed == 0f && unit.Flight is not null)
+            {
+                unit = unit with { Speed = unit.Flight.CruiseSpeed };
             }
             if (unit.Capabilities == TraversabilityCapabilities.DefaultVehicle &&
                 string.Equals(unit.Classification, "infantry", StringComparison.OrdinalIgnoreCase))

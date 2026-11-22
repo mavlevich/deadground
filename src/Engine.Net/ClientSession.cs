@@ -232,6 +232,36 @@ public sealed class ClientSession : IGameSession
         return true;
     }
 
+    public bool DeploySmoke(EntityId unit, bool hasTarget = false, Vector2 target = default, uint targetSurface = 0)
+    {
+        if (State != SessionConnectionState.Connected) return false;
+        DeploySmokeCommand command = new(_nextCommand, Replica.LatestTick, unit, hasTarget, target, targetSurface);
+        WireProtocol.WriteDeploySmoke(_command, command);
+        if (!_transport.TrySend(_command.AsSpan(0, WireProtocol.DeploySmokeSize))) return false;
+        _nextCommand = checked(_nextCommand + 1);
+        return true;
+    }
+
+    public bool OrderHelicopter(EntityId unit, HelicopterOrderKind kind, AltitudeBand altitudeBand = AltitudeBand.High, bool hasTarget = false, Vector2 target = default, EntityId targetUnit = default)
+    {
+        if (State != SessionConnectionState.Connected) return false;
+        HelicopterCommand command = new(_nextCommand, Replica.LatestTick, unit, kind, altitudeBand, hasTarget, target, targetUnit);
+        WireProtocol.WriteHelicopter(_command, command);
+        if (!_transport.TrySend(_command.AsSpan(0, WireProtocol.HelicopterSize))) return false;
+        _nextCommand = checked(_nextCommand + 1);
+        return true;
+    }
+
+    public bool FireMission(EntityId unit, Vector2 target, bool cancel = false)
+    {
+        if (State != SessionConnectionState.Connected) return false;
+        FireMissionCommand command = new(_nextCommand, Replica.LatestTick, unit, target, cancel);
+        WireProtocol.WriteFireMission(_command, command);
+        if (!_transport.TrySend(_command.AsSpan(0, WireProtocol.FireMissionSize))) return false;
+        _nextCommand = checked(_nextCommand + 1);
+        return true;
+    }
+
     private void Poll()
     {
         _transport.Poll(MaxMessagesPerPoll);

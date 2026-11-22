@@ -13,6 +13,8 @@ internal static class CannonSound
     internal const float BurstDuration = 1.0f;
     internal const float RifleDuration = 0.6f;
     internal const float GroundImpactDuration = 0.4f;
+    internal const float RocketLaunchDuration = 1.15f;
+    internal const float ArtilleryImpactDuration = 2.4f;
     internal const float Peak = 0.95f;
 
     // Delay in seconds, gain and low-pass cutoff in Hz of each echo of the dry blast.
@@ -378,6 +380,249 @@ internal static class CannonSound
         float norm = Peak / MathF.Tanh(1.3f);
         for (int i = 0; i < count; i++)
             output[i] = MathF.Tanh(output[i] * drive) * norm;
+        return output;
+    }
+
+    internal static AudioStreamWav CreateRocketLaunchStream(int seed)
+    {
+        float[] samples = RenderRocketLaunch(seed);
+        byte[] data = new byte[samples.Length * 2];
+        for (int i = 0; i < samples.Length; i++)
+        {
+            short pcm = (short)MathF.Round(samples[i] * 32767f);
+            data[i * 2] = (byte)(pcm & 0xFF);
+            data[i * 2 + 1] = (byte)((pcm >> 8) & 0xFF);
+        }
+        return new AudioStreamWav
+        {
+            Format = AudioStreamWav.FormatEnum.Format16Bits,
+            MixRate = SampleRate,
+            Stereo = false,
+            Data = data
+        };
+    }
+
+    internal static float[] RenderRocketLaunch(int seed)
+    {
+        int count = (int)(SampleRate * RocketLaunchDuration);
+        Random rand = new(seed);
+        float[] output = new float[count];
+
+        float hp = 0f, hpPrev = 0f;
+        float jet1 = 0f, jet2 = 0f;
+        float low1 = 0f, low2 = 0f;
+        float rumblePhase = 0f;
+
+        for (int i = 0; i < count; i++)
+        {
+            float t = (float)i / SampleRate;
+            float white = (float)rand.NextDouble() * 2f - 1f;
+
+            // Tube ignition crack (0-25ms)
+            hp = 0.86f * (hp + white - hpPrev);
+            hpPrev = white;
+            float ignite = hp * MathF.Exp(-t / 0.014f) * 1.1f;
+
+            // High-pressure solid-fuel exhaust roar sweeping down as rocket clears the tube
+            float jetCutoff = 650f + 2200f * MathF.Exp(-t / 0.35f);
+            float kJet = Coefficient(jetCutoff);
+            jet1 += (white - jet1) * kJet;
+            jet2 += (jet1 - jet2) * kJet;
+            float jetEnv = (1f - MathF.Exp(-t / 0.025f)) * MathF.Exp(-t / 0.42f);
+            float jetRoar = (jet2 - low2 * 0.45f) * jetEnv * 2.2f;
+
+            // Deep rocket motor backblast rumble
+            float kLow = Coefficient(180f + 220f * MathF.Exp(-t / 0.25f));
+            low1 += (white - low1) * kLow;
+            low2 += (low1 - low2) * kLow;
+            float lowEnv = (1f - MathF.Exp(-t / 0.018f)) * MathF.Exp(-t / 0.36f);
+            rumblePhase += MathF.Tau * (72f + 48f * MathF.Exp(-t / 0.18f)) / SampleRate;
+            float subThrust = MathF.Sin(rumblePhase) * MathF.Exp(-t / 0.16f) * 0.35f;
+
+            output[i] = ignite + jetRoar + low2 * lowEnv * 1.9f + subThrust;
+        }
+
+        int fade = (int)(0.18f * SampleRate);
+        for (int i = count - fade; i < count; i++)
+            output[i] *= (float)(count - i) / fade;
+
+        float peak = 0.0001f;
+        for (int i = 0; i < count; i++)
+            peak = MathF.Max(peak, MathF.Abs(output[i]));
+        float drive = 1.4f / peak;
+        float norm = Peak / MathF.Tanh(1.4f);
+        for (int i = 0; i < count; i++)
+            output[i] = MathF.Tanh(output[i] * drive) * norm;
+
+        return output;
+    }
+
+    internal static AudioStreamWav CreateArtilleryImpactStream(int seed)
+    {
+        float[] samples = RenderArtilleryImpact(seed);
+        byte[] data = new byte[samples.Length * 2];
+        for (int i = 0; i < samples.Length; i++)
+        {
+            short pcm = (short)MathF.Round(samples[i] * 32767f);
+            data[i * 2] = (byte)(pcm & 0xFF);
+            data[i * 2 + 1] = (byte)((pcm >> 8) & 0xFF);
+        }
+        return new AudioStreamWav
+        {
+            Format = AudioStreamWav.FormatEnum.Format16Bits,
+            MixRate = SampleRate,
+            Stereo = false,
+            Data = data
+        };
+    }
+
+    internal static float[] RenderArtilleryImpact(int seed)
+    {
+        int count = (int)(SampleRate * ArtilleryImpactDuration);
+        Random rand = new(seed);
+        float[] dry = new float[count];
+
+        float hp = 0f, hpPrev = 0f, b1 = 0f, b2 = 0f, phase = 0f;
+        for (int i = 0; i < count; i++)
+        {
+            float t = (float)i / SampleRate;
+            float white = (float)rand.NextDouble() * 2f - 1f;
+
+            // Sharp HE shockwave overpressure snap
+            float pulse = t < 0.08f ? (1f - t / 0.011f) * MathF.Exp(-t / 0.008f) : 0f;
+
+            // Fragmentation crack
+            hp = 0.85f * (hp + white - hpPrev);
+            hpPrev = white;
+            float crack = hp * MathF.Exp(-t / 0.012f);
+
+            // Massive 122mm HE blast boom sweeping from 2.6 kHz down to 95 Hz
+            float k = Coefficient(95f + 2500f * MathF.Exp(-t / 0.075f));
+            b1 += (white - b1) * k;
+            b2 += (b1 - b2) * k;
+            float boom = b2 * MathF.Min(1f, t / 0.003f) * MathF.Exp(-t / 0.34f) * (1f + 2.8f * MathF.Exp(-t / 0.045f));
+
+            // Deep sub-bass earth thump (58 Hz -> 26 Hz)
+            phase += MathF.Tau * (26f + 32f * MathF.Exp(-t / 0.09f)) / SampleRate;
+            float thump = MathF.Sin(phase) * MathF.Min(1f, t / 0.005f) * MathF.Exp(-t / 0.22f);
+
+            dry[i] = pulse * 1.1f + crack * 1.0f + boom * 3.0f + thump * 0.95f;
+        }
+
+        float[] output = (float[])dry.Clone();
+        foreach ((float delay, float gain, float cutoff) in Echoes)
+        {
+            int offset = (int)(delay * SampleRate);
+            float k = Coefficient(cutoff * 0.85f), s1 = 0f, s2 = 0f;
+            for (int i = 0; i + offset < count; i++)
+            {
+                s1 += (dry[i] - s1) * k;
+                s2 += (s1 - s2) * k;
+                output[i + offset] += s2 * (gain * 1.35f);
+            }
+        }
+
+        // Earth shower & rolling artillery thunder tail
+        float r1 = 0f, r2 = 0f;
+        for (int i = 0; i < count; i++)
+        {
+            float t = (float)i / SampleRate;
+            float white = (float)rand.NextDouble() * 2f - 1f;
+            float k = Coefficient(180f + 420f * MathF.Exp(-t / 0.55f));
+            r1 += (white - r1) * k;
+            r2 += (r1 - r2) * k;
+            output[i] += r2 * (1f - MathF.Exp(-t / 0.05f)) * MathF.Exp(-t / 0.95f) * 2.4f;
+        }
+
+        int fade = (int)(0.3f * SampleRate);
+        for (int i = count - fade; i < count; i++)
+            output[i] *= (float)(count - i) / fade;
+
+        float peak = 0.0001f;
+        for (int i = 0; i < count; i++)
+            peak = MathF.Max(peak, MathF.Abs(output[i]));
+        float drive = 1.5f / peak;
+        float norm = Peak / MathF.Tanh(1.5f);
+        for (int i = 0; i < count; i++)
+            output[i] = MathF.Tanh(output[i] * drive) * norm;
+
+        return output;
+    }
+
+    internal const float RocketIncomingDuration = 0.92f;
+
+    internal static AudioStreamWav CreateRocketIncomingStream(int seed)
+    {
+        float[] samples = RenderRocketIncoming(seed);
+        byte[] data = new byte[samples.Length * 2];
+        for (int i = 0; i < samples.Length; i++)
+        {
+            short pcm = (short)MathF.Round(samples[i] * 32767f);
+            data[i * 2] = (byte)(pcm & 0xFF);
+            data[i * 2 + 1] = (byte)((pcm >> 8) & 0xFF);
+        }
+        return new AudioStreamWav
+        {
+            Format = AudioStreamWav.FormatEnum.Format16Bits,
+            MixRate = SampleRate,
+            Stereo = false,
+            Data = data
+        };
+    }
+
+    // Realistic incoming 122mm rocket aerodynamic air-tearing rush & Doppler descending scream right before impact.
+    internal static float[] RenderRocketIncoming(int seed)
+    {
+        int count = (int)(SampleRate * RocketIncomingDuration);
+        Random rand = new(seed);
+        float[] output = new float[count];
+
+        float lp1 = 0f, lp2 = 0f;
+        float hp = 0f, hpPrev = 0f;
+        float flutterLp = 0f;
+        float finPhase = 0f;
+
+        for (int i = 0; i < count; i++)
+        {
+            float t = (float)i / SampleRate;
+            float u = t / RocketIncomingDuration; // 0 -> 1 approaching impact
+            float white = (float)rand.NextDouble() * 2f - 1f;
+
+            // Steep approach crescendo with clean 25ms tail taper right at impact
+            float swell = MathF.Pow(u, 1.85f) * MathF.Min(1f, t / 0.08f);
+            if (u > 0.94f)
+            {
+                swell *= Math.Clamp((1f - u) / 0.06f, 0f, 1f);
+            }
+
+            // Descending Doppler air-tearing band-pass noise (1750 Hz -> 480 Hz)
+            float hiCut = 480f + 1270f * MathF.Pow(1f - u, 1.35f);
+            float kLp = Coefficient(hiCut);
+            lp1 += (white - lp1) * kLp;
+            lp2 += (lp1 - lp2) * kLp;
+            hp = 0.86f * (hp + lp2 - hpPrev);
+            hpPrev = lp2;
+
+            // Subtle turbulent fin-flutter scream (noisy resonant steel hiss, never a clean cartoon whistle)
+            flutterLp += (white - flutterLp) * Coefficient(45f);
+            float finFreq = (390f + 560f * MathF.Pow(1f - u, 1.5f)) * (1f + flutterLp * 0.14f);
+            finPhase += MathF.Tau * finFreq / SampleRate;
+            float finHiss = MathF.Sin(finPhase) * (0.30f + 0.70f * MathF.Abs(flutterLp)) * 0.24f;
+
+            // Low air-pressure whoosh directly before touchdown
+            float rush = lp2 * 0.65f + hp * 1.45f + finHiss;
+            output[i] = rush * swell;
+        }
+
+        float peak = 0.0001f;
+        for (int i = 0; i < count; i++)
+            peak = MathF.Max(peak, MathF.Abs(output[i]));
+        float targetPeak = Peak * 0.62f;
+        float drive = 1.25f / peak;
+        float norm = targetPeak / MathF.Tanh(1.25f);
+        for (int i = 0; i < count; i++)
+            output[i] = MathF.Tanh(output[i] * drive) * norm;
+
         return output;
     }
 

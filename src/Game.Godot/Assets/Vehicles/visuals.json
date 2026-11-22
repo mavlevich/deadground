@@ -138,5 +138,37 @@
   "contact_infantry": {
     "scene": "res://Assets/Infantry/US/us_rifleman.glb",
     "scale": 1.0
+  },
+  "ch47d": {
+    "scene": "res://Assets/Vehicles/CH47/ch47.glb",
+    "lods": [
+      "res://Assets/Vehicles/CH47/ch47_lod1.glb",
+      "res://Assets/Vehicles/CH47/ch47_lod2.glb"
+    ],
+    "scale": 1.0
+  },
+  "contact_helicopter": {
+    "scene": "res://Assets/Vehicles/CH47/ch47_lod1.glb",
+    "lods": [
+      "res://Assets/Vehicles/CH47/ch47_lod2.glb"
+    ],
+    "scale": 1.0
+  },
+  "bm21": {
+    "scene": "res://Assets/Vehicles/BM21/bm21.glb",
+    "lods": [
+      "res://Assets/Vehicles/BM21/bm21_lod1.glb",
+      "res://Assets/Vehicles/BM21/bm21_lod2.glb"
+    ],
+    "scale": 1.0,
+    "track_gauge": 2.0,
+    "track_wrap": 999.2777912538415
+  },
+  "contact_artillery": {
+    "scene": "res://Assets/Vehicles/BM21/bm21_lod1.glb",
+    "lods": [
+      "res://Assets/Vehicles/BM21/bm21_lod2.glb"
+    ],
+    "scale": 1.0
   }
 }

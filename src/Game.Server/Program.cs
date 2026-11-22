@@ -97,7 +97,9 @@ string[] validScenarios =
     "ustye-raid",
     "forest-visibility",
     "infantry-playground",
-    "infantry-transport"
+    "infantry-transport",
+    "helicopter-playground",
+    "artillery-playground"
 ];
 
 if (!validScenarios.Contains(scenario))
@@ -127,6 +129,8 @@ StaticGeometry? scenarioGeometry = scenario switch
     "forest-visibility" => ForestVisibilityScenario.CreateStaticGeometry(),
     "infantry-playground" => InfantryPlaygroundScenario.CreateStaticGeometry(),
     "infantry-transport" => InfantryTransportScenario.CreateStaticGeometry(),
+    "helicopter-playground" => HelicopterPlaygroundScenario.CreateStaticGeometry(),
+    "artillery-playground" => ArtilleryPlaygroundScenario.CreateStaticGeometry(),
     "prototype" => null,
     _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
 };
@@ -150,6 +154,8 @@ MatchSetup setup = scenario switch
     "forest-visibility" => ForestVisibilityScenario.CreateMatchSetup(scenarioGeometry!),
     "infantry-playground" => InfantryPlaygroundScenario.CreateMatchSetup(scenarioGeometry!),
     "infantry-transport" => InfantryTransportScenario.CreateMatchSetup(scenarioGeometry!),
+    "helicopter-playground" => HelicopterPlaygroundScenario.CreateMatchSetup(scenarioGeometry!),
+    "artillery-playground" => ArtilleryPlaygroundScenario.CreateMatchSetup(scenarioGeometry!),
     "prototype" => PrototypeScenario.CreateMatchSetup(map),
     _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
 };
@@ -185,6 +191,8 @@ Simulation CreateSimulation(ulong seed = 0)
         "forest-visibility" => ForestVisibilityScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "infantry-playground" => InfantryPlaygroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "infantry-transport" => InfantryTransportScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
+        "helicopter-playground" => HelicopterPlaygroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
+        "artillery-playground" => ArtilleryPlaygroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "prototype" => PrototypeScenario.Create(map),
         _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
     };
@@ -358,6 +366,67 @@ if (smokeTest)
             throw new InvalidOperationException($"Infantry-transport smoke test: rifleman failed to disembark. container={rifleman.ContainerId}");
 
         Console.WriteLine($"INFANTRY_TRANSPORT_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} board_disembark=true");
+        return;
+    }
+
+    if (scenario == "helicopter-playground")
+    {
+        for (int i = 0; i < 20; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.Replica.OwnUnits.Length != 9)
+            throw new InvalidOperationException($"Helicopter-playground smoke test: expected 9 own units, got {session.Replica.OwnUnits.Length}.");
+
+        EntityId heliId = session.Replica.OwnUnits[0].Id;
+        session.Move(heliId, HelicopterPlaygroundScenario.SouthLandingZone);
+        for (int i = 0; i < 200; i++) session.Advance(1d / Simulation.TickRate);
+        if (!session.Replica.TryGetOwnUnit(heliId, out OwnUnitObservation heliObs) ||
+            heliObs.FlightPhase != FlightPhase.Airborne ||
+            heliObs.Altitude < 10f)
+        {
+            throw new InvalidOperationException($"Helicopter-playground smoke test: Chinook did not take off and fly. phase={heliObs.FlightPhase} alt={heliObs.Altitude:F1}");
+        }
+
+        Console.WriteLine($"HELICOPTER_PLAYGROUND_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} alt={heliObs.Altitude:F1}");
+        return;
+    }
+
+    if (scenario == "artillery-playground")
+    {
+        for (int i = 0; i < 20; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.Replica.OwnUnits.Length != 4)
+            throw new InvalidOperationException($"Artillery-playground smoke test: expected 4 own units, got {session.Replica.OwnUnits.Length}.");
+
+        EntityId gradId = session.Replica.OwnUnits[0].Id;
+        int ammoBefore = session.Replica.OwnUnits[0].Ammunition;
+        bool ordered = session.FireMission(gradId, ArtilleryPlaygroundScenario.TargetCampCenter);
+        if (!ordered)
+            throw new InvalidOperationException("Artillery-playground smoke test: failed to issue fire mission.");
+
+        int launchesSeen = 0;
+        int impactsSeen = 0;
+        uint lastEvId = 0;
+        for (int i = 0; i < 500; i++)
+        {
+            session.Advance(1d / Simulation.TickRate);
+            ReadOnlySpan<CombatEventObservation> events = session.Replica.Events;
+            for (int e = 0; e < events.Length; e++)
+            {
+                if (events[e].EventId <= lastEvId) continue;
+                lastEvId = events[e].EventId;
+                if (events[e].Kind == CombatEventKind.RocketLaunched) launchesSeen++;
+                else if (events[e].Kind == CombatEventKind.ArtilleryImpact) impactsSeen++;
+            }
+        }
+
+        if (!session.Replica.TryGetOwnUnit(gradId, out OwnUnitObservation gradObs) ||
+            gradObs.Ammunition >= ammoBefore ||
+            launchesSeen < 10 ||
+            impactsSeen < 10)
+        {
+            throw new InvalidOperationException(
+                $"Artillery-playground smoke test failed: ammo={gradObs.Ammunition}/{ammoBefore} launches={launchesSeen} impacts={impactsSeen}");
+        }
+
+        Console.WriteLine($"ARTILLERY_PLAYGROUND_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} launches={launchesSeen} impacts={impactsSeen} ammo_remaining={gradObs.Ammunition}");
         return;
     }
 

@@ -201,7 +201,10 @@ internal sealed class SelectionController
         Rect2 box = MakeScreenRect(startScreen, endScreen);
         foreach ((EntityId id, UnitView view) in unitViews.Views)
         {
-            Vector3 center = view.Root.Position + Vector3.Up;
+            if (!view.Root.Visible)
+                continue;
+
+            Vector3 center = view.Root.Position + Vector3.Up * (1.0f + view.Altitude);
             if (!TryProjectWorldPoint(camera, center, out Vector2 screenPos))
                 continue;
 
@@ -242,10 +245,13 @@ internal sealed class SelectionController
         Rect2 screenBounds = new(Vector2.Zero, viewportSize);
         foreach ((EntityId id, UnitView view) in unitViews.Views)
         {
+            if (!view.Root.Visible)
+                continue;
+
             if (!string.Equals(view.UnitId, targetType, StringComparison.Ordinal))
                 continue;
 
-            Vector3 center = view.Root.Position + Vector3.Up;
+            Vector3 center = view.Root.Position + Vector3.Up * (1.0f + view.Altitude);
             if (!TryProjectWorldPoint(camera, center, out Vector2 screenPos))
                 continue;
 
@@ -281,7 +287,10 @@ internal sealed class SelectionController
             float nearestUnitDistance = ClickPickRadiusPixels * ClickPickRadiusPixels;
             foreach ((EntityId id, UnitView view) in unitViews.Views)
             {
-                Vector3 center = view.Root.Position + Vector3.Up;
+                if (!view.Root.Visible)
+                    continue;
+
+                Vector3 center = view.Root.Position + Vector3.Up * (1.0f + view.Altitude);
                 if (!TryProjectWorldPoint(camera, center, out Vector2 projected))
                     continue;
 
@@ -296,7 +305,7 @@ internal sealed class SelectionController
             float nearestContactDistance = ClickPickRadiusPixels * ClickPickRadiusPixels;
             foreach ((ContactId id, ContactView view) in contactViews.Views)
             {
-                Vector3 center = view.Root.Position + Vector3.Up * 1.5f;
+                Vector3 center = view.Root.Position + Vector3.Up * (1.5f + view.Altitude);
                 if (!TryProjectWorldPoint(camera, center, out Vector2 projected))
                     continue;
 

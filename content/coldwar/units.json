@@ -90,7 +90,9 @@
       "dispersion_mils": 3.5,
       "target_movement_penalty": 0.15,
       "ranging_bonus": 0.06,
-      "max_ranging_bonus": 0.18
+      "max_ranging_bonus": 0.18,
+      "can_target_air": true,
+      "max_air_target_altitude": 80.0
     },
     {
       "id": "mg_12_7mm_m2hb",
@@ -115,7 +117,9 @@
       "dispersion_mils": 3.8,
       "target_movement_penalty": 0.15,
       "ranging_bonus": 0.06,
-      "max_ranging_bonus": 0.18
+      "max_ranging_bonus": 0.18,
+      "can_target_air": true,
+      "max_air_target_altitude": 70.0
     },
     {
       "id": "mg_7_62mm_m60",
@@ -140,7 +144,35 @@
       "dispersion_mils": 4.0,
       "target_movement_penalty": 0.15,
       "ranging_bonus": 0.05,
-      "max_ranging_bonus": 0.15
+      "max_ranging_bonus": 0.15,
+      "can_target_air": true,
+      "max_air_target_altitude": 40.0
+    },
+    {
+      "id": "mg_7_62mm_m60d",
+      "range": 550.0,
+      "reload_seconds": 1.2,
+      "damage": 6,
+      "ammo_capacity": 1200,
+      "muzzle_height": 1.9,
+      "presentation_id": "mg_7_62mm_m60d",
+      "presentation_kind": "machine_gun",
+      "penetration_near": 9.0,
+      "penetration_far": 4.0,
+      "penetration_near_range": 0.0,
+      "penetration_far_range": 550.0,
+      "rounds_per_burst": 5,
+      "accuracy_curve": [
+        { "range": 150.0, "hit_probability": 0.78 },
+        { "range": 350.0, "hit_probability": 0.55 },
+        { "range": 550.0, "hit_probability": 0.30 }
+      ],
+      "dispersion_mils": 4.5,
+      "target_movement_penalty": 0.15,
+      "ranging_bonus": 0.05,
+      "max_ranging_bonus": 0.15,
+      "can_target_air": true,
+      "max_air_target_altitude": 65.0
     },
     {
       "id": "rifle_5_56mm_m16a1",
@@ -166,7 +198,34 @@
       "dispersion_mils": 1.5,
       "target_movement_penalty": 0.15,
       "ranging_bonus": 0.05,
-      "max_ranging_bonus": 0.15
+      "max_ranging_bonus": 0.15,
+      "can_target_air": true,
+      "max_air_target_altitude": 25.0
+    },
+    {
+      "id": "rocket_122mm_9m22u",
+      "range": 4000.0,
+      "min_range": 350.0,
+      "reload_seconds": 30.0,
+      "damage": 90,
+      "ammo_capacity": 40,
+      "muzzle_height": 2.35,
+      "presentation_id": "rocket_122mm_9m22u",
+      "presentation_kind": "rocket_artillery",
+      "penetration_near": 25.0,
+      "penetration_far": 25.0,
+      "penetration_near_range": 0.0,
+      "penetration_far_range": 4000.0,
+      "rounds_per_burst": 1,
+      "dispersion_mils": 15.0,
+      "is_indirect_fire": true,
+      "salvo_count": 20,
+      "salvo_interval_seconds": 0.5,
+      "dispersion_radius": 55.0,
+      "splash_radius": 22.0,
+      "projectile_speed": 160.0,
+      "setup_seconds": 2.0,
+      "elevation_degrees": 32.0
     }
   ],
   "units": [
@@ -194,7 +253,26 @@
       "deceleration": 4.0,
       "armor_front": 200.0,
       "armor_side": 80.0,
-      "armor_rear": 45.0
+      "armor_rear": 45.0,
+      "cargo_weight_kg": 40000.0,
+      "can_internal_load": false,
+      "can_sling_load": false,
+      "smoke": {
+        "kind": "engine_screen",
+        "charges": 2,
+        "cooldown_seconds": 45.0,
+        "emit_duration_seconds": 20.0,
+        "emit_interval_seconds": 1.0,
+        "min_cloud_spacing": 10.0,
+        "cloud_radius": 16.0,
+        "cloud_height": 7.0,
+        "cloud_duration_seconds": 105.0,
+        "bloom_seconds": 3.0,
+        "fade_seconds": 15.0,
+        "optical_density": 0.25,
+        "exhaust_offset": 3.5,
+        "range": 0.0
+      }
     },
     {
       "id": "m60a1",
@@ -220,7 +298,10 @@
       "deceleration": 4.5,
       "armor_front": 220.0,
       "armor_side": 76.0,
-      "armor_rear": 41.0
+      "armor_rear": 41.0,
+      "cargo_weight_kg": 49000.0,
+      "can_internal_load": false,
+      "can_sling_load": false
     },
     {
       "id": "btr70",
@@ -249,7 +330,10 @@
       "deceleration": 5.0,
       "armor_front": 16.0,
       "armor_side": 9.0,
-      "armor_rear": 7.0
+      "armor_rear": 7.0,
+      "cargo_weight_kg": 11500.0,
+      "can_internal_load": false,
+      "can_sling_load": true
     },
     {
       "id": "m113a1",
@@ -278,7 +362,10 @@
       "deceleration": 4.5,
       "armor_front": 20.0,
       "armor_side": 12.0,
-      "armor_rear": 12.0
+      "armor_rear": 12.0,
+      "cargo_weight_kg": 11200.0,
+      "can_internal_load": false,
+      "can_sling_load": true
     },
     {
       "id": "brdm2",
@@ -305,7 +392,10 @@
       "deceleration": 5.5,
       "armor_front": 16.0,
       "armor_side": 8.0,
-      "armor_rear": 5.0
+      "armor_rear": 5.0,
+      "cargo_weight_kg": 7000.0,
+      "can_internal_load": false,
+      "can_sling_load": true
     },
     {
       "id": "m151a2",
@@ -331,7 +421,11 @@
       "deceleration": 6.0,
       "armor_front": 0.0,
       "armor_side": 0.0,
-      "armor_rear": 0.0
+      "armor_rear": 0.0,
+      "cargo_weight_kg": 1100.0,
+      "internal_cargo_slots": 8,
+      "can_internal_load": true,
+      "can_sling_load": true
     },
     {
       "id": "m577",
@@ -356,7 +450,10 @@
       "deceleration": 4.5,
       "armor_front": 20.0,
       "armor_side": 12.0,
-      "armor_rear": 12.0
+      "armor_rear": 12.0,
+      "cargo_weight_kg": 11500.0,
+      "can_internal_load": false,
+      "can_sling_load": true
     },
     {
       "id": "us_rifleman",
@@ -382,7 +479,90 @@
       "deceleration": 16.0,
       "armor_front": 0.0,
       "armor_side": 0.0,
-      "armor_rear": 0.0
+      "armor_rear": 0.0,
+      "cargo_weight_kg": 100.0,
+      "internal_cargo_slots": 1,
+      "can_internal_load": true,
+      "can_sling_load": false
+    },
+    {
+      "id": "ch47d",
+      "name": "CH-47D Chinook",
+      "faction": "us",
+      "classification": "helicopter",
+      "passenger_capacity": 24,
+      "container_destruction_damage": 100,
+      "sensor_range": 1800.0,
+      "eye_height": 2.5,
+      "target_points": [1.5, 3.8, 5.5],
+      "radius": 4.5,
+      "collision_radius": 8.5,
+      "height": 5.7,
+      "max_health": 160,
+      "weapon": "mg_7_62mm_m60d",
+      "turret_traverse_rate": 120.0,
+      "turn_rate": 55.0,
+      "can_pivot": true,
+      "min_turn_radius": 0.0,
+      "acceleration": 12.0,
+      "deceleration": 14.0,
+      "armor_front": 2.0,
+      "armor_side": 2.0,
+      "armor_rear": 2.0,
+      "flight": {
+        "cruise_speed": 68.0,
+        "low_altitude_speed": 42.0,
+        "acceleration": 12.0,
+        "deceleration": 14.0,
+        "yaw_rate": 55.0,
+        "climb_rate": 9.0,
+        "descent_rate": 7.0,
+        "low_altitude": 18.0,
+        "high_altitude": 55.0,
+        "landing_clearance_radius": 10.0,
+        "max_landing_slope_degrees": 12.0,
+        "crash_descent_rate": 18.0,
+        "crash_spin_rate": 180.0,
+        "crash_splash_radius": 12.0,
+        "crash_splash_damage": 60,
+        "start_airborne": false,
+        "can_load_internal_vehicles": true,
+        "can_fast_rope": true,
+        "fast_rope_altitude": 18.0,
+        "fast_rope_interval_ticks": 10,
+        "max_sling_weight_kg": 12700.0,
+        "sling_cable_length": 10.0,
+        "sling_speed_penalty_at_max": 0.45
+      }
+    },
+    {
+      "id": "bm21",
+      "name": "BM-21 Grad",
+      "faction": "soviet",
+      "classification": "artillery",
+      "speed_road": 20.8,
+      "speed_offroad": 9.7,
+      "reverse_speed": 3.3,
+      "sensor_range": 1200.0,
+      "eye_height": 2.2,
+      "target_points": [1.0, 2.5],
+      "radius": 1.5,
+      "collision_radius": 3.9,
+      "height": 2.73,
+      "max_health": 40,
+      "weapon": "rocket_122mm_9m22u",
+      "turret_traverse_rate": 28.0,
+      "turn_rate": 32.0,
+      "can_pivot": false,
+      "min_turn_radius": 10.5,
+      "acceleration": 2.4,
+      "deceleration": 4.5,
+      "armor_front": 0.0,
+      "armor_side": 0.0,
+      "armor_rear": 0.0,
+      "cargo_weight_kg": 13700.0,
+      "can_internal_load": false,
+      "can_sling_load": false
     }
   ]
 }

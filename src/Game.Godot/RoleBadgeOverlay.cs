@@ -43,6 +43,8 @@ internal sealed partial class RoleBadgeOverlay : Control
                 "recon" => ContactClassification.Recon,
                 "apc" => ContactClassification.Apc,
                 "infantry" => ContactClassification.Infantry,
+                "helicopter" => ContactClassification.Helicopter,
+                "artillery" or "mlrs" => ContactClassification.Artillery,
                 "command_vehicle" or "command" => ContactClassification.CommandVehicle,
                 _ => ContactClassification.Vehicle
             };
@@ -99,7 +101,10 @@ internal sealed partial class RoleBadgeOverlay : Control
 
             if (obs.ContainerId != default || !view.Root.Visible)
             {
-                if (_unitBadges.TryGetValue(id, out RoleBadge? hiddenBadge)) hiddenBadge.Visible = false;
+                if (_unitBadges.TryGetValue(id, out RoleBadge? hiddenBadge))
+                {
+                    hiddenBadge.Visible = false;
+                }
                 continue;
             }
 
@@ -133,7 +138,8 @@ internal sealed partial class RoleBadgeOverlay : Control
             // This overlay owns the screen-space indicators in the main client.
             view.SetWorldHealthBarVisible(false);
 
-            Vector3 worldPos = view.Root.Position + Vector3.Up * (view.IsInfantry ? 2.2f : 3.4f);
+            float badgeElevation = (view.IsHelicopter ? 6.2f : (view.IsInfantry ? 2.2f : 3.4f)) + view.Altitude;
+            Vector3 worldPos = view.Root.Position + Vector3.Up * badgeElevation;
             if (camera.IsPositionBehind(worldPos))
             {
                 badge.Visible = false;
@@ -188,7 +194,7 @@ internal sealed partial class RoleBadgeOverlay : Control
 
             float heightOffset = view.Observation.State == ContactState.LastKnown
                 ? 2.2f
-                : 2.8f;
+                : (view.Observation.Classification == ContactClassification.Helicopter ? 6.2f : 2.8f) + view.Altitude;
 
             Vector3 worldPos = view.Root.Position + Vector3.Up * heightOffset;
             if (camera.IsPositionBehind(worldPos))
@@ -302,6 +308,8 @@ internal sealed partial class RoleBadgeOverlay : Control
             ContactClassification.CommandVehicle => "CMD",
             ContactClassification.Vehicle => "VEH",
             ContactClassification.Infantry => "INF",
+            ContactClassification.Helicopter => "HELI",
+            ContactClassification.Artillery => "ARTY",
             _ => "UNIT"
         };
     }
@@ -319,6 +327,8 @@ internal sealed partial class RoleBadgeOverlay : Control
                 "apc" => "APC",
                 "command_vehicle" => "CMD",
                 "infantry" => "INF",
+                "helicopter" => "HELI",
+                "artillery" or "mlrs" => "ARTY",
                 _ => def.Classification.ToUpperInvariant()
             };
         }

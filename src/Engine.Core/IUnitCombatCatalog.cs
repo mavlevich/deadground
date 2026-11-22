@@ -23,7 +23,8 @@ public enum WeaponPresentationKind : byte
     None = 0,
     Cannon = 1,
     MachineGun = 2,
-    Rifle = 3
+    Rifle = 3,
+    RocketArtillery = 4
 }
 
 public static class WeaponPresentation
@@ -39,6 +40,7 @@ public static class WeaponPresentation
             (byte)WeaponPresentationKind.Cannon => WeaponPresentationKind.Cannon,
             (byte)WeaponPresentationKind.MachineGun => WeaponPresentationKind.MachineGun,
             (byte)WeaponPresentationKind.Rifle => WeaponPresentationKind.Rifle,
+            (byte)WeaponPresentationKind.RocketArtillery => WeaponPresentationKind.RocketArtillery,
             _ => WeaponPresentationKind.None
         };
     }
@@ -51,12 +53,15 @@ public static class WeaponPresentation
 
     public static bool IsRifle(ushort presentationId) =>
         GetKind(presentationId) == WeaponPresentationKind.Rifle;
+
+    public static bool IsRocketArtillery(ushort presentationId) =>
+        GetKind(presentationId) == WeaponPresentationKind.RocketArtillery;
 }
 
 public readonly record struct AccuracyPoint(float Range, float HitProbability);
 
 /// <summary>
-/// Data-driven weapon specification for direct-fire combat.
+/// Data-driven weapon specification for direct-fire and indirect-fire combat.
 /// </summary>
 public sealed record WeaponDefinition(
     string Id,
@@ -75,7 +80,18 @@ public sealed record WeaponDefinition(
     float DispersionMils = 3.0f,
     float TargetMovementPenalty = 0.20f,
     float RangingBonus = 0.08f,
-    float MaxRangingBonus = 0.24f)
+    float MaxRangingBonus = 0.24f,
+    bool CanTargetAir = false,
+    float MaxAirTargetAltitude = 0f,
+    bool IsIndirectFire = false,
+    float MinRange = 0f,
+    int SalvoCount = 1,
+    int SalvoIntervalTicks = 1,
+    float DispersionRadius = 0f,
+    float SplashRadius = 0f,
+    float ProjectileSpeed = ArtilleryBallistics.DefaultRocketSpeed,
+    int SetupTicks = 0,
+    float ElevationDegrees = 0f)
 {
     public float Dispersion => DispersionMils;
 

@@ -8,5 +8,6 @@ public enum ObstructionKind : byte
     None = 0,
     Terrain = 1,
     Structure = 2,
-    Vegetation = 3
+    Vegetation = 3,
+    Smoke = 4
 }

@@ -206,6 +206,37 @@ internal sealed class WreckView
 
     internal static void ApplyCharredMaterial(Node node, Material material)
     {
+        // Hide flight rotor blur discs on wrecks so they do not turn into giant solid black discs.
+        string name = node.Name.ToString();
+        if (name == "FrontRotorBlur" || name == "RearRotorBlur")
+        {
+            if (node is Node3D blurNode)
+            {
+                blurNode.Visible = false;
+            }
+            if (node is GeometryInstance3D blurGeom)
+            {
+                blurGeom.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
+            }
+            return;
+        }
+
+        if (node is Node3D partNode)
+        {
+            if (name == "FrontRotor")
+            {
+                partNode.Rotation = new Vector3(Mathf.DegToRad(9f), Mathf.DegToRad(18f), Mathf.DegToRad(-7f));
+            }
+            else if (name == "RearRotor")
+            {
+                partNode.Rotation = new Vector3(Mathf.DegToRad(-11f), Mathf.DegToRad(-24f), Mathf.DegToRad(8f));
+            }
+            else if (name == "RearRamp")
+            {
+                partNode.Rotation = new Vector3(Mathf.DegToRad(26f), 0f, 0f);
+            }
+        }
+
         if (node is GeometryInstance3D geom)
         {
             geom.MaterialOverride = material;

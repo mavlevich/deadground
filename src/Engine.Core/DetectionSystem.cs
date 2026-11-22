@@ -14,10 +14,13 @@ public sealed class DetectionSystem : ISimulationSystem
     private readonly StaticGeometry _geometry;
     private readonly IUnitPerceptionCatalog _catalog;
     private readonly DetectionTuning _tuning;
+    private readonly SmokeSystem? _smokeSystem;
     private readonly SideContactTracker[] _trackers;
     private readonly SideWreckTracker[] _wreckTrackers;
+    private readonly SideSmokeTracker[] _smokeTrackers;
     private readonly UnitSpatialGrid _spatialGrid;
     private readonly LineOfSightContext _losContext;
+    private readonly LineOfSightContext _staticOnlyLosContext;
     private readonly int[] _candidateBuffer;
     private readonly uint[] _observedBitmask;
     private readonly SideContactTracker.ObservedTarget[] _observedTargetsBuffer;
@@ -40,11 +43,15 @@ public sealed class DetectionSystem : ISimulationSystem
     private readonly float[] _unitTurretYaws;
     private readonly float[] _unitHullHeadings;
     private readonly uint[] _unitSupportSurfaces;
+    private readonly float[] _unitAltitudes;
+    private readonly FlightPhase[] _unitFlightPhases;
+    private readonly float[] _unitGunPitches;
     private readonly int _maxUnits;
     private readonly int _wordsPerSide;
 
     public DetectionTuning Tuning => _tuning;
     public StaticGeometry Geometry => _geometry;
+    internal SmokeSystem? SmokeSystem => _smokeSystem;
     public int CandidateQueriesCount { get; private set; }
     public int LosQueriesCount { get; private set; }
     public int ObservationsCount { get; private set; }
@@ -67,7 +74,8 @@ public sealed class DetectionSystem : ISimulationSystem
         IUnitPerceptionCatalog catalog,
         DetectionTuning? tuning = null,
         int maxUnits = 1024,
-        int maxSides = Simulation.MaxPlayers)
+        int maxSides = Simulation.MaxPlayers,
+        SmokeSystem? smokeSystem = null)
     {
         ArgumentNullException.ThrowIfNull(geometry);
         ArgumentNullException.ThrowIfNull(catalog);
@@ -75,19 +83,23 @@ public sealed class DetectionSystem : ISimulationSystem
         _geometry = geometry;
         _catalog = catalog;
         _tuning = tuning ?? new DetectionTuning();
+        _smokeSystem = smokeSystem;
         _trackers = new SideContactTracker[maxSides];
         _wreckTrackers = new SideWreckTracker[maxSides];
+        _smokeTrackers = new SideSmokeTracker[maxSides];
 
         for (int i = 0; i < maxSides; i++)
         {
             _trackers[i] = new SideContactTracker(i + 1, _tuning);
             _wreckTrackers[i] = new SideWreckTracker();
+            _smokeTrackers[i] = new SideSmokeTracker();
         }
 
         _maxUnits = maxUnits;
         _wordsPerSide = (maxUnits + 31) / 32;
         _spatialGrid = new UnitSpatialGrid(geometry.HeightMap.Width, geometry.HeightMap.Depth, maxUnits);
         _losContext = new LineOfSightContext(geometry.Structures.Count);
+        _staticOnlyLosContext = new LineOfSightContext(geometry.Structures.Count);
         _candidateBuffer = new int[maxUnits];
         _observedBitmask = new uint[maxSides * _wordsPerSide];
         _observedTargetsBuffer = new SideContactTracker.ObservedTarget[maxSides * maxUnits];
@@ -110,6 +122,9 @@ public sealed class DetectionSystem : ISimulationSystem
         _unitTurretYaws = new float[maxUnits];
         _unitHullHeadings = new float[maxUnits];
         _unitSupportSurfaces = new uint[maxUnits];
+        _unitAltitudes = new float[maxUnits];
+        _unitFlightPhases = new FlightPhase[maxUnits];
+        _unitGunPitches = new float[maxUnits];
     }
 
     public void Update(WorldState world, int tick)
@@ -118,6 +133,15 @@ public sealed class DetectionSystem : ISimulationSystem
         LosQueriesCount = 0;
         ObservationsCount = 0;
         ConfirmedEmptyPositionsCount = 0;
+
+        if (_smokeSystem is not null)
+        {
+            _smokeSystem.CopyActiveVolumesTo(_losContext);
+        }
+        else
+        {
+            _losContext.SetSmokeVolumes(null, 0);
+        }
 
         int unitCount = world.Count;
 
@@ -128,7 +152,17 @@ public sealed class DetectionSystem : ISimulationSystem
             _unitPositions[i] = u.Position;
             _unitSupportSurfaces[i] = u.SupportSurface;
             float groundY = _geometry.GetSurfaceHeight(u.Position, u.SupportSurface);
-            _unitGroundHeights[i] = groundY;
+            float altitude = 0f;
+            FlightPhase flightPhase = FlightPhase.Ground;
+            if (world.TryGetFlightState(u.Id, out WorldState.UnitFlightState fs) && fs.HasCapability)
+            {
+                altitude = fs.Altitude;
+                flightPhase = fs.Phase;
+            }
+            _unitAltitudes[i] = altitude;
+            _unitFlightPhases[i] = flightPhase;
+            float baseElevationY = groundY + altitude;
+            _unitGroundHeights[i] = baseElevationY;
             _unitOwners[i] = u.Owner;
             _unitTeams[i] = world.GetPlayerTeam(u.Owner);
             _unitDefinitions[i] = u.Definition;
@@ -136,6 +170,7 @@ public sealed class DetectionSystem : ISimulationSystem
             bool hasCombat = world.TryGetCombatState(u.Id, out WorldState.CombatState cs);
             _unitTurretYaws[i] = hasCombat ? cs.TurretYaw : 0f;
             _unitHullHeadings[i] = hasCombat ? cs.HullHeading : 0f;
+            _unitGunPitches[i] = world.TryGetArtilleryState(u.Id, out WorldState.UnitArtilleryState artState) ? artState.GunPitchRad : 0f;
 
             if (world.IsContained(u.Id))
             {
@@ -148,11 +183,11 @@ public sealed class DetectionSystem : ISimulationSystem
             if (_catalog.TryGetProfile(u.Definition, out UnitPerceptionProfile profile))
             {
                 _unitClassifications[i] = profile.Classification;
-                if (profile.Sensor is not null)
+                if (profile.Sensor is not null && flightPhase != FlightPhase.Crashing)
                 {
                     _unitHasSensor[i] = true;
                     _unitSensorRange[i] = profile.Sensor.Range;
-                    _unitEyePos[i] = new Vector3(u.Position.X, groundY + profile.Sensor.EyeHeight, u.Position.Y);
+                    _unitEyePos[i] = new Vector3(u.Position.X, baseElevationY + profile.Sensor.EyeHeight, u.Position.Y);
                 }
                 else
                 {
@@ -163,7 +198,7 @@ public sealed class DetectionSystem : ISimulationSystem
                 {
                     _unitTargetPoints[i] = profile.TargetPoints;
                     float topRelY = profile.TargetPoints.RelativeHeights[^1];
-                    _unitTopTargetPoint[i] = new Vector3(u.Position.X, groundY + topRelY, u.Position.Y);
+                    _unitTopTargetPoint[i] = new Vector3(u.Position.X, baseElevationY + topRelY, u.Position.Y);
                 }
                 else
                 {
@@ -293,7 +328,10 @@ public sealed class DetectionSystem : ISimulationSystem
                             targetType,
                             _unitTurretYaws[targetUnitIndex],
                             _unitHullHeadings[targetUnitIndex],
-                            _unitSupportSurfaces[targetUnitIndex]);
+                            _unitSupportSurfaces[targetUnitIndex],
+                            _unitAltitudes[targetUnitIndex],
+                            _unitFlightPhases[targetUnitIndex],
+                            _unitGunPitches[targetUnitIndex]);
                         _observedCounts[sideIndex] = count + 1;
                     }
 
@@ -416,6 +454,142 @@ public sealed class DetectionSystem : ISimulationSystem
                 }
             }
         }
+
+        // 8. Filter observed smoke clouds per side (own/allied clouds always visible; hostile clouds require LOS)
+        UpdateVisibleSmokeClouds(world, unitCount, tick);
+    }
+
+    private void UpdateVisibleSmokeClouds(WorldState world, int unitCount, int tick)
+    {
+        ReadOnlySpan<SmokeCloudState> clouds = world.SmokeClouds;
+        ReadOnlySpan<SmokeVolume> activeVolumes = _smokeSystem is not null ? _smokeSystem.ActiveVolumes : [];
+
+        for (int s = 0; s < _smokeTrackers.Length; s++)
+        {
+            SideSmokeTracker tracker = _smokeTrackers[s];
+            tracker.Clear();
+
+            if (clouds.Length == 0)
+            {
+                continue;
+            }
+
+            int sidePlayer = s + 1;
+            int sideTeam = world.GetPlayerTeam(sidePlayer);
+
+            for (int c = 0; c < clouds.Length; c++)
+            {
+                ref readonly SmokeCloudState cloud = ref clouds[c];
+                if (cloud.IsExpired(tick))
+                {
+                    continue;
+                }
+
+                if (!world.AreHostile(sidePlayer, cloud.Owner))
+                {
+                    tracker.TryAdd(cloud.ToObservation());
+                    continue;
+                }
+
+                if (IsSmokeCloudVisibleToTeam(in cloud, unitCount, sideTeam, tick, activeVolumes))
+                {
+                    tracker.TryAdd(cloud.ToObservation());
+                }
+            }
+        }
+    }
+
+    private bool IsSmokeCloudVisibleToTeam(
+        in SmokeCloudState cloud,
+        int unitCount,
+        int observerTeam,
+        int tick,
+        ReadOnlySpan<SmokeVolume> activeVolumes)
+    {
+        cloud.EvaluateAtTick(tick, out float effectiveRadius, out _);
+        float visibleRadius = MathF.Max(effectiveRadius, cloud.Radius * SmokeCloudEvaluation.MinBloomRadiusFraction);
+        float baseY = _geometry.GetSurfaceHeight(cloud.Position, cloud.SupportSurface);
+        float topY = baseY + cloud.Height;
+        float sampleY = baseY + cloud.Height * 0.6f;
+        Vector3 cloudCenterPt = new(cloud.Position.X, sampleY, cloud.Position.Y);
+
+        for (int u = 0; u < unitCount; u++)
+        {
+            if (!_unitHasSensor[u] || _unitTeams[u] != observerTeam)
+            {
+                continue;
+            }
+
+            Vector2 obsPos = _unitPositions[u];
+            float maxDist = _unitSensorRange[u] + visibleRadius;
+            float dx = obsPos.X - cloud.Position.X;
+            float dz = obsPos.Y - cloud.Position.Y;
+            float distSq = dx * dx + dz * dz;
+            if (distSq > maxDist * maxDist)
+            {
+                continue;
+            }
+
+            Vector3 eyePos = _unitEyePos[u];
+            float surfaceDistThreshold = visibleRadius + 0.1f;
+
+            if (distSq <= surfaceDistThreshold * surfaceDistThreshold)
+            {
+                // Observer is horizontally inside or adjacent to the cloud footprint:
+                // always require unobstructed static LOS to the cloud body (blocks through walls and bridge decks).
+                float clampedY = Math.Clamp(eyePos.Y, baseY + 0.35f, MathF.Max(baseY + 0.35f, topY - 0.15f));
+                Vector3 insidePt = new(cloud.Position.X, clampedY, cloud.Position.Y);
+                LosQueriesCount++;
+                if (!_geometry.IsLineOfSightClear(eyePos, insidePt, _staticOnlyLosContext, out _))
+                {
+                    continue;
+                }
+
+                // If observer eye is vertically within the smoke column, it is directly in the smoke.
+                if (eyePos.Y >= baseY - 0.5f && eyePos.Y <= topY + 0.5f)
+                {
+                    return true;
+                }
+
+                // Otherwise (e.g., elevated above or below an open cloud), test outer top/bottom surface against other smoke.
+                float outerSurfaceY = eyePos.Y > topY ? topY + 0.05f : baseY - 0.05f;
+                Vector3 verticalSurfacePt = new(cloud.Position.X, outerSurfaceY, cloud.Position.Y);
+                if (activeVolumes.Length == 0 || SmokeLos.IsSmokeClear(eyePos, verticalSurfacePt, activeVolumes, excludeId: cloud.Id))
+                {
+                    return true;
+                }
+                continue;
+            }
+
+            // Observer is outside the cloud horizontally: test visibility to the outer observer-facing surface
+            // so overlapping clouds at the same position do not mutually occlude each other.
+            float invDist = 1.0f / MathF.Sqrt(distSq);
+            float outerOffset = visibleRadius + 0.05f;
+            Vector3 surfacePt = new(
+                cloud.Position.X + dx * invDist * outerOffset,
+                sampleY,
+                cloud.Position.Y + dz * invDist * outerOffset);
+
+            LosQueriesCount++;
+            if (!_geometry.IsLineOfSightClear(eyePos, surfacePt, _staticOnlyLosContext, out _))
+            {
+                continue;
+            }
+
+            // Prevent a cloud centered behind an opaque wall from leaking through the wall to its outer radius.
+            LosQueriesCount++;
+            if (!_geometry.IsLineOfSightClear(cloudCenterPt, surfacePt, _staticOnlyLosContext, out _))
+            {
+                continue;
+            }
+
+            if (activeVolumes.Length == 0 || SmokeLos.IsSmokeClear(eyePos, surfacePt, activeVolumes, excludeId: cloud.Id))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private bool IsPositionInLineOfSight(Vector2 lkPos, uint supportSurface, ushort unitType, int sideIndex)
@@ -543,6 +717,15 @@ public sealed class DetectionSystem : ISimulationSystem
         return _wreckTrackers[index].ExportWrecks();
     }
 
+    public ReadOnlySpan<SmokeCloudObservation> GetVisibleSmokeClouds(int player)
+    {
+        int index = player - 1;
+        if (index < 0 || index >= _smokeTrackers.Length)
+            return [];
+
+        return _smokeTrackers[index].ExportSmokeClouds();
+    }
+
     public void NotifyWreckCreated(WreckState wreck, int victimOwner, EntityId victimId)
     {
         WreckObservation obs = wreck.ToObservation();
@@ -568,6 +751,7 @@ public sealed class DetectionSystem : ISimulationSystem
         if (index >= 0 && index < _wreckTrackers.Length)
         {
             _wreckTrackers[index].Clear();
+            _smokeTrackers[index].Clear();
         }
     }
 }
