@@ -32,20 +32,24 @@ public sealed class StopCommandTests
 
     private sealed class TestPerceptionCatalog : IUnitPerceptionCatalog
     {
+        private readonly UnitPerceptionProfile[] _profiles =
+        [
+            new(new VisualSensorProfile(500f, 2.0f), new TargetObservationPoints(0.8f, 2.0f), ContactClassification.Tank),
+            new(new VisualSensorProfile(500f, 1.6f), new TargetObservationPoints(0.6f, 1.4f), ContactClassification.Infantry),
+            new(new VisualSensorProfile(500f, 2.0f), new TargetObservationPoints(0.8f, 2.0f), ContactClassification.Apc),
+            new(new VisualSensorProfile(500f, 2.5f), new TargetObservationPoints(1.5f, 4.0f), ContactClassification.Helicopter),
+            new(new VisualSensorProfile(500f, 2.2f), new TargetObservationPoints(1.0f, 2.5f), ContactClassification.Artillery)
+        ];
+
         public bool TryGetProfile(ushort definition, out UnitPerceptionProfile profile)
         {
-            profile = new UnitPerceptionProfile(
-                new VisualSensorProfile(500f, 2.0f),
-                new TargetObservationPoints(0.8f, 2.0f),
-                definition switch
-                {
-                    DefInfantry => ContactClassification.Infantry,
-                    DefApc => ContactClassification.Apc,
-                    DefHeli => ContactClassification.Helicopter,
-                    DefArtillery => ContactClassification.Artillery,
-                    _ => ContactClassification.Tank
-                });
-            return true;
+            if (definition < _profiles.Length)
+            {
+                profile = _profiles[definition];
+                return true;
+            }
+            profile = default;
+            return false;
         }
     }
 
@@ -324,10 +328,11 @@ public sealed class StopCommandTests
 
         using NoGcAllocationWindow window = new();
         long before = GC.GetAllocatedBytesForCurrentThread();
-        Assert.True(sim.TryEnqueue(1, new StopCommand(1000u, 0, tank)));
+        bool enq = sim.TryEnqueue(1, new StopCommand(1000u, 0, tank));
         for (int i = 0; i < 20; i++) sim.Step();
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
+        Assert.True(enq);
         Assert.True(allocated == 0, window.Describe(allocated));
     }
 }
