@@ -128,8 +128,14 @@ internal static partial class ViewportAspectRegressionTests
         Window.ContentScaleAspectEnum origAspect = root.ContentScaleAspect;
         bool origHudVisible = main.HudCanvas.Visible;
         string origStatsText = main.StatsLabel.Text;
+        bool origDebugVisible = main.DebugHudVisible;
+        HashSet<EntityId> origSelectedUnits = [.. main.UnitViews.Selected];
+        HashSet<ContactId> origSelectedContacts = [.. main.ContactViews.Selected];
+        bool origNotificationVisible = main.OrderNotification.Visible;
+        string origNotificationText = main.OrderNotification.CurrentText;
         MissionPanel? origMissionPanel = main.MissionPanel;
         bool createdTempMission = origMissionPanel is null;
+        bool origBriefingExpanded = origMissionPanel?.IsBriefingExpanded ?? false;
 
         if (createdTempMission)
         {
@@ -137,8 +143,30 @@ internal static partial class ViewportAspectRegressionTests
         }
 
         main.HudCanvas.Visible = true;
+        main.SetDebugHudVisible(true);
+        main.MissionPanel!.SetBriefingExpanded(true);
+        Require(main.Session.Replica.OwnUnits.Length > 0, "HUD layout fixture requires an own unit.");
+        main.UnitViews.Selected.Clear();
+        main.UnitViews.Selected.Add(main.Session.Replica.OwnUnits[0].Id);
+        main.ContactViews.Selected.Clear();
+        main.UpdateSelectionPresentation();
         main.StatsLabel.Text = "20 Hz SIM / 10 Hz STATE / TICK 00010 / OWN: 3 / CONTACTS: 0\n3,986 ms per tick / 0 B tick allocations / 2,1 KiB/s";
         main.TopHud.ResetSize();
+
+        // Exercise the largest transport action row, not only an invisible context panel.
+        ushort transportDefinition = 0;
+        while (transportDefinition < main.Catalog.Units.Length && main.Catalog.Units[transportDefinition].PassengerCapacity == 0) transportDefinition++;
+        Require(transportDefinition < main.Catalog.Units.Length, "HUD layout fixture requires a transport definition.");
+        ClientReplica layoutReplica = new();
+        OwnUnitObservation transport = new(new EntityId(901), transportDefinition, default, 0, PassengerCount: 3, PassengerCapacity: 11);
+        byte[] layoutSnapshot = new byte[WireProtocol.MaxMessageSize];
+        int layoutSize = WireProtocol.WriteSnapshot(layoutSnapshot, 1, 1, [transport]);
+        Require(layoutReplica.TryApply(layoutSnapshot.AsSpan(0, layoutSize)), "HUD transport fixture snapshot must apply.");
+        HashSet<EntityId> transportSelection = [transport.Id];
+        main.ContextActionPanel.UpdateContext(transportSelection, layoutReplica);
+        main.ContextActionPanel.SetTargetingMode(ContextTargetingMode.Disembark);
+        main.ContextActionPanel.UpdateContext(transportSelection, layoutReplica);
+        main.OrderNotification.ShowNotification("Movement order submitted for selected units");
 
         try
         {
@@ -162,31 +190,40 @@ internal static partial class ViewportAspectRegressionTests
 
                 // Explicitly ensure TopHud uses real multi-line minimum size and RefreshOccludingPanels updates briefing Y offset
                 main.TopHud.ResetSize();
-                main.BottomHud.SetSize(new Vector2(visW - 48f, 64f));
-                main.BottomHud.Position = new Vector2(24f, visH - 88f);
-                main.SelectionCard.Position = new Vector2(24f, visH - 196f);
-                main.SelectionCard.SetSize(new Vector2(380f, 100f));
-                main.Minimap.Position = new Vector2(visW - 24f - TacticalMinimap.DefaultWidgetSize, visH - 96f - TacticalMinimap.DefaultWidgetSize);
+                main.UtilityHud.SetSize(new Vector2(HudLayout.ToolbarWidth, HudLayout.ToolbarHeight));
+                main.UtilityHud.Position = new Vector2(visW - HudLayout.Margin - HudLayout.ToolbarWidth, HudLayout.Margin);
+                main.SelectionCard.Position = new Vector2(HudLayout.Margin, visH - HudLayout.Margin - HudLayout.CardHeight);
+                main.SelectionCard.SetSize(new Vector2(HudLayout.CardWidth, HudLayout.CardHeight));
+                main.CommandPanel.Position = new Vector2(HudLayout.Margin + HudLayout.CardWidth + HudLayout.Gap, visH - HudLayout.Margin - HudLayout.CommandHeight);
+                main.CommandPanel.SetSize(new Vector2(HudLayout.CommandWidth, HudLayout.CommandHeight));
+                main.ContextActionPanel.Position = new Vector2(HudLayout.Margin, visH - HudLayout.Margin - HudLayout.CardHeight - HudLayout.Gap - HudLayout.ContextHeight);
+                main.ContextActionPanel.SetSize(new Vector2(HudLayout.CardWidth, HudLayout.ContextHeight));
+                main.OrderNotification.Position = new Vector2(visW * 0.5f - 180f, visH - HudLayout.Margin - HudLayout.CardHeight - HudLayout.Gap - HudLayout.NotificationHeight);
+                main.OrderNotification.SetSize(new Vector2(360f, 36f));
+                main.Minimap.Position = new Vector2(visW - HudLayout.Margin - TacticalMinimap.DefaultWidgetSize, visH - HudLayout.Margin - TacticalMinimap.DefaultWidgetSize);
                 main.Minimap.SetSize(new Vector2(TacticalMinimap.DefaultWidgetSize, TacticalMinimap.DefaultWidgetSize));
 
                 main.RefreshOccludingPanels();
 
                 ReadOnlySpan<Rect2> occluding = main.InputOccludingPanels;
                 Rect2 topRect = occluding[0];
-                Rect2 bottomRect = occluding[1];
+                Rect2 utilityRect = occluding[1];
                 Rect2 cardRect = occluding[2];
                 Rect2 missionRect = occluding[4];
                 Rect2 minimapRect = occluding[5];
+                Rect2 commandRect = occluding[7];
+                Rect2 contextRect = occluding[6];
+                Rect2 notificationRect = main.OrderNotification.GetGlobalRect();
 
-                Require(topRect.Size.Y >= 135f,
-                    $"Real TopHud with 4 lines must expand to >= 135px, got {topRect.Size.Y:F1}px.");
+                Require(topRect.Size.Y >= 100f,
+                    $"Real compact TopHud with 4 lines must expand to >= 100px, got {topRect.Size.Y:F1}px.");
                 Require(missionRect.Size.X > 100f && missionRect.Size.Y > 80f,
                     $"Real MissionPanel briefing card must have positive layout size, got {missionRect}.");
                 Require(!topRect.Intersects(missionRect) && missionRect.Position.Y >= topRect.End.Y + 9f,
                     $"TopHud ({topRect}) must clear MissionPanel briefing ({missionRect}) at {w}x{h}.");
 
                 Rect2 screenRect = new(Vector2.Zero, vis.Size);
-                Rect2[] realPanels = [topRect, missionRect, bottomRect, cardRect, minimapRect];
+                Rect2[] realPanels = [topRect, missionRect, utilityRect, cardRect, minimapRect, commandRect, contextRect, notificationRect];
                 for (int i = 0; i < realPanels.Length; i++)
                 {
                     Require(screenRect.Encloses(realPanels[i]),
@@ -198,10 +235,12 @@ internal static partial class ViewportAspectRegressionTests
                     }
                 }
 
-                Require(MathF.Abs(bottomRect.Position.Y - cardRect.End.Y - 8f) < 1f,
-                    $"SelectionCard must stay 8px above BottomHud at {w}x{h}: bottom={bottomRect}, card={cardRect}.");
-                Require(MathF.Abs(bottomRect.Position.Y - minimapRect.End.Y - 8f) < 1f,
-                    $"Minimap must stay 8px above BottomHud at {w}x{h}: bottom={bottomRect}, minimap={minimapRect}.");
+                Require(MathF.Abs(cardRect.End.Y - (visH - HudLayout.Margin)) < 1f,
+                    $"SelectionCard must use the bottom margin at {w}x{h}: card={cardRect}.");
+                Require(MathF.Abs(minimapRect.End.Y - (visH - HudLayout.Margin)) < 1f,
+                    $"Minimap must use the bottom margin at {w}x{h}: minimap={minimapRect}.");
+                Require(MathF.Abs(commandRect.End.Y - (visH - HudLayout.Margin)) < 1f,
+                    $"Commands must fit their content and use the bottom margin at {w}x{h}: commands={commandRect}.");
                 Require(MathF.Abs(minimapRect.End.X - (visW - 24f)) < 1f,
                     $"Minimap must hug right edge at {w}x{h}: visW={visW}, minimap={minimapRect}.");
             }
@@ -213,6 +252,17 @@ internal static partial class ViewportAspectRegressionTests
                 main.ClearMissionPanel();
             }
             main.StatsLabel.Text = origStatsText;
+            main.UnitViews.Selected.Clear();
+            foreach (EntityId id in origSelectedUnits) main.UnitViews.Selected.Add(id);
+            main.ContactViews.Selected.Clear();
+            foreach (ContactId id in origSelectedContacts) main.ContactViews.Selected.Add(id);
+            if (!createdTempMission) main.MissionPanel?.SetBriefingExpanded(origBriefingExpanded);
+            main.SetDebugHudVisible(origDebugVisible);
+            main.UpdateSelectionPresentation();
+            main.ContextActionPanel.CancelTargeting();
+            main.ContextActionPanel.UpdateContext(main.UnitViews.Selected, main.Session.Replica);
+            if (origNotificationVisible) main.OrderNotification.ShowNotification(origNotificationText);
+            else main.OrderNotification.Clear();
             main.TopHud.ResetSize();
             main.HudCanvas.Visible = origHudVisible;
             root.ContentScaleAspect = origAspect;

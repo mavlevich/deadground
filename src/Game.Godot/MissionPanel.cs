@@ -11,6 +11,9 @@ internal sealed partial class MissionPanel : Control
     private readonly Label _targetStatusLabel;
     private readonly Label _timerLabel;
     private readonly Label _squadLabel;
+    private readonly VBoxContainer _briefingDetails;
+    private readonly Label _compactObjectiveLabel;
+    private readonly Button _briefingToggleButton;
 
     private readonly PanelContainer _resultCard;
     private readonly Label _resultTitle;
@@ -33,12 +36,15 @@ internal sealed partial class MissionPanel : Control
     public event System.Action? RetryRequested;
     public event System.Action? LeaveRequested;
     public bool IsMissionFinished => _hasFinished;
+    internal bool IsBriefingExpanded { get; private set; }
+    internal Button BriefingToggleButton => _briefingToggleButton;
     public Rect2 GetBriefingRect() => _briefingCard.Visible ? _briefingCard.GetGlobalRect() : default;
     public Rect2 GetResultRect() => _resultCard.Visible ? _resultCard.GetGlobalRect() : default;
     public Rect2 GetLeaveButtonRect() => _leaveButton.Visible ? _leaveButton.GetGlobalRect() : default;
 
     public MissionPanel(Node3D parent3D, HeightMap map)
     {
+        Theme = HudTheme.Shared;
         _map = map ?? throw new System.ArgumentNullException(nameof(map));
         MouseFilter = MouseFilterEnum.Ignore;
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
@@ -46,19 +52,57 @@ internal sealed partial class MissionPanel : Control
         // 1. Briefing and objective HUD card (top left, positioned dynamically via SetBriefingTopOffset)
         _briefingCard = new PanelContainer
         {
-            Position = new Vector2(24, 156),
+            Position = new Vector2(HudLayout.Margin, 72),
+            CustomMinimumSize = new Vector2(HudLayout.CardWidth, 0),
             MouseFilter = Control.MouseFilterEnum.Stop
         };
-        _briefingCard.AddThemeStyleboxOverride("panel", HudCardStyle());
+        _briefingCard.AddThemeStyleboxOverride("panel", HudTheme.CreatePanel(padding: 1, topRail: true));
 
         MarginContainer margin = new() { MouseFilter = MouseFilterEnum.Ignore };
-        margin.AddThemeConstantOverride("margin_left", 14);
-        margin.AddThemeConstantOverride("margin_right", 14);
-        margin.AddThemeConstantOverride("margin_top", 10);
-        margin.AddThemeConstantOverride("margin_bottom", 10);
+        margin.AddThemeConstantOverride("margin_left", 10);
+        margin.AddThemeConstantOverride("margin_right", 10);
+        margin.AddThemeConstantOverride("margin_top", 6);
+        margin.AddThemeConstantOverride("margin_bottom", 6);
 
         VBoxContainer stack = new() { MouseFilter = MouseFilterEnum.Ignore };
-        stack.AddThemeConstantOverride("separation", 4);
+        stack.AddThemeConstantOverride("separation", 3);
+
+        HBoxContainer headingRow = new() { MouseFilter = MouseFilterEnum.Ignore };
+        headingRow.AddThemeConstantOverride("separation", 10);
+        _briefingToggleButton = new Button
+        {
+            Text = "OBJECTIVE +",
+            ThemeTypeVariation = "CompactButton",
+            MouseFilter = MouseFilterEnum.Stop,
+            FocusMode = FocusModeEnum.None
+        };
+        _briefingToggleButton.Pressed += OnBriefingTogglePressed;
+        headingRow.AddChild(_briefingToggleButton);
+        _timerLabel = new Label
+        {
+            Text = "Time Remaining: 12:00",
+            MouseFilter = MouseFilterEnum.Ignore,
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        HudTheme.ApplyMono(_timerLabel);
+        _timerLabel.AddThemeFontSizeOverride("font_size", 12);
+        _timerLabel.AddThemeColorOverride("font_color", HudTheme.Accent);
+        headingRow.AddChild(_timerLabel);
+        stack.AddChild(headingRow);
+
+        _compactObjectiveLabel = new Label
+        {
+            Text = "Destroy enemy command vehicle. Preserve recon vehicle.",
+            MouseFilter = MouseFilterEnum.Ignore,
+            TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis
+        };
+        _compactObjectiveLabel.AddThemeFontSizeOverride("font_size", 12);
+        stack.AddChild(_compactObjectiveLabel);
+
+        _briefingDetails = new VBoxContainer { MouseFilter = MouseFilterEnum.Ignore, Visible = false };
+        _briefingDetails.AddThemeConstantOverride("separation", 4);
+        stack.AddChild(_briefingDetails);
 
         _headerLabel = new Label
         {
@@ -66,8 +110,8 @@ internal sealed partial class MissionPanel : Control
             MouseFilter = MouseFilterEnum.Ignore
         };
         _headerLabel.AddThemeFontSizeOverride("font_size", 14);
-        _headerLabel.AddThemeColorOverride("font_color", new Color("edc76b"));
-        stack.AddChild(_headerLabel);
+        _headerLabel.AddThemeColorOverride("font_color", HudTheme.Accent);
+        _briefingDetails.AddChild(_headerLabel);
 
         _objectiveLabel = new Label
         {
@@ -75,8 +119,8 @@ internal sealed partial class MissionPanel : Control
             MouseFilter = MouseFilterEnum.Ignore
         };
         _objectiveLabel.AddThemeFontSizeOverride("font_size", 13);
-        _objectiveLabel.AddThemeColorOverride("font_color", new Color("d0ded0"));
-        stack.AddChild(_objectiveLabel);
+        _objectiveLabel.AddThemeColorOverride("font_color", HudTheme.Text);
+        _briefingDetails.AddChild(_objectiveLabel);
 
         _targetStatusLabel = new Label
         {
@@ -84,17 +128,8 @@ internal sealed partial class MissionPanel : Control
             MouseFilter = MouseFilterEnum.Ignore
         };
         _targetStatusLabel.AddThemeFontSizeOverride("font_size", 13);
-        _targetStatusLabel.AddThemeColorOverride("font_color", new Color("a8b8a0"));
-        stack.AddChild(_targetStatusLabel);
-
-        _timerLabel = new Label
-        {
-            Text = "Time Remaining: 12:00",
-            MouseFilter = MouseFilterEnum.Ignore
-        };
-        _timerLabel.AddThemeFontSizeOverride("font_size", 13);
-        _timerLabel.AddThemeColorOverride("font_color", new Color("f0e0a0"));
-        stack.AddChild(_timerLabel);
+        _targetStatusLabel.AddThemeColorOverride("font_color", HudTheme.Muted);
+        _briefingDetails.AddChild(_targetStatusLabel);
 
         _squadLabel = new Label
         {
@@ -102,8 +137,8 @@ internal sealed partial class MissionPanel : Control
             MouseFilter = MouseFilterEnum.Ignore
         };
         _squadLabel.AddThemeFontSizeOverride("font_size", 12);
-        _squadLabel.AddThemeColorOverride("font_color", new Color("8a9a88"));
-        stack.AddChild(_squadLabel);
+        _squadLabel.AddThemeColorOverride("font_color", HudTheme.Muted);
+        _briefingDetails.AddChild(_squadLabel);
 
         margin.AddChild(stack);
         _briefingCard.AddChild(margin);
@@ -115,7 +150,7 @@ internal sealed partial class MissionPanel : Control
             MouseFilter = MouseFilterEnum.Stop,
             Visible = false
         };
-        _resultCard.AddThemeStyleboxOverride("panel", ResultCardStyle());
+        _resultCard.AddThemeStyleboxOverride("panel", HudTheme.CreatePanel(accented: true, padding: 2, topRail: true, modal: true));
 
         MarginContainer resultMargin = new() { MouseFilter = MouseFilterEnum.Ignore };
         resultMargin.AddThemeConstantOverride("margin_left", 32);
@@ -142,7 +177,7 @@ internal sealed partial class MissionPanel : Control
             MouseFilter = MouseFilterEnum.Ignore
         };
         _resultReason.AddThemeFontSizeOverride("font_size", 16);
-        _resultReason.AddThemeColorOverride("font_color", new Color("d5ded0"));
+        _resultReason.AddThemeColorOverride("font_color", HudTheme.Text);
         resultStack.AddChild(_resultReason);
 
         _resultDuration = new Label
@@ -152,7 +187,7 @@ internal sealed partial class MissionPanel : Control
             MouseFilter = MouseFilterEnum.Ignore
         };
         _resultDuration.AddThemeFontSizeOverride("font_size", 14);
-        _resultDuration.AddThemeColorOverride("font_color", new Color("b0c0a8"));
+        _resultDuration.AddThemeColorOverride("font_color", HudTheme.Muted);
         resultStack.AddChild(_resultDuration);
 
         _retryButton = new Button
@@ -179,7 +214,7 @@ internal sealed partial class MissionPanel : Control
             Visible = false
         };
         _instructionLabel.AddThemeFontSizeOverride("font_size", 13);
-        _instructionLabel.AddThemeColorOverride("font_color", new Color("a8b8a0"));
+        _instructionLabel.AddThemeColorOverride("font_color", HudTheme.Muted);
         resultStack.AddChild(_instructionLabel);
 
         resultMargin.AddChild(resultStack);
@@ -191,7 +226,7 @@ internal sealed partial class MissionPanel : Control
         {
             MaterialOverride = new StandardMaterial3D
             {
-                AlbedoColor = new Color(0.93f, 0.78f, 0.42f, 0.45f),
+                AlbedoColor = new Color(HudTheme.Accent, 0.45f),
                 ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
                 Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
                 CullMode = BaseMaterial3D.CullModeEnum.Disabled,
@@ -275,17 +310,17 @@ internal sealed partial class MissionPanel : Control
             if (mission.IsTargetDestroyed)
             {
                 _targetStatusLabel.Text = "Target: DESTROYED (Objective complete)";
-                _targetStatusLabel.AddThemeColorOverride("font_color", new Color("77dd77"));
+                _targetStatusLabel.AddThemeColorOverride("font_color", HudTheme.Accent);
             }
             else if (mission.IsTargetSpotted && mission.TargetContactId.Value != 0)
             {
                 _targetStatusLabel.Text = $"Target: SPOTTED (Enemy Contact #{mission.TargetContactId.Value})";
-                _targetStatusLabel.AddThemeColorOverride("font_color", new Color("ff7777"));
+                _targetStatusLabel.AddThemeColorOverride("font_color", HudTheme.Danger);
             }
             else
             {
                 _targetStatusLabel.Text = $"Target Area: ~[{mission.SearchAreaCenter.X:F0}, {mission.SearchAreaCenter.Y:F0}] (Radius {mission.SearchAreaRadius:F0}m) / Unlocated";
-                _targetStatusLabel.AddThemeColorOverride("font_color", new Color("a8b8a0"));
+                _targetStatusLabel.AddThemeColorOverride("font_color", HudTheme.Muted);
             }
         }
 
@@ -297,13 +332,6 @@ internal sealed partial class MissionPanel : Control
             _retryButton.Visible = _isLocal;
             _instructionLabel.Visible = !_isLocal;
 
-            // Center result card
-            Vector2 viewportSize = GetViewportRect().Size;
-            Vector2 cardSize = _resultCard.GetCombinedMinimumSize();
-            _resultCard.Position = new Vector2(
-                (viewportSize.X - cardSize.X) * 0.5f,
-                (viewportSize.Y - cardSize.Y) * 0.5f);
-
             int elapsedSeconds = effectiveTick / Simulation.TickRate;
             int elMins = elapsedSeconds / 60;
             int elSecs = elapsedSeconds % 60;
@@ -314,7 +342,7 @@ internal sealed partial class MissionPanel : Control
             if (mission.Status == MissionStatus.Victory)
             {
                 _resultTitle.Text = "VICTORY";
-                _resultTitle.AddThemeColorOverride("font_color", new Color("77dd77"));
+                _resultTitle.AddThemeColorOverride("font_color", HudTheme.Accent);
                 _resultReason.Text = _scenario == "battle"
                     ? "All enemy units destroyed."
                     : "Enemy command vehicle was located and destroyed.";
@@ -322,13 +350,13 @@ internal sealed partial class MissionPanel : Control
             else if (mission.Status == MissionStatus.Draw)
             {
                 _resultTitle.Text = "DRAW";
-                _resultTitle.AddThemeColorOverride("font_color", new Color("edc76b"));
+                _resultTitle.AddThemeColorOverride("font_color", HudTheme.Accent);
                 _resultReason.Text = "Mutual destruction: all units on both sides destroyed.";
             }
             else
             {
                 _resultTitle.Text = "DEFEAT";
-                _resultTitle.AddThemeColorOverride("font_color", new Color("ee6666"));
+                _resultTitle.AddThemeColorOverride("font_color", HudTheme.Danger);
                 if (_scenario == "battle")
                 {
                     _resultReason.Text = "All friendly units destroyed.";
@@ -344,6 +372,7 @@ internal sealed partial class MissionPanel : Control
                     };
                 }
             }
+            HudTheme.CenterModal(_resultCard);
         }
         else
         {
@@ -422,7 +451,7 @@ internal sealed partial class MissionPanel : Control
 
     public void SetBriefingTopOffset(float topY)
     {
-        float targetY = MathF.Max(156f, topY);
+        float targetY = MathF.Max(24f, topY);
         if (MathF.Abs(_briefingCard.Position.Y - targetY) > 0.5f)
         {
             _briefingCard.Position = new Vector2(_briefingCard.Position.X, targetY);
@@ -433,45 +462,33 @@ internal sealed partial class MissionPanel : Control
     {
         _headerLabel.Text = title;
         _objectiveLabel.Text = objective;
+        _compactObjectiveLabel.Text = objective.StartsWith("Primary: ", StringComparison.Ordinal)
+            ? objective["Primary: ".Length..]
+            : objective;
         _squadLabel.Text = roster;
+        _briefingCard.ResetSize();
     }
+
+    internal void SetBriefingExpanded(bool expanded)
+    {
+        IsBriefingExpanded = expanded;
+        _briefingDetails.Visible = expanded;
+        _compactObjectiveLabel.Visible = !expanded;
+        _briefingToggleButton.Text = expanded ? "OBJECTIVE -" : "OBJECTIVE +";
+        _briefingCard.ResetSize();
+    }
+
+    private void OnBriefingTogglePressed() => SetBriefingExpanded(!IsBriefingExpanded);
 
     public void ResetUi()
     {
+        SetBriefingExpanded(false);
         _hasFinished = false;
         _resultCard.Visible = false;
         _targetStatusLabel.Text = "Target: Locating...";
-        _targetStatusLabel.AddThemeColorOverride("font_color", new Color("a8b8a0"));
+        _targetStatusLabel.AddThemeColorOverride("font_color", HudTheme.Muted);
         _timerLabel.Text = "Time Remaining: 12:00";
     }
-
-    private static StyleBoxFlat HudCardStyle() => new()
-    {
-        BgColor = new Color(0.045f, 0.07f, 0.055f, 0.92f),
-        BorderColor = new Color("3b4835"),
-        BorderWidthBottom = 1,
-        BorderWidthTop = 1,
-        BorderWidthLeft = 1,
-        BorderWidthRight = 1,
-        CornerRadiusBottomLeft = 5,
-        CornerRadiusBottomRight = 5,
-        CornerRadiusTopLeft = 5,
-        CornerRadiusTopRight = 5
-    };
-
-    private static StyleBoxFlat ResultCardStyle() => new()
-    {
-        BgColor = new Color(0.04f, 0.06f, 0.05f, 0.96f),
-        BorderColor = new Color("edc76b"),
-        BorderWidthBottom = 2,
-        BorderWidthTop = 2,
-        BorderWidthLeft = 2,
-        BorderWidthRight = 2,
-        CornerRadiusBottomLeft = 8,
-        CornerRadiusBottomRight = 8,
-        CornerRadiusTopLeft = 8,
-        CornerRadiusTopRight = 8
-    };
 
     public void Cleanup()
     {

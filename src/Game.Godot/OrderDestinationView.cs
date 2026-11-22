@@ -153,15 +153,15 @@ internal sealed partial class OrderDestinationView : Node3D
 
     public OrderDestinationView()
     {
-        _matSent = CreateUnshadedMaterial(new Color("edc76b"));        // Amber
-        _matProcessing = CreateUnshadedMaterial(new Color("4da6ff"));  // Cyan
-        _matSuccess = CreateUnshadedMaterial(new Color("5cb85c"));     // Green
-        _matFailed = CreateUnshadedMaterial(new Color("ff4d4d"));      // Red
-        _matPartial = CreateUnshadedMaterial(new Color("f0ad4e"));     // Orange / amber
+        _matSent = CreateUnshadedMaterial(HudTheme.Accent);
+        _matProcessing = CreateUnshadedMaterial(HudTheme.Muted);
+        _matSuccess = CreateUnshadedMaterial(HudTheme.Text);
+        _matFailed = CreateUnshadedMaterial(HudTheme.Danger);
+        _matPartial = CreateUnshadedMaterial(HudTheme.Accent);
 
         _matGhost = new StandardMaterial3D
         {
-            AlbedoColor = new Color(0.93f, 0.78f, 0.42f, 0.5f),
+            AlbedoColor = new Color(HudTheme.Accent, 0.5f),
             ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
             Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
             CullMode = BaseMaterial3D.CullModeEnum.Disabled,

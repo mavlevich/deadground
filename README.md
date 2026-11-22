@@ -63,6 +63,22 @@ Direct CLI arguments bypass the start menu: pass `--scenario <name>` to launch d
 
 During gameplay, press Escape to open the Pause Menu and select **Leave Battle** to return to the Start Menu. When a match ends, the outcome screen also provides a **Leave Battle** button. If the server restarts between matches, players can return to the Multiplayer menu and connect again without restarting the game client.
 
+### Tactical HUD
+
+The client uses a shared neutral black-graphite interface with amber selection highlights and an obsidian radar-topographic minimap.
+
+- Select own units to inspect health, weapon name, ammunition, weapon readiness, tactical catalog specs (armor, weapon range, sensor range), and existing order status. White health bars have a thin amber reload bar below them. `NO AMMO` is distinct from `READY`.
+- Selecting multiple friendly units shows a full class breakdown (tanks, recon, APCs, infantry, command) and clickable unit roster chips to focus a unit or Shift-click to remove it, plus honest damaged/empty-ammo alerts.
+- Screen-space unit badges use a compact dark micro-pill around the NATO symbol and unit name with segmented bars underneath, keeping battlefield models clear while staying legible over any terrain. Nearby unselected own units show detail bars only when damaged, reloading, or out of ammunition; overhead `READY` text is omitted because a full amber bar already signals readiness. Enemy contacts never show private health, ammunition, or reload values, though identified types show public catalog reference specs. Last-known markers retain their observation age.
+- Use the command panel's **Move**, **Reverse [R]**, or **Attack** button, then left-click a destination or currently observed enemy contact. Active targeting buttons stay highlighted and clicking an active button again cancels targeting; Escape or right-click also cancels. Hovering an observed enemy in **Attack** mode displays distance and range status. Selection changes, focus loss, menus, and scenario reset also cancel targeting.
+- The existing right-click and right-drag orders remain available. Fire stance buttons use the existing Z/X/C commands and indicate mixed stances in groups. Transport actions appear above the selection card when applicable.
+- **F7** or **Ranges [F7]** toggles selected range rings, hidden by default: solid amber for weapon range, dashed neutral for sensor range. Terrain, forest, and buildings may obstruct actual observation or fire.
+- The compact top-right toolbar provides **Menu**, **Settings**, and **Help**. **F1** or **Help** opens the controls and range legend; there is no permanent footer. Selection and command panels disappear when no unit or contact is selected, releasing their area for battlefield clicks.
+- Mission briefings start collapsed with the goal and timer visible. **Objective +** reveals target details and the roster.
+- **F9** toggles diagnostics, hidden by default. Use `--debug-hud` to show them at startup. The normal HUD does not format periodic tick or network statistics.
+
+This UI change does not add order queues, a stop command, attack-ground, new mission rules or weapon mechanics.
+
 ### Dedicated server and two clients
 
 To run one dedicated server and two network clients:

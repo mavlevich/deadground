@@ -23,7 +23,7 @@ internal sealed partial class ContextActionPanel : PanelContainer
     private readonly Button _disembarkButton;
     private readonly Label _passengerLabel;
     private readonly Label _statusLabel;
-    private readonly UnitCatalog _catalog;
+    private UnitCatalog _catalog;
 
     public ContextTargetingMode TargetingMode { get; private set; } = ContextTargetingMode.None;
 
@@ -47,62 +47,57 @@ internal sealed partial class ContextActionPanel : PanelContainer
     public ContextActionPanel(UnitCatalog catalog)
     {
         _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+        Theme = HudTheme.Shared;
         MouseFilter = MouseFilterEnum.Stop;
-        CustomMinimumSize = new Vector2(360, 48);
+        CustomMinimumSize = new Vector2(HudLayout.CardWidth, HudLayout.ContextHeight);
 
-        StyleBoxFlat style = new()
-        {
-            BgColor = new Color(0.12f, 0.14f, 0.18f, 0.92f),
-            BorderWidthLeft = 1,
-            BorderWidthRight = 1,
-            BorderWidthTop = 1,
-            BorderWidthBottom = 1,
-            BorderColor = new Color(0.40f, 0.50f, 0.65f, 0.80f),
-            CornerRadiusTopLeft = 4,
-            CornerRadiusTopRight = 4,
-            CornerRadiusBottomLeft = 4,
-            CornerRadiusBottomRight = 4,
-            ContentMarginLeft = 10,
-            ContentMarginRight = 10,
-            ContentMarginTop = 6,
-            ContentMarginBottom = 6
-        };
+        StyleBoxFlat style = HudTheme.CreatePanel(padding: 4, topRail: true);
+        style.ContentMarginLeft = 10;
+        style.ContentMarginRight = 10;
         AddThemeStyleboxOverride("panel", style);
 
+        VBoxContainer column = new() { MouseFilter = MouseFilterEnum.Ignore };
+        column.AddThemeConstantOverride("separation", 2);
+        AddChild(column);
         HBoxContainer hbox = new()
         {
             MouseFilter = MouseFilterEnum.Ignore
         };
-        hbox.AddThemeConstantOverride("separation", 10);
-        AddChild(hbox);
+        hbox.AddThemeConstantOverride("separation", 6);
+        column.AddChild(hbox);
 
         _boardButton = new Button
         {
             Text = "BOARD TRANSPORT",
+            ThemeTypeVariation = "CompactButton",
+            ToggleMode = true,
+            FocusMode = FocusModeEnum.None,
             MouseFilter = MouseFilterEnum.Stop,
-            CustomMinimumSize = new Vector2(140, 32)
+            CustomMinimumSize = new Vector2(110, 22)
         };
-        _boardButton.AddThemeFontSizeOverride("font_size", 11);
         _boardButton.Pressed += OnBoardButtonPressed;
         hbox.AddChild(_boardButton);
 
         _disembarkHereButton = new Button
         {
-            Text = "DISEMBARK HERE",
+            Text = "UNLOAD HERE",
+            ThemeTypeVariation = "CompactButton",
+            FocusMode = FocusModeEnum.None,
             MouseFilter = MouseFilterEnum.Stop,
-            CustomMinimumSize = new Vector2(130, 32)
+            CustomMinimumSize = new Vector2(88, 22)
         };
-        _disembarkHereButton.AddThemeFontSizeOverride("font_size", 11);
         _disembarkHereButton.Pressed += () => DisembarkHereRequested?.Invoke();
         hbox.AddChild(_disembarkHereButton);
 
         _disembarkButton = new Button
         {
             Text = "UNLOAD AT...",
+            ThemeTypeVariation = "CompactButton",
+            ToggleMode = true,
+            FocusMode = FocusModeEnum.None,
             MouseFilter = MouseFilterEnum.Stop,
-            CustomMinimumSize = new Vector2(120, 32)
+            CustomMinimumSize = new Vector2(88, 22)
         };
-        _disembarkButton.AddThemeFontSizeOverride("font_size", 11);
         _disembarkButton.Pressed += OnDisembarkButtonPressed;
         hbox.AddChild(_disembarkButton);
 
@@ -111,19 +106,39 @@ internal sealed partial class ContextActionPanel : PanelContainer
             MouseFilter = MouseFilterEnum.Ignore,
             VerticalAlignment = VerticalAlignment.Center
         };
-        _passengerLabel.AddThemeFontSizeOverride("font_size", 11);
-        _passengerLabel.AddThemeColorOverride("font_color", new Color("edc76b"));
+        HudTheme.ApplyMono(_passengerLabel);
+        _passengerLabel.AddThemeFontSizeOverride("font_size", 10);
+        _passengerLabel.AddThemeColorOverride("font_color", HudTheme.Accent);
         hbox.AddChild(_passengerLabel);
 
         _statusLabel = new Label
         {
             MouseFilter = MouseFilterEnum.Ignore,
+            TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis,
             VerticalAlignment = VerticalAlignment.Center
         };
         _statusLabel.AddThemeFontSizeOverride("font_size", 10);
-        _statusLabel.AddThemeColorOverride("font_color", new Color("a0a8b0"));
-        hbox.AddChild(_statusLabel);
+        _statusLabel.AddThemeColorOverride("font_color", HudTheme.Muted);
+        column.AddChild(_statusLabel);
 
+        Visible = false;
+        _boardButton.Visible = false;
+        _disembarkHereButton.Visible = false;
+        _disembarkButton.Visible = false;
+        _passengerLabel.Visible = false;
+        _statusLabel.Visible = false;
+    }
+
+    internal void SetCatalog(UnitCatalog catalog)
+    {
+        _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+        CancelTargeting();
+        _cachedSelectionCount = -1;
+        _cachedSelectionHash = 0;
+        _cachedTargetingMode = (ContextTargetingMode)(-1);
+        _cachedPassengerCount = -1;
+        _cachedPassengerCapacity = -1;
+        _cachedTransportId = default;
         Visible = false;
         _boardButton.Visible = false;
         _disembarkHereButton.Visible = false;
@@ -150,6 +165,8 @@ internal sealed partial class ContextActionPanel : PanelContainer
     {
         if (TargetingMode == mode) return;
         TargetingMode = mode;
+        _boardButton.SetPressedNoSignal(mode == ContextTargetingMode.BoardTransport);
+        _disembarkButton.SetPressedNoSignal(mode == ContextTargetingMode.Disembark);
         TargetingModeChanged?.Invoke(mode);
     }
 

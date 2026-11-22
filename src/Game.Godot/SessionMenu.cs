@@ -5,6 +5,8 @@ namespace DeadGround.Client;
 
 internal sealed partial class SessionMenu : CanvasLayer
 {
+    private const int CardHorizontalMargin = 24;
+    private const int CardPanelPadding = 2;
     private readonly Control _backdrop;
     private readonly PanelContainer _mainCard;
     private readonly PanelContainer _multiplayerCard;
@@ -55,12 +57,7 @@ internal sealed partial class SessionMenu : CanvasLayer
     {
         Layer = 8;
 
-        _backdrop = new Control
-        {
-            Visible = true,
-            MouseFilter = Control.MouseFilterEnum.Stop
-        };
-        _backdrop.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+        _backdrop = HudTheme.CreateModalBackdrop(visible: true);
         AddChild(_backdrop);
 
         // 1. Main menu card
@@ -74,7 +71,7 @@ internal sealed partial class SessionMenu : CanvasLayer
             HorizontalAlignment = HorizontalAlignment.Center
         };
         mainTitle.AddThemeFontSizeOverride("font_size", 28);
-        mainTitle.AddThemeColorOverride("font_color", new Color("d5ded0"));
+        mainTitle.AddThemeColorOverride("font_color", HudTheme.Text);
         mainStack.AddChild(mainTitle);
 
         Label mainSubtitle = new()
@@ -83,7 +80,7 @@ internal sealed partial class SessionMenu : CanvasLayer
             HorizontalAlignment = HorizontalAlignment.Center
         };
         mainSubtitle.AddThemeFontSizeOverride("font_size", 12);
-        mainSubtitle.AddThemeColorOverride("font_color", new Color("8a9a88"));
+        mainSubtitle.AddThemeColorOverride("font_color", HudTheme.Muted);
         mainStack.AddChild(mainSubtitle);
 
         Control spacer1 = new() { CustomMinimumSize = new Vector2(0, 10) };
@@ -121,7 +118,7 @@ internal sealed partial class SessionMenu : CanvasLayer
             HorizontalAlignment = HorizontalAlignment.Center
         };
         mpTitle.AddThemeFontSizeOverride("font_size", 24);
-        mpTitle.AddThemeColorOverride("font_color", new Color("edc76b"));
+        mpTitle.AddThemeColorOverride("font_color", HudTheme.Accent);
         mpStack.AddChild(mpTitle);
 
         Label mpSubtitle = new()
@@ -130,7 +127,7 @@ internal sealed partial class SessionMenu : CanvasLayer
             HorizontalAlignment = HorizontalAlignment.Center
         };
         mpSubtitle.AddThemeFontSizeOverride("font_size", 12);
-        mpSubtitle.AddThemeColorOverride("font_color", new Color("8a9a88"));
+        mpSubtitle.AddThemeColorOverride("font_color", HudTheme.Muted);
         mpStack.AddChild(mpSubtitle);
 
         VBoxContainer fieldBox = new();
@@ -138,7 +135,7 @@ internal sealed partial class SessionMenu : CanvasLayer
 
         Label addrLabel = new() { Text = "SERVER ADDRESS" };
         addrLabel.AddThemeFontSizeOverride("font_size", 11);
-        addrLabel.AddThemeColorOverride("font_color", new Color("a8b8a0"));
+        addrLabel.AddThemeColorOverride("font_color", HudTheme.Muted);
         fieldBox.AddChild(addrLabel);
 
         _addressInput = new LineEdit
@@ -147,23 +144,22 @@ internal sealed partial class SessionMenu : CanvasLayer
             PlaceholderText = "127.0.0.1:7777",
             CustomMinimumSize = new Vector2(0, 36)
         };
-        _addressInput.AddThemeStyleboxOverride("normal", LineEditStyle());
-        _addressInput.AddThemeStyleboxOverride("focus", LineEditStyle(focused: true));
         _addressInput.AddThemeFontSizeOverride("font_size", 14);
-        _addressInput.AddThemeColorOverride("font_color", new Color("ffffff"));
+        _addressInput.AddThemeColorOverride("font_color", HudTheme.Text);
         _addressInput.TextSubmitted += _ => OnConnectPressed();
         fieldBox.AddChild(_addressInput);
         mpStack.AddChild(fieldBox);
 
         _statusLabel = new Label
         {
+            Size = new Vector2(_multiplayerCard.CustomMinimumSize.X - 2 * (CardHorizontalMargin + CardPanelPadding), 32),
             Text = "Ready to connect.",
             HorizontalAlignment = HorizontalAlignment.Center,
             AutowrapMode = TextServer.AutowrapMode.WordSmart,
             CustomMinimumSize = new Vector2(0, 32)
         };
         _statusLabel.AddThemeFontSizeOverride("font_size", 12);
-        _statusLabel.AddThemeColorOverride("font_color", new Color("8a9a88"));
+        _statusLabel.AddThemeColorOverride("font_color", HudTheme.Muted);
         mpStack.AddChild(_statusLabel);
 
         HBoxContainer buttonRow = new();
@@ -203,17 +199,19 @@ internal sealed partial class SessionMenu : CanvasLayer
             HorizontalAlignment = HorizontalAlignment.Center
         };
         dcTitle.AddThemeFontSizeOverride("font_size", 22);
-        dcTitle.AddThemeColorOverride("font_color", new Color("ee6666"));
+        dcTitle.AddThemeColorOverride("font_color", HudTheme.Danger);
         dcStack.AddChild(dcTitle);
 
         _disconnectReason = new Label
         {
+            // Seed the wrapping width before the first container layout measures height.
+            Size = new Vector2(_disconnectCard.CustomMinimumSize.X - 2 * (CardHorizontalMargin + CardPanelPadding), 0),
             Text = "Disconnected from server.",
             HorizontalAlignment = HorizontalAlignment.Center,
             AutowrapMode = TextServer.AutowrapMode.WordSmart
         };
         _disconnectReason.AddThemeFontSizeOverride("font_size", 14);
-        _disconnectReason.AddThemeColorOverride("font_color", new Color("d5ded0"));
+        _disconnectReason.AddThemeColorOverride("font_color", HudTheme.Text);
         dcStack.AddChild(_disconnectReason);
 
         Button dcReturnBtn = CreateButton("RETURN TO MENU");
@@ -243,6 +241,7 @@ internal sealed partial class SessionMenu : CanvasLayer
         _multiplayerCard.Visible = false;
         _disconnectCard.Visible = false;
         SetConnecting(false);
+        HudTheme.CenterModal(_mainCard);
     }
 
     public void ShowMultiplayerView()
@@ -253,6 +252,7 @@ internal sealed partial class SessionMenu : CanvasLayer
         _multiplayerCard.Visible = true;
         _disconnectCard.Visible = false;
         SetConnecting(false);
+        HudTheme.CenterModal(_multiplayerCard);
     }
 
     public void ShowConnectionLostModal(string reason)
@@ -265,6 +265,7 @@ internal sealed partial class SessionMenu : CanvasLayer
         _disconnectReason.Text = string.IsNullOrWhiteSpace(reason)
             ? "Disconnected from server."
             : reason;
+        HudTheme.CenterModal(_disconnectCard);
     }
 
     public void SetConnecting(bool isConnecting)
@@ -280,12 +281,12 @@ internal sealed partial class SessionMenu : CanvasLayer
         _statusLabel.Text = message;
         Color color = state switch
         {
-            ClientLifecycleState.Failed => new Color("ee6666"),
+            ClientLifecycleState.Failed => HudTheme.Danger,
             ClientLifecycleState.Connecting or
             ClientLifecycleState.Handshaking or
-            ClientLifecycleState.WaitingForFirstSnapshot => new Color("edc76b"),
-            ClientLifecycleState.Active => new Color("77dd77"),
-            _ => new Color("8a9a88")
+            ClientLifecycleState.WaitingForFirstSnapshot => HudTheme.Accent,
+            ClientLifecycleState.Active => HudTheme.Accent,
+            _ => HudTheme.Muted
         };
         _statusLabel.AddThemeColorOverride("font_color", color);
 
@@ -321,19 +322,20 @@ internal sealed partial class SessionMenu : CanvasLayer
     {
         PanelContainer card = new()
         {
+            Theme = HudTheme.Shared,
             CustomMinimumSize = minSize,
             MouseFilter = Control.MouseFilterEnum.Stop
         };
-        card.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.Center);
-        card.AddThemeStyleboxOverride("panel", CardStyle());
+        HudTheme.CenterModal(card);
+        card.AddThemeStyleboxOverride("panel", HudTheme.CreatePanel(accented: true, padding: CardPanelPadding, topRail: true, modal: true));
         return card;
     }
 
     private static void WrapInMargin(PanelContainer parent, Control child)
     {
         MarginContainer margin = new();
-        margin.AddThemeConstantOverride("margin_left", 24);
-        margin.AddThemeConstantOverride("margin_right", 24);
+        margin.AddThemeConstantOverride("margin_left", CardHorizontalMargin);
+        margin.AddThemeConstantOverride("margin_right", CardHorizontalMargin);
         margin.AddThemeConstantOverride("margin_top", 20);
         margin.AddThemeConstantOverride("margin_bottom", 20);
         margin.AddChild(child);
@@ -348,99 +350,7 @@ internal sealed partial class SessionMenu : CanvasLayer
             CustomMinimumSize = new Vector2(0, 36),
             MouseFilter = Control.MouseFilterEnum.Stop
         };
-        btn.AddThemeStyleboxOverride("normal", ButtonNormalStyle());
-        btn.AddThemeStyleboxOverride("hover", ButtonHoverStyle());
-        btn.AddThemeStyleboxOverride("pressed", ButtonPressedStyle());
-        btn.AddThemeStyleboxOverride("disabled", ButtonDisabledStyle());
         btn.AddThemeFontSizeOverride("font_size", 14);
-        btn.AddThemeColorOverride("font_color", new Color("d5ded0"));
-        btn.AddThemeColorOverride("font_hover_color", new Color("ffffff"));
-        btn.AddThemeColorOverride("font_pressed_color", new Color("edc76b"));
-        btn.AddThemeColorOverride("font_disabled_color", new Color("556655"));
         return btn;
     }
-
-    private static StyleBoxFlat CardStyle() => new()
-    {
-        BgColor = new Color(0.04f, 0.06f, 0.05f, 0.96f),
-        BorderColor = new Color("46533e"),
-        BorderWidthBottom = 2,
-        BorderWidthTop = 2,
-        BorderWidthLeft = 2,
-        BorderWidthRight = 2,
-        CornerRadiusBottomLeft = 8,
-        CornerRadiusBottomRight = 8,
-        CornerRadiusTopLeft = 8,
-        CornerRadiusTopRight = 8
-    };
-
-    private static StyleBoxFlat LineEditStyle(bool focused = false) => new()
-    {
-        BgColor = new Color(0.025f, 0.04f, 0.03f, 0.95f),
-        BorderColor = focused ? new Color("edc76b") : new Color("46533e"),
-        BorderWidthBottom = 1,
-        BorderWidthTop = 1,
-        BorderWidthLeft = 1,
-        BorderWidthRight = 1,
-        CornerRadiusBottomLeft = 4,
-        CornerRadiusBottomRight = 4,
-        CornerRadiusTopLeft = 4,
-        CornerRadiusTopRight = 4
-    };
-
-    private static StyleBoxFlat ButtonNormalStyle() => new()
-    {
-        BgColor = new Color(0.10f, 0.14f, 0.11f, 0.92f),
-        BorderColor = new Color("46533e"),
-        BorderWidthBottom = 1,
-        BorderWidthTop = 1,
-        BorderWidthLeft = 1,
-        BorderWidthRight = 1,
-        CornerRadiusBottomLeft = 4,
-        CornerRadiusBottomRight = 4,
-        CornerRadiusTopLeft = 4,
-        CornerRadiusTopRight = 4
-    };
-
-    private static StyleBoxFlat ButtonHoverStyle() => new()
-    {
-        BgColor = new Color(0.16f, 0.22f, 0.17f, 0.95f),
-        BorderColor = new Color("edc76b"),
-        BorderWidthBottom = 1,
-        BorderWidthTop = 1,
-        BorderWidthLeft = 1,
-        BorderWidthRight = 1,
-        CornerRadiusBottomLeft = 4,
-        CornerRadiusBottomRight = 4,
-        CornerRadiusTopLeft = 4,
-        CornerRadiusTopRight = 4
-    };
-
-    private static StyleBoxFlat ButtonPressedStyle() => new()
-    {
-        BgColor = new Color(0.08f, 0.11f, 0.09f, 0.98f),
-        BorderColor = new Color("77dd77"),
-        BorderWidthBottom = 1,
-        BorderWidthTop = 1,
-        BorderWidthLeft = 1,
-        BorderWidthRight = 1,
-        CornerRadiusBottomLeft = 4,
-        CornerRadiusBottomRight = 4,
-        CornerRadiusTopLeft = 4,
-        CornerRadiusTopRight = 4
-    };
-
-    private static StyleBoxFlat ButtonDisabledStyle() => new()
-    {
-        BgColor = new Color(0.05f, 0.07f, 0.06f, 0.5f),
-        BorderColor = new Color(0.18f, 0.22f, 0.18f, 0.4f),
-        BorderWidthBottom = 1,
-        BorderWidthTop = 1,
-        BorderWidthLeft = 1,
-        BorderWidthRight = 1,
-        CornerRadiusBottomLeft = 4,
-        CornerRadiusBottomRight = 4,
-        CornerRadiusTopLeft = 4,
-        CornerRadiusTopRight = 4
-    };
 }

@@ -82,23 +82,12 @@ public partial class TacticalMinimap : Control
             ZIndex = 10
         };
 
-        StyleBoxFlat tipStyle = new()
-        {
-            BgColor = new Color(0.11f, 0.13f, 0.10f, 0.95f),
-            BorderColor = new Color(0.56f, 0.60f, 0.49f),
-            BorderWidthLeft = 1,
-            BorderWidthRight = 1,
-            BorderWidthTop = 1,
-            BorderWidthBottom = 1,
-            CornerRadiusTopLeft = 3,
-            CornerRadiusTopRight = 3,
-            CornerRadiusBottomLeft = 3,
-            CornerRadiusBottomRight = 3,
-            ContentMarginLeft = 6,
-            ContentMarginRight = 6,
-            ContentMarginTop = 3,
-            ContentMarginBottom = 3
-        };
+        StyleBoxFlat tipStyle = HudTheme.CreatePanel(padding: 4);
+        tipStyle.BgColor = HudTheme.PanelSolid;
+        tipStyle.ContentMarginLeft = 6;
+        tipStyle.ContentMarginRight = 6;
+        tipStyle.ContentMarginTop = 3;
+        tipStyle.ContentMarginBottom = 3;
         _tooltipPanel.AddThemeStyleboxOverride("panel", tipStyle);
 
         HBoxContainer tooltipContent = new() { MouseFilter = MouseFilterEnum.Ignore };
@@ -117,7 +106,7 @@ public partial class TacticalMinimap : Control
     {
         Label label = new() { MouseFilter = MouseFilterEnum.Ignore };
         label.AddThemeFontSizeOverride("font_size", 11);
-        label.AddThemeColorOverride("font_color", new Color(0.92f, 0.88f, 0.79f));
+        label.AddThemeColorOverride("font_color", HudTheme.Text);
         return label;
     }
 
@@ -498,8 +487,33 @@ public partial class TacticalMinimap : Control
         // 8. Enemy contact markers
         DrawEnemyContacts();
 
-        // 9. Outer frame border
+        // 9. Optical corner reticle ticks around the active map glass
+        DrawOpticalCornerTicks();
+
+        // 10. Outer frame border
         DrawRect(new Rect2(Vector2.Zero, Size), TacticalMinimapTheme.FrameBorder, filled: false, width: 1.5f);
+    }
+
+    private void DrawOpticalCornerTicks()
+    {
+        float tick = TacticalMinimapTheme.CornerTickLength;
+        float x0 = _mapRect.Position.X;
+        float y0 = _mapRect.Position.Y;
+        float x1 = _mapRect.End.X;
+        float y1 = _mapRect.End.Y;
+        Color color = TacticalMinimapTheme.CornerTickColor;
+
+        DrawLine(new Vector2(x0, y0), new Vector2(x0 + tick, y0), color, 1.5f);
+        DrawLine(new Vector2(x0, y0), new Vector2(x0, y0 + tick), color, 1.5f);
+
+        DrawLine(new Vector2(x1, y0), new Vector2(x1 - tick, y0), color, 1.5f);
+        DrawLine(new Vector2(x1, y0), new Vector2(x1, y0 + tick), color, 1.5f);
+
+        DrawLine(new Vector2(x0, y1), new Vector2(x0 + tick, y1), color, 1.5f);
+        DrawLine(new Vector2(x0, y1), new Vector2(x0, y1 - tick), color, 1.5f);
+
+        DrawLine(new Vector2(x1, y1), new Vector2(x1 - tick, y1), color, 1.5f);
+        DrawLine(new Vector2(x1, y1), new Vector2(x1, y1 - tick), color, 1.5f);
     }
 
     private void DrawCoordinateGrid()
@@ -510,17 +524,20 @@ public partial class TacticalMinimap : Control
             float norm = i / (float)divisions;
             float gx = _mapRect.Position.X + norm * _mapRect.Size.X;
             float gy = _mapRect.Position.Y + norm * _mapRect.Size.Y;
+            Color lineColor = i == divisions / 2
+                ? TacticalMinimapTheme.ReticleCrosshairColor
+                : TacticalMinimapTheme.GridLineColor;
 
             DrawLine(
                 new Vector2(gx, _mapRect.Position.Y),
                 new Vector2(gx, _mapRect.End.Y),
-                TacticalMinimapTheme.GridLineColor,
+                lineColor,
                 1.0f);
 
             DrawLine(
                 new Vector2(_mapRect.Position.X, gy),
                 new Vector2(_mapRect.End.X, gy),
-                TacticalMinimapTheme.GridLineColor,
+                lineColor,
                 1.0f);
         }
     }

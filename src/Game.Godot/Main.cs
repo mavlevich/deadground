@@ -66,14 +66,23 @@ public partial class Main : Node3D
     private UnitCatalog _catalog = null!;
     private SelectionCard _selectionCard = null!;
     private ContextActionPanel _contextActionPanel = null!;
+    private UnitCommandPanel _commandPanel = null!;
+    private ControlsHelpPanel _helpPanel = null!;
+    private bool _debugHudVisible;
+    private bool _showRangeRings;
+    private float _lastSelectionCardHeight = -1;
+    private HudTargetingMode _hudTargetingMode;
+    private uint _hudTargetSelectionHash;
+    private int _hudTargetSelectionCount;
+    private Vector2? _headlessPointerPosition;
     private OrderNotification _orderNotification = null!;
     private RoleBadgeOverlay _roleBadgeOverlay = null!;
     private SelectionBoxOverlay _selectionBoxOverlay = null!;
     private readonly SelectionController _selectionController = new();
-    private PanelContainer _topHud = null!, _bottomHud = null!;
+    private PanelContainer _topHud = null!, _utilityHud = null!;
     private TacticalMinimap _minimap = null!;
-    private readonly Rect2[] _badgeOccludingPanels = new Rect2[8];
-    private readonly Rect2[] _inputOccludingPanels = new Rect2[7];
+    private readonly Rect2[] _badgeOccludingPanels = new Rect2[9];
+    private readonly Rect2[] _inputOccludingPanels = new Rect2[8];
     private FogOfWarView? _fogOfWar;
     private string? _screenshotPath;
     private double _screenshotTimer = 0.5;
@@ -139,7 +148,10 @@ public partial class Main : Node3D
 
     internal float CachedTerrainViewportHeightPx => _cachedTerrainViewportHeightPx;
     internal PanelContainer TopHud => _topHud;
-    internal PanelContainer BottomHud => _bottomHud;
+    internal PanelContainer UtilityHud => _utilityHud;
+    internal ControlsHelpPanel HelpPanel => _helpPanel;
+    internal bool DebugHudVisible => _debugHudVisible;
+    internal bool RangeLimitsVisible => _showRangeRings;
     internal Label StatsLabel => _stats;
     internal FogOfWarView? FogOfWar => _fogOfWar;
     internal CameraRig CameraRig => _cameraRig;
@@ -154,6 +166,8 @@ public partial class Main : Node3D
     internal MissionPanel? MissionPanel => _missionPanel;
     internal SelectionCard SelectionCard => _selectionCard;
     internal ContextActionPanel ContextActionPanel => _contextActionPanel;
+    internal UnitCommandPanel CommandPanel => _commandPanel;
+    internal HudTargetingMode CommandTargetingMode => _hudTargetingMode;
     internal OrderNotification OrderNotification => _orderNotification;
     internal RoleBadgeOverlay RoleBadgeOverlay => _roleBadgeOverlay;
     internal SelectionBoxOverlay SelectionBoxOverlay => _selectionBoxOverlay;
@@ -324,7 +338,11 @@ public partial class Main : Node3D
         {
             for (int i = 0; i < args.Length; i++)
             {
-                if (args[i] == "--no-prewarm")
+                if (args[i] == "--debug-hud")
+                {
+                    _debugHudVisible = true;
+                }
+                else if (args[i] == "--no-prewarm")
                 {
                     noPrewarm = true;
                 }
@@ -1266,9 +1284,14 @@ public partial class Main : Node3D
         _combatEffects.UpdateListener(_cameraRig.Focus);
         _missionPanel?.UpdateMission(_session.Mission, _session.Tick);
 
-        if (!string.Equals(_subtitle.Text, _session.StatusDescription, StringComparison.Ordinal))
+        if (_debugHudVisible)
         {
-            _subtitle.Text = _session.StatusDescription;
+            string sessionDescription = _session.StatusDescription;
+            if (!string.Equals(_lastSubtitleText, sessionDescription, StringComparison.Ordinal))
+            {
+                _lastSubtitleText = sessionDescription;
+                _subtitle.Text = sessionDescription;
+            }
         }
         if (_title is not null && (_session.AssignedPlayerId != _lastTitlePlayerId || _scenario != _lastTitleScenario))
         {
@@ -1292,11 +1315,13 @@ public partial class Main : Node3D
         long previewStart = collectBench ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         _previewController?.UpdateOrders(_session, delta);
 
-        if (!_settingsPanel.IsOpen && !_pauseMenu.IsOpen)
+        if (!_settingsPanel.IsOpen && !_pauseMenu.IsOpen && !_helpPanel.IsOpen)
         {
-            Vector2 mousePos = GetViewport().GetMousePosition();
+            Vector2 mousePos = SettingsPanel.IsHeadlessDisplay && _headlessPointerPosition.HasValue
+                ? _headlessPointerPosition.Value
+                : GetViewport().GetMousePosition();
             Vector2 viewportSize = GetViewport().GetVisibleRect().Size;
-            bool isOccluded = false;
+            bool isOccluded = !new Rect2(Vector2.Zero, viewportSize).HasPoint(mousePos);
             for (int i = 0; i < _inputOccludingPanels.Length; i++)
             {
                 if (_inputOccludingPanels[i].HasPoint(mousePos))
@@ -1306,7 +1331,28 @@ public partial class Main : Node3D
                 }
             }
 
-            if (_contextActionPanel?.TargetingMode == ContextTargetingMode.BoardTransport)
+            if (isOccluded && _previewController?.IsFacingGestureActive != true)
+            {
+                _orderCursorOverlay?.HideTooltip();
+                _destination.HideGhost();
+                _destination.ClearGroupPreviewSlots();
+            }
+            else if (_hudTargetingMode is HudTargetingMode.Move or HudTargetingMode.Reverse)
+            {
+                _previewController?.UpdateHover(_camera, mousePos, viewportSize, isOccluded, false, _unitViews, _session.Replica,
+                    _hudTargetingMode == HudTargetingMode.Reverse ? MoveMode.Reverse : MoveMode.Forward);
+            }
+            else if (_hudTargetingMode == HudTargetingMode.Attack)
+            {
+                _destination.HideGhost();
+                _destination.ClearGroupPreviewSlots();
+                if (isOccluded) _orderCursorOverlay?.HideTooltip();
+                else
+                {
+                    UpdateAttackHoverTooltip(mousePos, viewportSize);
+                }
+            }
+            else if (_contextActionPanel?.TargetingMode == ContextTargetingMode.BoardTransport)
             {
                 if (TryGetOwnUnitUnderMouse(mousePos, out EntityId hoverTransportId) &&
                     _session.Replica.TryGetOwnUnit(hoverTransportId, out OwnUnitObservation hoverTrans))
@@ -1388,13 +1434,13 @@ public partial class Main : Node3D
             float offsetZ = (float)Math.Cos(_panElapsed * 0.5) * 18f;
             _cameraRig.CenterOn(_panAnchor.Value + new Vector3(offsetX, 0f, offsetZ));
         }
-        _cameraRig.Update(delta, allowInput: !_benchmarkActive && !_settingsPanel.IsOpen && !_pauseMenu.IsOpen);
+        _cameraRig.Update(delta, allowInput: !_benchmarkActive && !_settingsPanel.IsOpen && !_pauseMenu.IsOpen && !_helpPanel.IsOpen);
         _environmentView?.UpdateHazeForCamera(_cameraRig.Size, _cameraRig.Focus, _cameraRig.ViewPitch);
         _environmentView?.UpdateShadowTierForCamera(_cameraRig.Size, _activeShadowMapLayers);
         _environmentView?.UpdateShadowFade(delta);
         UpdateTerrainLodStep(_terrainView, _camera, _cachedTerrainViewportHeightPx);
 
-        if (_roleBadgeOverlay is not null && _topHud is not null && _bottomHud is not null && _selectionCard is not null)
+        if (_roleBadgeOverlay is not null && _topHud is not null && _utilityHud is not null && _selectionCard is not null)
         {
             RefreshOccludingPanels();
             _roleBadgeOverlay.UpdateBadges(_camera, _camera.Size, _unitViews, _contactViews, _session.Replica, _session.Tick, _badgeOccludingPanels);
@@ -1525,10 +1571,13 @@ public partial class Main : Node3D
         {
             double rate = (_session.BytesReceived - _lastBytes) / _hudTimer / 1024;
             _lastBytes = _session.BytesReceived;
-            string simInfo = _session is LocalSession local
-                ? $"{local.LastTickMilliseconds:F3} ms per tick / {local.LastTickAllocatedBytes} B tick allocations"
-                : _session.StatusDescription;
-            _stats.Text = $"20 Hz SIM / 10 Hz STATE / TICK {_session.Tick:00000} / OWN: {_session.Replica.OwnUnits.Length} / CONTACTS: {_session.Replica.ContactCount}\n{simInfo} / {rate:F1} KiB/s";
+            if (_debugHudVisible)
+            {
+                string simInfo = _session is LocalSession local
+                    ? $"{local.LastTickMilliseconds:F3} ms per tick / {local.LastTickAllocatedBytes} B tick allocations"
+                    : _session.StatusDescription;
+                _stats.Text = $"20 Hz SIM / 10 Hz STATE / TICK {_session.Tick:00000} / OWN: {_session.Replica.OwnUnits.Length} / CONTACTS: {_session.Replica.ContactCount}\n{simInfo} / {rate:F1} KiB/s";
+            }
             _hudTimer = 0;
         }
 
@@ -1987,12 +2036,17 @@ public partial class Main : Node3D
 
     public override void _Input(InputEvent @event)
     {
+        if (SettingsPanel.IsHeadlessDisplay && @event is InputEventMouseMotion headlessMotion)
+        {
+            _headlessPointerPosition = headlessMotion.Position;
+        }
+
         if (_benchmarkActive)
         {
             return;
         }
 
-        if (_settingsPanel?.IsOpen == true || _sessionMenu?.IsOpen == true || _pauseMenu?.IsOpen == true)
+        if (_settingsPanel?.IsOpen == true || _sessionMenu?.IsOpen == true || _pauseMenu?.IsOpen == true || _helpPanel?.IsOpen == true)
         {
             CancelActiveDrag();
             return;
@@ -2018,7 +2072,7 @@ public partial class Main : Node3D
         }
         else if (_previewController?.IsFacingGestureActive == true)
         {
-            if (_settingsPanel?.IsOpen == true)
+            if (_settingsPanel?.IsOpen == true || _pauseMenu?.IsOpen == true || _helpPanel?.IsOpen == true)
             {
                 CancelActiveDrag();
                 return;
@@ -2040,6 +2094,13 @@ public partial class Main : Node3D
     {
         if (_benchmarkActive)
         {
+            return;
+        }
+
+        if (_helpPanel?.IsOpen == true)
+        {
+            if (@event is InputEventKey { Pressed: true, Echo: false, Keycode: Key.Escape or Key.F1 }) _helpPanel.Close();
+            GetViewport().SetInputAsHandled();
             return;
         }
 
@@ -2113,6 +2174,28 @@ public partial class Main : Node3D
             }
             GetViewport().SetInputAsHandled();
             return;
+        }
+
+        if (@event is InputEventKey { Pressed: true, Echo: false } hudKey)
+        {
+            if (hudKey.Keycode == Key.F1)
+            {
+                OpenControlsHelp();
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+            if (hudKey.Keycode == Key.F9)
+            {
+                SetDebugHudVisible(!_debugHudVisible);
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+            if (hudKey.Keycode == Key.F7)
+            {
+                ToggleRangeLimits();
+                GetViewport().SetInputAsHandled();
+                return;
+            }
         }
 
         if (_missionPanel?.IsMissionFinished == true)
@@ -2213,6 +2296,12 @@ public partial class Main : Node3D
 
             if (key.Keycode == Key.Escape)
             {
+                if (_hudTargetingMode != HudTargetingMode.None)
+                {
+                    CancelHudTargeting();
+                    GetViewport().SetInputAsHandled();
+                    return;
+                }
                 if (_contextActionPanel?.TargetingMode != ContextTargetingMode.None)
                 {
                     _contextActionPanel?.CancelTargeting();
@@ -2382,6 +2471,13 @@ public partial class Main : Node3D
                 return;
             }
 
+            if (_hudTargetingMode != HudTargetingMode.None)
+            {
+                ExecuteHudTarget(mouse.Position);
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
             if (_contextActionPanel?.TargetingMode == ContextTargetingMode.BoardTransport)
             {
                 if (TryGetOwnUnitUnderMouse(mouse.Position, out EntityId targetTransportId))
@@ -2462,6 +2558,13 @@ public partial class Main : Node3D
             RefreshOccludingPanels();
             if (SelectionController.IsPointOccluded(mouse.Position, _inputOccludingPanels))
                 return;
+
+            if (_hudTargetingMode != HudTargetingMode.None)
+            {
+                CancelHudTargeting();
+                GetViewport().SetInputAsHandled();
+                return;
+            }
 
             if (_contextActionPanel?.TargetingMode != ContextTargetingMode.None)
             {
@@ -2677,17 +2780,174 @@ public partial class Main : Node3D
         }
     }
 
+    private bool IsCommandSessionFinished => _session.Mission.Status is MissionStatus.Victory or MissionStatus.Defeat or MissionStatus.Draw;
+
+    internal void BeginHudTargeting(HudTargetingMode mode)
+    {
+        if (mode == HudTargetingMode.None)
+        {
+            CancelHudTargeting();
+            return;
+        }
+        if (IsCommandSessionFinished || _unitViews.Selected.Count == 0) return;
+        _commandPanel.UpdateSelection(_unitViews.Selected, _session.Replica, false);
+        bool disabled = mode switch
+        {
+            HudTargetingMode.Move => _commandPanel.MoveButton.Disabled,
+            HudTargetingMode.Reverse => _commandPanel.ReverseButton.Disabled,
+            HudTargetingMode.Attack => _commandPanel.AttackButton.Disabled,
+            _ => true
+        };
+        if (disabled) return;
+        CancelActiveDrag();
+        _contextActionPanel?.CancelTargeting();
+        _hudTargetSelectionHash = ComputeSelectionHash(_unitViews.Selected);
+        _hudTargetSelectionCount = _unitViews.Selected.Count;
+        _hudTargetingMode = mode;
+        _commandPanel?.SetTargetingMode(mode);
+    }
+
+    private void UpdateAttackHoverTooltip(Vector2 mousePos, Vector2 viewportSize)
+    {
+        if (TryGetTargetContactUnderMouse(mousePos, out ContactId hoverContact) &&
+            _session.Replica.TryGetContact(hoverContact, out ContactObservation contact))
+        {
+            if (contact.State != ContactState.Current)
+            {
+                _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Blocked, "Last-known marker cannot be attacked");
+            }
+            else
+            {
+                float nearestDist = float.MaxValue;
+                bool anyInRange = false;
+                foreach (EntityId unitId in _unitViews.Selected)
+                {
+                    if (!_session.Replica.TryGetOwnUnit(unitId, out OwnUnitObservation own) || own.Ammunition == 0) continue;
+                    float dist = NumericsVector2.Distance(own.Position, contact.Position);
+                    if (dist < nearestDist) nearestDist = dist;
+                    if (own.Definition < _catalog.Units.Length)
+                    {
+                        string? weaponId = _catalog.Units[own.Definition].Weapon;
+                        if (weaponId is not null && _catalog.Weapons is not null)
+                        {
+                            for (int i = 0; i < _catalog.Weapons.Length; i++)
+                            {
+                                if (string.Equals(_catalog.Weapons[i].Id, weaponId, StringComparison.Ordinal))
+                                {
+                                    if (dist <= _catalog.Weapons[i].Range) anyInRange = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                string rangeTag = anyInRange ? "IN RANGE" : "OUT OF RANGE";
+                string distText = nearestDist < float.MaxValue ? $"{nearestDist:F0}m" : "-";
+                _orderCursorOverlay?.SetCustomTooltip(
+                    true,
+                    anyInRange ? DestinationValidity.Valid : DestinationValidity.Adjusted,
+                    $"Attack Contact #{contact.Id.Value} ({distText} / {rangeTag}) [LMB]");
+            }
+        }
+        else
+        {
+            _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Adjusted, "Choose observed enemy contact [LMB] / [Esc] cancel");
+        }
+        _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
+    }
+
+    private void CancelHudTargeting()
+    {
+        if (_hudTargetingMode == HudTargetingMode.None) return;
+        _hudTargetingMode = HudTargetingMode.None;
+        _commandPanel?.SetTargetingMode(HudTargetingMode.None);
+        _orderCursorOverlay?.HideTooltip();
+        _destination?.HideGhost();
+        _destination?.ClearGroupPreviewSlots();
+    }
+
+    private void OnContextTargetingChanged(ContextTargetingMode mode)
+    {
+        if (mode != ContextTargetingMode.None) CancelHudTargeting();
+    }
+
+    internal void ExecuteHudTarget(Vector2 position)
+    {
+        UpdateSelectionPresentation();
+        if (_hudTargetingMode == HudTargetingMode.None || IsCommandSessionFinished) return;
+        if (_hudTargetingMode == HudTargetingMode.Attack)
+        {
+            if (!TryGetTargetContactUnderMouse(position, out ContactId contact))
+            {
+                _orderNotification?.ShowNotification("Choose an enemy contact. Attack ground is unavailable.");
+                return;
+            }
+            ExecuteHudAttackTarget(contact);
+        }
+        else
+        {
+            MoveMode mode = _hudTargetingMode == HudTargetingMode.Reverse ? MoveMode.Reverse : MoveMode.Forward;
+            bool submitted = _previewController.ExecuteMoveClick(_camera, position, _unitViews, _session, out string message, null, mode);
+            if (message.Length > 0) _status.Text = message;
+            if (submitted) CancelHudTargeting();
+        }
+    }
+
+    internal void ExecuteHudAttackTarget(ContactId contact)
+    {
+        if (_hudTargetingMode != HudTargetingMode.Attack || IsCommandSessionFinished) return;
+        if (!_session.Replica.TryGetContact(contact, out ContactObservation observation) || observation.State != ContactState.Current)
+        {
+            _orderNotification?.ShowNotification("Target is no longer observed. Last-known markers cannot be attacked.");
+            return;
+        }
+        int sent = 0;
+        foreach (EntityId id in _unitViews.Selected)
+            if (_session.Attack(id, contact)) sent++;
+        string message = sent == 0 ? "Attack order could not be submitted. Choose another target."
+            : $"Attack order submitted for {sent} of {_unitViews.Selected.Count} units";
+        _orderNotification?.ShowNotification(message);
+        _status.Text = message;
+        if (sent == 0) return;
+        _destination.Clear();
+        CancelHudTargeting();
+    }
+
+    private void OnHudStanceRequested(FireStance stance)
+    {
+        if (IsCommandSessionFinished) return;
+        CancelHudTargeting();
+        int sent = 0;
+        foreach (EntityId id in _unitViews.Selected)
+            if (_session.SetFireStance(id, stance)) sent++;
+        string label = stance switch
+        {
+            FireStance.HoldFire => "Hold fire",
+            FireStance.ReturnFire => "Return fire",
+            _ => "Fire at will"
+        };
+        string message = $"Fire stance set to {label} for {sent} units";
+        _orderNotification?.ShowNotification(message);
+        _status.Text = message;
+    }
+
     internal void CancelActiveDrag()
     {
         _selectionController.CancelDrag();
         _selectionBoxOverlay?.HideBox();
         _previewController?.CancelFacingGesture();
         _minimap?.CancelDrag();
+        CancelHudTargeting();
+        if (_contextActionPanel?.TargetingMode != ContextTargetingMode.None)
+        {
+            _contextActionPanel?.CancelTargeting();
+            _orderCursorOverlay?.HideTooltip();
+        }
     }
 
     internal void RefreshOccludingPanels()
     {
-        if (_topHud is null || _bottomHud is null || _selectionCard is null)
+        if (_topHud is null || _utilityHud is null || _selectionCard is null)
             return;
 
         Rect2 topRect = _topHud.GetGlobalRect();
@@ -2695,28 +2955,30 @@ public partial class Main : Node3D
         {
             _missionPanel.SetBriefingTopOffset(topRect.End.Y + 10f);
         }
-        Rect2 bottomRect = _bottomHud.GetGlobalRect();
-        Rect2 cardRect = _selectionCard.GetGlobalRect();
+        Rect2 utilityRect = _utilityHud.GetGlobalRect();
+        Rect2 cardRect = _selectionCard.Visible ? _selectionCard.GetGlobalRect() : default;
         Rect2 settingsRect = _settingsPanel.IsOpen ? _settingsPanel.GetContainerRect() : default;
         Rect2 missionRect = _missionPanel is not null ? (_missionPanel.IsMissionFinished ? _missionPanel.GetResultRect() : _missionPanel.GetBriefingRect()) : default;
         Rect2 minimapRect = _minimap is not null ? _minimap.GetGlobalRect() : default;
 
         _inputOccludingPanels[0] = topRect;
-        _inputOccludingPanels[1] = bottomRect;
+        _inputOccludingPanels[1] = utilityRect;
         _inputOccludingPanels[2] = cardRect;
         _inputOccludingPanels[3] = settingsRect;
         _inputOccludingPanels[4] = missionRect;
         _inputOccludingPanels[5] = minimapRect;
         _inputOccludingPanels[6] = _contextActionPanel?.Visible == true ? _contextActionPanel.GetGlobalRect() : default;
+        _inputOccludingPanels[7] = _commandPanel?.Visible == true ? _commandPanel.GetGlobalRect() : default;
 
         _badgeOccludingPanels[0] = topRect;
-        _badgeOccludingPanels[1] = bottomRect;
+        _badgeOccludingPanels[1] = utilityRect;
         _badgeOccludingPanels[2] = cardRect;
         _badgeOccludingPanels[3] = _orderNotification is { Visible: true } ? _orderNotification.GetGlobalRect() : default;
         _badgeOccludingPanels[4] = settingsRect;
         _badgeOccludingPanels[5] = missionRect;
         _badgeOccludingPanels[6] = minimapRect;
         _badgeOccludingPanels[7] = _contextActionPanel?.Visible == true ? _contextActionPanel.GetGlobalRect() : default;
+        _badgeOccludingPanels[8] = _commandPanel?.Visible == true ? _commandPanel.GetGlobalRect() : default;
     }
 
     internal static bool TryGetNavigationLargeDebugTarget(
@@ -2764,6 +3026,7 @@ public partial class Main : Node3D
 
     private int _lastTitlePlayerId = -1;
     private string? _lastTitleScenario;
+    private string? _lastSubtitleText;
 
     private enum SelectionPresentationKind { None, SingleUnit, MultipleUnits, Contact }
     private SelectionPresentationKind _presentedKind = SelectionPresentationKind.None;
@@ -2776,13 +3039,20 @@ public partial class Main : Node3D
 
     internal void UpdateSelectionPresentation()
     {
+        if (_selectionCard is null || _commandPanel is null || _contextActionPanel is null || _orderNotification is null) return;
+        bool finished = IsCommandSessionFinished;
+        if (_hudTargetingMode != HudTargetingMode.None &&
+            (finished || _unitViews.Selected.Count != _hudTargetSelectionCount ||
+             ComputeSelectionHash(_unitViews.Selected) != _hudTargetSelectionHash))
+            CancelHudTargeting();
+        _commandPanel.UpdateSelection(_unitViews.Selected, _session.Replica, finished);
         int activeGroup = _unitViews.GetSelectedControlGroup();
 
         if (_unitViews.Selected.Count == 1 && TryGetFirstSelectedUnit(out EntityId selId))
         {
             if (_session.Replica.TryGetOwnUnit(selId, out OwnUnitObservation ownUnit))
             {
-                _selectionCard?.UpdateSingleOwnUnit(ownUnit, activeGroup);
+                _selectionCard.UpdateSingleOwnUnit(ownUnit, activeGroup);
                 if (_presentedKind != SelectionPresentationKind.SingleUnit ||
                     _presentedSingleUnitId != selId ||
                     _presentedActiveGroup != activeGroup)
@@ -2798,6 +3068,7 @@ public partial class Main : Node3D
         }
         else if (_unitViews.Selected.Count > 1)
         {
+            _selectionCard.UpdateMultipleOwnUnits(_unitViews.Selected, _session.Replica, activeGroup);
             uint hash = ComputeSelectionHash(_unitViews.Selected);
             if (_presentedKind != SelectionPresentationKind.MultipleUnits ||
                 _presentedMultiCount != _unitViews.Selected.Count ||
@@ -2809,23 +3080,6 @@ public partial class Main : Node3D
                 _presentedActiveGroup = activeGroup;
                 _presentedMultiHash = hash;
 
-                int tanks = 0, recons = 0, others = 0;
-                foreach (EntityId id in _unitViews.Selected)
-                {
-                    if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation u))
-                    {
-                        if (u.Definition < _catalog.Units.Length)
-                        {
-                            string cls = _catalog.Units[u.Definition].Classification ?? string.Empty;
-                            if (cls.Equals("tank", StringComparison.OrdinalIgnoreCase)) tanks++;
-                            else if (cls.Equals("recon", StringComparison.OrdinalIgnoreCase)) recons++;
-                            else others++;
-                        }
-                        else others++;
-                    }
-                }
-
-                _selectionCard?.UpdateMultipleOwnUnits(_unitViews.Selected.Count, tanks, recons, others, activeGroup);
                 string groupSuffix = GetControlGroupSuffix(activeGroup);
                 _cachedStatusText = $"{_unitViews.Selected.Count} units selected{groupSuffix} / RMB terrain to move, RMB enemy to attack";
                 _status.Text = _cachedStatusText;
@@ -2835,7 +3089,7 @@ public partial class Main : Node3D
         {
             if (_contactViews.Views.TryGetValue(firstSelected, out ContactView? cv))
             {
-                _selectionCard?.UpdateContact(cv.Observation, _session.Tick);
+                _selectionCard.UpdateContact(cv.Observation, _session.Tick);
                 if (_presentedKind != SelectionPresentationKind.Contact ||
                     _presentedContactId != firstSelected)
                 {
@@ -2848,7 +3102,7 @@ public partial class Main : Node3D
         }
         else
         {
-            _selectionCard?.UpdateEmpty();
+            _selectionCard.UpdateEmpty();
             if (_presentedKind != SelectionPresentationKind.None)
             {
                 _presentedKind = SelectionPresentationKind.None;
@@ -2857,7 +3111,36 @@ public partial class Main : Node3D
             }
         }
 
-        _contextActionPanel?.UpdateContext(_unitViews.Selected, _session.Replica);
+        _contextActionPanel.UpdateContext(_unitViews.Selected, _session.Replica);
+        _selectionCard.Visible = _unitViews.Selected.Count > 0 || _contactViews.Selected.Count > 0;
+        _commandPanel.Visible = _unitViews.Selected.Count > 0;
+        float cardHeight = _selectionCard.PreferredHeight;
+        if (_lastSelectionCardHeight != cardHeight)
+        {
+            _lastSelectionCardHeight = cardHeight;
+            _selectionCard.OffsetTop = -HudLayout.Margin - cardHeight;
+            _contextActionPanel.OffsetBottom = -HudLayout.Margin - cardHeight - HudLayout.Gap;
+            _contextActionPanel.OffsetTop = _contextActionPanel.OffsetBottom - HudLayout.ContextHeight;
+            _orderNotification.OffsetBottom = -HudLayout.Margin - Math.Max(cardHeight, HudLayout.CommandHeight) - HudLayout.Gap;
+            _orderNotification.OffsetTop = _orderNotification.OffsetBottom - HudLayout.NotificationHeight;
+        }
+    }
+
+    private void OnRosterUnitClicked(EntityId unitId, bool removeFromSelection)
+    {
+        if (!_unitViews.Views.ContainsKey(unitId)) return;
+        if (removeFromSelection)
+        {
+            _unitViews.Selected.Remove(unitId);
+        }
+        else
+        {
+            _unitViews.Selected.Clear();
+            _contactViews.Selected.Clear();
+            _unitViews.Selected.Add(unitId);
+        }
+        _unitViews.UpdateSelectionVisuals();
+        UpdateSelectionPresentation();
     }
 
     private static uint ComputeSelectionHash(HashSet<EntityId> set)
@@ -2934,6 +3217,7 @@ public partial class Main : Node3D
 
     internal void UpdateViews()
     {
+        _unitViews.SetRangeIndicatorsVisible(_showRangeRings);
         int selectedUnits = _unitViews.Selected.Count;
         int selectedContacts = _contactViews.Selected.Count;
         _unitViews.Sync(_session.Replica, _session.RenderTick);
@@ -3258,6 +3542,29 @@ public partial class Main : Node3D
         _settingsPanel.Toggle();
     }
 
+    internal void SetDebugHudVisible(bool visible)
+    {
+        _debugHudVisible = visible;
+        _subtitle.Visible = visible;
+        _stats.Visible = visible;
+        _topHud.ResetSize();
+        RefreshOccludingPanels();
+    }
+
+    internal void ToggleRangeLimits()
+    {
+        _showRangeRings = !_showRangeRings;
+        _unitViews.SetRangeIndicatorsVisible(_showRangeRings);
+        _commandPanel?.SetRangesVisible(_showRangeRings);
+    }
+
+    internal void OpenControlsHelp()
+    {
+        CancelActiveDrag();
+        _cameraRig.ClearInput();
+        _helpPanel.Open();
+    }
+
     private void BuildHud()
     {
         CanvasLayer canvas = new();
@@ -3270,22 +3577,34 @@ public partial class Main : Node3D
         _selectionBoxOverlay = new SelectionBoxOverlay();
         canvas.AddChild(_selectionBoxOverlay);
 
-        PanelContainer top = new() { Position = new Vector2(24, 24), MouseFilter = Control.MouseFilterEnum.Stop };
+        PanelContainer top = new()
+        {
+            Theme = HudTheme.Shared,
+            Position = new Vector2(HudLayout.Margin, HudLayout.Margin),
+            CustomMinimumSize = new Vector2(HudLayout.CardWidth, HudLayout.ToolbarHeight),
+            MouseFilter = Control.MouseFilterEnum.Stop
+        };
         top.AddThemeStyleboxOverride("panel", PanelStyle());
         MarginContainer margin = new() { MouseFilter = Control.MouseFilterEnum.Ignore };
-        foreach (string side in new[] { "left", "right", "top", "bottom" }) margin.AddThemeConstantOverride("margin_" + side, 18);
+        margin.AddThemeConstantOverride("margin_left", 10);
+        margin.AddThemeConstantOverride("margin_right", 10);
+        margin.AddThemeConstantOverride("margin_top", 3);
+        margin.AddThemeConstantOverride("margin_bottom", 3);
         VBoxContainer stack = new() { MouseFilter = Control.MouseFilterEnum.Ignore };
         stack.AddThemeConstantOverride("separation", 9);
         _title = new Label
         {
             Text = FormatTitle(_session.AssignedPlayerId, _scenario),
+            VerticalAlignment = VerticalAlignment.Center,
+            SizeFlagsVertical = Control.SizeFlags.ExpandFill,
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
-        _title.AddThemeFontSizeOverride("font_size", 21);
-        _title.AddThemeColorOverride("font_color", new Color("edc76b"));
+        HudTheme.ApplyMono(_title);
+        _title.AddThemeFontSizeOverride("font_size", 12);
+        _title.AddThemeColorOverride("font_color", HudTheme.Muted);
         stack.AddChild(_title);
         _subtitle = new Label { Text = _session.StatusDescription, MouseFilter = Control.MouseFilterEnum.Ignore };
-        _subtitle.AddThemeColorOverride("font_color", new Color("b2beb1"));
+        _subtitle.AddThemeColorOverride("font_color", HudTheme.Muted);
         stack.AddChild(_subtitle);
         _stats = new Label { Text = "Starting session...", MouseFilter = Control.MouseFilterEnum.Ignore };
         _stats.AddThemeFontSizeOverride("font_size", 14);
@@ -3293,78 +3612,108 @@ public partial class Main : Node3D
         margin.AddChild(stack); top.AddChild(margin); canvas.AddChild(top);
         _topHud = top;
 
-        PanelContainer bottom = new() { MouseFilter = Control.MouseFilterEnum.Stop };
-        canvas.AddChild(bottom);
-        bottom.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.BottomWide);
-        bottom.OffsetLeft = 24; bottom.OffsetRight = -24; bottom.OffsetTop = -88; bottom.OffsetBottom = -24;
-        bottom.AddThemeStyleboxOverride("panel", PanelStyle());
-        VBoxContainer instructions = new() { MouseFilter = Control.MouseFilterEnum.Ignore };
-
-        HBoxContainer footer = new() { MouseFilter = Control.MouseFilterEnum.Ignore };
-        footer.AddThemeConstantOverride("separation", 16);
-        Label controls = new()
-        {
-            Text = FormatControlsHelpText(OS.GetName() == "macOS"),
-            MouseFilter = Control.MouseFilterEnum.Ignore,
-            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
-        };
-        controls.AddThemeFontSizeOverride("font_size", 14);
+        PanelContainer utility = new() { Theme = HudTheme.Shared, MouseFilter = Control.MouseFilterEnum.Stop };
+        canvas.AddChild(utility);
+        utility.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.TopRight);
+        utility.OffsetLeft = -HudLayout.Margin - HudLayout.ToolbarWidth;
+        utility.OffsetRight = -HudLayout.Margin;
+        utility.OffsetTop = HudLayout.Margin;
+        utility.OffsetBottom = HudLayout.Margin + HudLayout.ToolbarHeight;
+        utility.AddThemeStyleboxOverride("panel", PanelStyle());
+        HBoxContainer toolbar = new() { MouseFilter = Control.MouseFilterEnum.Ignore };
+        toolbar.AddThemeConstantOverride("separation", 6);
         Button menuBtn = new()
         {
-            Text = "MENU [ESC]",
+            Text = "MENU",
+            ThemeTypeVariation = "CompactButton",
+            TooltipText = "Battle menu [Esc]",
+            FocusMode = Control.FocusModeEnum.None,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
             MouseFilter = Control.MouseFilterEnum.Stop
         };
         menuBtn.Pressed += OnMenuButtonPressed;
         Button settingsBtn = new()
         {
-            Text = "SETTINGS [F10]",
+            Text = "SETTINGS",
+            ThemeTypeVariation = "CompactButton",
+            TooltipText = "Display and environment settings [F10]",
+            FocusMode = Control.FocusModeEnum.None,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
             MouseFilter = Control.MouseFilterEnum.Stop
         };
         settingsBtn.Pressed += OnSettingsButtonPressed;
-        footer.AddChild(controls);
-        footer.AddChild(menuBtn);
-        footer.AddChild(settingsBtn);
+        Button helpBtn = new()
+        {
+            Text = "HELP",
+            ThemeTypeVariation = "CompactButton",
+            TooltipText = "Controls and range legend [F1]",
+            FocusMode = Control.FocusModeEnum.None,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            MouseFilter = Control.MouseFilterEnum.Stop
+        };
+        helpBtn.Pressed += OpenControlsHelp;
+        toolbar.AddChild(menuBtn);
+        toolbar.AddChild(settingsBtn);
+        toolbar.AddChild(helpBtn);
+        utility.AddChild(toolbar);
+        _utilityHud = utility;
+        _helpPanel = new ControlsHelpPanel();
+        AddChild(_helpPanel);
 
-        _status = new Label { Text = "  Select a unit to issue orders", MouseFilter = Control.MouseFilterEnum.Ignore };
-        _status.AddThemeColorOverride("font_color", new Color("edc76b"));
-        instructions.AddChild(footer); instructions.AddChild(_status); bottom.AddChild(instructions);
-        _bottomHud = bottom;
+        // Retain command status for diagnostics and test observations, without a permanent footer.
+        _status = new Label { Text = "Select a unit to issue orders", Visible = false, MouseFilter = Control.MouseFilterEnum.Ignore };
+        stack.AddChild(_status);
+        SetDebugHudVisible(_debugHudVisible);
 
         _selectionCard = new SelectionCard(_catalog);
         _selectionCard.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.BottomLeft);
         _selectionCard.OffsetLeft = 24;
-        _selectionCard.OffsetBottom = -96;
-        _selectionCard.OffsetTop = -96 - 100;
-        _selectionCard.OffsetRight = 24 + 380;
+        _selectionCard.OffsetBottom = -HudLayout.Margin;
+        _selectionCard.OffsetTop = -HudLayout.Margin - HudLayout.CardHeight;
+        _selectionCard.OffsetRight = HudLayout.Margin + HudLayout.CardWidth;
+        _selectionCard.RosterUnitClicked += OnRosterUnitClicked;
         canvas.AddChild(_selectionCard);
 
         _contextActionPanel = new ContextActionPanel(_catalog);
         _contextActionPanel.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.BottomLeft);
         _contextActionPanel.OffsetLeft = 24;
-        _contextActionPanel.OffsetBottom = -96 - 100 - 8;
-        _contextActionPanel.OffsetTop = -96 - 100 - 8 - 44;
-        _contextActionPanel.OffsetRight = 24 + 380;
+        _contextActionPanel.OffsetBottom = -HudLayout.Margin - HudLayout.CardHeight - HudLayout.Gap;
+        _contextActionPanel.OffsetTop = _contextActionPanel.OffsetBottom - HudLayout.ContextHeight;
+        _contextActionPanel.OffsetRight = HudLayout.Margin + HudLayout.CardWidth;
         _contextActionPanel.DisembarkHereRequested += OnDisembarkHereRequested;
+        _contextActionPanel.TargetingModeChanged += OnContextTargetingChanged;
         canvas.AddChild(_contextActionPanel);
+
+        _commandPanel = new UnitCommandPanel(_catalog);
+        canvas.AddChild(_commandPanel);
+        _commandPanel.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.BottomLeft);
+        _commandPanel.OffsetLeft = HudLayout.Margin + HudLayout.CardWidth + HudLayout.Gap;
+        _commandPanel.OffsetRight = _commandPanel.OffsetLeft + HudLayout.CommandWidth;
+        _commandPanel.OffsetTop = -HudLayout.Margin - HudLayout.CommandHeight;
+        _commandPanel.OffsetBottom = -HudLayout.Margin;
+        _commandPanel.TargetRequested += BeginHudTargeting;
+        _commandPanel.StanceRequested += OnHudStanceRequested;
+        _commandPanel.RangeToggleRequested += ToggleRangeLimits;
+        _commandPanel.SetRangesVisible(_showRangeRings);
 
         _orderNotification = new OrderNotification();
         _orderNotification.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.CenterBottom);
-        _orderNotification.OffsetBottom = -96;
-        _orderNotification.OffsetTop = -96 - 36;
+        _orderNotification.OffsetBottom = -HudLayout.Margin - HudLayout.CardHeight - HudLayout.Gap;
+        _orderNotification.OffsetTop = _orderNotification.OffsetBottom - HudLayout.NotificationHeight;
         _orderNotification.OffsetLeft = -180;
         _orderNotification.OffsetRight = 180;
         canvas.AddChild(_orderNotification);
-
-        _orderCursorOverlay = new OrderCursorOverlay();
-        canvas.AddChild(_orderCursorOverlay);
 
         _minimap = new TacticalMinimap();
         _minimap.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.BottomRight);
         _minimap.OffsetRight = -24;
         _minimap.OffsetLeft = -24 - TacticalMinimap.DefaultWidgetSize;
-        _minimap.OffsetBottom = -96;
-        _minimap.OffsetTop = -96 - TacticalMinimap.DefaultWidgetSize;
+        _minimap.OffsetBottom = -HudLayout.Margin;
+        _minimap.OffsetTop = -HudLayout.Margin - TacticalMinimap.DefaultWidgetSize;
         canvas.AddChild(_minimap);
+
+        _orderCursorOverlay = new OrderCursorOverlay();
+        canvas.AddChild(_orderCursorOverlay);
 
         UstyePlanData? plan = (_scenario == "ustye-ground" || _scenario == "ustye-raid") ? UstyePlanData.Load() : null;
         _minimap.Initialize(_scenarioGeometry!, _cameraRig, _camera, _session, _unitViews, _contactViews, _catalog, plan);
@@ -3373,6 +3722,8 @@ public partial class Main : Node3D
         {
             ConfigureMissionPanel(_scenario);
         }
+        _unitViews.SetRangeIndicatorsVisible(_showRangeRings);
+        UpdateSelectionPresentation();
     }
 
     internal MissionPanel ConfigureMissionPanel(string scenario)
@@ -3430,6 +3781,7 @@ public partial class Main : Node3D
     {
         if (_session is not LocalSession || _scenarioGeometry is null) return;
 
+        _helpPanel?.Close();
         CancelActiveDrag();
         _selectionController.Reset();
         _unitViews.Clear();
@@ -3557,6 +3909,7 @@ public partial class Main : Node3D
         _map = _scenarioGeometry.HeightMap;
         _matchSetup = BattleScenario.CreateMatchSetup(_scenarioGeometry);
         _catalog = ScenarioContent.LoadCatalog("battle");
+        RebindHudCatalog();
 
         _fogOfWar?.Dispose();
         _fogOfWar = new FogOfWarView(_map, _scenarioGeometry);
@@ -3710,6 +4063,7 @@ public partial class Main : Node3D
             throw new ArgumentException($"Unsupported test scenario: {scenarioName}");
         }
 
+        RebindHudCatalog();
         _fogOfWar?.Dispose();
         _fogOfWar = new FogOfWarView(_map, scenarioGeometry);
         BuildEnvironment(scenarioGeometry);
@@ -3781,6 +4135,19 @@ public partial class Main : Node3D
         }
     }
 
+    private void RebindHudCatalog()
+    {
+        if (_selectionCard is null || _contextActionPanel is null || _commandPanel is null || _roleBadgeOverlay is null) return;
+        _selectionCard.SetCatalog(_catalog);
+        _contextActionPanel.SetCatalog(_catalog);
+        _commandPanel.SetCatalog(_catalog);
+        _roleBadgeOverlay.SetCatalog(_catalog);
+        _selectionCard.Visible = false;
+        _commandPanel.Visible = false;
+        _presentedKind = SelectionPresentationKind.None;
+        _lastSelectionCardHeight = -1;
+    }
+
     internal void StartLocalBattle()
     {
         EnsureBattleScenarioContext();
@@ -3842,6 +4209,7 @@ public partial class Main : Node3D
 
     internal void LeaveCurrentMatch()
     {
+        _helpPanel?.Close();
         _pauseMenu.Close();
         _lifecycleController.Disconnect();
         if (_session is not null)
@@ -3857,6 +4225,7 @@ public partial class Main : Node3D
 
     private void OnNetworkSessionDisconnected(string reason)
     {
+        _helpPanel?.Close();
         _pauseMenu.Close();
         if (_session is not null)
         {
@@ -3903,19 +4272,7 @@ public partial class Main : Node3D
         _orderNotification?.ShowNotification($"Setup {_ustyeSetupIndex + 1}: {name}");
     }
 
-    private static StyleBoxFlat PanelStyle() => new()
-    {
-        BgColor = new Color(0.055f, 0.08f, 0.065f, 0.94f),
-        BorderColor = new Color("46533e"),
-        BorderWidthBottom = 1,
-        BorderWidthTop = 1,
-        BorderWidthLeft = 1,
-        BorderWidthRight = 1,
-        CornerRadiusBottomLeft = 6,
-        CornerRadiusBottomRight = 6,
-        CornerRadiusTopLeft = 6,
-        CornerRadiusTopRight = 6
-    };
+    private static StyleBoxFlat PanelStyle() => HudTheme.CreatePanel(padding: 4, topRail: true);
 
     public static string FormatTitle(int assignedSide, string scenario)
     {

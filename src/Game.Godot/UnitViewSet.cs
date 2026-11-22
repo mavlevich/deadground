@@ -22,6 +22,8 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
     private readonly UnitCatalog? _catalog;
     public UnitCatalog? Catalog => _catalog;
     private float _cameraSize;
+    private bool _rangeIndicatorsVisible = true;
+    internal bool RangeIndicatorsVisible => _rangeIndicatorsVisible;
     private Basis _healthBarBasis;
     private bool _hasHealthBarBasis;
     private static readonly Lazy<UnitCatalog> DefaultCatalog = new(() => PrototypeScenario.LoadCatalog());
@@ -159,6 +161,7 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
                 string? classification = unit.Definition < effectiveCatalog.Units.Length ? effectiveCatalog.Units[unit.Definition].Classification : null;
                 float? initialSize = _cameraSize > 0f ? _cameraSize : null;
                 view = new UnitView(unitId, _factionProvider?.Invoke(), classification, initialSize);
+                view.SetRangeIndicatorsVisible(_rangeIndicatorsVisible);
                 var (sensorRange, weaponRange) = GetRanges(effectiveCatalog, unit.Definition);
                 view.ConfigureRanges(sensorRange, weaponRange, map);
                 Views.Add(unit.Id, view);
@@ -234,6 +237,13 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
     {
         foreach ((EntityId id, UnitView view) in Views)
             view.SetSelected(Selected.Contains(id));
+    }
+
+    internal void SetRangeIndicatorsVisible(bool visible)
+    {
+        if (_rangeIndicatorsVisible == visible) return;
+        _rangeIndicatorsVisible = visible;
+        foreach (UnitView view in Views.Values) view.SetRangeIndicatorsVisible(visible);
     }
 
     internal void UpdateEffects(double delta)
