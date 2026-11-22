@@ -1,5 +1,6 @@
 using System.Numerics;
 using DeadGround.Engine;
+using DeadGround.Rules.Tests;
 using Xunit;
 
 namespace DeadGround.Engine.Tests;
@@ -303,6 +304,7 @@ public sealed class VegetationVisibilityTests
             geo.CheckLineOfSight(start, target);
         }
 
+        using NoGcAllocationWindow window = new();
         long before = GC.GetAllocatedBytesForCurrentThread();
 
         for (int i = 0; i < 1000; i++)
@@ -310,8 +312,8 @@ public sealed class VegetationVisibilityTests
             geo.CheckLineOfSight(start, target);
         }
 
-        long after = GC.GetAllocatedBytesForCurrentThread();
-        Assert.Equal(0, after - before);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(allocated == 0, window.Describe(allocated));
     }
 
     [Fact]
@@ -757,6 +759,7 @@ public sealed class VegetationVisibilityTests
         }
 
         // Measure allocations over 500 iterations
+        using NoGcAllocationWindow window = new();
         long before = GC.GetAllocatedBytesForCurrentThread();
         for (int i = 0; i < 500; i++)
         {
@@ -765,6 +768,6 @@ public sealed class VegetationVisibilityTests
         }
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-        Assert.Equal(0, allocated);
+        Assert.True(allocated == 0, window.Describe(allocated));
     }
 }

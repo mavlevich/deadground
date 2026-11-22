@@ -1,5 +1,6 @@
 using System.Numerics;
 using DeadGround.Engine;
+using DeadGround.Rules.Tests;
 using Xunit;
 
 namespace DeadGround.Tests;
@@ -414,18 +415,15 @@ public sealed class CombatTests
             // Warm up
             for (int i = 0; i < 15; i++) sim.Step();
 
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
-
+            using NoGcAllocationWindow window = new();
             long before = GC.GetAllocatedBytesForCurrentThread();
             for (int i = 0; i < 60; i++)
             {
                 sim.Step();
             }
-            long after = GC.GetAllocatedBytesForCurrentThread();
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-            Assert.Equal(0, after - before);
+            Assert.True(allocated == 0, window.Describe(allocated));
         }
     }
 
@@ -670,15 +668,12 @@ public sealed class CombatTests
             Assert.True(sim.TryEnqueue(2, new AttackCommand(3, sim.Tick, b3, ca3.Id)));
             Assert.True(sim.TryEnqueue(2, new AttackCommand(4, sim.Tick, b4, ca4.Id)));
 
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
-
+            using NoGcAllocationWindow window = new();
             long before = GC.GetAllocatedBytesForCurrentThread();
             sim.Step(); // Multi-kill tick (4 units destroyed simultaneously)
-            long after = GC.GetAllocatedBytesForCurrentThread();
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-            Assert.Equal(0, after - before);
+            Assert.True(allocated == 0, window.Describe(allocated));
         }
     }
 

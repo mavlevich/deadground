@@ -1,5 +1,6 @@
 using System.Numerics;
 using DeadGround.Engine;
+using DeadGround.Rules.Tests;
 using Xunit;
 
 namespace DeadGround.Engine.Tests;
@@ -534,6 +535,7 @@ public sealed class StaticGeometryTests
         }
 
         // Measure allocations over 1000 queries
+        using NoGcAllocationWindow window = new();
         long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
 
         for (int i = 0; i < 1000; i++)
@@ -543,8 +545,8 @@ public sealed class StaticGeometryTests
             geo.CheckLineOfSight(start, end3);
         }
 
-        long allocatedAfter = GC.GetAllocatedBytesForCurrentThread();
-        Assert.Equal(0L, allocatedAfter - allocatedBefore);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        Assert.True(allocated == 0, window.Describe(allocated));
     }
 
     // -------------------------------------------------------------------------

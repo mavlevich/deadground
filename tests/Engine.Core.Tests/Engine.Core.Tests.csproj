@@ -7,4 +7,8 @@
     <ProjectReference Include="../../src/Engine.Core/Engine.Core.csproj" />
     <ProjectReference Include="../../src/Engine.Net/Engine.Net.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Shared with Game.Rules.Tests: one window type for all zero allocation checks. -->
+    <Compile Include="../Game.Rules.Tests/NoGcAllocationWindow.cs" Link="NoGcAllocationWindow.cs" />
+  </ItemGroup>
 </Project>
