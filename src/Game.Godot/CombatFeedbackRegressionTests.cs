@@ -1,5 +1,6 @@
 using DeadGround.Engine;
 using DeadGround.Engine.Net;
+using DeadGround.Rules.Ops;
 using Godot;
 using NumericsVector2 = System.Numerics.Vector2;
 using NumericsVector3 = System.Numerics.Vector3;
@@ -798,10 +799,46 @@ internal static class CombatFeedbackRegressionTests
             effects.ProcessEvents([mgEvent], unitViews);
 
             Require(effects.ActiveMuzzleFlashesCount == 1, "MG burst did not spawn muzzle flash.");
-            Require(effects.ActiveTracersCount == 1, "MG burst did not spawn tracer.");
+            Require(effects.ActiveTracersCount == 3, $"MG burst must spawn a 3-round tracer burst, got {effects.ActiveTracersCount}.");
+            Require(effects.ActiveSmokePuffsCount == 0, "MG burst must not spawn heavy cannon smoke puffs.");
             Require(effects.MuzzleFlashes[0].InitialScaleVector.X < 0.3f, "MG muzzle flash should have lighter scale than cannon.");
             Require(effects.Tracers[0].Thickness < CombatEffects.TracerThickness, "MG tracer should have thinner scale than cannon.");
             Require(effects.TotalAudioRequests == 1, "MG burst did not make an audio request.");
+
+            // Verify helicopter door gunners do not shake the fuselage and fire from the side facing the target
+            UnitCatalog coldWar = ColdWarContent.LoadCatalog();
+            ushort ch47Def = coldWar.RequireDefinitionIndex("ch47d");
+            UnitViewSet heliViews = new(parent, map, coldWar);
+            ClientReplica heliReplica = new();
+            byte[] snapBuf = new byte[WireProtocol.MaxMessageSize];
+            OwnUnitObservation heliObs = new(
+                new EntityId(77),
+                ch47Def,
+                new NumericsVector2(20f, 20f),
+                0,
+                Altitude: 40f,
+                FlightPhase: FlightPhase.Airborne,
+                HasFlightCapability: true);
+            int snapLen = WireProtocol.WriteSnapshot(snapBuf, 1, 10, [heliObs], []);
+            Require(heliReplica.TryApply(snapBuf.AsSpan(0, snapLen)), "Helicopter snapshot apply failed.");
+            heliViews.Sync(heliReplica, 10.0);
+            UnitView heliView = heliViews.Views[heliObs.Id];
+
+            CombatEventObservation heliMgEvent = new(
+                EventId: 5002,
+                ServerTick: 10,
+                Kind: CombatEventKind.ShotFired,
+                PresentationId: MgPresentationId,
+                Origin: new NumericsVector3(20f, 42f, 20f),
+                Target: new NumericsVector3(60f, 1.5f, 20f),
+                ShooterUnitId: heliObs.Id,
+                Result: HitResult.Miss);
+            effects.ProcessEvents([heliMgEvent], heliViews);
+            Require(heliView.RecoilOffset == Vector3.Zero, "Helicopter MG fire must not apply whole-body fallback recoil shake.");
+
+            Require(heliView.TryGetMuzzleTransformForTarget(new Vector3(60f, 1.5f, 20f), out Transform3D rightDoor), "Failed to resolve starboard door gun.");
+            Require(heliView.TryGetMuzzleTransformForTarget(new Vector3(-20f, 1.5f, 20f), out Transform3D leftDoor), "Failed to resolve port door gun.");
+            Require(rightDoor.Origin.DistanceTo(leftDoor.Origin) > 2.5f, "Port and starboard CH-47D door guns must be offset on opposite sides of the fuselage.");
         }
         finally
         {

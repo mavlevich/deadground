@@ -7,7 +7,7 @@ namespace DeadGround.Client;
 
 internal partial class CombatEffects : Node3D
 {
-    public const int MaxTracers = 16;
+    public const int MaxTracers = 48;
     public const int MaxMuzzleFlashes = 32;
     public const int MaxSmokePuffs = 224;
     public const int MaxImpacts = 32;
@@ -97,6 +97,7 @@ internal partial class CombatEffects : Node3D
         public float TotalDistance;
         public float TotalDuration;
         public float ElapsedTime;
+        public float DelayRemaining;
         public float StreakLength;
         public float Thickness;
         public bool Active;
@@ -1241,7 +1242,7 @@ void fragment() {
 
                 if (ev.ShooterUnitId.Value != 0 && unitViews.Views.TryGetValue(ev.ShooterUnitId, out UnitView? shooter))
                 {
-                    if (shooter.TryGetMuzzleTransform(out Transform3D muzzleXform))
+                    if (shooter.TryGetMuzzleTransformForTarget(target, out Transform3D muzzleXform))
                     {
                         origin = muzzleXform.Origin;
                         if (origin != target)
@@ -1251,7 +1252,7 @@ void fragment() {
                     }
                     if (ageSeconds < 0.10f)
                     {
-                        shooter.ApplyRecoil(shotDir);
+                        shooter.ApplyRecoil(shotDir, isMachineGun: isMg, isRifle: isRifle);
                     }
                 }
                 else if (contactViews is not null)
@@ -1260,7 +1261,7 @@ void fragment() {
                     {
                         if (cv.Observation.IsCurrent && cv.Root.Position.DistanceTo(new Vector3(origin.X, cv.Root.Position.Y, origin.Z)) < 4.0f)
                         {
-                            if (cv.TryGetMuzzleTransform(out Transform3D muzzleXform))
+                            if (cv.TryGetMuzzleTransformForTarget(target, out Transform3D muzzleXform))
                             {
                                 origin = muzzleXform.Origin;
                                 if (origin != target)
@@ -1287,19 +1288,26 @@ void fragment() {
                     }
                 }
 
-                if (!isRifle && ageSeconds < GunParticlesMaxEventAge)
+                if (!isRifle && !isMg && ageSeconds < GunParticlesMaxEventAge)
                 {
                     SpawnGunParticles(origin, shotDir, ageSeconds);
                 }
 
-                if (!isRifle && ageSeconds < SmokePuffLifetime)
+                if (!isRifle && !isMg && ageSeconds < SmokePuffLifetime)
                 {
                     SpawnSmokePuff(origin, isImpactSmoke: false, ageSeconds);
                 }
 
                 if (ageSeconds < flightDuration)
                 {
-                    SpawnTracer(origin, target, flightDuration, isMachineGun: isMg, isRifle: isRifle, elapsedOffset: ageSeconds);
+                    if (isMg)
+                    {
+                        SpawnMachineGunTracerBurst(origin, target, flightDuration, ageSeconds);
+                    }
+                    else
+                    {
+                        SpawnTracer(origin, target, flightDuration, isMachineGun: false, isRifle: isRifle, elapsedOffset: ageSeconds);
+                    }
                     QueuePendingImpact(target, shotDir, ev.Result, flightDuration - ageSeconds, isMachineGun: isMg, isRifle: isRifle);
                 }
                 else
@@ -1862,7 +1870,48 @@ void fragment() {
         mid = (front + back) * 0.5f;
     }
 
-    private void SpawnTracer(Vector3 origin, Vector3 target, float flightDuration, bool isMachineGun = false, bool isRifle = false, float elapsedOffset = 0f)
+    private void SpawnMachineGunTracerBurst(Vector3 origin, Vector3 target, float flightDuration, float elapsedOffset)
+    {
+        // Emit a crisp 3-round staggered tracer stream so machine-gun fire reads unmistakably
+        // in both close-up and tactical views across helicopters, APCs, recon vehicles, and mounts.
+        const int burstRounds = 3;
+        const float roundSpacingSeconds = 0.055f;
+
+        Vector3 dir = target - origin;
+        float dist = dir.Length();
+        if (dist < 0.1f) return;
+        Vector3 fwd = dir / dist;
+        Vector3 upRef = MathF.Abs(fwd.Y) > 0.96f ? Vector3.Right : Vector3.Up;
+        Vector3 side = fwd.Cross(upRef).Normalized();
+        Vector3 perpUp = side.Cross(fwd).Normalized();
+        float spreadRadius = Mathf.Clamp(dist * 0.008f, 0.35f, 1.4f);
+
+        for (int r = 0; r < burstRounds; r++)
+        {
+            float startDelay = r * roundSpacingSeconds - elapsedOffset;
+            float roundElapsed = startDelay < 0f ? -startDelay : 0f;
+            float pendingDelay = startDelay > 0f ? startDelay : 0f;
+
+            Vector3 roundTarget = target;
+            if (r > 0)
+            {
+                float sx = ((float)_presentationRng.NextDouble() * 2f - 1f) * spreadRadius;
+                float sy = ((float)_presentationRng.NextDouble() * 2f - 1f) * (spreadRadius * 0.65f);
+                roundTarget = target + side * sx + perpUp * sy;
+            }
+
+            SpawnTracer(
+                origin,
+                roundTarget,
+                flightDuration,
+                isMachineGun: true,
+                isRifle: false,
+                elapsedOffset: roundElapsed,
+                delay: pendingDelay);
+        }
+    }
+
+    private void SpawnTracer(Vector3 origin, Vector3 target, float flightDuration, bool isMachineGun = false, bool isRifle = false, float elapsedOffset = 0f, float delay = 0f)
     {
         float distance = origin.DistanceTo(target);
         if (distance < 0.1f) return;
@@ -1877,8 +1926,15 @@ void fragment() {
         tracer.Direction = (target - origin) / distance;
         tracer.TotalDuration = flightDuration;
         tracer.ElapsedTime = elapsedOffset;
-        tracer.Thickness = isRifle ? TracerThickness * 0.35f : (isMachineGun ? TracerThickness * 0.5f : TracerThickness);
-        tracer.StreakLength = isRifle ? Mathf.Min(0.9f, distance * 0.8f) : (isMachineGun ? Mathf.Min(1.5f, distance * 0.8f) : Mathf.Min(TracerLength, distance * 0.8f));
+        tracer.DelayRemaining = delay;
+        tracer.Thickness = isRifle ? TracerThickness * 0.35f : (isMachineGun ? TracerThickness * 0.48f : TracerThickness);
+        tracer.StreakLength = isRifle ? Mathf.Min(0.9f, distance * 0.8f) : (isMachineGun ? Mathf.Min(2.4f, distance * 0.8f) : Mathf.Min(TracerLength, distance * 0.8f));
+
+        if (delay > 0f)
+        {
+            tracer.Mesh.Visible = false;
+            return;
+        }
 
         float alpha = elapsedOffset / flightDuration;
         CalculateTracerSegment(
@@ -2435,6 +2491,7 @@ void fragment() {
         for (int i = 0; i < MaxTracers; i++)
         {
             _tracers[i].Active = false;
+            _tracers[i].DelayRemaining = 0f;
             _tracers[i].Mesh.Visible = false;
         }
         for (int i = 0; i < MaxRockets; i++)
@@ -2588,7 +2645,22 @@ void fragment() {
             ref TimedTracer tracer = ref _tracers[i];
             if (!tracer.Active) continue;
 
-            tracer.ElapsedTime += dt;
+            if (tracer.DelayRemaining > 0f)
+            {
+                tracer.DelayRemaining -= dt;
+                if (tracer.DelayRemaining > 0f)
+                {
+                    tracer.Mesh.Visible = false;
+                    continue;
+                }
+                tracer.ElapsedTime += -tracer.DelayRemaining;
+                tracer.DelayRemaining = 0f;
+            }
+            else
+            {
+                tracer.ElapsedTime += dt;
+            }
+
             if (tracer.ElapsedTime >= tracer.TotalDuration)
             {
                 tracer.Active = false;
@@ -2608,6 +2680,7 @@ void fragment() {
             {
                 tracer.Mesh.LookAt(front + tracer.Direction * 5f, Vector3.Up);
             }
+            tracer.Mesh.Visible = true;
         }
     }
 

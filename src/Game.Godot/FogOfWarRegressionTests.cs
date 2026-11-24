@@ -23,7 +23,8 @@ internal static class FogOfWarRegressionTests
         CheckToggle();
         CheckUstyeVegetationBudgetAndAgreement();
         CheckContainedPassengersSkipped();
-        GD.Print("FOG_OF_WAR_REGRESSIONS_OK 12/12 passed: flat_range structure_occlusion vegetation_detection battle_soviet_start los_agreement zero_allocations relief_shading budget_40_units cached_viewsheds toggle ustye_vegetation_budget contained_passengers");
+        CheckAirborneHelicopterAltitudeViewshed();
+        GD.Print("FOG_OF_WAR_REGRESSIONS_OK 13/13 passed: flat_range structure_occlusion vegetation_detection battle_soviet_start los_agreement zero_allocations relief_shading budget_40_units cached_viewsheds toggle ustye_vegetation_budget contained_passengers helicopter_altitude");
     }
 
     private static void CheckFlatMapRange()
@@ -686,6 +687,48 @@ internal static class FogOfWarRegressionTests
         Apply(replica, bytes, 2, 20, boarded);
         RunCycle(fog, replica, catalog);
         Require(fog.SweepsInLastCycle == 1, $"Moving transport with 4 passengers must only sweep 1 unit, got {fog.SweepsInLastCycle}.");
+    }
+
+    private static void CheckAirborneHelicopterAltitudeViewshed()
+    {
+        StaticGeometry geo = AirDefensePlaygroundScenario.CreateStaticGeometry();
+        UnitCatalog catalog = ColdWarContent.LoadCatalog();
+        ushort ch47Def = catalog.RequireDefinitionIndex("ch47d");
+
+        using FogOfWarView fog = new(geo.HeightMap, geo);
+        ClientReplica replica = new();
+        byte[] bytes = new byte[WireProtocol.MaxMessageSize];
+
+        System.Numerics.Vector2 heliPos = AirDefensePlaygroundScenario.ChinookDeltaPos;
+        System.Numerics.Vector2 farValley = AirDefensePlaygroundScenario.StrelaBravoPos;
+
+        // Grounded CH-47D behind the 28m central ridge cannot see the far valley floor
+        OwnUnitObservation[] grounded =
+        [
+            new OwnUnitObservation(new EntityId(901), ch47Def, heliPos, 0, Altitude: 0f, FlightPhase: FlightPhase.Ground, HasFlightCapability: true)
+        ];
+        Apply(replica, bytes, 1, 10, grounded);
+        RunCycle(fog, replica, catalog);
+        Require(!fog.IsWorldPointSeen(farValley.X, farValley.Y), "Grounded helicopter behind ridge must not reveal far valley floor.");
+
+        // Climbing to High altitude (55m) triggers an altitude-based resweep and reveals the valley over the ridge
+        OwnUnitObservation[] airborne =
+        [
+            grounded[0] with { Altitude = 55f, FlightPhase = FlightPhase.Airborne }
+        ];
+        Apply(replica, bytes, 2, 20, airborne);
+        RunCycle(fog, replica, catalog);
+        Require(fog.SweepsInLastCycle == 1, $"Helicopter altitude climb must trigger a viewshed resweep, got {fog.SweepsInLastCycle}.");
+        Require(fog.IsWorldPointSeen(farValley.X, farValley.Y), "High-altitude helicopter (55m) must reveal far valley over 28m ridge in FogOfWarView.");
+
+        // Crashing helicopter drops its sensor contribution (matching DetectionSystem)
+        OwnUnitObservation[] crashing =
+        [
+            airborne[0] with { FlightPhase = FlightPhase.Crashing }
+        ];
+        Apply(replica, bytes, 3, 30, crashing);
+        RunCycle(fog, replica, catalog);
+        Require(!fog.IsWorldPointSeen(farValley.X, farValley.Y), "Crashing helicopter must not contribute fog-of-war visibility.");
     }
 
     private static void Apply(ClientReplica replica, byte[] bytes, uint sequence, int tick, OwnUnitObservation[] units)

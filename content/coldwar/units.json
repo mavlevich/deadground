@@ -8,7 +8,7 @@
   ],
   // Contact tracking tuned for kilometer distances and road speeds up to about 30 m/s.
   "detection": {
-    "memory_duration_ticks": 400,
+    "memory_duration_ticks": 6000,
     "correlation_window_ticks": 120,
     "correlation_distance_gate": 60.0,
     "evaluation_interval_ticks": 2,
