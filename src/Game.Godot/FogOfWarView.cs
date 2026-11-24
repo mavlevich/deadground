@@ -97,6 +97,7 @@ void fragment() {
     private readonly float[] _horizonBuffer;
     private readonly float[] _structureTops;
     private readonly float[]? _structureMaxYOverrides;
+    private bool _structureHeightDirty;
     private readonly float[] _cellGroundY;
     private readonly float[] _cellBlockY;
     private readonly float[] _cellCenterX;
@@ -296,11 +297,19 @@ void fragment() {
         {
             _publishPending = false;
             EndCycle();
+            if (_structureHeightDirty)
+            {
+                FlushStructureHeightDirty();
+            }
             return;
         }
 
         if (!_cycleInProgress)
         {
+            if (_structureHeightDirty)
+            {
+                FlushStructureHeightDirty();
+            }
             if (_timeSinceCycleStart < CycleInterval)
             {
                 return;
@@ -357,6 +366,7 @@ void fragment() {
     public void UpdateAllNow(ClientReplica replica, UnitCatalog catalog)
     {
         CancelInProgressSweep();
+        _structureHeightDirty = false;
         SyncSmokeVolumes(replica);
         ReadOnlySpan<OwnUnitObservation> ownUnits = replica.OwnUnits;
         BeginCycle(ownUnits);
@@ -492,24 +502,29 @@ void fragment() {
             }
         }
 
+        // Coalesce multiple height updates within a frame or during an active barrage instead of
+        // cancelling an in-flight sweep and starving publication. FlushStructureHeightDirty() triggers
+        // an immediate resweep at the next cycle boundary.
+        _structureHeightDirty = true;
+
+        return true;
+    }
+
+    private void FlushStructureHeightDirty()
+    {
+        _structureHeightDirty = false;
         foreach (UnitViewshed viewshed in _viewsheds.Values)
         {
             viewshed.Swept = false;
         }
-        if (_unitSweepInProgress || _publishPending)
-        {
-            CancelInProgressSweep();
-            _cycleInProgress = false;
-            _timeSinceCycleStart = CycleInterval;
-        }
-
-        return true;
+        _timeSinceCycleStart = CycleInterval;
     }
 
     // Test helper: the view of a single observer, replacing everything seen before.
     public void UpdateUnitNow(NumericsVector2 position, float eyeHeight, float sensorRange)
     {
         CancelInProgressSweep();
+        _structureHeightDirty = false;
         foreach (UnitViewshed viewshed in _viewsheds.Values)
         {
             RemoveContribution(viewshed);

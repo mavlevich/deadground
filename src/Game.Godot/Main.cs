@@ -64,6 +64,10 @@ public partial class Main : Node3D
     private HelicopterAudioController? _helicopterAudio;
     private SmokeView? _smokeView;
     private BuildingDestructionView? _buildingDestructionView;
+    private uint _pendingAttackGroundMinSeq;
+    private uint _pendingAttackGroundMaxSeq;
+    private uint _lastHandledAttackGroundResultSeq;
+    private string _pendingAttackGroundTargetDesc = "ground point";
     private readonly LineOfSightContext _clientLosContext = new();
     private MissionPanel? _missionPanel;
     private StaticGeometry? _scenarioGeometry;
@@ -1175,13 +1179,14 @@ public partial class Main : Node3D
 
             if (scenarioGeometry is not null)
             {
-                if (_scenario == "urban-destruction-playground")
+                if (scenarioGeometry.DestructibleBuildings.Count > 0)
                 {
                     _buildingDestructionView = new BuildingDestructionView(
                         _environmentRoot,
                         scenarioGeometry,
-                        UrbanDestructionPlaygroundScenario.GetBuildingSpecs(),
+                        scenarioGeometry.DestructibleBuildings,
                         OnObservedStructureHeightChanged);
+                    _buildingDestructionView.UpdateLod(_cameraRig.Size);
                     SyncClientLosOverrides();
                 }
                 SetupStructures(scenarioGeometry);
@@ -1252,6 +1257,9 @@ public partial class Main : Node3D
         _environmentView?.SetShadowTarget(null);
         _buildingDestructionView?.Dispose();
         _buildingDestructionView = null;
+        _pendingAttackGroundMinSeq = 0;
+        _pendingAttackGroundMaxSeq = 0;
+        _lastHandledAttackGroundResultSeq = 0;
         _clientLosContext.SetStructureMaxYOverrides(null, 0);
         foreach (Node child in _environmentRoot.GetChildren())
         {
@@ -1378,6 +1386,7 @@ public partial class Main : Node3D
         lodSwitches += _unitViews.UpdateLod(_cameraRig.Size, ref lodInstantiationBudget);
         lodSwitches += _contactViews.UpdateLod(_cameraRig.Size, ref lodInstantiationBudget);
         lodSwitches += _wreckViews.UpdateLod(_cameraRig.Size, ref lodInstantiationBudget);
+        _buildingDestructionView?.UpdateLod(_cameraRig.Size);
         long effectsStart = collectBench ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         _wreckViews.UpdateEffects(delta, _cameraRig.Focus, _cameraRig.Size, _session.Tick);
         _unitViews.UpdateRecoil(delta);
@@ -1389,6 +1398,24 @@ public partial class Main : Node3D
         _wreckViews.ProcessEvents(_session.Replica.Events, _session.Tick);
         _smokeView?.Update((float)delta, _session.Replica, _session.RenderTick);
         _buildingDestructionView?.Update(_session.Replica, (float)delta);
+        if (_pendingAttackGroundMaxSeq != 0 &&
+            _session.LastCommandResult is { } agResult &&
+            agResult.Sequence != _lastHandledAttackGroundResultSeq &&
+            agResult.Sequence >= _pendingAttackGroundMinSeq &&
+            agResult.Sequence <= _pendingAttackGroundMaxSeq)
+        {
+            _lastHandledAttackGroundResultSeq = agResult.Sequence;
+            string agMsg = agResult.Queued
+                ? $"Attacking {_pendingAttackGroundTargetDesc}"
+                : $"Attack {_pendingAttackGroundTargetDesc} order rejected by server";
+            _orderNotification?.ShowNotification(agMsg);
+            _status.Text = agMsg;
+            if (agResult.Sequence >= _pendingAttackGroundMaxSeq)
+            {
+                _pendingAttackGroundMinSeq = 0;
+                _pendingAttackGroundMaxSeq = 0;
+            }
+        }
         _combatEffects.UpdateListener(_cameraRig.Focus);
         _helicopterAudio?.Update(_session.Replica, _cameraRig.Focus, _cameraRig.Size, delta);
         _missionPanel?.UpdateMission(_session.Mission, _session.Tick);
@@ -3128,8 +3155,15 @@ public partial class Main : Node3D
                 if (_previewController is not null &&
                     _previewController.TryRaycast(_camera, mouse.Position, out Vector3 hitPoint3D, out _, out _, out StructureId hitStructureId))
                 {
+                    StructureId targetStructureId = hitStructureId != default &&
+                        _buildingDestructionView is not null &&
+                        _buildingDestructionView.ContainsStructure(hitStructureId)
+                            ? hitStructureId
+                            : default;
                     System.Numerics.Vector3 targetPoint = new(hitPoint3D.X, hitPoint3D.Y, hitPoint3D.Z);
                     int ordered = 0;
+                    uint minSeq = 0;
+                    uint maxSeq = 0;
                     foreach (EntityId unitId in _unitViews.Selected)
                     {
                         if (_session.Replica.TryGetOwnUnit(unitId, out OwnUnitObservation obs) &&
@@ -3153,24 +3187,44 @@ public partial class Main : Node3D
                             }
                             if (weapon is not null && !weapon.IsIndirectFire && !weapon.AirTargetsOnly && weapon.StructuralDamage > 0)
                             {
-                                if (_session.AttackGround(unitId, targetPoint, hitStructureId))
+                                if (_session.AttackGround(unitId, targetPoint, targetStructureId))
+                                {
                                     ordered++;
+                                    uint seq = _session.LastSubmittedCommandSequence;
+                                    if (minSeq == 0 || seq < minSeq) minSeq = seq;
+                                    if (seq > maxSeq) maxSeq = seq;
+                                }
                             }
                         }
                     }
 
                     if (ordered > 0)
                     {
-                        string targetDesc = hitStructureId != default ? "building" : "ground point";
+                        string targetDesc = targetStructureId != default ? "building" : "ground point";
+                        _pendingAttackGroundMinSeq = minSeq;
+                        _pendingAttackGroundMaxSeq = maxSeq;
+                        _pendingAttackGroundTargetDesc = targetDesc;
                         string msg = ordered == 1
-                            ? $"Attacking {targetDesc} (1 unit)"
-                            : $"Attacking {targetDesc} ({ordered} units)";
+                            ? $"Sending attack {targetDesc} order (1 unit)"
+                            : $"Sending attack {targetDesc} order ({ordered} units)";
                         _orderNotification?.ShowNotification(msg);
                         _status.Text = msg;
                         _contextActionPanel.CancelTargeting();
                         _destination.HideZoneCircle();
                         _orderCursorOverlay?.HideTooltip();
                     }
+                    else
+                    {
+                        string msg = "No selected direct-fire unit with structural ammo available";
+                        _orderNotification?.ShowNotification(msg);
+                        _status.Text = msg;
+                    }
+                }
+                else
+                {
+                    string msg = "No valid attack ground target under cursor";
+                    _orderNotification?.ShowNotification(msg);
+                    _status.Text = msg;
                 }
                 GetViewport().SetInputAsHandled();
                 return;

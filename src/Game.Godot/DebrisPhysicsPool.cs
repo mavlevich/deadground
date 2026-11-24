@@ -6,8 +6,9 @@ namespace DeadGround.Client;
 /// <summary>
 /// Variant A pure-C# cosmetic concrete debris physics rendered via GPU MultiMesh batches.
 /// Uses local client-only RNG (never touches match RNG streams), analytic HeightMap + rubble-floor
-/// bounce with damping and automatic sleeping, zero RigidBody3D/PhysicsServer3D nodes, and zero
-/// steady-state heap allocations.
+/// bounce with damping and automatic sleeping, zero RigidBody3D/PhysicsServer3D nodes, explicit
+/// CustomAabb + VisibleInstanceCount culling (no -10000 hidden transforms), and zero steady-state
+/// heap allocations.
 /// </summary>
 internal sealed class DebrisPhysicsPool : IDisposable
 {
@@ -18,7 +19,8 @@ internal sealed class DebrisPhysicsPool : IDisposable
     private const float Gravity = 9.81f;
     private const float SleepSpeedSq = 0.09f; // 0.3 m/s
     private const float SleepSpinSq = 0.16f;  // 0.4 rad/s
-    private const float HiddenY = -10000f;
+
+    private static readonly Aabb PoolCustomAabb = new(new Vector3(-2500f, -50f, -2500f), new Vector3(5000f, 350f, 5000f));
 
     private struct Particle
     {
@@ -40,8 +42,8 @@ internal sealed class DebrisPhysicsPool : IDisposable
     private readonly MultiMeshInstance3D[] _batches = new MultiMeshInstance3D[3];
     private readonly MultiMesh[] _multiMeshes = new MultiMesh[3];
     private readonly int[] _batchCapacities = [SlabACapacity, SlabBCapacity, ChunkCCapacity];
+    private readonly int[] _batchVisibleCounts = new int[3];
     private readonly int[] _batchCursors = new int[3];
-    private readonly int[] _batchSlotToParticle = new int[TotalCapacity];
     private readonly Particle[] _particles = new Particle[TotalCapacity];
     private readonly Random _localRng;
     private bool _disposed;
@@ -70,15 +72,14 @@ internal sealed class DebrisPhysicsPool : IDisposable
             {
                 TransformFormat = MultiMesh.TransformFormatEnum.Transform3D,
                 InstanceCount = cap,
+                VisibleInstanceCount = 0,
                 Mesh = meshes[kind]
             };
-            Transform3D hidden = new(Basis.Identity.Scaled(new Vector3(0.0001f, 0.0001f, 0.0001f)), new Vector3(0f, HiddenY, 0f));
             for (int slot = 0; slot < cap; slot++)
             {
-                mm.SetInstanceTransform(slot, hidden);
+                mm.SetInstanceTransform(slot, Transform3D.Identity);
                 _particles[particleIndex].Kind = (byte)kind;
                 _particles[particleIndex].BatchSlot = slot;
-                _batchSlotToParticle[particleIndex] = particleIndex;
                 particleIndex++;
             }
 
@@ -86,6 +87,7 @@ internal sealed class DebrisPhysicsPool : IDisposable
             {
                 Name = kind switch { 0 => "DebrisSlabA", 1 => "DebrisSlabB", _ => "DebrisChunkC" },
                 Multimesh = mm,
+                CustomAabb = PoolCustomAabb,
                 CastShadow = kind == 0 ? GeometryInstance3D.ShadowCastingSetting.On : GeometryInstance3D.ShadowCastingSetting.Off
             };
             _root.AddChild(mmi);
@@ -108,6 +110,11 @@ internal sealed class DebrisPhysicsPool : IDisposable
             return;
 
         Vector3 biasDir = outwardBias.LengthSquared() > 1e-4f ? outwardBias.Normalized() : Vector3.Up;
+        bool isWallImpact = MathF.Abs(biasDir.Y) < 0.55f && (biasDir.X * biasDir.X + biasDir.Z * biasDir.Z) > 0.25f;
+        Vector2 wallNormalXZ = isWallImpact
+            ? new Vector2(biasDir.X, biasDir.Z).Normalized()
+            : Vector2.Zero;
+
         for (int i = 0; i < count; i++)
         {
             byte kind = PickKind(includeLargeSlabs);
@@ -119,6 +126,11 @@ internal sealed class DebrisPhysicsPool : IDisposable
                 p.Active = true;
                 ActiveCount++;
                 AwakeCount++;
+                if (p.BatchSlot + 1 > _batchVisibleCounts[kind])
+                {
+                    _batchVisibleCounts[kind] = p.BatchSlot + 1;
+                    _multiMeshes[kind].VisibleInstanceCount = _batchVisibleCounts[kind];
+                }
             }
             else if (p.Sleeping)
             {
@@ -127,21 +139,64 @@ internal sealed class DebrisPhysicsPool : IDisposable
             }
 
             float angle = (float)(_localRng.NextDouble() * Math.Tau);
-            float r = (float)Math.Sqrt(_localRng.NextDouble()) * spreadRadius;
-            float jitterY = (float)(_localRng.NextDouble() * 1.4 - 0.35);
-            p.Position = new Vector3(
-                origin.X + MathF.Cos(angle) * r,
-                MathF.Max(rubbleFloorY + 0.35f, origin.Y + jitterY),
-                origin.Z + MathF.Sin(angle) * r);
+            float radialX = MathF.Cos(angle);
+            float radialZ = MathF.Sin(angle);
 
+            Vector3 spawnPos;
+            Vector3 velocityDir;
+
+            if (isWallImpact)
+            {
+                // Project radial scatter into the outward hemisphere away from the struck wall
+                // so shell debris blasts outward into the street rather than through the building interior.
+                float dot = radialX * wallNormalXZ.X + radialZ * wallNormalXZ.Y;
+                if (dot < 0.15f)
+                {
+                    float push = 0.30f - dot;
+                    radialX += wallNormalXZ.X * push;
+                    radialZ += wallNormalXZ.Y * push;
+                    float len = MathF.Sqrt(radialX * radialX + radialZ * radialZ);
+                    if (len > 1e-4f)
+                    {
+                        radialX /= len;
+                        radialZ /= len;
+                    }
+                }
+
+                float r = (float)Math.Sqrt(_localRng.NextDouble()) * spreadRadius;
+                float jitterY = (float)(_localRng.NextDouble() * 1.2 - 0.3);
+                spawnPos = new Vector3(
+                    origin.X + wallNormalXZ.X * 0.35f + radialX * r,
+                    MathF.Max(rubbleFloorY + 0.35f, origin.Y + jitterY),
+                    origin.Z + wallNormalXZ.Y * 0.35f + radialZ * r);
+
+                Vector3 randomDir = new(
+                    radialX * (0.55f + (float)_localRng.NextDouble() * 0.45f),
+                    0.18f + (float)_localRng.NextDouble() * 0.68f,
+                    radialZ * (0.55f + (float)_localRng.NextDouble() * 0.45f));
+                velocityDir = (randomDir + biasDir * 0.75f).Normalized();
+            }
+            else
+            {
+                // Collapse burst: spawn along outer perimeter annulus and scatter radially outward
+                float annulusT = 0.55f + 0.50f * (float)_localRng.NextDouble();
+                float r = spreadRadius * annulusT;
+                float jitterY = (float)(_localRng.NextDouble() * 1.4 - 0.35);
+                spawnPos = new Vector3(
+                    origin.X + radialX * r,
+                    MathF.Max(rubbleFloorY + 0.35f, origin.Y + jitterY),
+                    origin.Z + radialZ * r);
+
+                Vector3 outwardDir = new(
+                    radialX * (0.55f + (float)_localRng.NextDouble() * 0.45f),
+                    0.22f + (float)_localRng.NextDouble() * 0.78f,
+                    radialZ * (0.55f + (float)_localRng.NextDouble() * 0.45f));
+                velocityDir = (outwardDir + biasDir * 0.45f).Normalized();
+            }
+
+            p.Position = spawnPos;
             float speed = minSpeed + (float)_localRng.NextDouble() * (maxSpeed - minSpeed);
-            Vector3 randomDir = new(
-                MathF.Cos(angle) * (0.45f + (float)_localRng.NextDouble() * 0.55f),
-                0.25f + (float)_localRng.NextDouble() * 0.85f,
-                MathF.Sin(angle) * (0.45f + (float)_localRng.NextDouble() * 0.55f));
-            Vector3 dir = (randomDir + biasDir * 0.65f).Normalized();
-
-            p.Velocity = dir * speed;
+            p.Velocity = velocityDir * speed;
             p.RotationEuler = new Vector3(
                 (float)(_localRng.NextDouble() * Math.Tau),
                 (float)(_localRng.NextDouble() * Math.Tau),
@@ -219,22 +274,19 @@ internal sealed class DebrisPhysicsPool : IDisposable
         if (_disposed)
             return;
 
-        Transform3D hidden = new(Basis.Identity.Scaled(new Vector3(0.0001f, 0.0001f, 0.0001f)), new Vector3(0f, HiddenY, 0f));
         for (int i = 0; i < TotalCapacity; i++)
         {
-            ref Particle p = ref _particles[i];
-            if (p.Active)
-            {
-                p.Active = false;
-                p.Sleeping = false;
-                _multiMeshes[p.Kind].SetInstanceTransform(p.BatchSlot, hidden);
-            }
+            _particles[i].Active = false;
+            _particles[i].Sleeping = false;
+        }
+        for (int kind = 0; kind < 3; kind++)
+        {
+            _batchVisibleCounts[kind] = 0;
+            _batchCursors[kind] = 0;
+            _multiMeshes[kind].VisibleInstanceCount = 0;
         }
         ActiveCount = 0;
         AwakeCount = 0;
-        _batchCursors[0] = 0;
-        _batchCursors[1] = 0;
-        _batchCursors[2] = 0;
     }
 
     private byte PickKind(bool includeLargeSlabs)
@@ -251,14 +303,22 @@ internal sealed class DebrisPhysicsPool : IDisposable
     {
         int startOffset = kind switch { 0 => 0, 1 => SlabACapacity, _ => SlabACapacity + SlabBCapacity };
         int cap = _batchCapacities[kind];
-        int cursor = _batchCursors[kind];
 
-        // Prefer unused or sleeping slots before recycling an actively flying slab
+        // Fill contiguous slots first so VisibleInstanceCount only covers active instances
+        int visible = _batchVisibleCounts[kind];
+        if (visible < cap)
+        {
+            _batchCursors[kind] = (visible + 1) % cap;
+            return startOffset + visible;
+        }
+
+        // Pool is full: prefer recycling sleeping slabs before actively flying ones
+        int cursor = _batchCursors[kind];
         for (int step = 0; step < cap; step++)
         {
             int slot = (cursor + step) % cap;
             int idx = startOffset + slot;
-            if (!_particles[idx].Active || _particles[idx].Sleeping)
+            if (_particles[idx].Sleeping)
             {
                 _batchCursors[kind] = (slot + 1) % cap;
                 return idx;

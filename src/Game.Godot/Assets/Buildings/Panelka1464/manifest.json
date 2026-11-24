@@ -9,6 +9,9 @@
   "floors_total": 5,
   "rubble_height_m": 1.5,
   "modules": [
+    "Section_Intact_LOD0",
+    "Section_Intact_LOD1",
+    "Section_Intact_LOD2",
     "Floor_Ground_Intact",
     "Floor_Mid_Intact",
     "Floor_Breached",
@@ -20,10 +23,10 @@
   ],
   "glb": {
     "file": "panelka_1_464.glb",
-    "triangles": 3922,
-    "vertices": 7642,
-    "mesh_parts": 35,
-    "materials": 12,
-    "bytes": 386900
+    "triangles": 5026,
+    "vertices": 9850,
+    "mesh_parts": 11,
+    "materials": 1,
+    "bytes": 1143220
   }
 }

@@ -54,6 +54,9 @@ BAY_CENTERS_X = (-4.5, -1.5, 1.5, 4.5)
 BAY_WIDTH = 3.0
 
 MODULE_NODES = (
+    "Section_Intact_LOD0",
+    "Section_Intact_LOD1",
+    "Section_Intact_LOD2",
     "Floor_Ground_Intact",
     "Floor_Mid_Intact",
     "Floor_Breached",
@@ -472,6 +475,93 @@ def _build_debris_meshes(m, nodes, mats):
     m.add_flat_mesh("DebrisChunkC_Geo", pts_c, faces_box, mats["broken"], nodes["Debris_Chunk_C"], auto_orient=True, tint=0.82)
 
 
+def _build_intact_lod1(m, parent, mats):
+    """Medium RTS-distance 5-story intact section (~800-1000 tris, 1 merged draw call)."""
+    total_h = FLOORS_TOTAL * FLOOR_HEIGHT
+    plinth_h = 0.55
+
+    # Foundation plinth + full 5-story concrete body
+    _add_box(m, "Lod1_Plinth", (SECTION_WIDTH - 0.06, plinth_h, SECTION_DEPTH - 0.06), (0.0, plinth_h * 0.5, 0.0), mats["plinth"], parent)
+    body_h = total_h - plinth_h
+    _add_box(m, "Lod1_Body", (SECTION_WIDTH, body_h, SECTION_DEPTH), (0.0, plinth_h + body_h * 0.5, 0.0), mats["concrete"], parent, tint=0.99)
+
+    # Entrance porch visor + recessed doorway on +Z front courtyard facade
+    ent_x = BAY_CENTERS_X[1]
+    _add_box(m, "Lod1_EntStep", (2.15, 0.32, 0.85), (ent_x, 0.16, HALF_D + 0.42), mats["plinth"], parent)
+    _add_box(m, "Lod1_EntDoor", (1.50, 2.15, 0.08), (ent_x, 1.48, HALF_D + 0.04), mats["rail"], parent, tint=0.88)
+    _add_box(m, "Lod1_EntVisor", (2.25, 0.18, 1.05), (ent_x, 2.58, HALF_D + 0.52), mats["concrete"], parent, tint=0.90)
+
+    # Floor slab bands + simplified windows and balcony blocks across all 5 floors
+    for f in range(FLOORS_TOTAL):
+        y0 = f * FLOOR_HEIGHT
+        if f > 0:
+            _add_box(m, f"Lod1_TrimF_{f}", (SECTION_WIDTH + 0.04, 0.14, 0.04), (0.0, y0 + 0.10, HALF_D + 0.01), mats["brick_trim"], parent)
+            _add_box(m, f"Lod1_TrimB_{f}", (SECTION_WIDTH + 0.04, 0.14, 0.04), (0.0, y0 + 0.10, -HALF_D - 0.01), mats["brick_trim"], parent)
+        for bi, bx in enumerate(BAY_CENTERS_X):
+            # Front (+Z)
+            if f == 0 and bi == 1:
+                pass  # entrance bay
+            elif f > 0 and bi in (0, 2):
+                # Simplified cantilevered balcony block + dark door recess
+                _add_box(m, f"Lod1_BalcF_{f}_{bi}", (2.45, 0.96, 0.88), (bx, y0 + 0.56, HALF_D + 0.44), mats["balcony_screen"], parent, tint=0.95)
+                _add_box(m, f"Lod1_BWinF_{f}_{bi}", (1.85, 1.40, 0.03), (bx, y0 + 1.60, HALF_D + 0.015), mats["glass"], parent)
+            else:
+                wy = y0 + (1.28 if (f > 0 and bi == 1) else (1.78 if f == 0 else 1.56))
+                wh = 1.82 if (f > 0 and bi == 1) else 1.44
+                ww = 1.18 if (f > 0 and bi == 1) else 1.72
+                _add_box(m, f"Lod1_WinF_{f}_{bi}", (ww, wh, 0.03), (bx, wy, HALF_D + 0.015), mats["glass"], parent)
+
+            # Rear (-Z)
+            if f > 0 and bi in (1, 3):
+                _add_box(m, f"Lod1_BalcB_{f}_{bi}", (2.45, 0.96, 0.88), (bx, y0 + 0.56, -HALF_D - 0.44), mats["balcony_screen"], parent, tint=0.95)
+                _add_box(m, f"Lod1_BWinB_{f}_{bi}", (1.85, 1.40, 0.03), (bx, y0 + 1.60, -HALF_D - 0.015), mats["glass"], parent)
+            else:
+                wy = y0 + (1.78 if f == 0 else 1.56)
+                _add_box(m, f"Lod1_WinB_{f}_{bi}", (1.72, 1.44, 0.03), (bx, wy, -HALF_D - 0.015), mats["glass"], parent)
+
+    # Roof tar slab, parapet rim, penthouse box, and vent shafts
+    _add_box(m, "Lod1_RoofTar", (SECTION_WIDTH - 0.24, 0.14, SECTION_DEPTH - 0.24), (0.0, total_h + 0.07, 0.0), mats["roof_tar"], parent)
+    _add_box(m, "Lod1_ParF", (SECTION_WIDTH + 0.08, ROOF_PARAPET_HEIGHT, 0.30), (0.0, total_h + ROOF_PARAPET_HEIGHT * 0.5, HALF_D - 0.11), mats["concrete"], parent, tint=0.92)
+    _add_box(m, "Lod1_ParB", (SECTION_WIDTH + 0.08, ROOF_PARAPET_HEIGHT, 0.30), (0.0, total_h + ROOF_PARAPET_HEIGHT * 0.5, -HALF_D + 0.11), mats["concrete"], parent, tint=0.92)
+    _add_box(m, "Lod1_ParL", (0.30, ROOF_PARAPET_HEIGHT, SECTION_DEPTH - 0.30), (-HALF_W + 0.11, total_h + ROOF_PARAPET_HEIGHT * 0.5, 0.0), mats["concrete"], parent, tint=0.90)
+    _add_box(m, "Lod1_ParR", (0.30, ROOF_PARAPET_HEIGHT, SECTION_DEPTH - 0.30), (HALF_W - 0.11, total_h + ROOF_PARAPET_HEIGHT * 0.5, 0.0), mats["concrete"], parent, tint=0.90)
+    _add_box(m, "Lod1_Penthouse", (2.10, 0.96, 1.80), (-1.50, total_h + 0.48, 0.60), mats["concrete"], parent, tint=0.88)
+    _add_box(m, "Lod1_VentA", (1.35, 0.80, 0.72), (-3.8, total_h + 0.40, -2.4), mats["concrete"], parent, tint=0.86)
+    _add_box(m, "Lod1_VentB", (1.35, 0.80, 0.72), (2.4, total_h + 0.40, -2.4), mats["concrete"], parent, tint=0.86)
+
+
+def _build_intact_lod2(m, parent, mats):
+    """Distant silhouette 5-story intact section (< 180 tris, 1 merged draw call)."""
+    total_h = FLOORS_TOTAL * FLOOR_HEIGHT
+    plinth_h = 0.55
+
+    _add_box(m, "Lod2_Plinth", (SECTION_WIDTH - 0.06, plinth_h, SECTION_DEPTH - 0.06), (0.0, plinth_h * 0.5, 0.0), mats["plinth"], parent)
+    _add_box(m, "Lod2_Body", (SECTION_WIDTH, total_h - plinth_h, SECTION_DEPTH), (0.0, plinth_h + (total_h - plinth_h) * 0.5, 0.0), mats["concrete"], parent, tint=0.98)
+    _add_box(m, "Lod2_EntVisor", (2.25, 0.24, 1.05), (BAY_CENTERS_X[1], 2.55, HALF_D + 0.52), mats["concrete"], parent, tint=0.90)
+
+    # 5 horizontal dark window bands on front (+Z) and rear (-Z) for clean distant readability
+    for f in range(FLOORS_TOTAL):
+        wy = f * FLOOR_HEIGHT + (1.78 if f == 0 else 1.56)
+        _add_box(m, f"Lod2_BandF_{f}", (SECTION_WIDTH - 0.8, 1.20, 0.04), (0.0, wy, HALF_D + 0.02), mats["glass"], parent)
+        _add_box(m, f"Lod2_BandB_{f}", (SECTION_WIDTH - 0.8, 1.20, 0.04), (0.0, wy, -HALF_D - 0.02), mats["glass"], parent)
+
+    # Roof silhouette: dark tar top + parapet block + penthouse
+    _add_box(m, "Lod2_Roof", (SECTION_WIDTH + 0.08, ROOF_PARAPET_HEIGHT, SECTION_DEPTH + 0.08), (0.0, total_h + ROOF_PARAPET_HEIGHT * 0.5, 0.0), mats["concrete"], parent, tint=0.90)
+    _add_box(m, "Lod2_RoofTar", (SECTION_WIDTH - 0.40, 0.06, SECTION_DEPTH - 0.40), (0.0, total_h + ROOF_PARAPET_HEIGHT + 0.02, 0.0), mats["roof_tar"], parent)
+    _add_box(m, "Lod2_Penthouse", (2.10, 0.90, 1.80), (-1.50, total_h + ROOF_PARAPET_HEIGHT + 0.45, 0.60), mats["concrete"], parent, tint=0.86)
+
+
+def _clone_module_parts_into(m, src_parent, dst_parent, offset_y, prefix):
+    """Clone already-authored parts from src_parent into dst_parent shifted along +Y."""
+    snapshot = list(m.parts)
+    for idx, (node_id, parent, material, points, normals, indices, colors) in enumerate(snapshot):
+        if parent != src_parent:
+            continue
+        src_t = m.data["nodes"][node_id].get("translation", [0.0, 0.0, 0.0])
+        new_node = m.node(f"{prefix}_{idx}", (src_t[0], src_t[1] + offset_y, src_t[2]), parent=dst_parent)
+        m.parts.append((new_node, dst_parent, material, list(points), list(normals), list(indices), list(colors)))
+
+
 def build_panelka_model():
     m = GltfModel("Panelka_1_464", surface_weathering=False)
     m.data["asset"]["generator"] = "Dead Ground Panelka 1-464 model authoring"
@@ -500,22 +590,62 @@ def build_panelka_model():
     _build_rubble_mound(m, nodes["Rubble_Mound"], mats)
     _build_debris_meshes(m, nodes, mats)
 
-    # Bake clean ambient occlusion per module independently so modules don't shadow one another
-    # (all modules share origin (0,0,0), so we only apply subtle vertical shading per vertex).
+    # Assemble pixel-exact Section_Intact_LOD0 from Ground + 4x Mid + Roof, plus simplified LOD1/LOD2
+    _clone_module_parts_into(m, nodes["Floor_Ground_Intact"], nodes["Section_Intact_LOD0"], 0.0, "Lod0_F0")
+    for f in range(1, FLOORS_TOTAL):
+        _clone_module_parts_into(m, nodes["Floor_Mid_Intact"], nodes["Section_Intact_LOD0"], f * FLOOR_HEIGHT, f"Lod0_F{f}")
+    _clone_module_parts_into(m, nodes["Roof_Cap"], nodes["Section_Intact_LOD0"], FLOORS_TOTAL * FLOOR_HEIGHT, "Lod0_Roof")
+
+    _build_intact_lod1(m, nodes["Section_Intact_LOD1"], mats)
+    _build_intact_lod2(m, nodes["Section_Intact_LOD2"], mats)
+
+    # Bake material baseColorFactor + subtle architectural contact shading into COLOR_0 and collapse
+    # all parts onto a single unified PBR material so every module merges into 1 draw call.
+    mat_colors = [
+        mat["pbrMetallicRoughness"]["baseColorFactor"][:3]
+        for mat in m.data["materials"]
+    ]
+    total_section_h = FLOORS_TOTAL * FLOOR_HEIGHT
+    debris_parents = (nodes["Debris_Slab_A"], nodes["Debris_Slab_B"], nodes["Debris_Chunk_C"])
+    section_lod_parents = (nodes["Section_Intact_LOD0"], nodes["Section_Intact_LOD1"], nodes["Section_Intact_LOD2"])
+
     for part_idx, (node_id, parent, material, points, normals, indices, colors) in enumerate(m.parts):
-        if parent in (nodes["Debris_Slab_A"], nodes["Debris_Slab_B"], nodes["Debris_Chunk_C"]):
-            continue
+        base_r, base_g, base_b = mat_colors[material]
         shaded = []
         for p, n, c in zip(points, normals, colors):
-            # Subtle architectural contact shading: slightly darker near floor base/eaves and downward faces
-            up_factor = 0.90 + 0.12 * max(-1.0, min(1.0, n[1]))
-            if parent == nodes["Rubble_Mound"]:
-                height_ao = 0.78 + 0.24 * min(1.0, max(0.0, p[1] / RUBBLE_HEIGHT))
+            if parent in debris_parents:
+                f = 1.0
             else:
-                height_ao = 0.88 + 0.12 * min(1.0, max(0.0, p[1] / FLOOR_HEIGHT))
-            f = max(0.68, min(1.06, up_factor * height_ao))
-            shaded.append((c[0] * f, c[1] * f, c[2] * f, c[3]))
-        m.parts[part_idx] = (node_id, parent, material, points, normals, indices, shaded)
+                up_factor = 0.90 + 0.12 * max(-1.0, min(1.0, n[1]))
+                if parent == nodes["Rubble_Mound"]:
+                    height_ao = 0.78 + 0.24 * min(1.0, max(0.0, p[1] / RUBBLE_HEIGHT))
+                elif parent in section_lod_parents:
+                    # Per-floor subtle AO matching the modular stack so LOD0 matches damaged floors seamlessly
+                    local_y = p[1] % FLOOR_HEIGHT if p[1] < total_section_h else FLOOR_HEIGHT
+                    height_ao = 0.88 + 0.12 * min(1.0, max(0.0, local_y / FLOOR_HEIGHT))
+                else:
+                    height_ao = 0.88 + 0.12 * min(1.0, max(0.0, p[1] / FLOOR_HEIGHT))
+                f = max(0.68, min(1.06, up_factor * height_ao))
+            shaded.append((
+                min(1.0, c[0] * base_r * f),
+                min(1.0, c[1] * base_g * f),
+                min(1.0, c[2] * base_b * f),
+                c[3],
+            ))
+        m.parts[part_idx] = (node_id, parent, 0, points, normals, indices, shaded)
+
+    # Replace the 12 authoring palette materials with 1 unified vertex-colored architectural material
+    m.data["materials"] = [
+        {
+            "name": "PanelkaArchitectural",
+            "pbrMetallicRoughness": {
+                "baseColorFactor": [1.0, 1.0, 1.0, 1.0],
+                "metallicFactor": 0.05,
+                "roughnessFactor": 0.88,
+            },
+        }
+    ]
+    m.materials = {"PanelkaArchitectural": 0}
 
     return m
 

@@ -100,6 +100,28 @@ class PanelkaAssetTests(unittest.TestCase):
             self.assertLessEqual(rub["max"][0] - rub["min"][0], SECTION_WIDTH)
             self.assertLessEqual(rub["max"][2] - rub["min"][2], SECTION_DEPTH)
 
+            # Every module must merge to exactly 1 single-material mesh (1 draw call per module / MultiMesh batch)
+            self.assertEqual(len(data["materials"]), 1, f"Expected 1 unified vertex-colored material, got {len(data['materials'])}")
+            for mod_name in MODULE_NODES:
+                self.assertEqual(stats_by_mod[mod_name]["meshes"], 1, f"{mod_name} must merge into exactly 1 mesh for single-draw-call rendering")
+
+            # Whole-section LOD progression for sleeping intact MultiMesh rendering
+            lod0 = stats_by_mod["Section_Intact_LOD0"]
+            lod1 = stats_by_mod["Section_Intact_LOD1"]
+            lod2 = stats_by_mod["Section_Intact_LOD2"]
+            self.assertGreater(lod0["triangles"], lod1["triangles"], "LOD0 must have more detail than LOD1")
+            self.assertGreater(lod1["triangles"], lod2["triangles"], "LOD1 must have more detail than LOD2")
+            self.assertLessEqual(lod1["triangles"], 1500, f"LOD1 too heavy: {lod1['triangles']} tris")
+            self.assertLessEqual(lod2["triangles"], 250, f"LOD2 too heavy: {lod2['triangles']} tris")
+            for lod_name, lod_st in (("Section_Intact_LOD0", lod0), ("Section_Intact_LOD1", lod1), ("Section_Intact_LOD2", lod2)):
+                self.assertAlmostEqual(lod_st["min"][1], 0.0, delta=0.05, msg=f"{lod_name} base must rest at Y = 0")
+                self.assertGreaterEqual(lod_st["max"][1], 5 * FLOOR_HEIGHT + 0.35, msg=f"{lod_name} must reach full 5-story + parapet height")
+
+            # Forward axis (+Z): front courtyard entrance steps/visor project on +Z, rear -Z ground wall stays flush
+            ground = stats_by_mod["Floor_Ground_Intact"]
+            self.assertGreater(ground["max"][2], SECTION_DEPTH * 0.5 + 0.5, "Front entrance porch/visor must project along +Z")
+            self.assertGreaterEqual(ground["min"][2], -SECTION_DEPTH * 0.5 - 0.3, "Rear -Z ground facade must not have an entrance projection")
+
             # Debris meshes are single-material and ultra-lightweight for 256-instance MultiMesh
             for debris_mod in ("Debris_Slab_A", "Debris_Slab_B", "Debris_Chunk_C"):
                 st = stats_by_mod[debris_mod]
@@ -112,12 +134,28 @@ class PanelkaAssetTests(unittest.TestCase):
                 + 4 * stats_by_mod["Floor_Mid_Intact"]["triangles"]
                 + stats_by_mod["Roof_Cap"]["triangles"]
             )
+            self.assertEqual(lod0["triangles"], assembled_tris, "Section_Intact_LOD0 must exactly match assembled 5-story modular triangle count")
             self.assertLessEqual(assembled_tris, 7500, f"Assembled 5-story section too heavy: {assembled_tris} tris")
             self.assertEqual(manifest["floors_total"], 5)
 
     def test_checked_in_asset_is_up_to_date(self):
-        checked_in = DEFAULT_OUTPUT_DIR / "panelka_1_464.glb"
-        self.assertTrue(checked_in.exists(), f"Missing checked-in GLB at {checked_in}")
+        checked_in_glb = DEFAULT_OUTPUT_DIR / "panelka_1_464.glb"
+        checked_in_manifest = DEFAULT_OUTPUT_DIR / "manifest.json"
+        self.assertTrue(checked_in_glb.exists(), f"Missing checked-in GLB at {checked_in_glb}")
+        self.assertTrue(checked_in_manifest.exists(), f"Missing checked-in manifest at {checked_in_manifest}")
+        with tempfile.TemporaryDirectory() as tmp:
+            rebuilt_glb, _ = export_panelka(Path(tmp))
+            rebuilt_manifest = Path(tmp) / "manifest.json"
+            self.assertEqual(
+                checked_in_glb.read_bytes(),
+                rebuilt_glb.read_bytes(),
+                "Checked-in panelka_1_464.glb is out of date; re-run build_panelka_1_464.py.",
+            )
+            self.assertEqual(
+                checked_in_manifest.read_text(encoding="utf-8"),
+                rebuilt_manifest.read_text(encoding="utf-8"),
+                "Checked-in manifest.json is out of date; re-run build_panelka_1_464.py.",
+            )
         manifest = json.loads((DEFAULT_OUTPUT_DIR / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["asset"], "panelka_1_464")
 

@@ -4,15 +4,6 @@ using DeadGround.Engine;
 namespace DeadGround.Rules.Ops;
 
 /// <summary>
-/// Data-driven visual and structural registration descriptor for a destructible building section.
-/// Shared between server scenario setup and client presentation so neither side hardcodes model dimensions.
-/// </summary>
-public readonly record struct DestructibleBuildingSpec(
-    StructureId Id,
-    StructureDestructionProfile Profile,
-    float YawRad = 0f);
-
-/// <summary>
 /// Playable urban combat and building destruction proving ground featuring modular 5-story Soviet
 /// Series 1-464 panelkas arranged around a central microdistrict courtyard.
 /// Player 1 (Soviet) fields 2x T-62 tanks, 1x BM-21 Grad MLRS, and 1x BRDM-2 recon vehicle
@@ -106,7 +97,7 @@ public static class UrbanDestructionPlaygroundScenario
         return new HeightMap(MapResolution, MapResolution, MapSpacing, 0.01f, heights);
     }
 
-    public static StaticGeometry CreateStaticGeometry(HeightMap? map = null)
+    public static StaticGeometry CreateStaticGeometry(HeightMap? map = null, UnitCatalog? catalog = null)
     {
         map ??= CreateHeightMap();
         OpaqueStructure[] structures = new OpaqueStructure[PanelkaLayout.Length];
@@ -147,7 +138,8 @@ public static class UrbanDestructionPlaygroundScenario
             canopyHeight: 9.0f,
             maxPenetration: 35.0f);
 
-        return new StaticGeometry(map, structures, [], [], [westPark, eastPark]);
+        DestructibleBuildingSpec[] specs = GetBuildingSpecs(catalog);
+        return new StaticGeometry(map, structures, [], [], [westPark, eastPark], [], destructibleBuildings: specs);
     }
 
     public static MatchSetup CreateMatchSetup(
@@ -210,8 +202,10 @@ public static class UrbanDestructionPlaygroundScenario
         Simulation simulation = new(world, rules, matchSeed: matchSeed);
         if (simulation.BuildingDestruction is not null)
         {
-            DestructibleBuildingSpec[] specs = GetBuildingSpecs();
-            for (int i = 0; i < specs.Length; i++)
+            IReadOnlyList<DestructibleBuildingSpec> specs = geometry.DestructibleBuildings.Count > 0
+                ? geometry.DestructibleBuildings
+                : GetBuildingSpecs(catalog);
+            for (int i = 0; i < specs.Count; i++)
             {
                 StructureDestructionProfile prof = specs[i].Profile;
                 simulation.BuildingDestruction.RegisterStructure(world, specs[i].Id, in prof);

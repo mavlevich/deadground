@@ -21,6 +21,15 @@ public readonly struct LineOfSightDiagnostics
 }
 
 /// <summary>
+/// Data-driven visual and structural registration descriptor for a destructible building section
+/// attached to a map's static geometry so neither server nor client branches on scenario name.
+/// </summary>
+public readonly record struct DestructibleBuildingSpec(
+    StructureId Id,
+    StructureDestructionProfile Profile,
+    float YawRad = 0f);
+
+/// <summary>
 /// Immutable static map geometry service combining continuous bilinear terrain,
 /// opaque axis-aligned structures, and an acceleration uniform spatial grid.
 ///
@@ -56,10 +65,13 @@ public sealed class StaticGeometry
     public IReadOnlyList<TerrainObstacle> TerrainObstacles => _readOnlyTerrainObstacles;
     public IReadOnlyList<VegetationZone> VegetationZones => _readOnlyVegetationZones;
     public IReadOnlyList<VegetationClearing> VegetationClearings => _readOnlyVegetationClearings;
+    public IReadOnlyList<DestructibleBuildingSpec> DestructibleBuildings => _readOnlyDestructibleBuildings;
     public float StructureCellSize { get; }
 
     private readonly VegetationClearing[] _vegetationClearings;
     private readonly ReadOnlyCollection<VegetationClearing> _readOnlyVegetationClearings;
+    private readonly DestructibleBuildingSpec[] _destructibleBuildings;
+    private readonly ReadOnlyCollection<DestructibleBuildingSpec> _readOnlyDestructibleBuildings;
     private readonly float[] _zoneMaxCanopyY;
     private readonly int _maxVegetationIntervals;
     private readonly int _maxZoneIntervals;
@@ -104,7 +116,8 @@ public sealed class StaticGeometry
         ReadOnlySpan<TerrainObstacle> terrainObstacles,
         ReadOnlySpan<VegetationZone> vegetationZones,
         ReadOnlySpan<VegetationClearing> vegetationClearings,
-        float structureCellSize = 16.0f)
+        float structureCellSize = 16.0f,
+        ReadOnlySpan<DestructibleBuildingSpec> destructibleBuildings = default)
     {
         ArgumentNullException.ThrowIfNull(heightMap);
         if (!float.IsFinite(structureCellSize) || structureCellSize <= 0)
@@ -121,6 +134,9 @@ public sealed class StaticGeometry
 
         _vegetationClearings = vegetationClearings.ToArray();
         _readOnlyVegetationClearings = Array.AsReadOnly(_vegetationClearings);
+
+        _destructibleBuildings = destructibleBuildings.ToArray();
+        _readOnlyDestructibleBuildings = Array.AsReadOnly(_destructibleBuildings);
 
         HashSet<StructureId> seenBridgeIds = new();
         for (int b = 0; b < _bridges.Length; b++)
