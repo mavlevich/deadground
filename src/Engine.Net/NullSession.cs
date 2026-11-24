@@ -32,6 +32,7 @@ public sealed class NullSession : IGameSession
     public bool FireMission(EntityId unit, Vector2 target, bool cancel = false) => false;
     public bool Stop(EntityId unit) => false;
     public bool DeployFlares(EntityId unit, bool toggleAuto = false) => false;
+    public bool AttackGround(EntityId unit, Vector3 targetPoint, StructureId targetStructure = default) => false;
     public void Advance(double elapsedSeconds) { }
     public void Dispose() { }
 }

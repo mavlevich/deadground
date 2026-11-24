@@ -2,6 +2,10 @@ using System.Buffers.Binary;
 
 namespace DeadGround.Engine;
 
+public readonly record struct DestructibleStructureBinding(
+    StructureId Id,
+    StructureDestructionProfile Profile);
+
 public sealed record MatchSetup(
     byte ProtocolVersion,
     ulong ContentHash,
@@ -10,7 +14,7 @@ public sealed record MatchSetup(
     int[]? PlayerTeams = null,
     string[]? PlayerFactions = null)
 {
-    public const byte CurrentProtocolVersion = 31;
+    public const byte CurrentProtocolVersion = 32;
 
     public bool Matches(MatchSetup other)
     {
@@ -76,7 +80,9 @@ public sealed record MatchSetup(
 
     public static ulong ComputeMapHash(HeightMap map) => ComputeMapHash(map, ReadOnlySpan<OpaqueStructure>.Empty);
 
-    public static ulong ComputeMapHash(StaticGeometry geometry)
+    public static ulong ComputeMapHash(
+        StaticGeometry geometry,
+        ReadOnlySpan<DestructibleStructureBinding> destructibleStructures = default)
     {
         ArgumentNullException.ThrowIfNull(geometry);
         OpaqueStructure[] array = geometry.Structures.ToArray();
@@ -84,7 +90,14 @@ public sealed record MatchSetup(
         TerrainObstacle[] obstacles = geometry.TerrainObstacles.ToArray();
         VegetationZone[] vegetation = geometry.VegetationZones.ToArray();
         VegetationClearing[] clearings = geometry.VegetationClearings.ToArray();
-        return ComputeMapHash(geometry.HeightMap, array.AsSpan(), bridges.AsSpan(), obstacles.AsSpan(), vegetation.AsSpan(), clearings.AsSpan());
+        return ComputeMapHash(
+            geometry.HeightMap,
+            array.AsSpan(),
+            bridges.AsSpan(),
+            obstacles.AsSpan(),
+            vegetation.AsSpan(),
+            clearings.AsSpan(),
+            destructibleStructures);
     }
 
     public static ulong ComputeMapHash(
@@ -93,7 +106,8 @@ public sealed record MatchSetup(
         ReadOnlySpan<BridgeStructure> bridges = default,
         ReadOnlySpan<TerrainObstacle> obstacles = default,
         ReadOnlySpan<VegetationZone> vegetation = default,
-        ReadOnlySpan<VegetationClearing> clearings = default)
+        ReadOnlySpan<VegetationClearing> clearings = default,
+        ReadOnlySpan<DestructibleStructureBinding> destructibleStructures = default)
     {
         ArgumentNullException.ThrowIfNull(map);
         ulong hash = 14695981039346656037UL;
@@ -222,6 +236,27 @@ public sealed record MatchSetup(
                     hash = HashFloat(hash, c.SegmentB.Y);
                     hash = HashFloat(hash, c.Radius);
                 }
+            }
+        }
+
+        if (destructibleStructures.Length > 0)
+        {
+            DestructibleStructureBinding[] sortedProfiles = destructibleStructures.ToArray();
+            Array.Sort(sortedProfiles, static (a, b) => a.Id.Value.CompareTo(b.Id.Value));
+
+            hash = HashInt(hash, sortedProfiles.Length);
+            for (int i = 0; i < sortedProfiles.Length; i++)
+            {
+                DestructibleStructureBinding d = sortedProfiles[i];
+                hash = HashInt(hash, d.Id.Value);
+                hash = HashInt(hash, d.Profile.FloorsTotal);
+                hash = HashFloat(hash, d.Profile.FloorHeight);
+                hash = HashFloat(hash, d.Profile.RubbleHeight);
+                hash = HashInt(hash, d.Profile.MaxHealth);
+                hash = HashInt(hash, d.Profile.StructuralArmor);
+                hash = HashFloat(hash, d.Profile.DustCloudRadius);
+                hash = HashFloat(hash, d.Profile.DustCloudHeight);
+                hash = HashInt(hash, d.Profile.DustCloudDurationTicks);
             }
         }
 

@@ -25,6 +25,8 @@ public sealed class ClientReplica
     public int SmokeCloudCount => _count == 0 ? 0 : Latest.SmokeCount;
     public ReadOnlySpan<GuidedMissileObservation> Missiles => _count == 0 ? [] : Latest.Missiles.AsSpan(0, Latest.MissileCount);
     public int MissileCount => _count == 0 ? 0 : Latest.MissileCount;
+    public ReadOnlySpan<StructureObservation> Structures => _count == 0 ? [] : Latest.Structures.AsSpan(0, Latest.StructureCount);
+    public int StructureCount => _count == 0 ? 0 : Latest.StructureCount;
     public ReadOnlySpan<CombatEventObservation> Events
     {
         get
@@ -82,6 +84,17 @@ public sealed class ClientReplica
             return false;
         }
         cloud = Latest.SmokeClouds[index];
+        return true;
+    }
+
+    public bool TryGetStructure(StructureId id, out StructureObservation structure)
+    {
+        if (_count == 0 || !Latest.StructureIndices.TryGetValue(id, out int index))
+        {
+            structure = default;
+            return false;
+        }
+        structure = Latest.Structures[index];
         return true;
     }
 
