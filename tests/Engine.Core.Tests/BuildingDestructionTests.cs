@@ -455,4 +455,256 @@ public sealed class BuildingDestructionTests
             Assert.True(destruction.TotalFloorsCollapsed >= 1);
         }
     }
+
+    [Fact]
+    public void P1_StructureImpactEvents_NeverLeakHiddenShooterOrigin_ForArtilleryOrDirectFire()
+    {
+        // Tall blocker wall at z=550 hides Player 2's Grad at z=200 from Player 1's scout at z=950,
+        // while Player 1's scout has full LOS to the target building at z=1000.
+        OpaqueStructure wall = new(new StructureId(20), 600f, 0f, 545f, 1400f, 45f, 555f);
+        OpaqueStructure building = new(new StructureId(701), 994f, 0f, 1000f, 1006f, 15.5f, 1012f);
+
+        (Simulation sim, WorldState world, _, BuildingDestructionSystem destruction, _, DetectionSystem det) =
+            CreateHarness([wall, building], seed: 707UL, gradStructuralDamage: 220);
+        using (sim)
+        {
+            StructureDestructionProfile profile = new(FloorsTotal: 5, FloorHeight: 3.0f, RubbleHeight: 2.2f, MaxHealth: 300, DustCloudDurationTicks: 100);
+            Assert.True(destruction.RegisterStructure(world, building.Id, in profile));
+
+            // Player 1 scout watches the building from z=900 (wall at z=550 hides Player 2 Grad at z=200)
+            world.CreateUnit(1, DefScout, new Vector2(1000f, 900f), 12f, 40, 0);
+            EntityId p2Grad = world.CreateUnit(2, DefGrad, new Vector2(1000f, 200f), 12f, 60, 40, initialTurretYaw: MathF.PI);
+
+            Assert.True(sim.TryEnqueue(2, new FireMissionCommand(1u, 0, p2Grad, new Vector2(1000f, 1006f))));
+
+            PlayerKnowledge p1 = new(1);
+            int p1StructureEvents = 0;
+
+            for (int t = 0; t < 200; t++)
+            {
+                sim.Step();
+                Assert.False(det.IsEntityObservedBy(1, p2Grad), "Hidden Grad behind wall must not be observed by Player 1.");
+                sim.UpdateKnowledge(p1);
+
+                ReadOnlySpan<CombatEventObservation> evs = p1.Events;
+                for (int e = 0; e < evs.Length; e++)
+                {
+                    CombatEventObservation ev = evs[e];
+                    if (ev.Kind is CombatEventKind.StructureDamaged or CombatEventKind.StructureFloorCollapsed or CombatEventKind.StructureCollapsed)
+                    {
+                        p1StructureEvents++;
+                        Assert.Equal(ev.Target, ev.Origin);
+                        Assert.True(Vector2.Distance(new Vector2(ev.Origin.X, ev.Origin.Z), new Vector2(1000f, 200f)) > 500f,
+                            "Structure event must never disclose hidden launcher origin.");
+                    }
+                }
+                sim.AcknowledgeCombatEvents(1, evs.Length);
+            }
+
+            Assert.True(p1StructureEvents >= 1, "Observing third party must still receive sanitized structure impact events.");
+        }
+    }
+
+    [Fact]
+    public void P2_CollapseDust_RefreshesSingleCloudPerSection_AndNeverEvictsPlayerSmokeAtCapacity()
+    {
+        OpaqueStructure section = new(new StructureId(711), 500f, 0f, 500f, 512f, 15.5f, 512f);
+        (Simulation sim, WorldState world, _, BuildingDestructionSystem destruction, _, _) = CreateHarness([section]);
+        using (sim)
+        {
+            StructureDestructionProfile profile = new(FloorsTotal: 5, FloorHeight: 3.0f, RubbleHeight: 2.2f, MaxHealth: 500, DustCloudDurationTicks: 100);
+            Assert.True(destruction.RegisterStructure(world, section.Id, in profile));
+
+            // 1st collapse (floor 2 -> floors 2..4 collapse) spawns 1 dust cloud
+            Assert.True(destruction.ApplyDirectHit(world, 10, section.Id, new Vector3(506f, 7.0f, 500f), 110, out _, out byte lost1, out bool full1));
+            Assert.Equal((byte)3, lost1);
+            Assert.False(full1);
+            Assert.Equal(1, world.SmokeCloudCount);
+            SmokeCloudId firstId = world.SmokeClouds[0].Id;
+            int firstExpiry = world.SmokeClouds[0].ExpiresTick;
+
+            // 2nd collapse on the same section at tick 40 refreshes the same cloud instead of adding a duplicate
+            Assert.True(destruction.ApplyDirectHit(world, 40, section.Id, new Vector3(506f, 1.0f, 500f), 110, out _, out byte lost2, out bool full2));
+            Assert.Equal((byte)2, lost2);
+            Assert.True(full2);
+            Assert.Equal(1, world.SmokeCloudCount);
+            Assert.Equal(firstId, world.SmokeClouds[0].Id);
+            Assert.True(world.SmokeClouds[0].ExpiresTick > firstExpiry);
+
+            // Saturate all 64 slots with Player 1 tactical smoke; another building collapse must NOT evict player smoke
+            world.ClearSmokeClouds();
+            for (int i = 0; i < WorldState.MaxSmokeClouds; i++)
+            {
+                world.AddSmokeCloud(owner: 1, new Vector2(100f + i * 2f, 100f), 0, 15f, 10f, 50, 300, 10, 40, 1f);
+            }
+            Assert.Equal(WorldState.MaxSmokeClouds, world.SmokeCloudCount);
+
+            OpaqueStructure sec2 = new(new StructureId(712), 600f, 0f, 500f, 612f, 15.5f, 512f);
+            (Simulation sim2, WorldState world2, _, BuildingDestructionSystem dest2, _, _) = CreateHarness([sec2]);
+            using (sim2)
+            {
+                Assert.True(dest2.RegisterStructure(world2, sec2.Id, in profile));
+                for (int i = 0; i < WorldState.MaxSmokeClouds; i++)
+                {
+                    world2.AddSmokeCloud(owner: 1, new Vector2(100f + i * 2f, 100f), 0, 15f, 10f, 50, 300, 10, 40, 1f);
+                }
+                Assert.True(dest2.ApplyDirectHit(world2, 60, sec2.Id, new Vector3(606f, 1.0f, 500f), 500, out _, out _, out bool collapsed2));
+                Assert.True(collapsed2);
+                Assert.Equal(WorldState.MaxSmokeClouds, world2.SmokeCloudCount);
+                for (int i = 0; i < world2.SmokeCloudCount; i++)
+                {
+                    Assert.Equal(1, world2.SmokeClouds[i].Owner);
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void P2_AttackGroundOnHiddenCollapsedBuilding_DoesNotLeakCollapseState_UntilObserved()
+    {
+        OpaqueStructure wall = new(new StructureId(30), 695f, 0f, 300f, 705f, 45f, 900f);
+        OpaqueStructure targetBuilding = new(new StructureId(721), 1200f, 0f, 600f, 1212f, 15.5f, 612f);
+
+        (Simulation sim, WorldState world, _, BuildingDestructionSystem destruction, _, _) =
+            CreateHarness([wall, targetBuilding], tankStructuralDamage: 400);
+        using (sim)
+        {
+            StructureDestructionProfile profile = new(FloorsTotal: 5, FloorHeight: 3.0f, RubbleHeight: 2.2f, MaxHealth: 300, DustCloudDurationTicks: 40);
+            Assert.True(destruction.RegisterStructure(world, targetBuilding.Id, in profile));
+
+            // Player 2 collapses targetBuilding completely in fog of war
+            Assert.True(destruction.ApplyDirectHit(world, 1, targetBuilding.Id, new Vector3(1200f, 1.0f, 606f), 400, out _, out _, out bool collapsed));
+            Assert.True(collapsed);
+
+            // Player 1 tank behind wall has never seen the collapsed building -> order must be ACCEPTED (no FoW leak)
+            EntityId p1Tank = world.CreateUnit(1, DefTank, new Vector2(300f, 606f), 12f, 100, 20);
+            Assert.True(sim.TryEnqueue(1, new AttackGroundCommand(1u, 0, p1Tank, new Vector3(1206f, 4.5f, 606f), targetBuilding.Id)));
+            sim.Step();
+
+            Assert.True(world.TryGetCombatState(p1Tank, out WorldState.CombatState csBeforeObs));
+            Assert.True(csBeforeObs.HasAttackGroundOrder, "AttackGround on unobserved collapsed building must not silently reject or auto-clear.");
+
+            // Now Player 1 gets a scout with clear LOS to the rubble -> side learns it collapsed and tank clears order
+            world.CreateUnit(1, DefScout, new Vector2(1050f, 606f), 12f, 40, 0);
+            for (int t = 0; t < 4; t++) sim.Step();
+
+            Assert.True(world.TryGetCombatState(p1Tank, out WorldState.CombatState csAfterObs));
+            Assert.False(csAfterObs.HasAttackGroundOrder, "AttackGround must auto-clear once Player 1 actually observes the collapsed building.");
+        }
+    }
+
+    [Fact]
+    public void P2_ZeroStructuralDamageRejectedOnBuilding_AndPureGroundShotAutoClears()
+    {
+        OpaqueStructure building = new(new StructureId(731), 600f, 0f, 600f, 612f, 15.5f, 612f);
+
+        // Case 1: Weapon with structural_damage == 0 cannot be ordered onto a building
+        (Simulation simZero, WorldState worldZero, _, BuildingDestructionSystem destZero, _, _) =
+            CreateHarness([building], tankStructuralDamage: 0);
+        using (simZero)
+        {
+            StructureDestructionProfile profile = new(FloorsTotal: 5, FloorHeight: 3.0f, RubbleHeight: 2.2f, MaxHealth: 300);
+            Assert.True(destZero.RegisterStructure(worldZero, building.Id, in profile));
+
+            EntityId mgUnit = worldZero.CreateUnit(1, DefTank, new Vector2(500f, 606f), 12f, 100, 40, initialTurretYaw: -MathF.PI * 0.5f);
+            Assert.True(simZero.TryEnqueue(1, new AttackGroundCommand(1u, 0, mgUnit, new Vector3(600f, 2.0f, 606f), building.Id)));
+            for (int t = 0; t < 20; t++) simZero.Step();
+
+            Assert.True(worldZero.TryGetCombatState(mgUnit, out WorldState.CombatState csMg));
+            Assert.False(csMg.HasAttackGroundOrder);
+            Assert.Equal(0, simZero.Combat!.TotalShotsFired);
+        }
+
+        // Case 2: Pure ground-point AttackGround (TargetStructure == default) fires once and auto-clears
+        (Simulation simGround, WorldState worldGround, _, _, _, _) = CreateHarness([building], tankStructuralDamage: 95);
+        using (simGround)
+        {
+            EntityId tank = worldGround.CreateUnit(1, DefTank, new Vector2(400f, 400f), 12f, 100, 20, initialTurretYaw: -MathF.PI * 0.5f);
+            Assert.True(simGround.TryEnqueue(1, new AttackGroundCommand(1u, 0, tank, new Vector3(520f, 0.5f, 400f))));
+            for (int t = 0; t < 35; t++) simGround.Step();
+
+            Assert.Equal(1, simGround.Combat!.TotalShotsFired);
+            Assert.True(worldGround.TryGetCombatState(tank, out WorldState.CombatState csTank));
+            Assert.False(csTank.HasAttackGroundOrder, "Pure ground-point AttackGround must auto-clear after one shot so auto-fire resumes.");
+            Assert.Equal(19, csTank.Ammunition);
+        }
+    }
+
+    [Fact]
+    public void P2_RegisterStructure_RejectsGeometryMismatchedProfile_AndEmitsDistinctCollapseEvents()
+    {
+        OpaqueStructure section = new(new StructureId(741), 500f, 0f, 500f, 512f, 15.5f, 512f);
+        (Simulation sim, WorldState world, _, BuildingDestructionSystem destruction, _, _) =
+            CreateHarness([section], tankStructuralDamage: 60);
+        using (sim)
+        {
+            // Mismatched FloorHeight (5 * 5m = 25m > 15.5m) must be rejected
+            StructureDestructionProfile tooTall = new(FloorsTotal: 5, FloorHeight: 5.0f, RubbleHeight: 2.2f, MaxHealth: 500);
+            Assert.False(destruction.RegisterStructure(world, section.Id, in tooTall));
+
+            // RubbleHeight >= AABB height must be rejected
+            StructureDestructionProfile rubbleTooTall = new(FloorsTotal: 5, FloorHeight: 3.0f, RubbleHeight: 16.0f, MaxHealth: 500);
+            Assert.False(destruction.RegisterStructure(world, section.Id, in rubbleTooTall));
+
+            // Valid 5-floor profile registers cleanly
+            StructureDestructionProfile valid = new(FloorsTotal: 5, FloorHeight: 3.0f, RubbleHeight: 2.2f, MaxHealth: 500, DustCloudDurationTicks: 60);
+            Assert.True(destruction.RegisterStructure(world, section.Id, in valid));
+
+            // Verify distinct events: StructureDamaged (breach), StructureFloorCollapsed (partial), StructureCollapsed (full)
+            EntityId tank = world.CreateUnit(1, DefTank, new Vector2(400f, 506f), 12f, 100, 40, initialTurretYaw: -MathF.PI * 0.5f);
+            Assert.True(sim.TryEnqueue(1, new AttackGroundCommand(1u, 0, tank, new Vector3(500f, 7.2f, 506f), section.Id)));
+
+            bool sawDamaged = false;
+            bool sawFloorCollapsed = false;
+            bool sawFullCollapsed = false;
+            PlayerKnowledge p1 = new(1);
+
+            for (int t = 0; t < 180; t++)
+            {
+                sim.Step();
+                sim.UpdateKnowledge(p1);
+                ReadOnlySpan<CombatEventObservation> evs = p1.Events;
+                for (int e = 0; e < evs.Length; e++)
+                {
+                    if (evs[e].Kind == CombatEventKind.StructureDamaged) sawDamaged = true;
+                    else if (evs[e].Kind == CombatEventKind.StructureFloorCollapsed) sawFloorCollapsed = true;
+                    else if (evs[e].Kind == CombatEventKind.StructureCollapsed) sawFullCollapsed = true;
+                }
+                sim.AcknowledgeCombatEvents(1, evs.Length);
+
+                // Once upper floors collapsed, switch target to ground floor to finish demolition
+                if (sawFloorCollapsed && !sawFullCollapsed && world.TryGetDestructibleStructure(section.Id, out DestructibleStructureState cur) && cur.FloorsStanding == 2)
+                {
+                    sim.TryEnqueue(1, new AttackGroundCommand((uint)(t + 10), t, tank, new Vector3(500f, 1.5f, 506f), section.Id));
+                }
+            }
+
+            Assert.True(sawDamaged, "Expected StructureDamaged event on non-collapsing hit.");
+            Assert.True(sawFloorCollapsed, "Expected StructureFloorCollapsed event on partial upper-floor collapse.");
+            Assert.True(sawFullCollapsed, "Expected StructureCollapsed event on full section collapse.");
+        }
+    }
+
+    [Fact]
+    public void P2_DetectionSystem_SkipsRedundantStructureLosQueries_WhenStateAlreadyKnown()
+    {
+        OpaqueStructure section = new(new StructureId(751), 500f, 0f, 500f, 512f, 15.5f, 512f);
+        (Simulation sim, WorldState world, _, BuildingDestructionSystem destruction, _, DetectionSystem det) = CreateHarness([section]);
+        using (sim)
+        {
+            StructureDestructionProfile valid = new(FloorsTotal: 5, FloorHeight: 3.0f, RubbleHeight: 2.2f, MaxHealth: 300, DustCloudDurationTicks: 0);
+            Assert.True(destruction.RegisterStructure(world, section.Id, in valid));
+            Assert.True(destruction.ApplyDirectHit(world, 0, section.Id, new Vector3(500f, 1.5f, 506f), 300, out _, out _, out _));
+
+            // Single Player 1 scout with no enemies on map: first tick observes collapsed section, next tick skips LOS
+            world.CreateUnit(1, DefScout, new Vector2(400f, 506f), 12f, 40, 0);
+
+            sim.Step();
+            Assert.Single(det.GetKnownStructures(1).ToArray());
+            Assert.True(det.LosQueriesCount >= 1);
+
+            sim.Step();
+            Assert.Equal(0, det.LosQueriesCount);
+        }
+    }
 }

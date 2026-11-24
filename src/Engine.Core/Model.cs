@@ -103,7 +103,8 @@ public enum CombatEventKind : byte
     MissileDetonated = 7,
     FlaresDeployed = 8,
     StructureDamaged = 9,
-    StructureCollapsed = 10
+    StructureFloorCollapsed = 10,
+    StructureCollapsed = 11
 }
 
 public enum HitResult : byte

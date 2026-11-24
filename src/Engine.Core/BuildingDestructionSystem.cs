@@ -43,6 +43,16 @@ public sealed class BuildingDestructionSystem : ISimulationSystem
             return false;
 
         OpaqueStructure structure = _geometry.Structures[geomIndex];
+        float aabbHeight = structure.MaxY - structure.MinY;
+        float totalFloorSpan = profile.FloorsTotal * profile.FloorHeight;
+        float upperDropBoundary = (profile.FloorsTotal - 1) * profile.FloorHeight;
+        // Ensure profile agrees with AABB geometry so losing any floor strictly reduces CurrentMaxY
+        // and rubble stays strictly below intact structure height.
+        if (profile.RubbleHeight >= aabbHeight - 0.01f ||
+            totalFloorSpan > aabbHeight + 0.5f ||
+            upperDropBoundary >= aabbHeight - 0.01f)
+            return false;
+
         if (!world.TryRegisterDestructibleStructure(structure, geomIndex, in profile))
             return false;
 
@@ -256,15 +266,15 @@ public sealed class BuildingDestructionSystem : ISimulationSystem
                 _structureMaxYOverrides[state.GeometryIndex] = state.CurrentMaxY;
             }
 
-            // Spawn a real tactical dust SmokeVolume so LOS does not snap open ahead of collapse visuals
-            SpawnCollapseDustCloud(world, tick, in state, floorsLost);
+            // Spawn or refresh a single per-section dust SmokeVolume so LOS does not snap open ahead of collapse visuals
+            SpawnOrRefreshCollapseDustCloud(world, tick, ref state, floorsLost);
         }
     }
 
-    private void SpawnCollapseDustCloud(
+    private void SpawnOrRefreshCollapseDustCloud(
         WorldState world,
         int tick,
-        in DestructibleStructureState state,
+        ref DestructibleStructureState state,
         byte floorsLost)
     {
         if (state.Profile.DustCloudDurationTicks <= 0 || state.Profile.DustCloudRadius <= 0f)
@@ -280,20 +290,33 @@ public sealed class BuildingDestructionSystem : ISimulationSystem
             ? 1.0f
             : Math.Clamp(0.6f + floorsLost * 0.12f, 0.6f, 1.0f);
 
+        float radius = state.Profile.DustCloudRadius * radiusScale;
+        float height = state.Profile.DustCloudHeight * heightScale;
         int duration = state.Profile.DustCloudDurationTicks;
         ushort fadeTicks = (ushort)Math.Clamp(duration / 3, 20, ushort.MaxValue);
 
-        world.AddSmokeCloud(
-            owner: 0,
-            position: center2D,
-            supportSurface: 0,
-            radius: state.Profile.DustCloudRadius * radiusScale,
-            height: state.Profile.DustCloudHeight * heightScale,
-            createdTick: tick,
-            expiresTick: tick + duration,
-            bloomTicks: CollapseDustBloomTicks,
-            fadeTicks: fadeTicks,
-            opticalDensity: 1.0f);
+        if (!world.TryRefreshSmokeCloud(
+                state.DustCloudId,
+                radius,
+                height,
+                createdTick: tick,
+                expiresTick: tick + duration,
+                bloomTicks: CollapseDustBloomTicks,
+                fadeTicks: fadeTicks))
+        {
+            SmokeCloudState created = world.AddSmokeCloud(
+                owner: 0,
+                position: center2D,
+                supportSurface: 0,
+                radius: radius,
+                height: height,
+                createdTick: tick,
+                expiresTick: tick + duration,
+                bloomTicks: CollapseDustBloomTicks,
+                fadeTicks: fadeTicks,
+                opticalDensity: 1.0f);
+            state.DustCloudId = created.Id;
+        }
 
         _smokeSystem?.RebuildActiveVolumes(world, tick);
     }

@@ -525,9 +525,15 @@ public sealed class DetectionSystem : ISimulationSystem
                 if (!st.IsDamaged)
                     continue;
 
+                // Early-out: damaged structures never self-heal, so skip LOS queries when this side
+                // already knows the exact current state.
+                StructureObservation currentObs = st.ToObservation();
+                if (tracker.TryGet(st.Id, out StructureObservation known) && known == currentObs)
+                    continue;
+
                 if (IsStructureVisibleToTeam(in st, unitCount, sideTeam))
                 {
-                    tracker.TryUpsert(st.ToObservation());
+                    tracker.TryUpsert(in currentObs);
                 }
             }
         }
@@ -906,6 +912,17 @@ public sealed class DetectionSystem : ISimulationSystem
             return [];
 
         return _structureTrackers[index].ExportStructures();
+    }
+
+    public bool TryGetKnownStructure(int player, StructureId structureId, out StructureObservation observation)
+    {
+        int index = player - 1;
+        if (index < 0 || index >= _structureTrackers.Length)
+        {
+            observation = default;
+            return false;
+        }
+        return _structureTrackers[index].TryGet(structureId, out observation);
     }
 
     /// <summary>
