@@ -194,6 +194,10 @@ public static class UrbanDestructionPlaygroundScenario
         ushort m60Idx = catalog.RequireDefinitionIndex("m60a1");
         int m60Ammo = catalog.GetAmmoCapacity(m60Def);
 
+        UnitDefinition rifleDef = catalog.RequireDefinition("us_rifleman");
+        ushort rifleIdx = catalog.RequireDefinitionIndex("us_rifleman");
+        int rifleAmmo = catalog.GetAmmoCapacity(rifleDef);
+
         // Player 1 (Soviet) facing +Z toward the central panelka block
         const float facingPlusZ = MathF.PI;
         world.CreateUnit(1, t62Idx, SovietT62WestPos, t62Def.Speed, t62Def.MaxHealth, t62Ammo, facingPlusZ);
@@ -201,10 +205,20 @@ public static class UrbanDestructionPlaygroundScenario
         world.CreateUnit(1, brdmIdx, SovietBrdm2Pos, brdmDef.Speed, brdmDef.MaxHealth, brdmAmmo, facingPlusZ);
         world.CreateUnit(1, bm21Idx, SovietBm21Pos, bm21Def.Speed, bm21Def.MaxHealth, bm21Ammo, facingPlusZ);
 
+        // Player 1 urban assault fireteam in the courtyard ready to garrison panelka sections
+        world.CreateUnit(1, rifleIdx, new Vector2(488.0f, 472.0f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingPlusZ);
+        world.CreateUnit(1, rifleIdx, new Vector2(496.0f, 472.0f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingPlusZ);
+        world.CreateUnit(1, rifleIdx, new Vector2(504.0f, 472.0f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingPlusZ);
+        world.CreateUnit(1, rifleIdx, new Vector2(512.0f, 472.0f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingPlusZ);
+
         // Player 2 (US) behind central panelka facing -Z toward the courtyard
         const float facingMinusZ = 0f;
         world.CreateUnit(2, m60Idx, UsM60WestPos, m60Def.Speed, m60Def.MaxHealth, m60Ammo, facingMinusZ);
         world.CreateUnit(2, m60Idx, UsM60EastPos, m60Def.Speed, m60Def.MaxHealth, m60Ammo, facingMinusZ);
+        EntityId opforInf1 = world.CreateUnit(2, rifleIdx, new Vector2(486.0f, 544.0f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingMinusZ);
+        EntityId opforInf2 = world.CreateUnit(2, rifleIdx, new Vector2(514.0f, 544.0f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingMinusZ);
+        world.SetFireStance(opforInf1, FireStance.HoldFire);
+        world.SetFireStance(opforInf2, FireStance.HoldFire);
 
         Simulation simulation = new(world, rules, matchSeed: matchSeed);
         if (simulation.BuildingDestruction is not null)

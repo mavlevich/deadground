@@ -100,7 +100,7 @@ internal sealed partial class RoleBadgeOverlay : Control
             if (!replica.TryGetOwnUnit(id, out OwnUnitObservation obs))
                 continue;
 
-            if (obs.ContainerId != default || !view.Root.Visible)
+            if (obs.ContainerId != default || obs.GarrisonStructureId != default || !view.Root.Visible)
             {
                 if (_unitBadges.TryGetValue(id, out RoleBadge? hiddenBadge))
                 {
@@ -182,6 +182,15 @@ internal sealed partial class RoleBadgeOverlay : Control
 
         foreach ((ContactId id, ContactView view) in contactViews.Views)
         {
+            if (view.Observation.GarrisonStructureId != default || !view.Root.Visible)
+            {
+                if (_contactBadges.TryGetValue(id, out RoleBadge? hiddenContactBadge))
+                {
+                    hiddenContactBadge.Visible = false;
+                }
+                continue;
+            }
+
             if (!_contactBadges.TryGetValue(id, out RoleBadge? badge))
             {
                 badge = new RoleBadge();

@@ -18,7 +18,7 @@ public sealed class UrbanDestructionScenarioTests
         for (int i = 0; i < 20; i++) sim.Step();
         sim.UpdateKnowledge(p1);
 
-        Assert.Equal(4, p1.OwnUnits.Length);
+        Assert.Equal(8, p1.OwnUnits.Length);
         Assert.Equal(0, p1.ContactCount);
         Assert.Equal(0, p1.StructureCount);
 

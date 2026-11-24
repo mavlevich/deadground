@@ -40,6 +40,19 @@ internal sealed class ContactViewSet(
                 Views.Add(contact.Id, view);
                 parent.AddChild(view.Root);
             }
+            if (contact.GarrisonStructureId != default)
+            {
+                // BuildingGarrisonView renders spotted hostile window/roof figures and tactical badges
+                if (view.Root.Visible)
+                {
+                    view.Root.Visible = false;
+                }
+                continue;
+            }
+            if (!view.Root.Visible)
+            {
+                view.Root.Visible = true;
+            }
             System.Numerics.Vector2 position = replica.SampleContactPosition(contact.Id, renderTick);
             replica.SampleContactYaws(contact.Id, renderTick, out float turretYaw, out float hullHeading);
             float altitude = replica.SampleContactAltitude(contact.Id, renderTick);

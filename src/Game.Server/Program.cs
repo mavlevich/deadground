@@ -480,8 +480,8 @@ if (smokeTest)
     if (scenario == "urban-destruction-playground")
     {
         for (int i = 0; i < 10; i++) session.Advance(1d / Simulation.TickRate);
-        if (session.Replica.OwnUnits.Length != 4)
-            throw new InvalidOperationException($"Urban-destruction-playground smoke test: expected 4 own units, got {session.Replica.OwnUnits.Length}.");
+        if (session.Replica.OwnUnits.Length != 8)
+            throw new InvalidOperationException($"Urban-destruction-playground smoke test: expected 8 own units, got {session.Replica.OwnUnits.Length}.");
 
         EntityId t62West = session.Replica.OwnUnits[0].Id;
         EntityId t62East = session.Replica.OwnUnits[1].Id;

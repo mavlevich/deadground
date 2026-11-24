@@ -616,6 +616,18 @@ void fragment() {
         viewshed.Present = true;
 
         float altitude = MathF.Max(0f, u.Altitude);
+        if (u.GarrisonStructureId != default &&
+            _geometry is not null &&
+            _geometry.TryGetStructureIndex(u.GarrisonStructureId, out int gIdx))
+        {
+            OpaqueStructure s = _geometry.Structures[gIdx];
+            float effectiveMaxY = _structureMaxYOverrides is not null && !float.IsNaN(_structureMaxYOverrides[gIdx])
+                ? _structureMaxYOverrides[gIdx]
+                : s.MaxY;
+            float groundY = _map.GetHeight(u.Position.X, u.Position.Y);
+            float roofBonus = u.GarrisonSlotKind == GarrisonSlotKind.Roof ? 1.15f : 0.35f;
+            altitude = MathF.Max(altitude, (effectiveMaxY - groundY) + roofBonus);
+        }
         if (viewshed.Swept && viewshed.Definition == u.Definition &&
             NumericsVector2.DistanceSquared(viewshed.Position, u.Position) < ResweepDistance * ResweepDistance &&
             MathF.Abs(viewshed.Altitude - altitude) < ResweepDistance)

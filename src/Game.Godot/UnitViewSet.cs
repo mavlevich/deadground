@@ -177,6 +177,16 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
                 }
                 continue;
             }
+            if (unit.GarrisonStructureId != default)
+            {
+                // Keep garrisoned infantry selectable (for Exit/Roof/Attack orders) while hiding the ground mesh
+                // so BuildingGarrisonView renders window/roof silhouettes and X-Ray markers cleanly.
+                if (view.Root.Visible)
+                {
+                    view.SetContainedHidden();
+                }
+                continue;
+            }
             System.Numerics.Vector2 position = replica.SamplePosition(unit.Id, renderTick);
             float groundY = geometry is not null
                 ? geometry.GetSurfaceHeight(position, unit.SupportSurface)
