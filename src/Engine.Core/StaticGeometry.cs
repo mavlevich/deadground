@@ -27,7 +27,8 @@ public readonly struct LineOfSightDiagnostics
 public readonly record struct DestructibleBuildingSpec(
     StructureId Id,
     StructureDestructionProfile Profile,
-    float YawRad = 0f);
+    float YawRad = 0f,
+    BuildingGarrisonProfile? GarrisonProfile = null);
 
 /// <summary>
 /// Immutable static map geometry service combining continuous bilinear terrain,

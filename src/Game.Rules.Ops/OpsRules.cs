@@ -33,13 +33,12 @@ public sealed class OpsRules : RuleSet
         NavigationBuildLimits? buildLimits = null,
         IUnitSmokeCatalog? smokeCatalog = null,
         IUnitFlightCatalog? flightCatalog = null,
-        IUnitCountermeasureCatalog? countermeasureCatalog = null,
-        BuildingGarrisonProfile? defaultGarrisonProfile = null)
-        : base(CreateSystems(geometry, perceptionCatalog, movementCatalog, combatCatalog, navTuning, detTuning, combatRandom, buildLimits, mission: null, smokeCatalog: smokeCatalog, flightCatalog: flightCatalog, countermeasureCatalog: countermeasureCatalog, defaultGarrisonProfile: defaultGarrisonProfile))
+        IUnitCountermeasureCatalog? countermeasureCatalog = null)
+        : base(CreateSystems(geometry, perceptionCatalog, movementCatalog, combatCatalog, navTuning, detTuning, combatRandom, buildLimits, mission: null, smokeCatalog: smokeCatalog, flightCatalog: flightCatalog, countermeasureCatalog: countermeasureCatalog))
     { }
 
     public OpsRules(StaticGeometry geometry, UnitCatalog catalog, DeterministicRandom? combatRandom = null)
-        : this(geometry, new OpsPerceptionCatalog(catalog), new OpsMovementCatalog(catalog), new OpsCombatCatalog(catalog), null, PrototypeScenario.CreateDetectionTuning(catalog), combatRandom, null, new OpsSmokeCatalog(catalog), new OpsFlightCatalog(catalog), new OpsCountermeasureCatalog(catalog), ResolveDefaultGarrisonProfile(catalog)) { }
+        : this(geometry, new OpsPerceptionCatalog(catalog), new OpsMovementCatalog(catalog), new OpsCombatCatalog(catalog), null, PrototypeScenario.CreateDetectionTuning(catalog), combatRandom, null, new OpsSmokeCatalog(catalog), new OpsFlightCatalog(catalog), new OpsCountermeasureCatalog(catalog)) { }
 
     public OpsRules(StaticGeometry geometry, UnitCatalog catalog, NavigationTuning? navTuning, DetectionTuning? detTuning = null, DeterministicRandom? combatRandom = null, NavigationBuildLimits? buildLimits = null)
         : this(
@@ -53,16 +52,8 @@ public sealed class OpsRules : RuleSet
             buildLimits,
             new OpsSmokeCatalog(catalog),
             new OpsFlightCatalog(catalog),
-            new OpsCountermeasureCatalog(catalog),
-            ResolveDefaultGarrisonProfile(catalog))
+            new OpsCountermeasureCatalog(catalog))
     { }
-
-    private static BuildingGarrisonProfile? ResolveDefaultGarrisonProfile(UnitCatalog catalog)
-    {
-        if (catalog.TryGetBuildingGarrisonProfile(UrbanDestructionPlaygroundScenario.PanelkaProfileId, out BuildingGarrisonProfile? profile))
-            return profile;
-        return null;
-    }
 
     public static OpsRules CreateWithMission(
         StaticGeometry geometry,
@@ -89,8 +80,7 @@ public sealed class OpsRules : RuleSet
             mission: mission,
             smokeCatalog: smokeCatalog,
             flightCatalog: flightCatalog,
-            countermeasureCatalog: countermeasureCatalog,
-            defaultGarrisonProfile: ResolveDefaultGarrisonProfile(catalog));
+            countermeasureCatalog: countermeasureCatalog);
         return new OpsRules(systems);
     }
 
@@ -106,8 +96,7 @@ public sealed class OpsRules : RuleSet
         IMissionSystem? mission = null,
         IUnitSmokeCatalog? smokeCatalog = null,
         IUnitFlightCatalog? flightCatalog = null,
-        IUnitCountermeasureCatalog? countermeasureCatalog = null,
-        BuildingGarrisonProfile? defaultGarrisonProfile = null)
+        IUnitCountermeasureCatalog? countermeasureCatalog = null)
     {
         FlightSystem? flight = flightCatalog is not null ? new FlightSystem(geometry, flightCatalog) : null;
         NavigationSystem nav = new(new NavigationGrid(geometry, navTuning?.CellSize ?? NavigationTuning.DefaultCellSize, enableHierarchical: true, buildLimits: buildLimits, sectorSize: navTuning?.SectorSize ?? NavigationTuning.DefaultSectorSize), movementCatalog, navTuning);
@@ -118,10 +107,10 @@ public sealed class OpsRules : RuleSet
         garrison.SetNavigationSystem(nav);
         if (geometry.DestructibleBuildings.Count > 0)
         {
-            BuildingGarrisonProfile garrisonProfile = defaultGarrisonProfile ?? BuildingGarrisonProfile.CreateDefault();
             for (int i = 0; i < geometry.DestructibleBuildings.Count; i++)
             {
                 DestructibleBuildingSpec spec = geometry.DestructibleBuildings[i];
+                BuildingGarrisonProfile garrisonProfile = spec.GarrisonProfile ?? CreateSizedDefaultGarrisonProfile(geometry, spec);
                 garrison.RegisterBuilding(spec.Id, spec.YawRad, garrisonProfile);
             }
         }
@@ -151,6 +140,21 @@ public sealed class OpsRules : RuleSet
         if (guidedMissiles is not null) list.Add(guidedMissiles);
         if (mission is not null) list.Add(mission);
         return list.ToArray();
+    }
+
+    private static BuildingGarrisonProfile CreateSizedDefaultGarrisonProfile(StaticGeometry geometry, DestructibleBuildingSpec spec)
+    {
+        if (geometry.TryGetStructureIndex(spec.Id, out int idx))
+        {
+            OpaqueStructure bounds = geometry.Structures[idx];
+            float sizeX = bounds.MaxX - bounds.MinX;
+            float sizeZ = bounds.MaxZ - bounds.MinZ;
+            bool rotated90 = MathF.Abs(MathF.Sin(spec.YawRad)) > 0.707f;
+            float localW = rotated90 ? sizeZ : sizeX;
+            float localD = rotated90 ? sizeX : sizeZ;
+            return BuildingGarrisonProfile.CreateDefault(localW, localD);
+        }
+        return BuildingGarrisonProfile.CreateDefault();
     }
 }
 

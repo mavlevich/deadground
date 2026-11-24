@@ -305,11 +305,9 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
 
             if (_garrison.TryGetElevatedPoint(world, targetUnit.Id, attacker.Position, out Vector3 garrisonTargetPt))
             {
-                if (!_geometry.IsLineOfSightClear(muzzlePos, garrisonTargetPt, _losContext, out _))
-                    return 0f;
-                // Garrisoned troops expose less silhouette through a window or parapet than standing in the open
-                GarrisonSlotKind slot = world.GetGarrisonSlotKind(targetUnit.Id);
-                return slot == GarrisonSlotKind.Roof ? 0.70f : 0.45f;
+                // Cover protection for garrisoned troops is applied once via CoverDamageMultiplier
+                // (no double penalty on hit probability).
+                return _geometry.IsLineOfSightClear(muzzlePos, garrisonTargetPt, _losContext, out _) ? 1.0f : 0f;
             }
 
             float targetGroundY = _geometry.GetSurfaceHeight(targetUnit.Position, targetUnit.SupportSurface) + world.GetUnitAltitude(targetUnit.Id);
@@ -1897,6 +1895,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         cs.LastTargetEntityId = targetUnit.Id;
         cs.LastTargetPosition = targetUnit.Position;
         world.SetCombatState(attacker.Id, cs);
+        world.RecordUnitFired(attacker.Id, tick);
 
         TotalShotsFired++;
         float shotDistance = Vector2.Distance(attacker.Position, targetUnit.Position);

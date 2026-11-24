@@ -1259,6 +1259,10 @@ public sealed class WorldState : IDisposable
                 hash = Mix(hash, (ulong)(uint)pe.StructureId.Value);
                 hash = Mix(hash, (ulong)pe.SlotKind);
             }
+            if (_unitLastFiredTicks.TryGetValue(id.Id, out int lastFiredTick))
+            {
+                hash = Mix(hash, (ulong)(uint)lastFiredTick);
+            }
         }
 
         hash = Mix(hash, (ulong)_destructibleStructureCount);

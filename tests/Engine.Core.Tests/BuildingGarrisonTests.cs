@@ -10,6 +10,7 @@ public sealed class BuildingGarrisonTests
     private const ushort DefInfantry = 0;
     private const ushort DefTank = 1;
     private const ushort DefScout = 2;
+    private const ushort DefAtgmInfantry = 3;
 
     private static HeightMap CreateFlatMap(int size = 129, float spacing = 4f)
     {
@@ -37,12 +38,12 @@ public sealed class BuildingGarrisonTests
         {
             profile = definition switch
             {
-                DefInfantry => InfantryProfile,
+                DefInfantry or DefAtgmInfantry => InfantryProfile,
                 DefTank => TankProfile,
                 DefScout => ScoutProfile,
                 _ => default
             };
-            return definition <= DefScout;
+            return definition <= DefAtgmInfantry;
         }
     }
 
@@ -52,12 +53,12 @@ public sealed class BuildingGarrisonTests
         {
             profile = definition switch
             {
-                DefInfantry => new UnitMovementProfile(4.0f, 0.5f, TraversabilityCapabilities.Foot, 180f, 2.0f, 6.0f, 8.0f, true, 0f, 0.45f, 1.7f),
+                DefInfantry or DefAtgmInfantry => new UnitMovementProfile(4.0f, 0.5f, TraversabilityCapabilities.Foot, 180f, 2.0f, 6.0f, 8.0f, true, 0f, 0.45f, 1.7f),
                 DefTank => new UnitMovementProfile(12.0f, 1.6f, TraversabilityCapabilities.DefaultVehicle, 45f, 4.0f, 3.0f, 5.0f, true, 0f, 1.6f, 2.4f),
                 DefScout => new UnitMovementProfile(16.0f, 1.2f, TraversabilityCapabilities.DefaultVehicle, 60f, 6.0f, 4.0f, 6.0f, true, 0f, 1.2f, 2.1f),
                 _ => default
             };
-            return definition <= DefScout;
+            return definition <= DefAtgmInfantry;
         }
     }
 
@@ -65,6 +66,7 @@ public sealed class BuildingGarrisonTests
     {
         private readonly WeaponDefinition _rifle;
         private readonly WeaponDefinition _cannon;
+        private readonly WeaponDefinition _atgm;
 
         public TestCombatCatalog(int rifleDamage = 20, int cannonStructuralDamage = 95, int rifleReloadTicks = 10)
         {
@@ -107,6 +109,34 @@ public sealed class BuildingGarrisonTests
                 RangingBonus: 0f,
                 MaxRangingBonus: 0f,
                 StructuralDamage: cannonStructuralDamage);
+
+            _atgm = new WeaponDefinition(
+                Id: "test_atgm",
+                Range: 800f,
+                ReloadDurationTicks: 60,
+                Damage: 120,
+                AmmoCapacity: 4,
+                MuzzleHeight: 1.4f,
+                PresentationId: WeaponPresentation.MakeId(WeaponPresentationKind.SurfaceToAirMissile, 2),
+                PenetrationNear: 400f,
+                PenetrationFar: 400f,
+                PenetrationNearRange: 0f,
+                PenetrationFarRange: 800f,
+                RoundsPerBurst: 1,
+                AccuracyCurve: [new AccuracyPoint(0f, 1.0f), new AccuracyPoint(800f, 1.0f)],
+                DispersionMils: 0f,
+                TargetMovementPenalty: 0f,
+                RangingBonus: 0f,
+                MaxRangingBonus: 0f,
+                MinRange: 30f,
+                SplashRadius: 4f,
+                ProjectileSpeed: 120f,
+                GuidanceKind: MissileGuidanceKind.Optical,
+                AirTargetsOnly: false,
+                MissileMaxTurnRateDegPerSec: 60f,
+                MissileProximityFuzeRadius: 3f,
+                MissileMaxFlightTicks: 160,
+                MissileMotorBurnTicks: 120);
         }
 
         public bool TryGetProfile(ushort definition, out UnitCombatProfile profile)
@@ -114,11 +144,12 @@ public sealed class BuildingGarrisonTests
             profile = definition switch
             {
                 DefInfantry => new UnitCombatProfile(100, _rifle, 360f, default, 0.5f, LeavesWreck: false),
+                DefAtgmInfantry => new UnitCombatProfile(100, _atgm, 360f, default, 0.5f, LeavesWreck: false),
                 DefTank => new UnitCombatProfile(200, _cannon, 180f, new UnitArmor(100f, 60f, 40f), 1.6f, LeavesWreck: true),
                 DefScout => new UnitCombatProfile(80, null, 0f, default, 1.2f, LeavesWreck: true),
                 _ => default
             };
-            return definition <= DefScout;
+            return definition <= DefAtgmInfantry;
         }
     }
 
@@ -153,7 +184,7 @@ public sealed class BuildingGarrisonTests
             ? new NavigationSystem(new NavigationGrid(geometry, 2.0f, enableHierarchical: true), movement)
             : null;
         BuildingDestructionSystem destruction = new(geometry);
-        GarrisonSystem garrison = new(geometry, def => def == DefInfantry);
+        GarrisonSystem garrison = new(geometry, def => def is DefInfantry or DefAtgmInfantry);
         garrison.SetNavigationSystem(nav);
         Assert.True(garrison.RegisterBuilding(panelka.Id, panelkaYawRad, BuildingGarrisonProfile.CreateDefault()));
 
@@ -362,14 +393,15 @@ public sealed class BuildingGarrisonTests
                 }
 
                 int hpBefore = world.TryGetCombatState(victim, out WorldState.CombatState pre) ? pre.CurrentHealth : 0;
-                int hpAfter = hpBefore;
-                for (int t = 0; t < 40 && hpAfter == hpBefore; t++)
+                for (int t = 0; t < 20 && sim.Combat!.TotalShotsFired == 0; t++)
                 {
                     sim.Step();
-                    hpAfter = world.TryGetCombatState(victim, out WorldState.CombatState post) ? post.CurrentHealth : 0;
                 }
 
-                Assert.True(hpAfter < hpBefore, "Expected at least one penetrating rifle hit.");
+                // Single-layer cover: 100%-accuracy shot hits on the very first shot (no hidden hit-probability double-dip)
+                Assert.Equal(1, sim.Combat!.TotalShotsFired);
+                int hpAfter = world.TryGetCombatState(victim, out WorldState.CombatState post) ? post.CurrentHealth : 0;
+                Assert.True(hpAfter < hpBefore, "Expected 100%-accuracy first shot to hit without double-dipped cover miss.");
                 return hpBefore - hpAfter;
             }
         }
@@ -597,6 +629,169 @@ public sealed class BuildingGarrisonTests
             long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
             Assert.True(allocated == 0, window.Describe(allocated));
+        }
+    }
+
+    [Fact]
+    public void Garrison_GuidedMissileLaunch_BreaksFogOfWarConcealment()
+    {
+        (Simulation sim, WorldState world, GarrisonSystem garrison, _, OpaqueStructure panelka) =
+            CreateHarness(includeNav: false);
+        using (sim)
+        {
+            Assert.True(garrison.TryGetEntrancePosition(panelka.Id, out Vector2 entrance));
+            // Player 1 tank parked 120m south (> 40m ConcealmentSpotRange) on HoldFire
+            EntityId p1Tank = world.CreateUnit(1, DefTank, new Vector2(200f, 80f), 12f, 200, 40);
+            world.SetFireStance(p1Tank, FireStance.HoldFire);
+
+            // Player 2 ATGM infantry enters panelka Interior on HoldFire
+            EntityId p2Atgm = world.CreateUnit(2, DefAtgmInfantry, entrance, 4f, 100, 4);
+            world.SetFireStance(p2Atgm, FireStance.HoldFire);
+            Assert.True(sim.TryEnqueue(2, new EnterBuildingCommand(1u, 0, p2Atgm, panelka.Id, GarrisonSlotKind.Interior)));
+            for (int t = 0; t < 5; t++) sim.Step();
+
+            PlayerKnowledge p1 = new(1);
+            sim.UpdateKnowledge(p1);
+            Assert.Equal(0, p1.ContactCount);
+            Assert.Equal(-1, world.GetUnitLastFiredTick(p2Atgm));
+
+            // Allow ATGM infantry to fire a guided missile from inside the building -> must record firing & reveal garrison
+            Assert.True(sim.TryEnqueue(2, new SetFireStanceCommand(2u, sim.Tick, p2Atgm, FireStance.FireAtWill)));
+            for (int t = 0; t < 15 && sim.Combat!.TotalShotsFired == 0; t++) sim.Step();
+
+            Assert.True(sim.Combat!.TotalShotsFired >= 1, "Expected garrisoned ATGM team to launch a guided missile.");
+            Assert.True(world.GetUnitLastFiredTick(p2Atgm) >= 0, "Guided missile launch must call RecordUnitFired.");
+            sim.Step();
+
+            sim.UpdateKnowledge(p1);
+            ContactObservation? revealed = FindCurrentContact(p1.Contacts);
+            Assert.True(revealed.HasValue, "Guided missile launch must break interior FoW concealment.");
+            Assert.Equal(panelka.Id, revealed.Value.GarrisonStructureId);
+            Assert.Equal(GarrisonSlotKind.Interior, revealed.Value.GarrisonSlotKind);
+        }
+    }
+
+    [Fact]
+    public void Garrison_TwelveSimultaneousExits_LandOnTwelveDistinctWalkablePositions_AndAvoidBlockedCells()
+    {
+        // Place a solid courtyard wall directly blocking one side of the exit fan so passability check must route around it
+        OpaqueStructure courtyardWall = new(
+            new StructureId(210),
+            minX: 196.0f, minY: 0f, minZ: 190.5f,
+            maxX: 201.0f, maxY: 3.0f, maxZ: 192.5f,
+            isGrounded: true);
+
+        (Simulation sim, WorldState world, GarrisonSystem garrison, _, OpaqueStructure panelka) =
+            CreateHarness(extraStructures: [courtyardWall], includeNav: true);
+        using (sim)
+        {
+            Assert.True(garrison.TryGetEntrancePosition(panelka.Id, out Vector2 entrance));
+            Assert.True(sim.Navigation!.Grid.Evaluator.IsPointClear(entrance, 0.45f, TraversabilityCapabilities.Foot));
+
+            uint seq = 1u;
+            EntityId[] soldiers = new EntityId[12];
+            for (int i = 0; i < 12; i++)
+            {
+                soldiers[i] = world.CreateUnit(1, DefInfantry, entrance, 4f, 100, 200);
+                Assert.True(sim.TryEnqueue(1, new EnterBuildingCommand(seq++, 0, soldiers[i], panelka.Id, GarrisonSlotKind.Interior)));
+            }
+            sim.Step();
+            Assert.Equal(12, garrison.GetOccupantCount(panelka.Id));
+
+            // Order all 12 soldiers to exit on the exact same tick
+            for (int i = 0; i < 12; i++)
+            {
+                Assert.True(sim.TryEnqueue(1, new ExitBuildingCommand(seq++, sim.Tick, soldiers[i])));
+            }
+            sim.Step();
+            Assert.Equal(0, garrison.GetOccupantCount(panelka.Id));
+
+            // Every exited soldier must land on a walkable foot cell clear of both panelka and courtyardWall,
+            // with all 12 positions distinct (no swap-remove stacking)
+            List<Vector2> exitPositions = new(12);
+            for (int i = 0; i < 12; i++)
+            {
+                Assert.True(world.TryGetUnit(soldiers[i], out UnitState u));
+                Assert.True(
+                    sim.Navigation.Grid.Evaluator.IsPointClear(u.Position, 0.45f, TraversabilityCapabilities.Foot),
+                    $"Exited soldier {i} landed on blocked cell {u.Position}.");
+                for (int j = 0; j < exitPositions.Count; j++)
+                {
+                    float sep = Vector2.Distance(u.Position, exitPositions[j]);
+                    Assert.True(sep >= 0.5f, $"Soldiers {i} and {j} stacked on exit ({u.Position} vs {exitPositions[j]}).");
+                }
+                exitPositions.Add(u.Position);
+            }
+        }
+    }
+
+    [Fact]
+    public void Garrison_ArtillerySplashNearBuilding_InflictsStructuralCasualties_WithoutOpenGroundDoubleDip()
+    {
+        (Simulation sim, WorldState world, GarrisonSystem garrison, _, OpaqueStructure panelka) =
+            CreateHarness(panelkaHealth: 360, includeNav: false);
+        using (sim)
+        {
+            Assert.True(garrison.TryGetEntrancePosition(panelka.Id, out Vector2 entrance));
+            EntityId interiorSoldier = world.CreateUnit(2, DefInfantry, entrance, 4f, 100, 0);
+            world.SetFireStance(interiorSoldier, FireStance.HoldFire);
+            Assert.True(sim.TryEnqueue(2, new EnterBuildingCommand(1u, 0, interiorSoldier, panelka.Id, GarrisonSlotKind.Interior)));
+            sim.Step();
+            Assert.True(world.IsGarrisoned(interiorSoldier));
+
+            // Detonate a Grad-class rocket right beside the south facade (18m splash radius, 120 open damage, 95 structural damage)
+            RocketProjectileState rocket = new()
+            {
+                ShooterOwner = 1,
+                PresentationId = WeaponPresentation.MakeId(WeaponPresentationKind.RocketArtillery, 0),
+                Origin = new Vector3(200f, 3f, 20f),
+                Target = new Vector3(200f, 0f, 192f),
+                Damage = 120,
+                Penetration = 25f,
+                SplashRadius = 18f,
+                StructuralDamage = 95
+            };
+            sim.Combat!.ResolveArtilleryImpact(world, sim.Tick, rocket);
+
+            // Garrisoned soldier must survive (not instantly killed by 120 open-ground splash) and instead
+            // take calibrated structural blast/collapse damage from ComputeStructuralHitCasualties
+            Assert.True(world.TryGetUnit(interiorSoldier, out _), "Garrisoned infantry should not take full open-ground artillery splash.");
+            Assert.True(world.TryGetCombatState(interiorSoldier, out WorldState.CombatState cs));
+            Assert.True(cs.CurrentHealth < 100 && cs.CurrentHealth > 60,
+                $"Expected calibrated structural blast damage (HP between 61 and 99), got {cs.CurrentHealth}.");
+        }
+    }
+
+    [Fact]
+    public void Garrison_RoofCollapse_DemotesRoofTroopsAndConcealsBeyondSpotRange()
+    {
+        (Simulation sim, WorldState world, GarrisonSystem garrison, BuildingDestructionSystem destruction, OpaqueStructure panelka) =
+            CreateHarness(includeNav: false);
+        using (sim)
+        {
+            Assert.True(garrison.TryGetEntrancePosition(panelka.Id, out Vector2 entrance));
+            // Scout 80m away sees rooftop soldier cleanly via 3D LOS
+            world.CreateUnit(1, DefScout, new Vector2(200f, 120f), 16f, 80, 0);
+            EntityId roofSoldier = world.CreateUnit(2, DefInfantry, entrance, 4f, 100, 0);
+            world.SetFireStance(roofSoldier, FireStance.HoldFire);
+
+            Assert.True(sim.TryEnqueue(2, new EnterBuildingCommand(1u, 0, roofSoldier, panelka.Id, GarrisonSlotKind.Roof)));
+            for (int t = 0; t < 3; t++) sim.Step();
+
+            PlayerKnowledge p1 = new(1);
+            sim.UpdateKnowledge(p1);
+            ContactObservation? roofSpot = FindCurrentContact(p1.Contacts);
+            Assert.True(roofSpot.HasValue);
+            Assert.Equal(GarrisonSlotKind.Roof, roofSpot.Value.GarrisonSlotKind);
+
+            // Collapse top floor -> soldier drops to Interior and conceals beyond 40m (drops from Current to LastKnown)
+            Assert.True(destruction.ApplyDirectHit(world, sim.Tick, panelka.Id, new Vector3(200f, 11f, 194.1f), 100, out _, out byte floorsLost, out _));
+            Assert.True(floorsLost >= 1);
+            for (int t = 0; t < 3; t++) sim.Step();
+
+            Assert.Equal(GarrisonSlotKind.Interior, world.GetGarrisonSlotKind(roofSoldier));
+            sim.UpdateKnowledge(p1);
+            Assert.Null(FindCurrentContact(p1.Contacts));
         }
     }
 }
