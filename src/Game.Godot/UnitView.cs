@@ -926,6 +926,22 @@ internal sealed class UnitView
         return false;
     }
 
+    public bool TryGetMuzzleTransformForTarget(Vector3 targetWorldPos, out Transform3D transform)
+    {
+        if (IsHelicopter)
+        {
+            // CH-47D door gunners fire from port/starboard cabin door windows facing the target.
+            Transform3D modelXform = Model.GlobalTransform;
+            Vector3 toTarget = targetWorldPos - modelXform.Origin;
+            float sideSign = modelXform.Basis.X.Dot(toTarget) >= 0f ? 1f : -1f;
+            Vector3 localGunPos = new(sideSign * 1.72f, 2.05f, -2.35f);
+            Vector3 worldGunPos = modelXform * localGunPos;
+            transform = new Transform3D(modelXform.Basis, worldGunPos);
+            return true;
+        }
+        return TryGetMuzzleTransform(out transform);
+    }
+
     public bool TryGetNextLaunchTubeTransform(out Transform3D transform)
     {
         Node3D[] tubes = ActiveRig.LaunchTubes;
@@ -1049,13 +1065,26 @@ internal sealed class UnitView
 
     internal Vector3 TurretRotation => ActiveRig.Turret?.Rotation ?? _turret?.Rotation ?? Vector3.Zero;
 
-    public void ApplyRecoil(Vector3 shotDirection)
+    public void ApplyRecoil(Vector3 shotDirection, bool isMachineGun = false, bool isRifle = false)
     {
-        if (IsInfantry)
+        if (IsInfantry || isRifle)
         {
             SetAiming(true);
             return;
         }
+        if (isMachineGun)
+        {
+            // Machine guns only kick an articulated barrel node (e.g. KPVT on BTR-70/BRDM-2);
+            // never shake the entire vehicle or helicopter hull via fallback offset.
+            if (_barrelRecoil is not null)
+            {
+                _recoilAmount = 0.08f;
+                SetBarrelRecoil(_recoilAmount);
+            }
+            return;
+        }
+        if (IsHelicopter)
+            return;
         if (_barrelRecoil is not null)
         {
             _recoilAmount = 0.35f;

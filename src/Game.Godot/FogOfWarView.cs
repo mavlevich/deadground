@@ -60,6 +60,7 @@ void fragment() {
     private sealed class UnitViewshed
     {
         public NumericsVector2 Position;
+        public float Altitude;
         public ushort Definition;
         public int[] Cells = [];
         public int CellCount;
@@ -79,6 +80,7 @@ void fragment() {
     private bool _unitSweepInProgress;
     private UnitViewshed? _activeSweepViewshed;
     private NumericsVector2 _activeSweepPos;
+    private float _activeSweepAltitude;
     private ushort _activeSweepDef;
     private float _activeSweepX0;
     private float _activeSweepZ0;
@@ -463,6 +465,7 @@ void fragment() {
         for (int i = 0; i < ownUnits.Length; i++)
         {
             if (ownUnits[i].ContainerId == default &&
+                ownUnits[i].FlightPhase != FlightPhase.Crashing &&
                 _viewsheds.TryGetValue(ownUnits[i].Id, out UnitViewshed? viewshed))
             {
                 viewshed.Present = true;
@@ -505,8 +508,8 @@ void fragment() {
         long maxTicks,
         out bool completed)
     {
-        // Passengers inside a transport do not observe independently (matching DetectionSystem).
-        if (u.ContainerId != default)
+        // Passengers inside a transport and crashing aircraft do not observe independently (matching DetectionSystem).
+        if (u.ContainerId != default || u.FlightPhase == FlightPhase.Crashing)
         {
             completed = true;
             return false;
@@ -519,8 +522,10 @@ void fragment() {
         }
         viewshed.Present = true;
 
+        float altitude = MathF.Max(0f, u.Altitude);
         if (viewshed.Swept && viewshed.Definition == u.Definition &&
-            NumericsVector2.DistanceSquared(viewshed.Position, u.Position) < ResweepDistance * ResweepDistance)
+            NumericsVector2.DistanceSquared(viewshed.Position, u.Position) < ResweepDistance * ResweepDistance &&
+            MathF.Abs(viewshed.Altitude - altitude) < ResweepDistance)
         {
             completed = true;
             return false;
@@ -535,7 +540,7 @@ void fragment() {
             sensorRange = def.SensorRange;
         }
 
-        StartUnitSweep(viewshed, u.Position, u.Definition, eyeHeight, sensorRange);
+        StartUnitSweep(viewshed, u.Position, u.Definition, eyeHeight + altitude, sensorRange, altitude);
         completed = ContinueActiveUnitSweep(startTimestamp, maxTicks);
         return true;
     }
@@ -545,7 +550,8 @@ void fragment() {
         NumericsVector2 unitPos,
         ushort definition,
         float eyeHeight,
-        float sensorRange)
+        float sensorRange,
+        float altitude = 0f)
     {
         float x0 = unitPos.X;
         float z0 = unitPos.Y;
@@ -596,6 +602,7 @@ void fragment() {
 
         _activeSweepViewshed = viewshed;
         _activeSweepPos = unitPos;
+        _activeSweepAltitude = altitude;
         _activeSweepDef = definition;
         _activeSweepX0 = x0;
         _activeSweepZ0 = z0;
@@ -655,6 +662,7 @@ void fragment() {
         AddContribution(viewshed);
 
         viewshed.Position = _activeSweepPos;
+        viewshed.Altitude = _activeSweepAltitude;
         viewshed.Definition = _activeSweepDef;
         viewshed.Swept = true;
         _sweepsThisCycle++;

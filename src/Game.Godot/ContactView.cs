@@ -354,6 +354,22 @@ internal sealed class ContactView
         return false;
     }
 
+    public bool TryGetMuzzleTransformForTarget(Vector3 targetWorldPos, out Transform3D transform)
+    {
+        if (_enemyModel is not null && _enemyModel.Visible &&
+            Observation.Classification == ContactClassification.Helicopter)
+        {
+            Transform3D modelXform = _enemyModel.GlobalTransform;
+            Vector3 toTarget = targetWorldPos - modelXform.Origin;
+            float sideSign = modelXform.Basis.X.Dot(toTarget) >= 0f ? 1f : -1f;
+            Vector3 localGunPos = new(sideSign * 1.72f, 2.05f, -2.35f);
+            Vector3 worldGunPos = modelXform * localGunPos;
+            transform = new Transform3D(modelXform.Basis, worldGunPos);
+            return true;
+        }
+        return TryGetMuzzleTransform(out transform);
+    }
+
     public bool TryGetNextLaunchTubeTransform(out Transform3D transform)
     {
         if (_enemyModel is not null && _enemyModel.Visible && _launchTubes.Length > 0)
