@@ -11,6 +11,10 @@ namespace DeadGround.Engine;
 /// </summary>
 public sealed class DetectionSystem : ISimulationSystem
 {
+    public const int HiddenLaunchConcealmentTicks = 14;
+    public const float MissileMotorVisualSignature = 1.35f;
+    public const float MissileCoastingVisualSignature = 0.65f;
+
     private readonly StaticGeometry _geometry;
     private readonly IUnitPerceptionCatalog _catalog;
     private readonly DetectionTuning _tuning;
@@ -49,6 +53,7 @@ public sealed class DetectionSystem : ISimulationSystem
     private readonly float[] _unitGunPitches;
     private readonly int _maxUnits;
     private readonly int _wordsPerSide;
+    private int _lastUnitCount;
 
     public DetectionTuning Tuning => _tuning;
     public StaticGeometry Geometry => _geometry;
@@ -146,6 +151,7 @@ public sealed class DetectionSystem : ISimulationSystem
         }
 
         int unitCount = world.Count;
+        _lastUnitCount = unitCount;
 
         // Copy unit state and precompute perception endpoints once per tick
         float maxVisualSignature = 1.0f;
@@ -746,6 +752,91 @@ public sealed class DetectionSystem : ISimulationSystem
             return [];
 
         return _smokeTrackers[index].ExportSmokeClouds();
+    }
+
+    /// <summary>
+    /// Copies guided missiles currently visible to <paramref name="player"/> into <paramref name="destination"/>.
+    /// Friendly missiles and missiles fired by directly spotted enemy launchers are visible immediately.
+    /// Missiles fired from unspotted launchers stay concealed during initial launch clearance
+    /// (<see cref="HiddenLaunchConcealmentTicks"/>) and require genuine 3D visual line of sight
+    /// so hidden SAM batteries do not leak their exact ground launch position through fog of war.
+    /// </summary>
+    public int CopyVisibleGuidedMissiles(
+        WorldState world,
+        int player,
+        int currentTick,
+        Span<GuidedMissileObservation> destination)
+    {
+        int total = world.GuidedMissileCount;
+        if (total == 0 || destination.Length == 0)
+            return 0;
+
+        int observerTeam = world.GetPlayerTeam(player);
+        int unitCount = Math.Min(_lastUnitCount, _maxUnits);
+        int written = 0;
+
+        for (int i = 0; i < total && written < destination.Length; i++)
+        {
+            ref readonly GuidedMissileState m = ref world.GetGuidedMissileRef(i);
+            bool motorBurning = currentTick - m.LaunchedTick < m.MotorBurnTicks;
+
+            if (!IsGuidedMissileVisibleTo(world, player, observerTeam, unitCount, in m, currentTick, motorBurning))
+                continue;
+
+            GuidedMissileFlags flags = GuidedMissileFlags.None;
+            if (motorBurning)
+                flags |= GuidedMissileFlags.MotorBurning;
+            if (m.Decoyed)
+                flags |= GuidedMissileFlags.Decoyed;
+
+            destination[written++] = new GuidedMissileObservation(
+                m.MissileId,
+                m.PresentationId,
+                m.Position,
+                m.Velocity,
+                flags);
+        }
+
+        return written;
+    }
+
+    private bool IsGuidedMissileVisibleTo(
+        WorldState world,
+        int player,
+        int observerTeam,
+        int unitCount,
+        in GuidedMissileState missile,
+        int currentTick,
+        bool motorBurning)
+    {
+        if (!world.AreHostile(player, missile.Owner))
+            return true;
+
+        if (missile.ShooterId.Value != 0 && IsEntityObservedBy(player, missile.ShooterId))
+            return true;
+
+        // Unspotted launcher: conceal initial launch segment so the contrail cannot trace
+        // all the way back to the hidden launcher's exact ground coordinates.
+        if (currentTick - missile.LaunchedTick < HiddenLaunchConcealmentTicks)
+            return false;
+
+        float visualSignature = motorBurning ? MissileMotorVisualSignature : MissileCoastingVisualSignature;
+        Vector2 missilePos2D = new(missile.Position.X, missile.Position.Z);
+
+        for (int u = 0; u < unitCount; u++)
+        {
+            if (!_unitHasSensor[u] || _unitTeams[u] != observerTeam)
+                continue;
+
+            float effectiveRange = _unitSensorRange[u] * visualSignature;
+            if (Vector2.DistanceSquared(_unitPositions[u], missilePos2D) > effectiveRange * effectiveRange)
+                continue;
+
+            if (_geometry.IsLineOfSightClear(_unitEyePos[u], missile.Position, _losContext, out _))
+                return true;
+        }
+
+        return false;
     }
 
     public void NotifyWreckCreated(WreckState wreck, int victimOwner, EntityId victimId)

@@ -442,6 +442,190 @@ public sealed class GuidedMissileFlareTests
     }
 
     [Fact]
+    public void HiddenSamLauncher_ConcealsLaunchEventAndInitialFlight_ThenRevealsMissileIn3DLos()
+    {
+        // Helicopter has 1500m ground sensor (cannot spot Strela-10 at 1750m),
+        // while SAM has 2600m sensor and 2000m weapon range.
+        HeightMap map = new(129, 129, 16f, 0.01f, new ushort[129 * 129]);
+        StaticGeometry geometry = new(map, []);
+        ShortHeliPerceptionCatalog perc = new();
+        TestMovementCatalog move = new();
+        TestFlightCatalog flight = new();
+        TestCombatCatalog combat = new(irResistance: 0.25f, samDamage: 30);
+        TestCountermeasureCatalog cm = new(spoofProb: 0.0f, defaultAuto: false);
+
+        NavigationSystem nav = new(new NavigationGrid(geometry, 16f), move);
+        FlightSystem flightSys = new(geometry, flight);
+        DetectionSystem det = new(geometry, perc, new DetectionTuning(evaluationIntervalTicks: 1));
+        CombatSystem combatSys = new(geometry, combat, perc, det, nav, combatRandom: new DeterministicRandom(77), flight: flightSys);
+        GuidedMissileSystem missileSys = new(geometry, cm, combat);
+        WorldState world = new(map);
+        using Simulation sim = new(world, new RuleSet(flightSys, nav, det, combatSys, missileSys), matchSeed: 77);
+
+        Vector2 heliPos = new(1000f, 150f);
+        Vector2 samPos = new(1000f, 1900f); // 1750m away: > 1500m heli sensor, < 2000m SAM range
+        EntityId heli = world.CreateUnit(1, DefHeli, heliPos, 50f, 160, 0, MathF.PI);
+        EntityId sam = world.CreateUnit(2, DefSam, samPos, 10f, 55, 8, 0f);
+        flightSys.EnsureUnitsInitialized(world);
+        missileSys.EnsureUnitsInitialized(world);
+        Assert.True(world.TryGetFlightState(heli, out WorldState.UnitFlightState fs));
+        world.SetFlightState(heli, fs with { Phase = FlightPhase.Airborne, Altitude = 55f, DesiredBand = AltitudeBand.High });
+
+        PlayerKnowledge p1 = new(1);
+        PlayerKnowledge p2 = new(2);
+        int launchedTick = -1;
+        bool p1SawLaunchEvent = false;
+        bool p2SawLaunchEvent = false;
+        bool p1SawMissileDuringConcealment = false;
+        bool p2SawMissileAtLaunch = false;
+        Vector3 firstRevealedPos = default;
+        bool p1RevealedMissileLater = false;
+
+        for (int t = 0; t < 120; t++)
+        {
+            sim.Step();
+            sim.UpdateKnowledge(p1);
+            sim.UpdateKnowledge(p2);
+
+            Assert.False(det.IsEntityObservedBy(1, sam), "SAM at 1750m must remain unspotted by 1500m helicopter.");
+
+            ReadOnlySpan<CombatEventObservation> p1Evs = p1.Events;
+            for (int e = 0; e < p1Evs.Length; e++)
+            {
+                if (p1Evs[e].Kind == CombatEventKind.MissileLaunched)
+                    p1SawLaunchEvent = true;
+            }
+            sim.AcknowledgeCombatEvents(1, p1Evs.Length);
+
+            ReadOnlySpan<CombatEventObservation> p2Evs = p2.Events;
+            for (int e = 0; e < p2Evs.Length; e++)
+            {
+                if (p2Evs[e].Kind == CombatEventKind.MissileLaunched)
+                    p2SawLaunchEvent = true;
+            }
+            sim.AcknowledgeCombatEvents(2, p2Evs.Length);
+
+            if (launchedTick < 0 && world.GuidedMissileCount > 0)
+            {
+                launchedTick = world.GetGuidedMissileRef(0).LaunchedTick;
+                if (p2.Missiles.Length > 0)
+                    p2SawMissileAtLaunch = true;
+            }
+
+            if (launchedTick >= 0)
+            {
+                int flightAge = sim.Tick - launchedTick;
+                if (flightAge < DetectionSystem.HiddenLaunchConcealmentTicks)
+                {
+                    if (p1.Missiles.Length > 0)
+                        p1SawMissileDuringConcealment = true;
+                }
+                else if (!p1RevealedMissileLater && p1.Missiles.Length > 0)
+                {
+                    p1RevealedMissileLater = true;
+                    firstRevealedPos = p1.Missiles[0].Position;
+                }
+            }
+
+            if (p1RevealedMissileLater)
+                break;
+        }
+
+        Assert.True(launchedTick >= 0, "Expected hidden SAM to launch a guided missile.");
+        Assert.True(p2SawLaunchEvent, "SAM owner must receive MissileLaunched event.");
+        Assert.True(p2SawMissileAtLaunch, "SAM owner must observe its own missile immediately.");
+        Assert.False(p1SawLaunchEvent, "Unspotted SAM must not leak MissileLaunched ground origin to opponent.");
+        Assert.False(p1SawMissileDuringConcealment, "Missile from unspotted SAM must remain concealed during initial launch ticks.");
+        Assert.True(p1RevealedMissileLater, "Burning SAM plume must become visible once it clears launch concealment inside 3D LOS.");
+
+        float distFromLauncher = Vector2.Distance(new Vector2(firstRevealedPos.X, firstRevealedPos.Z), samPos);
+        Assert.True(distFromLauncher >= 85f, $"First revealed missile position must stay well clear of hidden launcher, got {distFromLauncher:F1}m.");
+    }
+
+    [Fact]
+    public void HiddenSamBehindOpaqueCover_HidesMissileUntil3DLosClearsCover_WhileSpottedSamRevealsImmediately()
+    {
+        HeightMap map = new(129, 129, 16f, 0.01f, new ushort[129 * 129]);
+        // Tall 60m wall standing right in front of the SAM at z=1050 so low/mid flight is occluded from z=300
+        OpaqueStructure wall = new(new StructureId(99), 900f, 0f, 1040f, 1100f, 60f, 1060f, isGrounded: true);
+        StaticGeometry geometry = new(map, [wall]);
+        TestPerceptionCatalog perc = new();
+        TestMovementCatalog move = new();
+        TestFlightCatalog flight = new();
+        TestCombatCatalog combat = new();
+        TestCountermeasureCatalog cm = new(spoofProb: 0f, defaultAuto: false);
+
+        NavigationSystem nav = new(new NavigationGrid(geometry, 16f), move);
+        FlightSystem flightSys = new(geometry, flight);
+        DetectionSystem det = new(geometry, perc, new DetectionTuning(evaluationIntervalTicks: 1));
+        CombatSystem combatSys = new(geometry, combat, perc, det, nav, combatRandom: new DeterministicRandom(91), flight: flightSys);
+        GuidedMissileSystem missileSys = new(geometry, cm, combat);
+        WorldState world = new(map);
+        using Simulation sim = new(world, new RuleSet(flightSys, nav, det, combatSys, missileSys), matchSeed: 91);
+
+        EntityId observer = world.CreateUnit(1, DefTank, new Vector2(1000f, 300f), 10f, 100, 0, MathF.PI);
+        EntityId sam = world.CreateUnit(2, DefSam, new Vector2(1000f, 1100f), 10f, 55, 8, 0f);
+        sim.Step();
+        Assert.False(det.IsEntityObservedBy(1, sam), "Wall must hide SAM from Player 1 observer.");
+
+        // Spawn a hostile missile behind the wall past the concealment tick window:
+        // still occluded by the 60m wall at y=15m, then visible once above the wall at y=95m.
+        GuidedMissileState occludedMissile = new()
+        {
+            Owner = 2,
+            ShooterId = sam,
+            ShooterDefinition = DefSam,
+            TargetId = observer,
+            PresentationId = WeaponPresentation.MakeId(WeaponPresentationKind.SurfaceToAirMissile, 1),
+            Guidance = MissileGuidanceKind.Infrared,
+            Position = new Vector3(1000f, 15f, 1080f),
+            Velocity = new Vector3(0f, 35f, -120f),
+            Speed = 145f,
+            LaunchedTick = 0,
+            MaxFlightTicks = 200,
+            MotorBurnTicks = 140
+        };
+        Assert.True(world.TryAddGuidedMissile(occludedMissile, out _));
+
+        Span<GuidedMissileObservation> buf = stackalloc GuidedMissileObservation[4];
+        int tickAfterConcealment = DetectionSystem.HiddenLaunchConcealmentTicks + 5;
+        int hiddenCount = det.CopyVisibleGuidedMissiles(world, player: 1, currentTick: tickAfterConcealment, buf);
+        Assert.Equal(0, hiddenCount);
+
+        // Move missile above the 60m wall into clear 3D sky LOS
+        ref GuidedMissileState live = ref world.GetGuidedMissileRef(0);
+        live.Position = new Vector3(1000f, 95f, 1080f);
+        int revealedCount = det.CopyVisibleGuidedMissiles(world, player: 1, currentTick: tickAfterConcealment, buf);
+        Assert.Equal(1, revealedCount);
+
+        // Conversely, place a Player 1 spotter behind the wall with direct LOS to the SAM:
+        // once the SAM is observed, even a tick-0 missile right at the launcher is immediately visible.
+        world.CreateUnit(1, DefTank, new Vector2(1000f, 1200f), 10f, 100, 0, 0f);
+        sim.Step();
+        Assert.True(det.IsEntityObservedBy(1, sam), "Flanking spotter must observe the SAM directly.");
+
+        live.Position = new Vector3(1000f, 3f, 1100f);
+        live.LaunchedTick = sim.Tick;
+        int immediateCount = det.CopyVisibleGuidedMissiles(world, player: 1, currentTick: sim.Tick, buf);
+        Assert.Equal(1, immediateCount);
+    }
+
+    private sealed class ShortHeliPerceptionCatalog : IUnitPerceptionCatalog
+    {
+        private static readonly VisualSensorProfile HeliSensor = new(1500f, 2.5f);
+        private static readonly VisualSensorProfile SamSensor = new(2600f, 2.5f);
+        private static readonly TargetObservationPoints Points = new([1.0f, 2.5f]);
+        private static readonly UnitPerceptionProfile HeliProfile = new(HeliSensor, Points, ContactClassification.Helicopter, 1.0f);
+        private static readonly UnitPerceptionProfile SamProfile = new(SamSensor, Points, ContactClassification.AntiAir, 1.0f);
+
+        public bool TryGetProfile(ushort definition, out UnitPerceptionProfile profile)
+        {
+            profile = definition == DefHeli ? HeliProfile : SamProfile;
+            return true;
+        }
+    }
+
+    [Fact]
     public void GuidedMissileAndFlareLoop_HotPath_ZeroManagedAllocationsPerTick()
     {
         (Simulation sim, WorldState world) = CreateTestHarness(irSpoofProbability: 0.78f, defaultAutoFlares: true, samDamage: 30);
@@ -454,10 +638,15 @@ public sealed class GuidedMissileFlareTests
             Assert.True(world.TryGetFlightState(heli, out WorldState.UnitFlightState fs));
             world.SetFlightState(heli, fs with { Phase = FlightPhase.Airborne, Altitude = 55f, DesiredBand = AltitudeBand.High });
 
-            // Warm up detection, missile launch, and close-in auto-flare paths before measuring steady-state allocations
+            PlayerKnowledge p1Knowledge = new(1);
+            PlayerKnowledge p2Knowledge = new(2);
+
+            // Warm up detection, missile launch, knowledge visibility filtering, and close-in auto-flare paths
             for (int t = 0; t < 80; t++)
             {
                 sim.Step();
+                sim.UpdateKnowledge(p1Knowledge);
+                sim.UpdateKnowledge(p2Knowledge);
                 ReadOnlySpan<CombatEventObservation> warmupEvs = sim.Combat!.GetEvents(1);
                 sim.Combat.AcknowledgeEvents(1, warmupEvs.Length);
             }
@@ -467,6 +656,8 @@ public sealed class GuidedMissileFlareTests
             for (int t = 0; t < 90; t++)
             {
                 sim.Step();
+                sim.UpdateKnowledge(p1Knowledge);
+                sim.UpdateKnowledge(p2Knowledge);
                 ReadOnlySpan<CombatEventObservation> evs = sim.Combat!.GetEvents(1);
                 sim.Combat.AcknowledgeEvents(1, evs.Length);
             }

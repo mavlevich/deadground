@@ -64,7 +64,8 @@ public sealed class PlayerKnowledge
         MissionObservation mission = default,
         ReadOnlySpan<WreckObservation> wrecks = default,
         ReadOnlySpan<SmokeCloudObservation> smokeClouds = default,
-        int currentTick = 0)
+        int currentTick = 0,
+        DetectionSystem? detection = null)
     {
         int count = 0;
         for (int i = 0; i < world.Count; i++)
@@ -242,7 +243,9 @@ public sealed class PlayerKnowledge
         smokeClouds.CopyTo(_smokeClouds.AsSpan(0, smokeClouds.Length));
         SmokeCloudCount = smokeClouds.Length;
 
-        MissileCount = world.CopyGuidedMissileObservations(currentTick, _missiles);
+        MissileCount = detection is not null
+            ? detection.CopyVisibleGuidedMissiles(world, Player, currentTick, _missiles)
+            : world.CopyGuidedMissileObservations(currentTick, _missiles);
 
         Mission = mission;
     }
