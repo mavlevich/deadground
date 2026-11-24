@@ -58,13 +58,14 @@ internal static class BuildingDestructionRegressionTests
 
             // 1. Floor 1 breached (5 floors still standing) + StructureDamaged event
             StructureObservation breachedObs = new(targetId, FloorsStanding: 5, FloorBreachMask: 0b00010, Health: 220);
-            CombatEventObservation dmgEvent = new(
-                EventId: 1,
-                ServerTick: 10,
-                Kind: CombatEventKind.StructureDamaged,
-                PresentationId: 1,
-                Origin: new NumericsVector3(494f, 4f, 415f),
-                Target: new NumericsVector3(494f, 5.5f, 512f));
+            CombatEventObservation dmgEvent = CombatEventObservation.ForStructure(
+                eventId: 1,
+                serverTick: 10,
+                kind: CombatEventKind.StructureDamaged,
+                presentationId: 1,
+                origin: new NumericsVector3(494f, 4f, 415f),
+                target: new NumericsVector3(494f, 5.5f, 512f),
+                structureId: targetId);
             int len1 = WireProtocol.WriteSnapshot(snapBuf, 1, 10, default, default, [dmgEvent], default, default, default, default, [breachedObs]);
             Require(replica.TryApply(snapBuf.AsSpan(0, len1)), "Breached snapshot must apply.");
             view.Update(replica, 0.05f);
@@ -72,13 +73,14 @@ internal static class BuildingDestructionRegressionTests
 
             // 2. Partial collapse down to 2 floors + StructureFloorCollapsed event
             StructureObservation partialObs = new(targetId, FloorsStanding: 2, FloorBreachMask: 0b00010, Health: 120);
-            CombatEventObservation floorEvent = new(
-                EventId: 2,
-                ServerTick: 20,
-                Kind: CombatEventKind.StructureFloorCollapsed,
-                PresentationId: 1,
-                Origin: new NumericsVector3(494f, 4f, 415f),
-                Target: new NumericsVector3(494f, 8.2f, 518f));
+            CombatEventObservation floorEvent = CombatEventObservation.ForStructure(
+                eventId: 2,
+                serverTick: 20,
+                kind: CombatEventKind.StructureFloorCollapsed,
+                presentationId: 1,
+                origin: new NumericsVector3(494f, 4f, 415f),
+                target: new NumericsVector3(494f, 8.2f, 518f),
+                structureId: targetId);
             int len2 = WireProtocol.WriteSnapshot(snapBuf, 2, 20, default, default, [floorEvent], default, default, default, default, [partialObs]);
             Require(replica.TryApply(snapBuf.AsSpan(0, len2)), "Partial collapse snapshot must apply.");
             view.Update(replica, 0.05f);
@@ -87,14 +89,15 @@ internal static class BuildingDestructionRegressionTests
             Require(MathF.Abs(lastReportedMaxY - expectedPartialMaxY) < 0.05f, $"Expected partial MaxY {expectedPartialMaxY}, got {lastReportedMaxY}.");
 
             // 3. Full collapse to rubble (0 floors) + StructureCollapsed event
-            StructureObservation collapsedObs = new(targetId, FloorsStanding: 0, FloorBreachMask: 0b11111, Health: 0);
-            CombatEventObservation fullEvent = new(
-                EventId: 3,
-                ServerTick: 30,
-                Kind: CombatEventKind.StructureCollapsed,
-                PresentationId: 1,
-                Origin: new NumericsVector3(494f, 4f, 415f),
-                Target: new NumericsVector3(494f, 3.5f, 518f));
+            StructureObservation collapsedObs = new(targetId, FloorsStanding: 0, FloorBreachMask: 0, Health: 0);
+            CombatEventObservation fullEvent = CombatEventObservation.ForStructure(
+                eventId: 3,
+                serverTick: 30,
+                kind: CombatEventKind.StructureCollapsed,
+                presentationId: 1,
+                origin: new NumericsVector3(494f, 4f, 415f),
+                target: new NumericsVector3(494f, 3.5f, 518f),
+                structureId: targetId);
             int len3 = WireProtocol.WriteSnapshot(snapBuf, 3, 30, default, default, [fullEvent], default, default, default, default, [collapsedObs]);
             Require(replica.TryApply(snapBuf.AsSpan(0, len3)), "Full collapse snapshot must apply.");
             view.Update(replica, 0.05f);

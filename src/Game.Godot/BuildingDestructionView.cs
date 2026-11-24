@@ -352,6 +352,11 @@ internal sealed class BuildingDestructionView : IDisposable
             ? (originPos - hitPos).Normalized()
             : Vector3.Up;
         float terrainY = _geometry.HeightMap.GetHeight(hitPos.X, hitPos.Z);
+        float rubbleHeight = ReferenceRubbleHeight;
+        if (ev.StructureId.Value > 0 && _idToSection.TryGetValue(ev.StructureId, out int secIdx))
+        {
+            rubbleHeight = _sections[secIdx].Profile.RubbleHeight;
+        }
 
         if (ev.Kind == CombatEventKind.StructureDamaged)
         {
@@ -363,7 +368,7 @@ internal sealed class BuildingDestructionView : IDisposable
         else if (ev.Kind == CombatEventKind.StructureFloorCollapsed)
         {
             _soundBank.PlayFloorCollapse(hitPos);
-            _debrisPool.SpawnBurst(hitPos, Vector3.Up, spreadRadius: 4.5f, count: 22, minSpeed: 3.5f, maxSpeed: 11.5f, rubbleFloorY: terrainY + 0.6f, includeLargeSlabs: true);
+            _debrisPool.SpawnBurst(hitPos, Vector3.Up, spreadRadius: 4.5f, count: 22, minSpeed: 3.5f, maxSpeed: 11.5f, rubbleFloorY: terrainY + rubbleHeight * 0.4f, includeLargeSlabs: true);
             for (int p = 0; p < 4; p++)
             {
                 float a = p * (MathF.Tau * 0.25f) + 0.3f;
@@ -374,7 +379,7 @@ internal sealed class BuildingDestructionView : IDisposable
         else if (ev.Kind == CombatEventKind.StructureCollapsed)
         {
             _soundBank.PlayFullCollapse(hitPos);
-            _debrisPool.SpawnBurst(hitPos + Vector3.Up * 2.2f, Vector3.Up, spreadRadius: 5.2f, count: 34, minSpeed: 4.0f, maxSpeed: 13.5f, rubbleFloorY: terrainY + ReferenceRubbleHeight * 0.7f, includeLargeSlabs: true);
+            _debrisPool.SpawnBurst(hitPos + Vector3.Up * 2.2f, Vector3.Up, spreadRadius: 5.2f, count: 34, minSpeed: 4.0f, maxSpeed: 13.5f, rubbleFloorY: terrainY + rubbleHeight * 0.7f, includeLargeSlabs: true);
             for (int p = 0; p < 6; p++)
             {
                 float a = p * (MathF.Tau / 6f);

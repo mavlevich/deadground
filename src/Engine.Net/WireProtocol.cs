@@ -1250,10 +1250,14 @@ public static class WireProtocol
 
             byte resultByte = record[39];
 
+            bool isStructureEvent = kindByte is (byte)CombatEventKind.StructureDamaged
+                or (byte)CombatEventKind.StructureFloorCollapsed
+                or (byte)CombatEventKind.StructureCollapsed;
             if (eventId == 0 || serverTick < 0 ||
                 kindByte < (byte)CombatEventKind.ShotFired ||
                 kindByte > (byte)CombatEventKind.StructureCollapsed ||
                 resultByte > (byte)HitResult.Miss ||
+                (isStructureEvent && (shooterIdVal == 0 || shooterIdVal > int.MaxValue)) ||
                 !float.IsFinite(origin.X) || !float.IsFinite(origin.Y) || !float.IsFinite(origin.Z) ||
                 !float.IsFinite(target.X) || !float.IsFinite(target.Y) || !float.IsFinite(target.Z))
             {
@@ -1315,8 +1319,12 @@ public static class WireProtocol
             byte floorBreachMask = record[5];
             ushort health = BinaryPrimitives.ReadUInt16LittleEndian(record[6..]);
 
+            uint allowedBreachMask = floorsStanding == 0
+                ? 0u
+                : (floorsStanding >= 8 ? 0xFFu : ((1u << floorsStanding) - 1u));
             if (structureId.Value <= 0 ||
                 floorsStanding > StructureDestructionProfile.MaxSupportedFloors ||
+                (floorBreachMask & ~allowedBreachMask) != 0 ||
                 !frame.StructureIndices.TryAdd(structureId, i))
             {
                 return false;

@@ -126,6 +126,7 @@ public readonly record struct CombatEventObservation(
     HitResult Result = HitResult.None)
 {
     public WreckId WreckId => new(ShooterUnitId.Value);
+    public StructureId StructureId => new((int)ShooterUnitId.Value);
 
     public CombatEventObservation(
         uint eventId,
@@ -138,6 +139,17 @@ public readonly record struct CombatEventObservation(
         : this(eventId, serverTick, kind, presentationId, origin, target, new EntityId(wreckId.Value), HitResult.None)
     {
     }
+
+    public static CombatEventObservation ForStructure(
+        uint eventId,
+        int serverTick,
+        CombatEventKind kind,
+        ushort presentationId,
+        Vector3 origin,
+        Vector3 target,
+        StructureId structureId,
+        HitResult result = HitResult.None) =>
+        new(eventId, serverTick, kind, presentationId, origin, target, new EntityId((uint)Math.Max(0, structureId.Value)), result);
 }
 
 public readonly record struct UnitState(

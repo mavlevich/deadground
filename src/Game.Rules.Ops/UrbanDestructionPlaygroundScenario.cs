@@ -35,15 +35,10 @@ public static class UrbanDestructionPlaygroundScenario
     public const float BuildingHeight = FloorsTotal * FloorHeight; // 15.5m
     public const float RubbleHeight = 1.5f;
 
-    public static readonly StructureDestructionProfile PanelkaProfile = new(
-        FloorsTotal: FloorsTotal,
-        FloorHeight: FloorHeight,
-        RubbleHeight: RubbleHeight,
-        MaxHealth: 360,
-        StructuralArmor: 15,
-        DustCloudRadius: 18.0f,
-        DustCloudHeight: 14.0f,
-        DustCloudDurationTicks: 180);
+    public const string PanelkaProfileId = "panelka_1_464";
+
+    public static StructureDestructionProfile PanelkaProfile =>
+        ColdWarContent.LoadCatalog().RequireBuildingProfile(PanelkaProfileId);
 
     // Player 1 (Soviet): 2x T-62, 1x BM-21 Grad, 1x BRDM-2 scout facing north into the courtyard
     public static readonly Vector2 SovietT62WestPos = new(482.0f, 415.0f);
@@ -78,17 +73,29 @@ public static class UrbanDestructionPlaygroundScenario
         (112, 500f, 574f, MathF.PI),
     ];
 
-    public static DestructibleBuildingSpec[] GetBuildingSpecs()
+    public static DestructibleBuildingSpec[] GetBuildingSpecs(UnitCatalog? catalog = null)
     {
+        StructureDestructionProfile profile = (catalog ?? ColdWarContent.LoadCatalog()).RequireBuildingProfile(PanelkaProfileId);
         DestructibleBuildingSpec[] specs = new DestructibleBuildingSpec[PanelkaLayout.Length];
         for (int i = 0; i < PanelkaLayout.Length; i++)
         {
             specs[i] = new DestructibleBuildingSpec(
                 new StructureId(PanelkaLayout[i].Id),
-                PanelkaProfile,
+                profile,
                 PanelkaLayout[i].YawRad);
         }
         return specs;
+    }
+
+    public static DestructibleStructureBinding[] GetStructureBindings(UnitCatalog? catalog = null)
+    {
+        DestructibleBuildingSpec[] specs = GetBuildingSpecs(catalog);
+        DestructibleStructureBinding[] bindings = new DestructibleStructureBinding[specs.Length];
+        for (int i = 0; i < specs.Length; i++)
+        {
+            bindings[i] = new DestructibleStructureBinding(specs[i].Id, specs[i].Profile);
+        }
+        return bindings;
     }
 
     public static HeightMap CreateHeightMap()
@@ -150,10 +157,11 @@ public static class UrbanDestructionPlaygroundScenario
     {
         geometry ??= CreateStaticGeometry();
         catalog ??= ColdWarContent.LoadCatalog();
+        DestructibleStructureBinding[] bindings = GetStructureBindings(catalog);
         return new MatchSetup(
             MatchSetup.CurrentProtocolVersion,
             catalog.ContentHash,
-            MatchSetup.ComputeMapHash(geometry),
+            MatchSetup.ComputeMapHash(geometry, bindings),
             ruleSetId,
             PlayerFactions: ["soviet", "us"]);
     }

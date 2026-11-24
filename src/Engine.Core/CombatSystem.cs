@@ -678,6 +678,43 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         return false;
     }
 
+    /// <summary>
+    /// Validates own-unit and own-weapon preconditions for an AttackGroundCommand at enqueue time
+    /// without inspecting hidden enemy or unobserved structure state.
+    /// </summary>
+    public bool CanEnqueueAttackGround(int player, AttackGroundCommand command, WorldState world)
+    {
+        if (player < 1 || command.Sequence == 0)
+            return false;
+
+        if (!float.IsFinite(command.TargetPoint.X) ||
+            !float.IsFinite(command.TargetPoint.Y) ||
+            !float.IsFinite(command.TargetPoint.Z))
+            return false;
+
+        Vector2 target2D = new(command.TargetPoint.X, command.TargetPoint.Z);
+        if (!world.Map.Contains(target2D))
+            return false;
+
+        if (!world.TryGetUnit(command.Unit, out UnitState attacker) || attacker.Owner != player ||
+            world.IsContained(command.Unit) || world.IsCrashing(command.Unit) || world.IsSlung(command.Unit))
+            return false;
+
+        if (!_combatCatalog.TryGetProfile(attacker.Definition, out UnitCombatProfile profile) ||
+            profile.Weapon is null ||
+            profile.Weapon.IsIndirectFire ||
+            profile.Weapon.AirTargetsOnly)
+            return false;
+
+        if (command.TargetStructure != default && profile.Weapon.StructuralDamage <= 0)
+            return false;
+
+        if (!world.TryGetCombatState(command.Unit, out WorldState.CombatState cs) || cs.Ammunition <= 0)
+            return false;
+
+        return true;
+    }
+
     public bool TryOrderAttackGround(int player, AttackGroundCommand command, WorldState world)
     {
         if (player < 1 || command.Sequence == 0)
@@ -2840,14 +2877,14 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                 (shooterId.Value != 0 && _detection.IsEntityObservedBy(p, shooterId));
             Vector3 safeOrigin = shooterVisible ? origin : impactPoint;
 
-            AppendEvent(p, new CombatEventObservation(
+            AppendEvent(p, CombatEventObservation.ForStructure(
                 eventId,
                 tick,
                 kind,
                 presentationId,
                 safeOrigin,
                 impactPoint,
-                default,
+                structureId,
                 (isFloorCollapse || isFullCollapse) ? HitResult.Penetrated : HitResult.None));
         }
     }

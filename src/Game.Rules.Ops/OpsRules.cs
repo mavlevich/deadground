@@ -283,14 +283,50 @@ public sealed record UnitDefinition(
 
 public sealed record FactionData(string Id, string? Name = null);
 
+public sealed record BuildingProfileData(
+    string Id,
+    byte FloorsTotal,
+    float FloorHeight,
+    float RubbleHeight,
+    ushort MaxHealth,
+    ushort StructuralArmor = 0,
+    float DustCloudRadius = 18f,
+    float DustCloudHeight = 14f,
+    int DustCloudDurationTicks = 200)
+{
+    public StructureDestructionProfile ToProfile() => new(
+        FloorsTotal,
+        FloorHeight,
+        RubbleHeight,
+        MaxHealth,
+        StructuralArmor,
+        DustCloudRadius,
+        DustCloudHeight,
+        DustCloudDurationTicks);
+}
+
 public sealed record UnitCatalog(
     int SchemaVersion,
     UnitDefinition[] Units,
     DetectionSettings? Detection = null,
     WeaponData[]? Weapons = null,
-    FactionData[]? Factions = null)
+    FactionData[]? Factions = null,
+    BuildingProfileData[]? Buildings = null)
 {
     public ulong ContentHash { get; init; }
+
+    public StructureDestructionProfile RequireBuildingProfile(string id)
+    {
+        if (Buildings is not null)
+        {
+            for (int i = 0; i < Buildings.Length; i++)
+            {
+                if (string.Equals(Buildings[i].Id, id, StringComparison.Ordinal))
+                    return Buildings[i].ToProfile();
+            }
+        }
+        throw new KeyNotFoundException($"Building profile '{id}' not found in catalog.");
+    }
 
     public bool HasFaction(string id)
     {
@@ -829,6 +865,8 @@ public sealed class OpsCountermeasureCatalog : IUnitCountermeasureCatalog
 [JsonSerializable(typeof(AccuracyPoint[]))]
 [JsonSerializable(typeof(FactionData))]
 [JsonSerializable(typeof(FactionData[]))]
+[JsonSerializable(typeof(BuildingProfileData))]
+[JsonSerializable(typeof(BuildingProfileData[]))]
 [JsonSerializable(typeof(TraversabilityCapabilities))]
 [JsonSerializable(typeof(float[]))]
 internal partial class ContentJsonContext : JsonSerializerContext;
@@ -1149,6 +1187,19 @@ public static class PrototypeScenario
                 {
                     throw new InvalidOperationException($"Unit '{unit.Id}' has invalid flare countermeasure parameters.");
                 }
+            }
+        }
+        if (data.Buildings is not null)
+        {
+            HashSet<string> buildingIds = new(StringComparer.Ordinal);
+            foreach (BuildingProfileData b in data.Buildings)
+            {
+                if (b is null || string.IsNullOrWhiteSpace(b.Id))
+                    throw new InvalidOperationException("Building profile must have a non-empty id.");
+                if (!buildingIds.Add(b.Id))
+                    throw new InvalidOperationException($"Duplicate building profile id '{b.Id}'.");
+                if (!b.ToProfile().IsValid)
+                    throw new InvalidOperationException($"Building profile '{b.Id}' has invalid structural parameters.");
             }
         }
         return data;
