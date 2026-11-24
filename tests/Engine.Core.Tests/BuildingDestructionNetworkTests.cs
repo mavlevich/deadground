@@ -62,13 +62,13 @@ public sealed class BuildingDestructionNetworkTests
         StructureObservation[] structures =
         [
             new(new StructureId(10), FloorsStanding: 3, FloorBreachMask: 0b00110, Health: 240),
-            new(new StructureId(11), FloorsStanding: 0, FloorBreachMask: 0b11111, Health: 0)
+            new(new StructureId(11), FloorsStanding: 0, FloorBreachMask: 0, Health: 0)
         ];
         CombatEventObservation[] events =
         [
-            new(201, 10, CombatEventKind.StructureDamaged, 1, new Vector3(100f, 2f, 200f), new Vector3(206f, 4f, 206f), new EntityId(14), HitResult.Penetrated),
-            new(202, 10, CombatEventKind.StructureFloorCollapsed, 1, new Vector3(206f, 4f, 206f), new Vector3(206f, 4f, 206f), default, HitResult.Penetrated),
-            new(203, 10, CombatEventKind.StructureCollapsed, 1, new Vector3(206f, 1.5f, 206f), new Vector3(206f, 1.5f, 206f), default, HitResult.Penetrated)
+            CombatEventObservation.ForStructure(201, 10, CombatEventKind.StructureDamaged, 1, new Vector3(100f, 2f, 200f), new Vector3(206f, 4f, 206f), new StructureId(10), HitResult.Penetrated),
+            CombatEventObservation.ForStructure(202, 10, CombatEventKind.StructureFloorCollapsed, 1, new Vector3(206f, 4f, 206f), new Vector3(206f, 4f, 206f), new StructureId(10), HitResult.Penetrated),
+            CombatEventObservation.ForStructure(203, 10, CombatEventKind.StructureCollapsed, 1, new Vector3(206f, 1.5f, 206f), new Vector3(206f, 1.5f, 206f), new StructureId(11), HitResult.Penetrated)
         ];
 
         byte[] snapBuf = new byte[WireProtocol.MaxMessageSize];
@@ -100,10 +100,13 @@ public sealed class BuildingDestructionNetworkTests
 
         Assert.Equal(3, replica.EventCount);
         Assert.Equal(CombatEventKind.StructureDamaged, replica.Events[0].Kind);
+        Assert.Equal(new StructureId(10), replica.Events[0].StructureId);
         Assert.Equal(CombatEventKind.StructureFloorCollapsed, replica.Events[1].Kind);
+        Assert.Equal(new StructureId(10), replica.Events[1].StructureId);
         Assert.Equal(CombatEventKind.StructureCollapsed, replica.Events[2].Kind);
+        Assert.Equal(new StructureId(11), replica.Events[2].StructureId);
 
-        // Reject invalid structure records (non-positive id, floors > MaxSupportedFloors, duplicate id)
+        // Reject invalid structure records (non-positive id, floors > MaxSupportedFloors, breach bits above FloorsStanding, duplicate id)
         byte[] badBuf = new byte[snapLen];
         snapBuf.AsSpan(0, snapLen).CopyTo(badBuf);
         int firstStructOffset = WireProtocol.SnapshotHeaderSize + events.Length * WireProtocol.EventSize;
@@ -120,6 +123,21 @@ public sealed class BuildingDestructionNetworkTests
         // FloorsStanding > MaxSupportedFloors
         snapBuf.AsSpan(0, snapLen).CopyTo(badBuf);
         badBuf[firstStructOffset + 4] = StructureDestructionProfile.MaxSupportedFloors + 1;
+        Assert.False(new ClientReplica().TryApply(badBuf));
+
+        // FloorBreachMask bit set above FloorsStanding (FloorsStanding == 3 -> bit 3 is invalid)
+        snapBuf.AsSpan(0, snapLen).CopyTo(badBuf);
+        badBuf[firstStructOffset + 5] = 0b01000;
+        Assert.False(new ClientReplica().TryApply(badBuf));
+
+        // Non-zero FloorBreachMask when FloorsStanding == 0
+        snapBuf.AsSpan(0, snapLen).CopyTo(badBuf);
+        badBuf[firstStructOffset + WireProtocol.StructureSize + 5] = 0b00001;
+        Assert.False(new ClientReplica().TryApply(badBuf));
+
+        // Structure event with zero StructureId rejected
+        snapBuf.AsSpan(0, snapLen).CopyTo(badBuf);
+        BinaryPrimitives.WriteUInt32LittleEndian(badBuf.AsSpan(WireProtocol.SnapshotHeaderSize + 11, 4), 0u);
         Assert.False(new ClientReplica().TryApply(badBuf));
 
         // Out-of-range CombatEventKind
@@ -184,5 +202,95 @@ public sealed class BuildingDestructionNetworkTests
         }
 
         Assert.Equal(0, maxAlloc);
+    }
+
+    [Fact]
+    public void MaxStructures256_FragmentsAndReassemblesOverLiteNetLib_AndProfileHashMismatchRejected()
+    {
+        // Build a map with 256 destructible structures (> MaxFragmentPayloadSize = 960 bytes)
+        HeightMap map = new(65, 65, 16f, 0.01f, new ushort[65 * 65]);
+        OpaqueStructure[] structs = new OpaqueStructure[WorldState.MaxDestructibleStructures];
+        DestructibleStructureBinding[] bindings = new DestructibleStructureBinding[WorldState.MaxDestructibleStructures];
+        StructureDestructionProfile profile = new(
+            FloorsTotal: 5,
+            FloorHeight: 3.1f,
+            RubbleHeight: 1.5f,
+            MaxHealth: 360);
+
+        for (int i = 0; i < structs.Length; i++)
+        {
+            int col = i % 16;
+            int row = i / 16;
+            float x = 40f + col * 36f;
+            float z = 40f + row * 36f;
+            StructureId id = new(i + 1);
+            structs[i] = new OpaqueStructure(id, x, 0f, z, x + 12f, 15.5f, z + 12f, isGrounded: true);
+            bindings[i] = new DestructibleStructureBinding(id, profile);
+        }
+
+        StaticGeometry geometry = new(map, structs);
+        WorldState world = new(map);
+        BuildingDestructionSystem destruction = new(geometry);
+        for (int i = 0; i < structs.Length; i++)
+        {
+            Assert.True(destruction.RegisterStructure(world, structs[i].Id, in profile));
+            // Damage every single section so all 256 are replicated in the snapshot (256 * 8 = 2048+ bytes -> multi-fragment)
+            Assert.True(destruction.ApplyDirectHit(world, 0, structs[i].Id, new Vector3(structs[i].MinX + 6f, 2f, structs[i].MinZ + 6f), 40, out _, out _, out _));
+        }
+
+        ulong mapHashWithProfiles = MatchSetup.ComputeMapHash(geometry, bindings);
+        Assert.NotEqual(MatchSetup.ComputeMapHash(geometry), mapHashWithProfiles);
+
+        // Changing a single building's RubbleHeight changes MapHash and triggers MapMismatch on handshake
+        DestructibleStructureBinding[] mismatchedBindings = (DestructibleStructureBinding[])bindings.Clone();
+        mismatchedBindings[0] = mismatchedBindings[0] with { Profile = profile with { RubbleHeight = 2.2f } };
+        ulong mismatchedMapHash = MatchSetup.ComputeMapHash(geometry, mismatchedBindings);
+        Assert.NotEqual(mapHashWithProfiles, mismatchedMapHash);
+
+        MatchSetup serverSetup = new(MatchSetup.CurrentProtocolVersion, 99999UL, mapHashWithProfiles, "MaxStruct256");
+        using LiteNetLibServerTransport serverTransport = LiteNetLibTransport.CreateServer(0, maxPlayers: 2);
+        DetectionSystem detection = new(geometry, new ElevatedObserverPerceptionCatalog(), new DetectionTuning(evaluationIntervalTicks: 1));
+        world.CreateUnit(1, 1, new Vector2(512f, 512f), 10f, 100, 0);
+        using Simulation sim = new(world, new RuleSet(new MovementSystem(), detection, destruction));
+        using SimulationHost host = new(sim, serverTransport, serverSetup);
+
+        // 1. Mismatched building profile hash is rejected at handshake
+        MatchSetup badProfileClientSetup = serverSetup with { MapHash = mismatchedMapHash };
+        using (ClientSession badClient = ClientSession.Connect("127.0.0.1", serverTransport.Port, badProfileClientSetup))
+        {
+            for (int i = 0; i < 150 && badClient.State != SessionConnectionState.Failed; i++)
+            {
+                host.Advance(Simulation.TickSeconds);
+                badClient.Advance(Simulation.TickSeconds);
+                Thread.Sleep(4);
+            }
+            Assert.Equal(SessionConnectionState.Failed, badClient.State);
+            Assert.Contains("MapMismatch", badClient.StatusDescription);
+        }
+
+        // 2. Valid client receives fragmented 256-structure snapshot over real LiteNetLib
+        using ClientSession validClient = ClientSession.Connect("127.0.0.1", serverTransport.Port, serverSetup);
+        for (int i = 0; i < 200 && !(validClient.IsConnected && validClient.Replica.StructureCount == 256); i++)
+        {
+            host.Advance(Simulation.TickSeconds);
+            validClient.Advance(Simulation.TickSeconds);
+            Thread.Sleep(4);
+        }
+
+        Assert.True(validClient.IsConnected);
+        Assert.Equal(256, validClient.Replica.StructureCount);
+        Assert.True(validClient.Replica.TryGetStructure(new StructureId(1), out StructureObservation first));
+        Assert.True(validClient.Replica.TryGetStructure(new StructureId(256), out StructureObservation last));
+        Assert.Equal((ushort)320, first.Health);
+        Assert.Equal((ushort)320, last.Health);
+    }
+
+    private sealed class ElevatedObserverPerceptionCatalog : IUnitPerceptionCatalog
+    {
+        public bool TryGetProfile(ushort definition, out UnitPerceptionProfile profile)
+        {
+            profile = new UnitPerceptionProfile(new VisualSensorProfile(2000f, 180f), new TargetObservationPoints([2f]));
+            return true;
+        }
     }
 }

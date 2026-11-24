@@ -607,7 +607,7 @@ public sealed class BuildingDestructionTests
             Assert.True(destZero.RegisterStructure(worldZero, building.Id, in profile));
 
             EntityId mgUnit = worldZero.CreateUnit(1, DefTank, new Vector2(500f, 606f), 12f, 100, 40, initialTurretYaw: -MathF.PI * 0.5f);
-            Assert.True(simZero.TryEnqueue(1, new AttackGroundCommand(1u, 0, mgUnit, new Vector3(600f, 2.0f, 606f), building.Id)));
+            Assert.False(simZero.TryEnqueue(1, new AttackGroundCommand(1u, 0, mgUnit, new Vector3(600f, 2.0f, 606f), building.Id)));
             for (int t = 0; t < 20; t++) simZero.Step();
 
             Assert.True(worldZero.TryGetCombatState(mgUnit, out WorldState.CombatState csMg));

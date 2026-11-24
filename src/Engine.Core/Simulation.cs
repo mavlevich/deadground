@@ -253,6 +253,9 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
             _world.IsContained(command.Unit) || _world.IsCrashing(command.Unit) || _world.IsSlung(command.Unit))
             return false;
 
+        if (_combat is null || !_combat.CanEnqueueAttackGround(player, command, _world))
+            return false;
+
         _world.ClearBoardingOrder(command.Unit);
         _world.ClearPendingDisembark(command.Unit);
         _world.ClearFireMission(command.Unit);
