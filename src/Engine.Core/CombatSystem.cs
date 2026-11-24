@@ -1739,21 +1739,6 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                     HitResult.None);
                 AppendEvent(p, ev);
             }
-            else if (p == targetOwner || _detection.IsEntityObservedBy(p, targetId))
-            {
-                // Target owner hears/sees the bright SAM booster plume launching in the sky,
-                // without disclosing exact hidden launcher entity ID.
-                CombatEventObservation ev = new(
-                    eventId,
-                    tick,
-                    CombatEventKind.MissileLaunched,
-                    presentationId,
-                    origin,
-                    target,
-                    default,
-                    HitResult.None);
-                AppendEvent(p, ev);
-            }
         }
     }
 

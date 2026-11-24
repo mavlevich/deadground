@@ -1041,7 +1041,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         MissionObservation mission = _mission is not null
             ? _mission.GetObservation(knowledge.Player)
             : default;
-        knowledge.Refresh(_world, contacts, _navigation, events, mission, wrecks, smokeClouds, Tick);
+        knowledge.Refresh(_world, contacts, _navigation, events, mission, wrecks, smokeClouds, Tick, _detection);
     }
 
     private readonly bool[] _admittedPlayers = new bool[MaxPlayers];
