@@ -655,8 +655,8 @@
     {
       "id": "panelka_1_464",
       "floors_total": 5,
-      "floor_height": 3.1,
-      "rubble_height": 1.5,
+      "floor_height": 2.75,
+      "rubble_height": 1.65,
       "max_health": 360,
       "structural_armor": 15,
       "dust_cloud_radius": 18.0,

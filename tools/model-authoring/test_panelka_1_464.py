@@ -92,13 +92,20 @@ class PanelkaAssetTests(unittest.TestCase):
                 # Balconies/visor project <= 1.2 m beyond +/-6 m depth
                 self.assertLessEqual(st["max"][2] - st["min"][2], SECTION_DEPTH + 2.5)
 
-            # Rubble mound matches 1.5 m height and stays inside footprint
-            rub = stats_by_mod["Rubble_Mound"]
-            self.assertAlmostEqual(rub["min"][1], 0.0, delta=0.05)
-            self.assertGreaterEqual(rub["max"][1], RUBBLE_HEIGHT - 0.15)
-            self.assertLessEqual(rub["max"][1], RUBBLE_HEIGHT + 0.15)
-            self.assertLessEqual(rub["max"][0] - rub["min"][0], SECTION_WIDTH)
-            self.assertLessEqual(rub["max"][2] - rub["min"][2], SECTION_DEPTH)
+            # Battle ruins (Rubble_Mound & Rubble_Mound_B) have impassable 2.6-3.7 m corner wall stubs inside footprint
+            for rub_name in ("Rubble_Mound", "Rubble_Mound_B"):
+                rub = stats_by_mod[rub_name]
+                self.assertAlmostEqual(rub["min"][1], 0.0, delta=0.05)
+                self.assertGreaterEqual(rub["max"][1], RUBBLE_HEIGHT + 0.5, f"{rub_name} must have standing jagged corner ruins above central rubble saddle")
+                self.assertLessEqual(rub["max"][1], 4.0, f"{rub_name} ruin corner walls exceed height budget")
+                self.assertLessEqual(rub["max"][0] - rub["min"][0], SECTION_WIDTH + 0.4)
+                self.assertLessEqual(rub["max"][2] - rub["min"][2], SECTION_DEPTH + 0.6)
+
+            # Asymmetric jagged top cap sits cleanly at Y = 0 and rises jaggedly for partial collapse skylines
+            jagged = stats_by_mod["Top_Jagged_Cap"]
+            self.assertAlmostEqual(jagged["min"][1], 0.0, delta=0.05)
+            self.assertGreaterEqual(jagged["max"][1], 1.8)
+            self.assertLessEqual(jagged["max"][1], 2.8)
 
             # Every module must merge to exactly 1 single-material mesh (1 draw call per module / MultiMesh batch)
             self.assertEqual(len(data["materials"]), 1, f"Expected 1 unified vertex-colored material, got {len(data['materials'])}")

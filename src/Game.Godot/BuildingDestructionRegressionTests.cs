@@ -230,9 +230,9 @@ internal static class BuildingDestructionRegressionTests
             {
                 losCtx.SetStructureMaxYOverrides(view.ObservedMaxYOverrides, view.ObservedMaxYOverrides.Length);
 
-                NumericsVector2 observer = new(482f, 445f);
+                NumericsVector2 observer = new(478f, 445f);
                 NumericsVector2 targetBehindPanelka = UrbanDestructionPlaygroundScenario.UsM60WestPos;
-                NumericsVector2 farGroundBehindPanelka = new(482f, 750f);
+                NumericsVector2 farGroundBehindPanelka = new(478f, 750f);
 
                 ushort t62Idx = catalog.RequireDefinitionIndex("t62");
                 OwnUnitObservation scout = new(new EntityId(1), t62Idx, observer, 0, Health: 100, Ammunition: 40);
@@ -317,7 +317,7 @@ internal static class BuildingDestructionRegressionTests
         try
         {
             using BuildingDestructionSoundBank bank = new(host);
-            Require(bank.PrebakedClipCount == 6, $"Expected 6 pre-baked destruction PCM clips, got {bank.PrebakedClipCount}.");
+            Require(bank.PrebakedClipCount == 9, $"Expected 9 pre-baked destruction PCM clips, got {bank.PrebakedClipCount}.");
 
             bank.PlayConcreteHit(new Vector3(500f, 5f, 512f));
             long beforeAudio = GC.GetAllocatedBytesForCurrentThread();
@@ -370,10 +370,10 @@ internal static class BuildingDestructionRegressionTests
             float baseZ = 220f + row * 120f;
             for (int s = 0; s < sectionsPerBuilding; s++)
             {
-                float minX = baseX + s * 12f;
-                float gy = map.GetHeight(minX + 6f, baseZ + 6f);
+                float minX = baseX + s * UrbanDestructionPlaygroundScenario.SectionWidth;
+                float gy = map.GetHeight(minX + 7.2f, baseZ + 5.9f);
                 StructureId sid = new(1000 + idx);
-                structures[idx] = new OpaqueStructure(sid, minX, gy, baseZ, minX + 12f, gy + 15.5f, baseZ + 12f, isGrounded: true);
+                structures[idx] = new OpaqueStructure(sid, minX, gy, baseZ, minX + UrbanDestructionPlaygroundScenario.SectionWidth, gy + UrbanDestructionPlaygroundScenario.BuildingHeight, baseZ + UrbanDestructionPlaygroundScenario.SectionDepth, isGrounded: true);
                 specs[idx] = new DestructibleBuildingSpec(sid, profile, MathF.PI);
                 idx++;
             }
@@ -442,8 +442,8 @@ internal static class BuildingDestructionRegressionTests
             for (int step = 0; step < 120; step++) view.Update(replica, 0.05f);
 
             int rubbleDrawCalls = view.ActiveDrawCallEstimate;
-            Require(view.RubbleBatchedCount == totalSections, $"All {totalSections} collapsed sections must batch in Rubble MultiMesh.");
-            Require(rubbleDrawCalls == 1, $"120 settled rubble sections must submit exactly 1 opaque draw call, got {rubbleDrawCalls}.");
+            Require(view.RubbleBatchedCount == totalSections, $"All {totalSections} collapsed sections must batch in Rubble MultiMeshes.");
+            Require(rubbleDrawCalls <= 2, $"120 settled asymmetric battle-ruin sections must submit <= 2 opaque draw calls, got {rubbleDrawCalls}.");
 
             Array.Sort(frameMs);
             double p50 = frameMs[measuredFrames / 2];

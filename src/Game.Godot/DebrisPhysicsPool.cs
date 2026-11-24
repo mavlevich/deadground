@@ -12,10 +12,10 @@ namespace DeadGround.Client;
 /// </summary>
 internal sealed class DebrisPhysicsPool : IDisposable
 {
-    internal const int TotalCapacity = 256;
-    private const int SlabACapacity = 96;
-    private const int SlabBCapacity = 80;
-    private const int ChunkCCapacity = 80;
+    internal const int TotalCapacity = 384;
+    private const int SlabACapacity = 144;
+    private const int SlabBCapacity = 120;
+    private const int ChunkCCapacity = 120;
     private const float Gravity = 9.81f;
     private const float SleepSpeedSq = 0.09f; // 0.3 m/s
     private const float SleepSpinSq = 0.16f;  // 0.4 rad/s

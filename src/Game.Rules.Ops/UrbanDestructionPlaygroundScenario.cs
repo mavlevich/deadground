@@ -19,12 +19,13 @@ public static class UrbanDestructionPlaygroundScenario
     public const float MapSize = (MapResolution - 1) * MapSpacing;
     public const float BaseHeight = 2.0f;
 
-    public const float SectionWidth = 12.0f;
-    public const float SectionDepth = 12.0f;
-    public const float FloorHeight = 3.1f;
+    // Authentic Soviet Series 1-464 5-story panelka proportions (14.4 m pod'ezd, 11.8 m depth, 2.75 m/floor)
+    public const float SectionWidth = 14.4f;
+    public const float SectionDepth = 11.8f;
+    public const float FloorHeight = 2.75f;
     public const byte FloorsTotal = 5;
-    public const float BuildingHeight = FloorsTotal * FloorHeight; // 15.5m
-    public const float RubbleHeight = 1.5f;
+    public const float BuildingHeight = FloorsTotal * FloorHeight; // 13.75m
+    public const float RubbleHeight = 1.65f;
 
     public const string PanelkaProfileId = "panelka_1_464";
 
@@ -37,31 +38,31 @@ public static class UrbanDestructionPlaygroundScenario
     public static readonly Vector2 SovietBrdm2Pos = new(500.0f, 445.0f);
     public static readonly Vector2 SovietBm21Pos = new(500.0f, 110.0f);
 
-    // Player 2 (US): 2x M60A1 tanks concealed directly behind the 4-section central panelka (Z=512..524)
+    // Player 2 (US): 2x M60A1 tanks concealed directly behind the 4-section central panelka (Z=512..523.8)
     public static readonly Vector2 UsM60WestPos = new(492.0f, 548.0f);
     public static readonly Vector2 UsM60EastPos = new(508.0f, 548.0f);
 
     private static readonly (int Id, float MinX, float MinZ, float YawRad)[] PanelkaLayout =
     [
-        // Central 4-section (48m) panelka blocking LOS across the courtyard (front faces south toward Player 1)
-        (101, 476f, 512f, MathF.PI),
-        (102, 488f, 512f, MathF.PI),
-        (103, 500f, 512f, MathF.PI),
-        (104, 512f, 512f, MathF.PI),
+        // Central 4-section (57.6 m) panelka blocking LOS across the courtyard (front faces south toward Player 1)
+        (101, 471.2f, 512.0f, MathF.PI),
+        (102, 485.6f, 512.0f, MathF.PI),
+        (103, 500.0f, 512.0f, MathF.PI),
+        (104, 514.4f, 512.0f, MathF.PI),
 
-        // East 3-section (36m) flanking panelka (front faces west into courtyard)
-        (105, 556f, 464f, -MathF.PI * 0.5f),
-        (106, 556f, 476f, -MathF.PI * 0.5f),
-        (107, 556f, 488f, -MathF.PI * 0.5f),
+        // East 3-section (43.2 m) flanking panelka (front faces west into courtyard; rotated 90 deg -> 11.8 m X by 14.4 m Z)
+        (105, 562.0f, 458.0f, -MathF.PI * 0.5f),
+        (106, 562.0f, 472.4f, -MathF.PI * 0.5f),
+        (107, 562.0f, 486.8f, -MathF.PI * 0.5f),
 
-        // West 3-section (36m) flanking panelka (front faces east into courtyard)
-        (108, 432f, 464f, MathF.PI * 0.5f),
-        (109, 432f, 476f, MathF.PI * 0.5f),
-        (110, 432f, 488f, MathF.PI * 0.5f),
+        // West 3-section (43.2 m) flanking panelka (front faces east into courtyard; rotated 90 deg -> 11.8 m X by 14.4 m Z)
+        (108, 426.2f, 458.0f, MathF.PI * 0.5f),
+        (109, 426.2f, 472.4f, MathF.PI * 0.5f),
+        (110, 426.2f, 486.8f, MathF.PI * 0.5f),
 
-        // Rear north 2-section (24m) panelka behind OPFOR positions
-        (111, 488f, 574f, MathF.PI),
-        (112, 500f, 574f, MathF.PI),
+        // Rear north 2-section (28.8 m) panelka behind OPFOR positions
+        (111, 485.6f, 574.0f, MathF.PI),
+        (112, 500.0f, 574.0f, MathF.PI),
     ];
 
     public static DestructibleBuildingSpec[] GetBuildingSpecs(UnitCatalog? catalog = null)
@@ -103,16 +104,19 @@ public static class UrbanDestructionPlaygroundScenario
         OpaqueStructure[] structures = new OpaqueStructure[PanelkaLayout.Length];
         for (int i = 0; i < PanelkaLayout.Length; i++)
         {
-            (int id, float minX, float minZ, _) = PanelkaLayout[i];
-            float groundY = map.GetHeight(minX + SectionWidth * 0.5f, minZ + SectionDepth * 0.5f);
+            (int id, float minX, float minZ, float yawRad) = PanelkaLayout[i];
+            bool rotated90 = MathF.Abs(MathF.Sin(yawRad)) > 0.707f;
+            float sizeX = rotated90 ? SectionDepth : SectionWidth;
+            float sizeZ = rotated90 ? SectionWidth : SectionDepth;
+            float groundY = map.GetHeight(minX + sizeX * 0.5f, minZ + sizeZ * 0.5f);
             structures[i] = new OpaqueStructure(
                 new StructureId(id),
                 minX,
                 groundY,
                 minZ,
-                minX + SectionWidth,
+                minX + sizeX,
                 groundY + BuildingHeight,
-                minZ + SectionDepth,
+                minZ + sizeZ,
                 isGrounded: true);
         }
 
