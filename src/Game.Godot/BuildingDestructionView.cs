@@ -7,20 +7,24 @@ namespace DeadGround.Client;
 /// <summary>
 /// Presentation-only modular building destruction view for Godot.
 /// Sleeping intact sections render via GPU MultiMesh LOD batches (LOD0/LOD1/LOD2 = 1 draw call for
-/// all intact sections on the map), settled rubble mounds render via a single Rubble MultiMesh batch,
-/// and only actively damaged or collapsing sections borrow a pre-allocated modular floor rig
-/// (1 merged mesh per floor). Collapse animations and debris bursts are gated strictly on live
-/// collapse events so re-observed ruins from fog of war snap directly to their settled state.
+/// all intact sections on the map), settled impassable battle ruins render via 2 asymmetric Rubble
+/// MultiMesh batches, and actively damaged sections borrow a pre-allocated modular floor rig
+/// crowned by an asymmetric jagged upper-wall ruin cap (Top_Jagged_Cap).
+/// Live collapse transitions use a dense billowing dust curtain + multi-slab debris ejection +
+/// brief structural shudder and swap behind peak dust opacity (never sliding whole floor boxes).
+/// Re-observed ruins from fog of war snap directly to settled visuals without replaying collapse FX.
 /// Zero gameplay logic, zero steady-state heap allocations.
 /// </summary>
 internal sealed class BuildingDestructionView : IDisposable
 {
     internal const string PanelkaAssetPath = "res://Assets/Buildings/Panelka1464/panelka_1_464.glb";
-    private const float ReferenceFootprint = 12.0f;
-    private const float ReferenceFloorHeight = 3.1f;
-    private const float ReferenceRubbleHeight = 1.5f;
-    private const float CollapseAnimDurationSec = 1.45f;
-    private const int MaxDustPuffs = 48;
+    private const float ReferenceWidth = 14.4f;
+    private const float ReferenceDepth = 11.8f;
+    private const float ReferenceFloorHeight = 2.75f;
+    private const float ReferenceRubbleHeight = 1.65f;
+    private const float CollapseSwapDelaySec = 0.22f;
+    private const float CollapseShudderDurationSec = 0.42f;
+    private const int MaxDustPuffs = 96;
     private const int InitialDamagedRigPoolSize = 24;
     private const float Lod1CameraSize = 180.0f;
     private const float Lod2CameraSize = 420.0f;
@@ -31,7 +35,8 @@ internal sealed class BuildingDestructionView : IDisposable
     {
         IntactBatched = 0,
         DamagedRig = 1,
-        RubbleBatched = 2
+        RubbleBatchedA = 2,
+        RubbleBatchedB = 3
     }
 
     private sealed class DamagedSectionRig
@@ -39,8 +44,10 @@ internal sealed class BuildingDestructionView : IDisposable
         public Node3D Root = null!;
         public MeshInstance3D[] IntactFloors = null!;
         public MeshInstance3D[] BreachedFloors = null!;
+        public MeshInstance3D JaggedCapNode = null!;
         public MeshInstance3D RoofNode = null!;
-        public MeshInstance3D RubbleNode = null!;
+        public MeshInstance3D RubbleNodeA = null!;
+        public MeshInstance3D RubbleNodeB = null!;
         public int MaxFloors;
     }
 
@@ -56,21 +63,23 @@ internal sealed class BuildingDestructionView : IDisposable
         public Vector3 RubbleScale;
         public Transform3D IntactWorldTransform;
         public Transform3D RubbleWorldTransform;
+        public bool UseRubbleVariantB;
+        public float CapMirrorSign;
 
         public VisualMode Mode;
-        public int BatchSlot = -1; // slot inside intact or rubble MultiMesh when batched
+        public int BatchSlot = -1;
         public DamagedSectionRig? ActiveRig;
 
         public byte ObservedFloorsStanding;
         public byte ObservedBreachMask;
         public ushort ObservedHealth;
 
-        // Cascading visual collapse animation state
+        // Dust-masked structural shudder transition state (brief shudder -> swap behind dust -> settle)
         public bool AnimatingCollapse;
+        public bool CollapseSwapped;
         public float CollapseElapsed;
         public byte CollapseFromFloors;
         public byte CollapseToFloors;
-        public float CollapseTiltSign;
     }
 
     private struct DustPuff
@@ -84,6 +93,7 @@ internal sealed class BuildingDestructionView : IDisposable
         public float Lifetime;
         public float StartScale;
         public float EndScale;
+        public float PeakAlpha;
     }
 
     private readonly Node3D _root;
@@ -98,8 +108,10 @@ internal sealed class BuildingDestructionView : IDisposable
     private readonly Mesh _groundFloorMesh;
     private readonly Mesh _midFloorMesh;
     private readonly Mesh _breachedFloorMesh;
+    private readonly Mesh _jaggedCapMesh;
     private readonly Mesh _roofMesh;
-    private readonly Mesh _rubbleMesh;
+    private readonly Mesh _rubbleMeshA;
+    private readonly Mesh _rubbleMeshB;
 
     private readonly MultiMesh[] _intactLodMultiMeshes = new MultiMesh[3];
     private readonly MultiMeshInstance3D[] _intactLodInstances = new MultiMeshInstance3D[3];
@@ -107,10 +119,10 @@ internal sealed class BuildingDestructionView : IDisposable
     private int _intactBatchedCount;
     private int _activeLodLevel;
 
-    private readonly MultiMesh _rubbleMultiMesh;
-    private readonly MultiMeshInstance3D _rubbleInstance;
-    private readonly int[] _rubbleSlotToSection;
-    private int _rubbleBatchedCount;
+    private readonly MultiMesh[] _rubbleMultiMeshes = new MultiMesh[2];
+    private readonly MultiMeshInstance3D[] _rubbleInstances = new MultiMeshInstance3D[2];
+    private readonly int[][] _rubbleSlotToSection;
+    private readonly int[] _rubbleBatchedCounts = new int[2];
 
     private readonly List<DamagedSectionRig> _freeRigs = new();
     private readonly int _maxFloorsAcrossSections;
@@ -129,7 +141,7 @@ internal sealed class BuildingDestructionView : IDisposable
     internal int SectionCount => _sections.Length;
     internal int ActiveLodLevel => _activeLodLevel;
     internal int IntactBatchedCount => _intactBatchedCount;
-    internal int RubbleBatchedCount => _rubbleBatchedCount;
+    internal int RubbleBatchedCount => _rubbleBatchedCounts[0] + _rubbleBatchedCounts[1];
     internal int ActiveDamagedRigCount { get; private set; }
     internal DebrisPhysicsPool DebrisPool => _debrisPool;
     internal BuildingDestructionSoundBank SoundBank => _soundBank;
@@ -137,8 +149,8 @@ internal sealed class BuildingDestructionView : IDisposable
 
     /// <summary>
     /// Exact count of active opaque draw calls submitted by this view (excluding shadow pass):
-    /// 1 for all sleeping intact sections + 1 for all settled rubble mounds + visible 1-mesh modules
-    /// on currently damaged rigs.
+    /// 1 for all sleeping intact sections + 1-2 for all settled asymmetric battle ruins + visible
+    /// 1-mesh modules on currently damaged rigs.
     /// </summary>
     internal int ActiveDrawCallEstimate
     {
@@ -146,7 +158,8 @@ internal sealed class BuildingDestructionView : IDisposable
         {
             int calls = 0;
             if (_intactBatchedCount > 0) calls++;
-            if (_rubbleBatchedCount > 0) calls++;
+            if (_rubbleBatchedCounts[0] > 0) calls++;
+            if (_rubbleBatchedCounts[1] > 0) calls++;
             for (int i = 0; i < _sections.Length; i++)
             {
                 DamagedSectionRig? rig = _sections[i].ActiveRig;
@@ -157,8 +170,10 @@ internal sealed class BuildingDestructionView : IDisposable
                     if (rig.IntactFloors[f].Visible) calls++;
                     if (rig.BreachedFloors[f].Visible) calls++;
                 }
+                if (rig.JaggedCapNode.Visible) calls++;
                 if (rig.RoofNode.Visible) calls++;
-                if (rig.RubbleNode.Visible) calls++;
+                if (rig.RubbleNodeA.Visible) calls++;
+                if (rig.RubbleNodeB.Visible) calls++;
             }
             return calls;
         }
@@ -189,8 +204,10 @@ internal sealed class BuildingDestructionView : IDisposable
             out _groundFloorMesh,
             out _midFloorMesh,
             out _breachedFloorMesh,
+            out _jaggedCapMesh,
             out _roofMesh,
-            out _rubbleMesh,
+            out _rubbleMeshA,
+            out _rubbleMeshB,
             out Mesh? slabAMesh,
             out Mesh? slabBMesh,
             out Mesh? chunkCMesh);
@@ -198,13 +215,13 @@ internal sealed class BuildingDestructionView : IDisposable
         _debrisPool = new DebrisPhysicsPool(_root, slabAMesh, slabBMesh, chunkCMesh);
         _soundBank = new BuildingDestructionSoundBank(_root);
 
-        // Pre-allocate pooled concrete dust puff spheres for zero steady-state allocations
-        SphereMesh sharedPuffMesh = new() { Radius = 1.0f, Height = 1.6f, RadialSegments = 10, Rings = 6 };
+        // Pre-allocate pooled concrete dust puff billows for dense dust-curtain collapse masking (0 runtime allocs)
+        SphereMesh sharedPuffMesh = new() { Radius = 1.0f, Height = 1.65f, RadialSegments = 10, Rings = 6 };
         for (int i = 0; i < MaxDustPuffs; i++)
         {
             StandardMaterial3D mat = new()
             {
-                AlbedoColor = new Color(0.76f, 0.74f, 0.69f, 0.0f),
+                AlbedoColor = new Color(0.70f, 0.68f, 0.63f, 0.0f),
                 Roughness = 1.0f,
                 Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
                 ShadingMode = BaseMaterial3D.ShadingModeEnum.PerVertex
@@ -221,7 +238,6 @@ internal sealed class BuildingDestructionView : IDisposable
             _dustPuffs[i] = new DustPuff { Mesh = mi, Material = mat };
         }
 
-        // Count valid specs matching geometry structures
         int validCount = 0;
         int maxFloors = 5;
         for (int i = 0; i < specs.Count; i++)
@@ -239,12 +255,12 @@ internal sealed class BuildingDestructionView : IDisposable
         _idToSection = new Dictionary<StructureId, int>(validCount);
         _liveCollapseEventThisFrame = new bool[validCount];
         _liveDamageEventThisFrame = new bool[validCount];
-        _intactSlotToSection = new int[Math.Max(1, validCount)];
-        _rubbleSlotToSection = new int[Math.Max(1, validCount)];
-
-        // Create sleeping intact MultiMesh LOD batches (LOD0 close, LOD1 rts, LOD2 distant)
-        Mesh[] lodMeshes = [_intactLod0Mesh, _intactLod1Mesh, _intactLod2Mesh];
         int batchCap = Math.Max(1, validCount);
+        _intactSlotToSection = new int[batchCap];
+        _rubbleSlotToSection = [new int[batchCap], new int[batchCap]];
+
+        // Sleeping intact MultiMesh LOD batches (LOD0 close, LOD1 rts, LOD2 distant)
+        Mesh[] lodMeshes = [_intactLod0Mesh, _intactLod1Mesh, _intactLod2Mesh];
         for (int lod = 0; lod < 3; lod++)
         {
             MultiMesh mm = new()
@@ -267,25 +283,31 @@ internal sealed class BuildingDestructionView : IDisposable
             _intactLodInstances[lod] = mmi;
         }
 
-        // Create settled rubble MultiMesh batch (1 draw call for all collapsed sections)
-        _rubbleMultiMesh = new MultiMesh
+        // Settled war-torn battle ruins MultiMesh batches (2 asymmetric variants -> max 2 draw calls for 120 ruins)
+        Mesh[] rubbleMeshes = [_rubbleMeshA, _rubbleMeshB];
+        for (int v = 0; v < 2; v++)
         {
-            TransformFormat = MultiMesh.TransformFormatEnum.Transform3D,
-            InstanceCount = batchCap,
-            VisibleInstanceCount = 0,
-            Mesh = _rubbleMesh
-        };
-        _rubbleInstance = new MultiMeshInstance3D
-        {
-            Name = "PanelkaRubbleBatch",
-            Multimesh = _rubbleMultiMesh,
-            CustomAabb = BatchCustomAabb,
-            CastShadow = GeometryInstance3D.ShadowCastingSetting.On,
-            Visible = false
-        };
-        _root.AddChild(_rubbleInstance);
+            MultiMesh mm = new()
+            {
+                TransformFormat = MultiMesh.TransformFormatEnum.Transform3D,
+                InstanceCount = batchCap,
+                VisibleInstanceCount = 0,
+                Mesh = rubbleMeshes[v]
+            };
+            MultiMeshInstance3D mmi = new()
+            {
+                Name = v == 0 ? "PanelkaRubbleBatchA" : "PanelkaRubbleBatchB",
+                Multimesh = mm,
+                CustomAabb = BatchCustomAabb,
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.On,
+                Visible = false
+            };
+            _root.AddChild(mmi);
+            _rubbleMultiMeshes[v] = mm;
+            _rubbleInstances[v] = mmi;
+        }
 
-        // Pre-allocate pooled modular rigs for actively damaged sections (zero steady-state allocations)
+        // Pre-allocate pooled modular rigs for actively damaged sections
         int initialRigs = Math.Min(validCount, InitialDamagedRigPoolSize);
         for (int r = 0; r < initialRigs; r++)
         {
@@ -302,9 +324,13 @@ internal sealed class BuildingDestructionView : IDisposable
             OpaqueStructure bounds = geometry.Structures[geomIdx];
             float sizeX = bounds.MaxX - bounds.MinX;
             float sizeZ = bounds.MaxZ - bounds.MinZ;
+            bool rotated90 = MathF.Abs(MathF.Sin(spec.YawRad)) > 0.707f;
+            float localWidthX = rotated90 ? sizeZ : sizeX;
+            float localDepthZ = rotated90 ? sizeX : sizeZ;
+
             Vector3 baseCenter = new((bounds.MinX + bounds.MaxX) * 0.5f, bounds.MinY, (bounds.MinZ + bounds.MaxZ) * 0.5f);
-            Vector3 floorScale = new(sizeX / ReferenceFootprint, spec.Profile.FloorHeight / ReferenceFloorHeight, sizeZ / ReferenceFootprint);
-            Vector3 rubbleScale = new(sizeX / ReferenceFootprint, spec.Profile.RubbleHeight / ReferenceRubbleHeight, sizeZ / ReferenceFootprint);
+            Vector3 floorScale = new(localWidthX / ReferenceWidth, spec.Profile.FloorHeight / ReferenceFloorHeight, localDepthZ / ReferenceDepth);
+            Vector3 rubbleScale = new(localWidthX / ReferenceWidth, Math.Clamp(spec.Profile.RubbleHeight / ReferenceRubbleHeight, 0.75f, 1.35f), localDepthZ / ReferenceDepth);
 
             Basis rotYaw = new(Vector3.Up, spec.YawRad);
             Transform3D intactTransform = new(rotYaw.Scaled(floorScale), baseCenter);
@@ -322,12 +348,13 @@ internal sealed class BuildingDestructionView : IDisposable
                 RubbleScale = rubbleScale,
                 IntactWorldTransform = intactTransform,
                 RubbleWorldTransform = rubbleTransform,
+                UseRubbleVariantB = (spec.Id.Value & 1) == 1,
+                CapMirrorSign = (spec.Id.Value & 1) == 0 ? 1f : -1f,
                 Mode = VisualMode.IntactBatched,
                 BatchSlot = -1,
                 ObservedFloorsStanding = spec.Profile.FloorsTotal,
                 ObservedBreachMask = 0,
-                ObservedHealth = spec.Profile.MaxHealth,
-                CollapseTiltSign = (spec.Id.Value & 1) == 0 ? 1f : -1f
+                ObservedHealth = spec.Profile.MaxHealth
             };
             _sections[idx] = sec;
             _idToSection[spec.Id] = idx;
@@ -390,8 +417,8 @@ internal sealed class BuildingDestructionView : IDisposable
         Array.Clear(_liveCollapseEventThisFrame);
         Array.Clear(_liveDamageEventThisFrame);
 
-        // 1. Process incoming combat events FIRST so we know which sections experienced a live
-        //    observed breach/collapse this frame vs. stale ruins newly revealed from fog of war.
+        // 1. Process incoming combat events FIRST to distinguish live observed breaches/collapses
+        //    from stale ruins newly revealed from fog of war.
         ReadOnlySpan<CombatEventObservation> events = replica.Events;
         for (int i = 0; i < events.Length; i++)
         {
@@ -450,12 +477,11 @@ internal sealed class BuildingDestructionView : IDisposable
 
                     if (obs.FloorsStanding < prevFloors && _liveCollapseEventThisFrame[idx])
                     {
-                        // Live observed collapse: animate floors pancaking downward
-                        BeginCollapseAnimation(idx, sec, prevFloors, obs.FloorsStanding);
+                        BeginDustMaskedCollapse(idx, sec, prevFloors, obs.FloorsStanding);
                     }
                     else
                     {
-                        // Re-observed ruins or non-live state jump: snap directly to settled visuals
+                        // Re-observed ruins or non-live state jump: snap directly to settled battle-ruin visuals
                         sec.AnimatingCollapse = false;
                         ApplySettledVisualState(idx, sec);
                     }
@@ -472,17 +498,17 @@ internal sealed class BuildingDestructionView : IDisposable
             }
         }
 
-        // 3. Advance active floor cascade collapse animations
+        // 3. Advance active dust-masked structural shudder transitions
         for (int i = 0; i < _sections.Length; i++)
         {
             SectionVisual sec = _sections[i];
             if (!sec.AnimatingCollapse)
                 continue;
 
-            AdvanceCollapseAnimation(i, sec, deltaSeconds);
+            AdvanceCollapseTransition(i, sec, deltaSeconds);
         }
 
-        // 4. Advance Variant A MultiMesh debris physics and dust puffs
+        // 4. Advance Variant A MultiMesh debris physics and dust clouds
         _debrisPool.Update(deltaSeconds, _geometry.HeightMap);
         UpdateDustPuffs(deltaSeconds);
     }
@@ -504,64 +530,89 @@ internal sealed class BuildingDestructionView : IDisposable
         if (ev.Kind == CombatEventKind.StructureDamaged)
         {
             _soundBank.PlayConcreteHit(hitPos);
-            _debrisPool.SpawnBurst(hitPos, outward, spreadRadius: 1.4f, count: 10, minSpeed: 4.5f, maxSpeed: 12.5f, rubbleFloorY: terrainY, includeLargeSlabs: false);
-            SpawnDustPuff(hitPos, outward * 2.5f + Vector3.Up * 1.8f, startScale: 1.2f, endScale: 4.8f, lifetime: 1.4f);
-            SpawnDustPuff(hitPos + Vector3.Up * 0.6f, Vector3.Up * 2.4f, startScale: 0.9f, endScale: 3.6f, lifetime: 1.2f);
+            _debrisPool.SpawnBurst(hitPos, outward, spreadRadius: 1.5f, count: 14, minSpeed: 5.0f, maxSpeed: 13.5f, rubbleFloorY: terrainY, includeLargeSlabs: false);
+            SpawnDustPuff(hitPos, outward * 2.8f + Vector3.Up * 1.6f, startScale: 1.4f, endScale: 5.2f, lifetime: 1.6f, peakAlpha: 0.62f);
+            SpawnDustPuff(hitPos + Vector3.Up * 0.8f, outward * 1.4f + Vector3.Up * 2.4f, startScale: 1.1f, endScale: 4.4f, lifetime: 1.4f, peakAlpha: 0.55f);
         }
         else if (ev.Kind == CombatEventKind.StructureFloorCollapsed)
         {
             _soundBank.PlayFloorCollapse(hitPos);
-            _debrisPool.SpawnBurst(hitPos, Vector3.Up, spreadRadius: 5.5f, count: 22, minSpeed: 3.5f, maxSpeed: 11.5f, rubbleFloorY: terrainY + rubbleHeight * 0.4f, includeLargeSlabs: true);
-            for (int p = 0; p < 4; p++)
-            {
-                float a = p * (MathF.Tau * 0.25f) + 0.3f;
-                Vector3 dir = new(MathF.Cos(a) * 3.8f, 2.2f, MathF.Sin(a) * 3.8f);
-                SpawnDustPuff(hitPos + dir * 0.4f, dir, startScale: 2.2f, endScale: 8.5f, lifetime: 2.4f);
-            }
+            _debrisPool.SpawnBurst(hitPos, Vector3.Up, spreadRadius: 6.2f, count: 28, minSpeed: 4.0f, maxSpeed: 12.5f, rubbleFloorY: terrainY + rubbleHeight * 0.4f, includeLargeSlabs: true);
         }
         else if (ev.Kind == CombatEventKind.StructureCollapsed)
         {
             _soundBank.PlayFullCollapse(hitPos);
-            _debrisPool.SpawnBurst(hitPos + Vector3.Up * 2.2f, Vector3.Up, spreadRadius: 5.8f, count: 34, minSpeed: 4.0f, maxSpeed: 13.5f, rubbleFloorY: terrainY + rubbleHeight * 0.7f, includeLargeSlabs: true);
-            for (int p = 0; p < 6; p++)
-            {
-                float a = p * (MathF.Tau / 6f);
-                Vector3 dir = new(MathF.Cos(a) * 4.8f, 2.6f, MathF.Sin(a) * 4.8f);
-                SpawnDustPuff(hitPos + dir * 0.45f, dir, startScale: 2.8f, endScale: 10.5f, lifetime: 3.0f);
-            }
+            _debrisPool.SpawnBurst(hitPos + Vector3.Up * 2.0f, Vector3.Up, spreadRadius: 6.8f, count: 44, minSpeed: 4.5f, maxSpeed: 14.5f, rubbleFloorY: terrainY + rubbleHeight * 0.65f, includeLargeSlabs: true);
         }
     }
 
-    private void BeginCollapseAnimation(int secIdx, SectionVisual sec, byte fromFloors, byte toFloors)
+    private void BeginDustMaskedCollapse(int secIdx, SectionVisual sec, byte fromFloors, byte toFloors)
     {
         DamagedSectionRig rig = AcquireDamagedRig(secIdx, sec);
         sec.AnimatingCollapse = true;
+        sec.CollapseSwapped = false;
         sec.CollapseElapsed = 0f;
         sec.CollapseFromFloors = fromFloors;
         sec.CollapseToFloors = toFloors;
 
-        rig.RubbleNode.Visible = toFloors == 0;
-        if (toFloors == 0)
+        // Show current pre-collapse state for 0.22 s while violent dust curtain & debris shroud the swap
+        ConfigureRigFloors(rig, sec, fromFloors);
+
+        // Dense multi-billow concrete dust curtain wrapping the collapsing section footprint
+        float baseY = sec.BaseCenter.Y + toFloors * sec.Profile.FloorHeight;
+        float topY = sec.BaseCenter.Y + fromFloors * sec.Profile.FloorHeight;
+        float midY = (baseY + topY) * 0.5f;
+        float halfX = (sec.Bounds.MaxX - sec.Bounds.MinX) * 0.45f;
+        float halfZ = (sec.Bounds.MaxZ - sec.Bounds.MinZ) * 0.45f;
+
+        int ringCount = toFloors == 0 ? 14 : 10;
+        for (int p = 0; p < ringCount; p++)
         {
-            rig.RubbleNode.Scale = new Vector3(sec.RubbleScale.X, sec.RubbleScale.Y * 0.35f, sec.RubbleScale.Z);
+            float a = p * (MathF.Tau / ringCount) + (sec.Id.Value * 0.37f);
+            float cx = MathF.Cos(a);
+            float sz = MathF.Sin(a);
+            Vector3 puffPos = new(
+                sec.BaseCenter.X + cx * halfX * 0.82f,
+                baseY + ((p % 3) * 0.35f + 0.15f) * MathF.Max(2.5f, topY - baseY),
+                sec.BaseCenter.Z + sz * halfZ * 0.82f);
+            Vector3 puffVel = new(cx * (3.2f + (p % 3) * 1.1f), 1.6f + (p % 2) * 1.4f, sz * (3.2f + (p % 3) * 1.1f));
+            SpawnDustPuff(
+                puffPos,
+                puffVel,
+                startScale: toFloors == 0 ? 3.8f : 3.0f,
+                endScale: toFloors == 0 ? 11.5f : 8.8f,
+                lifetime: toFloors == 0 ? 3.4f : 2.5f,
+                peakAlpha: 0.78f);
         }
 
-        // Spawn concrete slabs cascading outward from the collapsing perimeter
-        float topY = sec.BaseCenter.Y + fromFloors * sec.Profile.FloorHeight * 0.72f;
-        float floorY = sec.BaseCenter.Y + (toFloors == 0 ? sec.Profile.RubbleHeight * 0.7f : toFloors * sec.Profile.FloorHeight * 0.25f);
-        int burstCount = Math.Clamp((fromFloors - toFloors) * 12, 12, 36);
+        // Core vertical dust column rising from the shattered interior
+        for (int c = 0; c < 4; c++)
+        {
+            float cy = baseY + (c + 0.4f) * (MathF.Max(3.0f, topY - baseY) * 0.25f);
+            SpawnDustPuff(
+                new Vector3(sec.BaseCenter.X + (c - 1.5f) * 2.1f, cy, sec.BaseCenter.Z),
+                new Vector3((c - 1.5f) * 1.2f, 2.8f + c * 0.5f, (c % 2 == 0 ? 1f : -1f) * 1.4f),
+                startScale: 4.2f,
+                endScale: 12.2f,
+                lifetime: 3.6f,
+                peakAlpha: 0.82f);
+        }
+
+        // Eject heavy concrete slabs and rubble chunks around the perimeter during collapse
+        float floorY = sec.BaseCenter.Y + (toFloors == 0 ? sec.Profile.RubbleHeight * 0.65f : toFloors * sec.Profile.FloorHeight * 0.30f);
+        int burstCount = Math.Clamp((fromFloors - toFloors) * 16, 20, 48);
         _debrisPool.SpawnBurst(
-            new Vector3(sec.BaseCenter.X, topY, sec.BaseCenter.Z),
+            new Vector3(sec.BaseCenter.X, midY, sec.BaseCenter.Z),
             Vector3.Up,
-            spreadRadius: (sec.Bounds.MaxX - sec.Bounds.MinX) * 0.48f,
+            spreadRadius: MathF.Max(halfX, halfZ) * 1.05f,
             count: burstCount,
-            minSpeed: 3.0f,
-            maxSpeed: 10.0f,
+            minSpeed: 3.8f,
+            maxSpeed: 12.0f,
             rubbleFloorY: floorY,
             includeLargeSlabs: true);
     }
 
-    private void AdvanceCollapseAnimation(int secIdx, SectionVisual sec, float dt)
+    private void AdvanceCollapseTransition(int secIdx, SectionVisual sec, float dt)
     {
         DamagedSectionRig? rig = sec.ActiveRig;
         if (rig is null)
@@ -572,104 +623,67 @@ internal sealed class BuildingDestructionView : IDisposable
         }
 
         sec.CollapseElapsed += dt;
-        float progress = Math.Clamp(sec.CollapseElapsed / CollapseAnimDurationSec, 0f, 1f);
-        float targetTopY = sec.CollapseToFloors == 0
-            ? sec.Profile.RubbleHeight * 0.4f
-            : sec.CollapseToFloors * sec.Profile.FloorHeight;
 
-        int total = sec.Profile.FloorsTotal;
-        for (int f = 0; f < total; f++)
+        // Phase 1 (0 .. 0.22 s): violent structural tremor right as dust curtain engulfs the section
+        if (!sec.CollapseSwapped && sec.CollapseElapsed < CollapseSwapDelaySec)
         {
-            bool breached = (sec.ObservedBreachMask & (1 << f)) != 0;
-            if (f < sec.CollapseToFloors)
-            {
-                float restY = f * sec.Profile.FloorHeight;
-                rig.IntactFloors[f].Position = new Vector3(0f, restY, 0f);
-                rig.IntactFloors[f].Rotation = Vector3.Zero;
-                rig.IntactFloors[f].Visible = !breached;
-                rig.BreachedFloors[f].Position = new Vector3(0f, restY, 0f);
-                rig.BreachedFloors[f].Rotation = Vector3.Zero;
-                rig.BreachedFloors[f].Visible = breached;
-            }
-            else if (f < sec.CollapseFromFloors)
-            {
-                float stagger = (f - sec.CollapseToFloors) * 0.08f;
-                float localT = Math.Clamp((progress - stagger) / MathF.Max(0.25f, 1f - stagger), 0f, 1f);
-                float fallEase = localT * localT;
-                float startY = f * sec.Profile.FloorHeight;
-                float curY = startY + (targetTopY - startY) * fallEase;
-                float tilt = sec.CollapseTiltSign * 0.14f * fallEase * (1f + 0.15f * f);
-                float jitterX = MathF.Sin(sec.CollapseElapsed * 28f + f * 1.7f) * 0.14f * (1f - localT);
-                bool stillVisible = localT < 0.94f;
+            float t = sec.CollapseElapsed / CollapseSwapDelaySec;
+            float shakeX = MathF.Sin(sec.CollapseElapsed * 62f) * 0.22f * (1f - 0.3f * t);
+            float shakeZ = MathF.Cos(sec.CollapseElapsed * 53f) * 0.18f * (1f - 0.3f * t);
+            float sagY = -0.35f * t * t;
+            rig.Root.Position = sec.BaseCenter + new Vector3(shakeX, sagY, shakeZ);
+            return;
+        }
 
-                rig.IntactFloors[f].Visible = false;
-                rig.BreachedFloors[f].Visible = stillVisible;
-                rig.BreachedFloors[f].Position = new Vector3(jitterX, curY, 0f);
-                rig.BreachedFloors[f].Rotation = new Vector3(tilt * 0.65f, 0f, tilt);
-            }
-            else
+        // Swap cleanly behind peak opaque dust cloud to asymmetric jagged shell or war-torn ground ruins
+        if (!sec.CollapseSwapped)
+        {
+            sec.CollapseSwapped = true;
+            rig.Root.Position = sec.BaseCenter;
+            ConfigureRigFloors(rig, sec, sec.CollapseToFloors);
+        }
+
+        // Phase 2 (0.22 .. 0.42 s): brief residual settling vibration of the new ruined shell
+        if (sec.CollapseElapsed < CollapseShudderDurationSec)
+        {
+            float settleT = (sec.CollapseElapsed - CollapseSwapDelaySec) / (CollapseShudderDurationSec - CollapseSwapDelaySec);
+            float amp = 0.08f * (1f - settleT);
+            rig.Root.Position = sec.BaseCenter + new Vector3(MathF.Sin(sec.CollapseElapsed * 44f) * amp, 0f, 0f);
+            return;
+        }
+
+        rig.Root.Position = sec.BaseCenter;
+        sec.AnimatingCollapse = false;
+        ApplySettledVisualState(secIdx, sec);
+    }
+
+    private void ConfigureRigFloors(DamagedSectionRig rig, SectionVisual sec, byte standingFloors)
+    {
+        int total = sec.Profile.FloorsTotal;
+        int standing = Math.Clamp((int)standingFloors, 0, total);
+
+        if (standing == 0)
+        {
+            for (int f = 0; f < rig.MaxFloors; f++)
             {
                 rig.IntactFloors[f].Visible = false;
                 rig.BreachedFloors[f].Visible = false;
             }
-        }
-
-        if (sec.CollapseFromFloors == total && sec.CollapseToFloors < total)
-        {
-            float roofEase = progress * progress;
-            float roofStartY = total * sec.Profile.FloorHeight;
-            rig.RoofNode.Position = new Vector3(0f, roofStartY + (targetTopY - roofStartY) * roofEase, 0f);
-            rig.RoofNode.Rotation = new Vector3(0.18f * roofEase, 0f, -sec.CollapseTiltSign * 0.16f * roofEase);
-            rig.RoofNode.Visible = progress < 0.85f;
-        }
-        else
-        {
-            rig.RoofNode.Visible = sec.CollapseToFloors == total;
-        }
-
-        if (sec.CollapseToFloors == 0)
-        {
-            rig.RubbleNode.Visible = true;
-            float rise = 0.35f + 0.65f * MathF.Min(1f, progress * 1.25f);
-            rig.RubbleNode.Scale = new Vector3(sec.RubbleScale.X, sec.RubbleScale.Y * rise, sec.RubbleScale.Z);
-        }
-
-        if (progress >= 1f)
-        {
-            sec.AnimatingCollapse = false;
-            ApplySettledVisualState(secIdx, sec);
-        }
-    }
-
-    private void ApplySettledVisualState(int secIdx, SectionVisual sec)
-    {
-        if (sec.ObservedFloorsStanding >= sec.Profile.FloorsTotal && sec.ObservedBreachMask == 0)
-        {
-            // Undamaged: return to sleeping intact MultiMesh batch
-            ReleaseDamagedRig(sec);
-            RemoveFromRubbleBatch(sec);
-            AddToIntactBatch(secIdx, sec);
+            rig.JaggedCapNode.Visible = false;
+            rig.RoofNode.Visible = false;
+            rig.RubbleNodeA.Scale = sec.RubbleScale;
+            rig.RubbleNodeB.Scale = sec.RubbleScale;
+            rig.RubbleNodeA.Visible = !sec.UseRubbleVariantB;
+            rig.RubbleNodeB.Visible = sec.UseRubbleVariantB;
             return;
         }
 
-        if (sec.ObservedFloorsStanding == 0)
-        {
-            // Fully collapsed: return rig to pool and move to settled Rubble MultiMesh batch
-            ReleaseDamagedRig(sec);
-            RemoveFromIntactBatch(sec);
-            AddToRubbleBatch(secIdx, sec);
-            return;
-        }
-
-        // Partially standing or breached: render via pooled modular rig (1 mesh per floor)
-        DamagedSectionRig rig = AcquireDamagedRig(secIdx, sec);
-        int total = sec.Profile.FloorsTotal;
-        int standing = sec.ObservedFloorsStanding;
         for (int f = 0; f < rig.MaxFloors; f++)
         {
             bool inProfile = f < total;
             bool visible = inProfile && f < standing;
-            bool breached = visible && ((sec.ObservedBreachMask & (1 << f)) != 0);
+            // Topmost surviving floor of a partially collapsed shell always shows battle damage
+            bool breached = visible && (((sec.ObservedBreachMask & (1 << f)) != 0) || (standing < total && f == standing - 1));
             float y = f * sec.Profile.FloorHeight;
 
             rig.IntactFloors[f].Position = new Vector3(0f, y, 0f);
@@ -681,12 +695,42 @@ internal sealed class BuildingDestructionView : IDisposable
             rig.BreachedFloors[f].Visible = breached;
         }
 
+        // Intact 5-story height keeps Roof_Cap; partially collapsed shells get asymmetric Top_Jagged_Cap!
+        bool hasIntactRoof = standing >= total;
         rig.RoofNode.Position = new Vector3(0f, total * sec.Profile.FloorHeight, 0f);
         rig.RoofNode.Rotation = Vector3.Zero;
-        rig.RoofNode.Visible = standing >= total;
+        rig.RoofNode.Visible = hasIntactRoof;
 
-        rig.RubbleNode.Scale = sec.RubbleScale;
-        rig.RubbleNode.Visible = false;
+        rig.JaggedCapNode.Position = new Vector3(0f, standing * sec.Profile.FloorHeight, 0f);
+        rig.JaggedCapNode.Rotation = sec.CapMirrorSign < 0f ? new Vector3(0f, MathF.PI, 0f) : Vector3.Zero;
+        rig.JaggedCapNode.Scale = new Vector3(sec.FloorScale.X, sec.FloorScale.Y, sec.FloorScale.Z);
+        rig.JaggedCapNode.Visible = !hasIntactRoof;
+
+        rig.RubbleNodeA.Visible = false;
+        rig.RubbleNodeB.Visible = false;
+    }
+
+    private void ApplySettledVisualState(int secIdx, SectionVisual sec)
+    {
+        if (sec.ObservedFloorsStanding >= sec.Profile.FloorsTotal && sec.ObservedBreachMask == 0)
+        {
+            ReleaseDamagedRig(sec);
+            RemoveFromRubbleBatch(sec);
+            AddToIntactBatch(secIdx, sec);
+            return;
+        }
+
+        if (sec.ObservedFloorsStanding == 0)
+        {
+            ReleaseDamagedRig(sec);
+            RemoveFromIntactBatch(sec);
+            AddToRubbleBatch(secIdx, sec);
+            return;
+        }
+
+        DamagedSectionRig rig = AcquireDamagedRig(secIdx, sec);
+        rig.Root.Position = sec.BaseCenter;
+        ConfigureRigFloors(rig, sec, sec.ObservedFloorsStanding);
     }
 
     private void AddToIntactBatch(int secIdx, SectionVisual sec)
@@ -737,38 +781,41 @@ internal sealed class BuildingDestructionView : IDisposable
 
     private void AddToRubbleBatch(int secIdx, SectionVisual sec)
     {
-        if (sec.Mode == VisualMode.RubbleBatched && sec.BatchSlot >= 0)
+        int variant = sec.UseRubbleVariantB ? 1 : 0;
+        VisualMode targetMode = variant == 0 ? VisualMode.RubbleBatchedA : VisualMode.RubbleBatchedB;
+        if (sec.Mode == targetMode && sec.BatchSlot >= 0)
             return;
 
-        int slot = _rubbleBatchedCount++;
-        _rubbleSlotToSection[slot] = secIdx;
-        sec.Mode = VisualMode.RubbleBatched;
+        int slot = _rubbleBatchedCounts[variant]++;
+        _rubbleSlotToSection[variant][slot] = secIdx;
+        sec.Mode = targetMode;
         sec.BatchSlot = slot;
 
-        _rubbleMultiMesh.SetInstanceTransform(slot, sec.RubbleWorldTransform);
-        _rubbleMultiMesh.VisibleInstanceCount = _rubbleBatchedCount;
-        _rubbleInstance.Visible = true;
+        _rubbleMultiMeshes[variant].SetInstanceTransform(slot, sec.RubbleWorldTransform);
+        _rubbleMultiMeshes[variant].VisibleInstanceCount = _rubbleBatchedCounts[variant];
+        _rubbleInstances[variant].Visible = true;
     }
 
     private void RemoveFromRubbleBatch(SectionVisual sec)
     {
-        if (sec.Mode != VisualMode.RubbleBatched || sec.BatchSlot < 0)
+        if (sec.Mode is not (VisualMode.RubbleBatchedA or VisualMode.RubbleBatchedB) || sec.BatchSlot < 0)
             return;
 
+        int variant = sec.Mode == VisualMode.RubbleBatchedA ? 0 : 1;
         int slot = sec.BatchSlot;
-        int lastSlot = --_rubbleBatchedCount;
+        int lastSlot = --_rubbleBatchedCounts[variant];
         if (slot != lastSlot)
         {
-            int movedSecIdx = _rubbleSlotToSection[lastSlot];
+            int movedSecIdx = _rubbleSlotToSection[variant][lastSlot];
             SectionVisual movedSec = _sections[movedSecIdx];
-            _rubbleSlotToSection[slot] = movedSecIdx;
+            _rubbleSlotToSection[variant][slot] = movedSecIdx;
             movedSec.BatchSlot = slot;
-            _rubbleMultiMesh.SetInstanceTransform(slot, movedSec.RubbleWorldTransform);
+            _rubbleMultiMeshes[variant].SetInstanceTransform(slot, movedSec.RubbleWorldTransform);
         }
 
         sec.BatchSlot = -1;
-        _rubbleMultiMesh.VisibleInstanceCount = _rubbleBatchedCount;
-        _rubbleInstance.Visible = _rubbleBatchedCount > 0;
+        _rubbleMultiMeshes[variant].VisibleInstanceCount = _rubbleBatchedCounts[variant];
+        _rubbleInstances[variant].Visible = _rubbleBatchedCounts[variant] > 0;
     }
 
     private DamagedSectionRig AcquireDamagedRig(int secIdx, SectionVisual sec)
@@ -800,10 +847,14 @@ internal sealed class BuildingDestructionView : IDisposable
             rig.IntactFloors[f].Visible = false;
             rig.BreachedFloors[f].Visible = false;
         }
+        rig.JaggedCapNode.Scale = sec.FloorScale;
+        rig.JaggedCapNode.Visible = false;
         rig.RoofNode.Scale = new Vector3(sec.FloorScale.X, 1f, sec.FloorScale.Z);
         rig.RoofNode.Visible = false;
-        rig.RubbleNode.Scale = sec.RubbleScale;
-        rig.RubbleNode.Visible = false;
+        rig.RubbleNodeA.Scale = sec.RubbleScale;
+        rig.RubbleNodeA.Visible = false;
+        rig.RubbleNodeB.Scale = sec.RubbleScale;
+        rig.RubbleNodeB.Visible = false;
         rig.Root.Visible = true;
 
         sec.Mode = VisualMode.DamagedRig;
@@ -860,6 +911,15 @@ internal sealed class BuildingDestructionView : IDisposable
             breachedFloors[f] = breachedMi;
         }
 
+        MeshInstance3D jaggedCapMi = new()
+        {
+            Name = "TopJaggedCap",
+            Mesh = _jaggedCapMesh,
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.On,
+            Visible = false
+        };
+        rigRoot.AddChild(jaggedCapMi);
+
         MeshInstance3D roofMi = new()
         {
             Name = "RoofCap",
@@ -869,22 +929,33 @@ internal sealed class BuildingDestructionView : IDisposable
         };
         rigRoot.AddChild(roofMi);
 
-        MeshInstance3D rubbleMi = new()
+        MeshInstance3D rubbleMiA = new()
         {
-            Name = "RubbleMound",
-            Mesh = _rubbleMesh,
+            Name = "RubbleMoundA",
+            Mesh = _rubbleMeshA,
             CastShadow = GeometryInstance3D.ShadowCastingSetting.On,
             Visible = false
         };
-        rigRoot.AddChild(rubbleMi);
+        rigRoot.AddChild(rubbleMiA);
+
+        MeshInstance3D rubbleMiB = new()
+        {
+            Name = "RubbleMoundB",
+            Mesh = _rubbleMeshB,
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.On,
+            Visible = false
+        };
+        rigRoot.AddChild(rubbleMiB);
 
         return new DamagedSectionRig
         {
             Root = rigRoot,
             IntactFloors = intactFloors,
             BreachedFloors = breachedFloors,
+            JaggedCapNode = jaggedCapMi,
             RoofNode = roofMi,
-            RubbleNode = rubbleMi,
+            RubbleNodeA = rubbleMiA,
+            RubbleNodeB = rubbleMiB,
             MaxFloors = maxFloors
         };
     }
@@ -897,11 +968,11 @@ internal sealed class BuildingDestructionView : IDisposable
                 continue;
             float y = sec.BaseCenter.Y + (f + 0.5f) * sec.Profile.FloorHeight;
             Vector3 center = new(sec.BaseCenter.X, y, sec.BaseCenter.Z);
-            SpawnDustPuff(center, Vector3.Up * 1.6f, startScale: 1.8f, endScale: 6.2f, lifetime: 1.8f);
+            SpawnDustPuff(center, Vector3.Up * 1.8f, startScale: 2.2f, endScale: 7.2f, lifetime: 2.1f, peakAlpha: 0.68f);
         }
     }
 
-    private void SpawnDustPuff(Vector3 position, Vector3 velocity, float startScale, float endScale, float lifetime)
+    private void SpawnDustPuff(Vector3 position, Vector3 velocity, float startScale, float endScale, float lifetime, float peakAlpha = 0.62f)
     {
         ref DustPuff puff = ref _dustPuffs[_nextDustPuff];
         _nextDustPuff = (_nextDustPuff + 1) % MaxDustPuffs;
@@ -913,10 +984,11 @@ internal sealed class BuildingDestructionView : IDisposable
         puff.Lifetime = lifetime;
         puff.StartScale = startScale;
         puff.EndScale = endScale;
+        puff.PeakAlpha = peakAlpha;
         puff.Mesh.Position = position;
         puff.Mesh.Scale = new Vector3(startScale, startScale, startScale);
         puff.Mesh.Visible = true;
-        puff.Material.AlbedoColor = new Color(0.76f, 0.74f, 0.69f, 0.55f);
+        puff.Material.AlbedoColor = new Color(0.71f, 0.69f, 0.64f, peakAlpha);
     }
 
     private void UpdateDustPuffs(float dt)
@@ -937,13 +1009,15 @@ internal sealed class BuildingDestructionView : IDisposable
 
             float t = puff.Age / puff.Lifetime;
             puff.Position += puff.Velocity * dt;
-            puff.Velocity *= MathF.Max(0f, 1f - dt * 1.4f);
-            float scale = puff.StartScale + (puff.EndScale - puff.StartScale) * MathF.Sqrt(t);
-            float alpha = 0.55f * (1f - t) * (1f - t);
+            puff.Velocity *= MathF.Max(0f, 1f - dt * 1.25f);
+            float scale = puff.StartScale + (puff.EndScale - puff.StartScale) * MathF.Pow(t, 0.45f);
+            // Hold opaque peak briefly during early bloom to mask geometry swap, then dissipate smoothly
+            float fade = t < 0.18f ? 1f : (1f - (t - 0.18f) / 0.82f);
+            float alpha = puff.PeakAlpha * fade * fade;
 
             puff.Mesh.Position = puff.Position;
-            puff.Mesh.Scale = new Vector3(scale, scale * 0.78f, scale);
-            puff.Material.AlbedoColor = new Color(0.75f, 0.73f, 0.68f, alpha);
+            puff.Mesh.Scale = new Vector3(scale, scale * 0.80f, scale);
+            puff.Material.AlbedoColor = new Color(0.70f, 0.68f, 0.63f, alpha);
         }
     }
 
@@ -954,8 +1028,10 @@ internal sealed class BuildingDestructionView : IDisposable
         out Mesh ground,
         out Mesh mid,
         out Mesh breached,
+        out Mesh jaggedCap,
         out Mesh roof,
-        out Mesh rubble,
+        out Mesh rubbleA,
+        out Mesh rubbleB,
         out Mesh? slabA,
         out Mesh? slabB,
         out Mesh? chunkC)
@@ -980,14 +1056,17 @@ internal sealed class BuildingDestructionView : IDisposable
                     Mesh? g = ExtractSingleMesh(sceneRoot, "Floor_Ground_Intact");
                     Mesh? m = ExtractSingleMesh(sceneRoot, "Floor_Mid_Intact");
                     Mesh? b = ExtractSingleMesh(sceneRoot, "Floor_Breached");
+                    Mesh? jc = ExtractSingleMesh(sceneRoot, "Top_Jagged_Cap");
                     Mesh? rf = ExtractSingleMesh(sceneRoot, "Roof_Cap");
-                    Mesh? rb = ExtractSingleMesh(sceneRoot, "Rubble_Mound");
+                    Mesh? rbA = ExtractSingleMesh(sceneRoot, "Rubble_Mound");
+                    Mesh? rbB = ExtractSingleMesh(sceneRoot, "Rubble_Mound_B");
                     slabA = ExtractSingleMesh(sceneRoot, "Debris_Slab_A");
                     slabB = ExtractSingleMesh(sceneRoot, "Debris_Slab_B");
                     chunkC = ExtractSingleMesh(sceneRoot, "Debris_Chunk_C");
 
                     if (l0 is not null && l1 is not null && l2 is not null &&
-                        g is not null && m is not null && b is not null && rf is not null && rb is not null)
+                        g is not null && m is not null && b is not null && jc is not null &&
+                        rf is not null && rbA is not null && rbB is not null)
                     {
                         intactLod0 = l0;
                         intactLod1 = l1;
@@ -995,8 +1074,10 @@ internal sealed class BuildingDestructionView : IDisposable
                         ground = g;
                         mid = m;
                         breached = b;
+                        jaggedCap = jc;
                         roof = rf;
-                        rubble = rb;
+                        rubbleA = rbA;
+                        rubbleB = rbB;
                         return true;
                     }
                 }
@@ -1007,26 +1088,24 @@ internal sealed class BuildingDestructionView : IDisposable
             }
         }
 
-        // Clean procedural box fallback if asset has not been imported yet
-        Mesh fullFallback = CreateFallbackMesh(new Vector3(ReferenceFootprint, ReferenceFloorHeight * 5f, ReferenceFootprint), new Color("b3afa4"));
+        Mesh fullFallback = CreateFallbackMesh(new Vector3(ReferenceWidth, ReferenceFloorHeight * 5f, ReferenceDepth), new Color("b3afa4"));
         intactLod0 = fullFallback;
         intactLod1 = fullFallback;
         intactLod2 = fullFallback;
-        ground = CreateFallbackMesh(new Vector3(ReferenceFootprint, ReferenceFloorHeight, ReferenceFootprint), new Color("9f9b90"));
-        mid = CreateFallbackMesh(new Vector3(ReferenceFootprint, ReferenceFloorHeight, ReferenceFootprint), new Color("b3afa4"));
-        breached = CreateFallbackMesh(new Vector3(ReferenceFootprint * 0.96f, ReferenceFloorHeight * 0.96f, ReferenceFootprint * 0.96f), new Color("746f68"));
-        roof = CreateFallbackMesh(new Vector3(ReferenceFootprint, 0.4f, ReferenceFootprint), new Color("47484a"));
-        rubble = CreateFallbackMesh(new Vector3(ReferenceFootprint * 0.96f, ReferenceRubbleHeight, ReferenceFootprint * 0.96f), new Color("7d7870"));
+        ground = CreateFallbackMesh(new Vector3(ReferenceWidth, ReferenceFloorHeight, ReferenceDepth), new Color("9f9b90"));
+        mid = CreateFallbackMesh(new Vector3(ReferenceWidth, ReferenceFloorHeight, ReferenceDepth), new Color("b3afa4"));
+        breached = CreateFallbackMesh(new Vector3(ReferenceWidth * 0.96f, ReferenceFloorHeight * 0.96f, ReferenceDepth * 0.96f), new Color("746f68"));
+        jaggedCap = CreateFallbackMesh(new Vector3(ReferenceWidth * 0.92f, 1.4f, ReferenceDepth * 0.92f), new Color("6e6961"));
+        roof = CreateFallbackMesh(new Vector3(ReferenceWidth, 0.4f, ReferenceDepth), new Color("47484a"));
+        rubbleA = CreateFallbackMesh(new Vector3(ReferenceWidth * 0.96f, ReferenceRubbleHeight, ReferenceDepth * 0.96f), new Color("7d7870"));
+        rubbleB = rubbleA;
         return false;
     }
 
     private static Mesh? ExtractSingleMesh(Node3D root, string moduleName)
     {
         Node? moduleNode = root.FindChild(moduleName, recursive: true, owned: false);
-        if (moduleNode is null)
-            return null;
-
-        return FindFirstMesh(moduleNode);
+        return moduleNode is not null ? FindFirstMesh(moduleNode) : null;
     }
 
     private static Mesh? FindFirstMesh(Node node)
@@ -1045,7 +1124,6 @@ internal sealed class BuildingDestructionView : IDisposable
 
     private static Mesh CreateFallbackMesh(Vector3 size, Color color)
     {
-        // Offset vertices upward by +size.Y/2 so base sits at Y = 0, matching GLB module convention
         SurfaceTool st = new();
         st.Begin(Mesh.PrimitiveType.Triangles);
         BoxMesh box = new() { Size = size };

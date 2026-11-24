@@ -146,8 +146,8 @@ public sealed class BuildingDestructionNetworkTests
         // Verify panelka_1_464 profile loads from content/coldwar/units.json (covered by ContentHash)
         StructureDestructionProfile panelkaProfile = catalog.RequireBuildingProfile("panelka_1_464");
         Assert.Equal((byte)5, panelkaProfile.FloorsTotal);
-        Assert.Equal(3.1f, panelkaProfile.FloorHeight);
-        Assert.Equal(1.5f, panelkaProfile.RubbleHeight);
+        Assert.Equal(2.75f, panelkaProfile.FloorHeight);
+        Assert.Equal(1.65f, panelkaProfile.RubbleHeight);
 
         OpsRules rules = new(geometry, catalog);
         WorldState world = new(map);
