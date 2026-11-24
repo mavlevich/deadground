@@ -37,8 +37,10 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
     private readonly NavigationSystem? _navigation;
     private FlightSystem? _flight;
     private BuildingDestructionSystem? _buildingDestruction;
+    private GarrisonSystem? _garrison;
     private readonly LineOfSightContext _losContext;
     private readonly StructureSplashResult[] _splashStructureResults = new StructureSplashResult[WorldState.MaxDestructibleStructures];
+    private readonly GarrisonCasualty[] _garrisonCasualtyBuffer = new GarrisonCasualty[BuildingGarrisonProfile.MaxOccupantsPerStructure];
     private DeterministicRandom? _combatRandom;
     private int _currentTick;
 
@@ -127,6 +129,9 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
     internal void SetBuildingDestructionSystem(BuildingDestructionSystem? buildingDestruction) =>
         _buildingDestruction = buildingDestruction;
 
+    public void SetGarrisonSystem(GarrisonSystem? garrison) =>
+        _garrison = garrison;
+
     public static bool CanEngageTargetAltitude(WeaponDefinition weapon, WorldState world, EntityId targetId)
     {
         if (world.IsCrashing(targetId))
@@ -150,6 +155,9 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
     /// </summary>
     private void OrderUnitToMove(int player, EntityId unitId, Vector2 destination, WorldState world)
     {
+        if (world.IsGarrisoned(unitId))
+            return;
+
         if (_flight is not null && world.IsAircraft(unitId))
         {
             _flight.OrderMove(world, unitId, destination, finalFacing: null, landOnArrival: false, _currentTick);
@@ -181,8 +189,55 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
     public bool HasLineOfSightToTarget(UnitState attacker, WeaponDefinition weapon, UnitState targetUnit, out Vector3 hitPoint, out Vector3 muzzlePos) =>
         HasLineOfSightToTarget(attacker, weapon, targetUnit, attackerAltitude: 0f, targetAltitude: 0f, out hitPoint, out muzzlePos);
 
-    public bool HasLineOfSightToTarget(UnitState attacker, WeaponDefinition weapon, UnitState targetUnit, WorldState world, out Vector3 hitPoint, out Vector3 muzzlePos) =>
-        HasLineOfSightToTarget(
+    public bool HasLineOfSightToTarget(UnitState attacker, WeaponDefinition weapon, UnitState targetUnit, WorldState world, out Vector3 hitPoint, out Vector3 muzzlePos)
+    {
+        if (_garrison is not null && (world.IsGarrisoned(attacker.Id) || world.IsGarrisoned(targetUnit.Id)))
+        {
+            if (!_garrison.TryGetElevatedPoint(world, attacker.Id, targetUnit.Position, out muzzlePos))
+            {
+                float attackerGroundY = _geometry.GetSurfaceHeight(attacker.Position, attacker.SupportSurface) + world.GetUnitAltitude(attacker.Id);
+                muzzlePos = new Vector3(attacker.Position.X, attackerGroundY + weapon.MuzzleHeight, attacker.Position.Y);
+            }
+
+            if (_garrison.TryGetElevatedPoint(world, targetUnit.Id, attacker.Position, out Vector3 garrisonTargetPt))
+            {
+                if (_geometry.IsLineOfSightClear(muzzlePos, garrisonTargetPt, _losContext, out _))
+                {
+                    hitPoint = garrisonTargetPt;
+                    return true;
+                }
+                hitPoint = Vector3.Zero;
+                return false;
+            }
+
+            float targetGroundY = _geometry.GetSurfaceHeight(targetUnit.Position, targetUnit.SupportSurface) + world.GetUnitAltitude(targetUnit.Id);
+            if (_perceptionCatalog.TryGetProfile(targetUnit.Definition, out UnitPerceptionProfile tp) &&
+                tp.TargetPoints is { RelativeHeights.Length: > 0 } pts)
+            {
+                for (int p = pts.RelativeHeights.Length - 1; p >= 0; p--)
+                {
+                    Vector3 testPoint = new(targetUnit.Position.X, targetGroundY + pts.RelativeHeights[p], targetUnit.Position.Y);
+                    if (_geometry.IsLineOfSightClear(muzzlePos, testPoint, _losContext, out _))
+                    {
+                        hitPoint = testPoint;
+                        return true;
+                    }
+                }
+                hitPoint = Vector3.Zero;
+                return false;
+            }
+
+            Vector3 fallbackPt = new(targetUnit.Position.X, targetGroundY + 1.5f, targetUnit.Position.Y);
+            if (_geometry.IsLineOfSightClear(muzzlePos, fallbackPt, _losContext, out _))
+            {
+                hitPoint = fallbackPt;
+                return true;
+            }
+            hitPoint = Vector3.Zero;
+            return false;
+        }
+
+        return HasLineOfSightToTarget(
             attacker,
             weapon,
             targetUnit,
@@ -190,6 +245,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
             world.GetUnitAltitude(targetUnit.Id),
             out hitPoint,
             out muzzlePos);
+    }
 
     public bool HasLineOfSightToTarget(
         UnitState attacker,
@@ -234,8 +290,46 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
     public float ComputeVisibleShare(UnitState attacker, UnitState targetUnit) =>
         ComputeVisibleShare(attacker, targetUnit, attackerAltitude: 0f, targetAltitude: 0f);
 
-    public float ComputeVisibleShare(UnitState attacker, UnitState targetUnit, WorldState world) =>
-        ComputeVisibleShare(attacker, targetUnit, world.GetUnitAltitude(attacker.Id), world.GetUnitAltitude(targetUnit.Id));
+    public float ComputeVisibleShare(UnitState attacker, UnitState targetUnit, WorldState world)
+    {
+        if (_garrison is not null && (world.IsGarrisoned(attacker.Id) || world.IsGarrisoned(targetUnit.Id)))
+        {
+            if (!_garrison.TryGetElevatedPoint(world, attacker.Id, targetUnit.Position, out Vector3 muzzlePos))
+            {
+                float attackerGroundY = _geometry.GetSurfaceHeight(attacker.Position, attacker.SupportSurface) + world.GetUnitAltitude(attacker.Id);
+                float muzzleHeight = 1.8f;
+                if (_combatCatalog.TryGetProfile(attacker.Definition, out UnitCombatProfile ap) && ap.Weapon is not null)
+                    muzzleHeight = ap.Weapon.MuzzleHeight;
+                muzzlePos = new Vector3(attacker.Position.X, attackerGroundY + muzzleHeight, attacker.Position.Y);
+            }
+
+            if (_garrison.TryGetElevatedPoint(world, targetUnit.Id, attacker.Position, out Vector3 garrisonTargetPt))
+            {
+                // Cover protection for garrisoned troops is applied once via CoverDamageMultiplier
+                // (no double penalty on hit probability).
+                return _geometry.IsLineOfSightClear(muzzlePos, garrisonTargetPt, _losContext, out _) ? 1.0f : 0f;
+            }
+
+            float targetGroundY = _geometry.GetSurfaceHeight(targetUnit.Position, targetUnit.SupportSurface) + world.GetUnitAltitude(targetUnit.Id);
+            if (_perceptionCatalog.TryGetProfile(targetUnit.Definition, out UnitPerceptionProfile tp) &&
+                tp.TargetPoints is { RelativeHeights.Length: > 0 } pts)
+            {
+                int visibleCount = 0;
+                for (int p = 0; p < pts.RelativeHeights.Length; p++)
+                {
+                    Vector3 testPoint = new(targetUnit.Position.X, targetGroundY + pts.RelativeHeights[p], targetUnit.Position.Y);
+                    if (_geometry.IsLineOfSightClear(muzzlePos, testPoint, _losContext, out _))
+                        visibleCount++;
+                }
+                return (float)visibleCount / pts.RelativeHeights.Length;
+            }
+
+            Vector3 fallbackPt = new(targetUnit.Position.X, targetGroundY + 1.5f, targetUnit.Position.Y);
+            return _geometry.IsLineOfSightClear(muzzlePos, fallbackPt, _losContext, out _) ? 1.0f : 0.0f;
+        }
+
+        return ComputeVisibleShare(attacker, targetUnit, world.GetUnitAltitude(attacker.Id), world.GetUnitAltitude(targetUnit.Id));
+    }
 
     public float ComputeVisibleShare(UnitState attacker, UnitState targetUnit, float attackerAltitude, float targetAltitude)
     {
@@ -563,6 +657,11 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
 
     private void TryPursueTarget(int tick, UnitState attacker, Vector2 targetPos, ref WorldState.CombatState cs, WorldState world)
     {
+        if (world.IsGarrisoned(attacker.Id))
+        {
+            return;
+        }
+
         float distToTarget = Vector2.Distance(attacker.Position, targetPos);
         if (distToTarget <= 1.0f)
         {
@@ -1317,6 +1416,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         cs.ReloadTicksRemaining = weapon.ReloadDurationTicks;
         cs.HasSwitchedTargetThisReload = false;
         cs.Status = AttackExecutionStatus.Aiming;
+        world.RecordUnitFired(attacker.Id, tick);
 
         TotalShotsFired++;
 
@@ -1397,7 +1497,9 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
 
             if (penetrates)
             {
-                int damageToApply = Math.Max(1, (weapon.Damage * roundsFired) / burstRounds);
+                int rawDamage = Math.Max(1, (weapon.Damage * roundsFired) / burstRounds);
+                float coverMult = _garrison is not null ? _garrison.GetIncomingCoverDamageMultiplier(world, targetUnit.Id) : 1.0f;
+                int damageToApply = Math.Max(1, (int)MathF.Round(rawDamage * coverMult));
                 world.ApplyDamage(targetUnit.Id, damageToApply, out isDestroyed);
                 TotalDamageApplied += damageToApply;
                 hitResult = HitResult.Penetrated;
@@ -1793,6 +1895,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         cs.LastTargetEntityId = targetUnit.Id;
         cs.LastTargetPosition = targetUnit.Position;
         world.SetCombatState(attacker.Id, cs);
+        world.RecordUnitFired(attacker.Id, tick);
 
         TotalShotsFired++;
         float shotDistance = Vector2.Distance(attacker.Position, targetUnit.Position);
@@ -2106,7 +2209,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         for (int i = 0; i < world.Count; i++)
         {
             UnitState candidate = world.GetUnitAt(i);
-            if (world.IsContained(candidate.Id) || world.IsCrashing(candidate.Id))
+            if (world.IsContained(candidate.Id) || world.IsCrashing(candidate.Id) || world.IsGarrisoned(candidate.Id))
                 continue;
 
             float altitude = world.GetUnitAltitude(candidate.Id);
@@ -2180,6 +2283,15 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                     sr.FloorsLost > 0 && !sr.SectionCollapsed,
                     sr.SectionCollapsed,
                     world);
+
+                ApplyGarrisonStructuralCasualties(
+                    world,
+                    tick,
+                    sr.Id,
+                    projectile.StructuralDamage,
+                    sr.FloorsLost,
+                    sr.SectionCollapsed,
+                    immediateRemoval: true);
             }
         }
 
@@ -2724,9 +2836,12 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         out Vector3 impactPoint,
         out Vector3 muzzlePos)
     {
-        float attackerGround = _geometry.GetSurfaceHeight(attacker.Position, attacker.SupportSurface);
-        float attackerAlt = world.GetUnitAltitude(attacker.Id);
-        muzzlePos = new Vector3(attacker.Position.X, attackerGround + attackerAlt + weapon.MuzzleHeight, attacker.Position.Y);
+        if (_garrison is null || !_garrison.TryGetElevatedPoint(world, attacker.Id, new Vector2(targetPoint.X, targetPoint.Z), out muzzlePos))
+        {
+            float attackerGround = _geometry.GetSurfaceHeight(attacker.Position, attacker.SupportSurface);
+            float attackerAlt = world.GetUnitAltitude(attacker.Id);
+            muzzlePos = new Vector3(attacker.Position.X, attackerGround + attackerAlt + weapon.MuzzleHeight, attacker.Position.Y);
+        }
         impactPoint = targetPoint;
 
         LineOfSightResult lof = _geometry.CheckLineOfFire(muzzlePos, targetPoint, _losContext, out _);
@@ -2759,6 +2874,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         cs.Ammunition = Math.Max(0, cs.Ammunition - 1);
         cs.ReloadTicksRemaining = weapon.ReloadDurationTicks;
         cs.Status = cs.Ammunition <= 0 ? AttackExecutionStatus.NoAmmo : AttackExecutionStatus.Aiming;
+        world.RecordUnitFired(attacker.Id, tick);
 
         TotalShotsFired++;
         if (FirstShotTick < 0)
@@ -2821,6 +2937,15 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                     floorsLost > 0 && !sectionFullyCollapsed,
                     sectionFullyCollapsed,
                     world);
+
+                ApplyGarrisonStructuralCasualties(
+                    world,
+                    tick,
+                    targetStructure,
+                    weapon.StructuralDamage,
+                    floorsLost,
+                    sectionFullyCollapsed,
+                    immediateRemoval: false);
 
                 if (sectionFullyCollapsed &&
                     world.TryGetDestructibleStructure(targetStructure, out DestructibleStructureState collapsedSt) &&
@@ -2886,6 +3011,67 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                 impactPoint,
                 structureId,
                 (isFloorCollapse || isFullCollapse) ? HitResult.Penetrated : HitResult.None));
+        }
+    }
+
+    private void ApplyGarrisonStructuralCasualties(
+        WorldState world,
+        int tick,
+        StructureId structureId,
+        int effectiveStructuralDamage,
+        byte floorsLost,
+        bool sectionCollapsed,
+        bool immediateRemoval)
+    {
+        if (_garrison is null)
+            return;
+
+        int casualtyCount = _garrison.ComputeStructuralHitCasualties(
+            world,
+            structureId,
+            effectiveStructuralDamage,
+            floorsLost,
+            sectionCollapsed,
+            _garrisonCasualtyBuffer);
+
+        for (int i = 0; i < casualtyCount; i++)
+        {
+            GarrisonCasualty c = _garrisonCasualtyBuffer[i];
+            if (!world.TryGetUnit(c.UnitId, out UnitState victim))
+                continue;
+
+            world.ApplyDamage(c.UnitId, c.Damage, out bool killed);
+            TotalDamageApplied += c.Damage;
+            if (!killed)
+                continue;
+
+            _garrison.RecordCollapseCasualty();
+            if (immediateRemoval)
+            {
+                TotalUnitsDestroyed++;
+                RecordDestroyedEvent(tick, victim.Definition, victim.Id, victim.Owner, victim.Position, victim.SupportSurface);
+                world.RemoveUnit(victim.Id);
+                _navigation?.ClearUnit(victim.Id);
+                _detection.NotifyEntityDestroyed(victim.Id);
+            }
+            else
+            {
+                bool alreadyQueued = false;
+                for (int d = 0; d < _destroyedCount; d++)
+                {
+                    if (_destroyedBuffer[d].Value == victim.Id.Value)
+                    {
+                        alreadyQueued = true;
+                        break;
+                    }
+                }
+                if (!alreadyQueued && _destroyedCount < _destroyedBuffer.Length)
+                {
+                    TotalUnitsDestroyed++;
+                    RecordDestroyedEvent(tick, victim.Definition, victim.Id, victim.Owner, victim.Position, victim.SupportSurface);
+                    _destroyedBuffer[_destroyedCount++] = victim.Id;
+                }
+            }
         }
     }
 }

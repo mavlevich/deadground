@@ -53,6 +53,9 @@ public sealed class DetectionSystem : ISimulationSystem
     private readonly float[] _unitAltitudes;
     private readonly FlightPhase[] _unitFlightPhases;
     private readonly float[] _unitGunPitches;
+    private readonly StructureId[] _unitGarrisonStructures;
+    private readonly GarrisonSlotKind[] _unitGarrisonSlots;
+    private GarrisonSystem? _garrison;
     private readonly int _maxUnits;
     private readonly int _wordsPerSide;
     private int _lastUnitCount;
@@ -61,8 +64,11 @@ public sealed class DetectionSystem : ISimulationSystem
     public StaticGeometry Geometry => _geometry;
     internal SmokeSystem? SmokeSystem => _smokeSystem;
     internal BuildingDestructionSystem? BuildingDestruction => _buildingDestruction;
+    internal GarrisonSystem? Garrison => _garrison;
     public void SetBuildingDestructionSystem(BuildingDestructionSystem? buildingDestruction) =>
         _buildingDestruction = buildingDestruction;
+    public void SetGarrisonSystem(GarrisonSystem? garrison) =>
+        _garrison = garrison;
     public int CandidateQueriesCount { get; private set; }
     public int LosQueriesCount { get; private set; }
     public int ObservationsCount { get; private set; }
@@ -141,6 +147,8 @@ public sealed class DetectionSystem : ISimulationSystem
         _unitAltitudes = new float[maxUnits];
         _unitFlightPhases = new FlightPhase[maxUnits];
         _unitGunPitches = new float[maxUnits];
+        _unitGarrisonStructures = new StructureId[maxUnits];
+        _unitGarrisonSlots = new GarrisonSlotKind[maxUnits];
     }
 
     public void Update(WorldState world, int tick)
@@ -200,6 +208,9 @@ public sealed class DetectionSystem : ISimulationSystem
             _unitTurretYaws[i] = hasCombat ? cs.TurretYaw : 0f;
             _unitHullHeadings[i] = hasCombat ? cs.HullHeading : 0f;
             _unitGunPitches[i] = world.TryGetArtilleryState(u.Id, out WorldState.UnitArtilleryState artState) ? artState.GunPitchRad : 0f;
+            world.TryGetGarrison(u.Id, out StructureId garrStruct, out GarrisonSlotKind garrSlot);
+            _unitGarrisonStructures[i] = garrStruct;
+            _unitGarrisonSlots[i] = garrSlot;
 
             if (world.IsContained(u.Id))
             {
@@ -322,37 +333,64 @@ public sealed class DetectionSystem : ISimulationSystem
 
                 // Apply target visual signature scaling before executing line-of-sight geometry checks
                 float effectiveRange = sensorRange * _unitVisualSignatures[targetUnitIndex];
-                if (Vector2.DistanceSquared(obsPos, _unitPositions[targetUnitIndex]) > effectiveRange * effectiveRange)
+                float distSq = Vector2.DistanceSquared(obsPos, _unitPositions[targetUnitIndex]);
+                if (distSq > effectiveRange * effectiveRange)
                     continue;
 
-                Vector3 topPoint = _unitTopTargetPoint[targetUnitIndex];
-                LosQueriesCount++;
+                bool targetIsGarrisoned = _garrison is not null && _unitGarrisonSlots[targetUnitIndex] != GarrisonSlotKind.None;
+                if (targetIsGarrisoned)
+                {
+                    float dist = MathF.Sqrt(distSq);
+                    if (!_garrison!.IsGarrisonTargetObservable(world, tick, _unitIds[targetUnitIndex], dist))
+                        continue;
+                }
+
+                // Resolve elevated facade/roof eye point if observer is garrisoned
+                Vector3 effectiveEyePos = eyePos;
+                if (_garrison is not null &&
+                    _unitGarrisonSlots[i] != GarrisonSlotKind.None &&
+                    _garrison.TryGetElevatedPoint(world, _unitIds[i], _unitPositions[targetUnitIndex], out Vector3 garrEye))
+                {
+                    effectiveEyePos = garrEye;
+                }
 
                 bool isObserved = false;
-                if (_geometry.IsLineOfSightClear(eyePos, topPoint, _losContext, out bool blockedByTerrain))
+                if (targetIsGarrisoned &&
+                    _garrison!.TryGetElevatedPoint(world, _unitIds[targetUnitIndex], obsPos, out Vector3 garrTargetPt))
                 {
-                    isObserved = true;
+                    LosQueriesCount++;
+                    isObserved = _geometry.IsLineOfSightClear(effectiveEyePos, garrTargetPt, _losContext, out _);
                 }
-                else if (!blockedByTerrain && points.RelativeHeights.Length > 1)
+                else
                 {
-                    Vector2 targetPos = _unitPositions[targetUnitIndex];
-                    float tx = targetPos.X;
-                    float tz = targetPos.Y;
-                    float targetGroundY = _unitGroundHeights[targetUnitIndex];
-                    for (int p = points.RelativeHeights.Length - 2; p >= 0; p--)
+                    Vector3 topPoint = _unitTopTargetPoint[targetUnitIndex];
+                    LosQueriesCount++;
+
+                    if (_geometry.IsLineOfSightClear(effectiveEyePos, topPoint, _losContext, out bool blockedByTerrain))
                     {
-                        Vector3 targetPointPos = new(tx, targetGroundY + points.RelativeHeights[p], tz);
-                        LosQueriesCount++;
-
-                        if (_geometry.IsLineOfSightClear(eyePos, targetPointPos, _losContext, out bool lowerBlockedByTerrain))
+                        isObserved = true;
+                    }
+                    else if (!blockedByTerrain && points.RelativeHeights.Length > 1)
+                    {
+                        Vector2 targetPos = _unitPositions[targetUnitIndex];
+                        float tx = targetPos.X;
+                        float tz = targetPos.Y;
+                        float targetGroundY = _unitGroundHeights[targetUnitIndex];
+                        for (int p = points.RelativeHeights.Length - 2; p >= 0; p--)
                         {
-                            isObserved = true;
-                            break;
-                        }
+                            Vector3 targetPointPos = new(tx, targetGroundY + points.RelativeHeights[p], tz);
+                            LosQueriesCount++;
 
-                        if (lowerBlockedByTerrain)
-                        {
-                            break;
+                            if (_geometry.IsLineOfSightClear(effectiveEyePos, targetPointPos, _losContext, out bool lowerBlockedByTerrain))
+                            {
+                                isObserved = true;
+                                break;
+                            }
+
+                            if (lowerBlockedByTerrain)
+                            {
+                                break;
+                            }
                         }
                     }
                 }
@@ -376,7 +414,9 @@ public sealed class DetectionSystem : ISimulationSystem
                             _unitSupportSurfaces[targetUnitIndex],
                             _unitAltitudes[targetUnitIndex],
                             _unitFlightPhases[targetUnitIndex],
-                            _unitGunPitches[targetUnitIndex]);
+                            _unitGunPitches[targetUnitIndex],
+                            _unitGarrisonStructures[targetUnitIndex],
+                            _unitGarrisonSlots[targetUnitIndex]);
                         _observedCounts[sideIndex] = count + 1;
                     }
 

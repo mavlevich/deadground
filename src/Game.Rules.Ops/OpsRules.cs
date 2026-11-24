@@ -103,10 +103,23 @@ public sealed class OpsRules : RuleSet
         ContainerSystem container = new(nav);
         SmokeSystem? smoke = smokeCatalog is not null ? new SmokeSystem(geometry, smokeCatalog) : null;
         BuildingDestructionSystem buildingDestruction = new(geometry, smoke);
+        GarrisonSystem garrison = new(geometry, def => perceptionCatalog.TryGetProfile(def, out UnitPerceptionProfile p) && p.Classification == ContactClassification.Infantry);
+        garrison.SetNavigationSystem(nav);
+        if (geometry.DestructibleBuildings.Count > 0)
+        {
+            for (int i = 0; i < geometry.DestructibleBuildings.Count; i++)
+            {
+                DestructibleBuildingSpec spec = geometry.DestructibleBuildings[i];
+                BuildingGarrisonProfile garrisonProfile = spec.GarrisonProfile ?? CreateSizedDefaultGarrisonProfile(geometry, spec);
+                garrison.RegisterBuilding(spec.Id, spec.YawRad, garrisonProfile);
+            }
+        }
         DetectionSystem det = new(geometry, perceptionCatalog, detTuning, smokeSystem: smoke, buildingDestruction: buildingDestruction);
+        det.SetGarrisonSystem(garrison);
         CombatSystem? combat = combatCatalog is not null
             ? new CombatSystem(geometry, combatCatalog, perceptionCatalog, det, nav, combatRandom: combatRandom, flight: flight, buildingDestruction: buildingDestruction)
             : null;
+        combat?.SetGarrisonSystem(garrison);
         ArtillerySystem? artillery = combatCatalog is not null
             ? new ArtillerySystem(geometry, combatCatalog, nav)
             : null;
@@ -114,11 +127,12 @@ public sealed class OpsRules : RuleSet
             ? new GuidedMissileSystem(geometry, countermeasureCatalog, combatCatalog)
             : null;
 
-        List<ISimulationSystem> list = new(10);
+        List<ISimulationSystem> list = new(11);
         if (flight is not null) list.Add(flight);
         list.Add(nav);
         list.Add(container);
         list.Add(buildingDestruction);
+        list.Add(garrison);
         if (smoke is not null) list.Add(smoke);
         list.Add(det);
         if (combat is not null) list.Add(combat);
@@ -126,6 +140,21 @@ public sealed class OpsRules : RuleSet
         if (guidedMissiles is not null) list.Add(guidedMissiles);
         if (mission is not null) list.Add(mission);
         return list.ToArray();
+    }
+
+    private static BuildingGarrisonProfile CreateSizedDefaultGarrisonProfile(StaticGeometry geometry, DestructibleBuildingSpec spec)
+    {
+        if (geometry.TryGetStructureIndex(spec.Id, out int idx))
+        {
+            OpaqueStructure bounds = geometry.Structures[idx];
+            float sizeX = bounds.MaxX - bounds.MinX;
+            float sizeZ = bounds.MaxZ - bounds.MinZ;
+            bool rotated90 = MathF.Abs(MathF.Sin(spec.YawRad)) > 0.707f;
+            float localW = rotated90 ? sizeZ : sizeX;
+            float localD = rotated90 ? sizeX : sizeZ;
+            return BuildingGarrisonProfile.CreateDefault(localW, localD);
+        }
+        return BuildingGarrisonProfile.CreateDefault();
     }
 }
 
@@ -283,6 +312,77 @@ public sealed record UnitDefinition(
 
 public sealed record FactionData(string Id, string? Name = null);
 
+public sealed record BuildingFiringPortData(
+    float X,
+    float Y,
+    float Z,
+    float Nx,
+    float Nz);
+
+public sealed record BuildingRoofPortData(
+    float X,
+    float Y,
+    float Z);
+
+public sealed record BuildingGarrisonData(
+    int Capacity = 12,
+    float[]? EntranceLocalOffset = null,
+    float CoverDamageMultiplier = 0.35f,
+    float RubbleCoverDamageMultiplier = 0.55f,
+    float RoofCoverDamageMultiplier = 0.70f,
+    float ConcealmentSpotRange = 40.0f,
+    int FiringRevealTicks = 60,
+    BuildingFiringPortData[]? FiringPorts = null,
+    BuildingRoofPortData[]? RoofPorts = null)
+{
+    public BuildingGarrisonProfile ToGarrisonProfile()
+    {
+        Vector3 entrance = EntranceLocalOffset is { Length: 3 }
+            ? new Vector3(EntranceLocalOffset[0], EntranceLocalOffset[1], EntranceLocalOffset[2])
+            : new Vector3(0f, 0f, 6.4f);
+
+        BuildingFiringPort[] firingPorts;
+        if (FiringPorts is { Length: > 0 })
+        {
+            firingPorts = new BuildingFiringPort[FiringPorts.Length];
+            for (int i = 0; i < FiringPorts.Length; i++)
+            {
+                BuildingFiringPortData fp = FiringPorts[i];
+                firingPorts[i] = new BuildingFiringPort(fp.X, fp.Y, fp.Z, fp.Nx, fp.Nz);
+            }
+        }
+        else
+        {
+            firingPorts = [];
+        }
+
+        BuildingRoofPort[] roofPorts;
+        if (RoofPorts is { Length: > 0 })
+        {
+            roofPorts = new BuildingRoofPort[RoofPorts.Length];
+            for (int i = 0; i < RoofPorts.Length; i++)
+            {
+                roofPorts[i] = new BuildingRoofPort(RoofPorts[i].X, RoofPorts[i].Y, RoofPorts[i].Z);
+            }
+        }
+        else
+        {
+            roofPorts = [];
+        }
+
+        return new BuildingGarrisonProfile(
+            Capacity,
+            entrance,
+            CoverDamageMultiplier,
+            RubbleCoverDamageMultiplier,
+            RoofCoverDamageMultiplier,
+            ConcealmentSpotRange,
+            FiringRevealTicks,
+            firingPorts,
+            roofPorts);
+    }
+}
+
 public sealed record BuildingProfileData(
     string Id,
     byte FloorsTotal,
@@ -292,7 +392,8 @@ public sealed record BuildingProfileData(
     ushort StructuralArmor = 0,
     float DustCloudRadius = 18f,
     float DustCloudHeight = 14f,
-    int DustCloudDurationTicks = 200)
+    int DustCloudDurationTicks = 200,
+    BuildingGarrisonData? Garrison = null)
 {
     public StructureDestructionProfile ToProfile() => new(
         FloorsTotal,
@@ -326,6 +427,31 @@ public sealed record UnitCatalog(
             }
         }
         throw new KeyNotFoundException($"Building profile '{id}' not found in catalog.");
+    }
+
+    public bool TryGetBuildingGarrisonProfile(string id, out BuildingGarrisonProfile? profile)
+    {
+        if (Buildings is not null)
+        {
+            for (int i = 0; i < Buildings.Length; i++)
+            {
+                if (string.Equals(Buildings[i].Id, id, StringComparison.Ordinal) &&
+                    Buildings[i].Garrison is not null)
+                {
+                    profile = Buildings[i].Garrison!.ToGarrisonProfile();
+                    return true;
+                }
+            }
+        }
+        profile = null;
+        return false;
+    }
+
+    public BuildingGarrisonProfile RequireBuildingGarrisonProfile(string id)
+    {
+        if (TryGetBuildingGarrisonProfile(id, out BuildingGarrisonProfile? profile) && profile is not null)
+            return profile;
+        throw new KeyNotFoundException($"Building garrison profile '{id}' not found in catalog.");
     }
 
     public bool HasFaction(string id)
@@ -867,6 +993,11 @@ public sealed class OpsCountermeasureCatalog : IUnitCountermeasureCatalog
 [JsonSerializable(typeof(FactionData[]))]
 [JsonSerializable(typeof(BuildingProfileData))]
 [JsonSerializable(typeof(BuildingProfileData[]))]
+[JsonSerializable(typeof(BuildingGarrisonData))]
+[JsonSerializable(typeof(BuildingFiringPortData))]
+[JsonSerializable(typeof(BuildingFiringPortData[]))]
+[JsonSerializable(typeof(BuildingRoofPortData))]
+[JsonSerializable(typeof(BuildingRoofPortData[]))]
 [JsonSerializable(typeof(TraversabilityCapabilities))]
 [JsonSerializable(typeof(float[]))]
 internal partial class ContentJsonContext : JsonSerializerContext;
@@ -1200,6 +1331,18 @@ public static class PrototypeScenario
                     throw new InvalidOperationException($"Duplicate building profile id '{b.Id}'.");
                 if (!b.ToProfile().IsValid)
                     throw new InvalidOperationException($"Building profile '{b.Id}' has invalid structural parameters.");
+                if (b.Garrison is not null)
+                {
+                    if (b.Garrison.EntranceLocalOffset is not { Length: 3 } ||
+                        !float.IsFinite(b.Garrison.EntranceLocalOffset[0]) ||
+                        !float.IsFinite(b.Garrison.EntranceLocalOffset[1]) ||
+                        !float.IsFinite(b.Garrison.EntranceLocalOffset[2]))
+                    {
+                        throw new InvalidOperationException($"Building profile '{b.Id}' has an invalid garrison entrance_local_offset.");
+                    }
+                    if (!b.Garrison.ToGarrisonProfile().IsValid)
+                        throw new InvalidOperationException($"Building profile '{b.Id}' has invalid garrison parameters.");
+                }
             }
         }
         return data;

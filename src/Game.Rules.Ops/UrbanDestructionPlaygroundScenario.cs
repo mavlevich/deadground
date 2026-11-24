@@ -67,14 +67,17 @@ public static class UrbanDestructionPlaygroundScenario
 
     public static DestructibleBuildingSpec[] GetBuildingSpecs(UnitCatalog? catalog = null)
     {
-        StructureDestructionProfile profile = (catalog ?? ColdWarContent.LoadCatalog()).RequireBuildingProfile(PanelkaProfileId);
+        UnitCatalog resolvedCatalog = catalog ?? ColdWarContent.LoadCatalog();
+        StructureDestructionProfile profile = resolvedCatalog.RequireBuildingProfile(PanelkaProfileId);
+        BuildingGarrisonProfile garrisonProfile = resolvedCatalog.RequireBuildingGarrisonProfile(PanelkaProfileId);
         DestructibleBuildingSpec[] specs = new DestructibleBuildingSpec[PanelkaLayout.Length];
         for (int i = 0; i < PanelkaLayout.Length; i++)
         {
             specs[i] = new DestructibleBuildingSpec(
                 new StructureId(PanelkaLayout[i].Id),
                 profile,
-                PanelkaLayout[i].YawRad);
+                PanelkaLayout[i].YawRad,
+                garrisonProfile);
         }
         return specs;
     }

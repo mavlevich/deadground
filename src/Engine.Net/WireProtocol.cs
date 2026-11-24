@@ -25,9 +25,9 @@ public static class WireProtocol
     public const int CommandResultSize = 11;
     public const int MissionSize = 32;
     public const int SnapshotHeaderSize = 24 + MissionSize;
-    public const int UnitSize = 73;
+    public const int UnitSize = 78;
     public const int MaxUnits = 1024;
-    public const int ContactSize = 35;
+    public const int ContactSize = 40;
     public const int MaxContacts = 256;
     public const int WreckSize = 22;
     public const int MaxWrecks = 128;
@@ -56,6 +56,8 @@ public static class WireProtocol
     public const int StopSize = 14;
     public const int DeployFlaresSize = 15;
     public const int AttackGroundSize = 30;
+    public const int EnterBuildingSize = 19;
+    public const int ExitBuildingSize = 14;
 
     public const byte MoveKind = 1;
     public const byte SnapshotKind = 2;
@@ -76,6 +78,8 @@ public static class WireProtocol
     public const byte StopKind = 17;
     public const byte DeployFlaresKind = 18;
     public const byte AttackGroundKind = 19;
+    public const byte EnterBuildingKind = 20;
+    public const byte ExitBuildingKind = 21;
 
     // Yaw in 65536 steps over a full turn: code 32768 is exactly 0, and the quarter turns are exact too.
     // +pi and -pi share code 0.
@@ -729,6 +733,66 @@ public static class WireProtocol
         return true;
     }
 
+    public static void WriteEnterBuilding(Span<byte> bytes, EnterBuildingCommand command)
+    {
+        if (bytes.Length < EnterBuildingSize) throw new ArgumentException("Enter building buffer is too small.");
+        bytes[0] = Version;
+        bytes[1] = EnterBuildingKind;
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[2..], command.Sequence);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[6..], command.ClientTick);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[10..], command.Unit.Value);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[14..], command.TargetStructure.Value);
+        bytes[18] = (byte)command.SlotKind;
+    }
+
+    public static bool TryReadEnterBuilding(ReadOnlySpan<byte> bytes, out EnterBuildingCommand command)
+    {
+        command = default;
+        if (bytes.Length != EnterBuildingSize || bytes[0] != Version || bytes[1] != EnterBuildingKind) return false;
+        uint sequence = BinaryPrimitives.ReadUInt32LittleEndian(bytes[2..]);
+        int tick = BinaryPrimitives.ReadInt32LittleEndian(bytes[6..]);
+        uint unitId = BinaryPrimitives.ReadUInt32LittleEndian(bytes[10..]);
+        int structureId = BinaryPrimitives.ReadInt32LittleEndian(bytes[14..]);
+        byte slotKindByte = bytes[18];
+        if (sequence == 0 || tick < 0 || unitId == 0 || structureId <= 0 ||
+            slotKindByte is not ((byte)GarrisonSlotKind.Interior or (byte)GarrisonSlotKind.Roof))
+        {
+            return false;
+        }
+        command = new EnterBuildingCommand(
+            sequence,
+            tick,
+            new EntityId(unitId),
+            new StructureId(structureId),
+            (GarrisonSlotKind)slotKindByte);
+        return true;
+    }
+
+    public static void WriteExitBuilding(Span<byte> bytes, ExitBuildingCommand command)
+    {
+        if (bytes.Length < ExitBuildingSize) throw new ArgumentException("Exit building buffer is too small.");
+        bytes[0] = Version;
+        bytes[1] = ExitBuildingKind;
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[2..], command.Sequence);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[6..], command.ClientTick);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[10..], command.Unit.Value);
+    }
+
+    public static bool TryReadExitBuilding(ReadOnlySpan<byte> bytes, out ExitBuildingCommand command)
+    {
+        command = default;
+        if (bytes.Length != ExitBuildingSize || bytes[0] != Version || bytes[1] != ExitBuildingKind) return false;
+        uint sequence = BinaryPrimitives.ReadUInt32LittleEndian(bytes[2..]);
+        int tick = BinaryPrimitives.ReadInt32LittleEndian(bytes[6..]);
+        uint unitId = BinaryPrimitives.ReadUInt32LittleEndian(bytes[10..]);
+        if (sequence == 0 || tick < 0 || unitId == 0)
+        {
+            return false;
+        }
+        command = new ExitBuildingCommand(sequence, tick, new EntityId(unitId));
+        return true;
+    }
+
     public static int WriteSnapshot(
         Span<byte> bytes,
         uint sequence,
@@ -812,6 +876,8 @@ public static class WireProtocol
             record[69] = unit.FlareCharges;
             BinaryPrimitives.WriteUInt16LittleEndian(record[70..], unit.FlareCooldownTicks);
             record[72] = (byte)unit.CountermeasureFlags;
+            BinaryPrimitives.WriteInt32LittleEndian(record[73..], unit.GarrisonStructureId.Value);
+            record[77] = (byte)unit.GarrisonSlotKind;
         }
 
         int contactsOffset = SnapshotHeaderSize + units.Length * UnitSize;
@@ -832,6 +898,8 @@ public static class WireProtocol
             BinaryPrimitives.WriteSingleLittleEndian(record[28..], contact.Altitude);
             record[32] = (byte)contact.FlightPhase;
             BinaryPrimitives.WriteUInt16LittleEndian(record[33..], QuantizeYaw(contact.GunPitchRad));
+            BinaryPrimitives.WriteInt32LittleEndian(record[35..], contact.GarrisonStructureId.Value);
+            record[39] = (byte)contact.GarrisonSlotKind;
         }
 
         int wrecksOffset = SnapshotHeaderSize + units.Length * UnitSize + contacts.Length * ContactSize;
@@ -1062,6 +1130,8 @@ public static class WireProtocol
             byte flareCharges = record[69];
             ushort flareCooldownTicks = BinaryPrimitives.ReadUInt16LittleEndian(record[70..]);
             byte countermeasureFlagsByte = record[72];
+            int garrisonStructureIdVal = BinaryPrimitives.ReadInt32LittleEndian(record[73..]);
+            byte garrisonSlotByte = record[77];
 
             if (id.Value == 0 || !float.IsFinite(position.X) || !float.IsFinite(position.Y) ||
                 !float.IsFinite(altitude) || altitude < 0f ||
@@ -1072,6 +1142,9 @@ public static class WireProtocol
                 flightPhaseByte > (byte)FlightPhase.Crashing ||
                 (artilleryFlagsByte & ~3) != 0 ||
                 (countermeasureFlagsByte & ~0x0F) != 0 ||
+                garrisonStructureIdVal < 0 ||
+                garrisonSlotByte > (byte)GarrisonSlotKind.Roof ||
+                ((garrisonStructureIdVal == 0) != (garrisonSlotByte == 0)) ||
                 !frame.Indices.TryAdd(id, i)) return false;
 
             frame.Units[i] = new OwnUnitObservation(
@@ -1109,7 +1182,9 @@ public static class WireProtocol
                 (ArtilleryFlags)artilleryFlagsByte,
                 flareCharges,
                 flareCooldownTicks,
-                (CountermeasureFlags)countermeasureFlagsByte);
+                (CountermeasureFlags)countermeasureFlagsByte,
+                new StructureId(garrisonStructureIdVal),
+                (GarrisonSlotKind)garrisonSlotByte);
         }
 
         int contactsOffset = SnapshotHeaderSize + unitCount * UnitSize;
@@ -1130,6 +1205,8 @@ public static class WireProtocol
             float contactAltitude = BinaryPrimitives.ReadSingleLittleEndian(record[28..]);
             byte contactFlightPhase = record[32];
             float contactGunPitchRad = DequantizeYaw(BinaryPrimitives.ReadUInt16LittleEndian(record[33..]));
+            int contactGarrisonStructVal = BinaryPrimitives.ReadInt32LittleEndian(record[35..]);
+            byte contactGarrisonSlotByte = record[39];
 
             if (contactId.Value == 0 ||
                 stateByte is not ((byte)ContactState.Current or (byte)ContactState.LastKnown) ||
@@ -1138,6 +1215,9 @@ public static class WireProtocol
                 !float.IsFinite(contactAltitude) || contactAltitude < 0f ||
                 contactFlightPhase > (byte)FlightPhase.Crashing ||
                 lastSeenTick < 0 || lastSeenTick > tick ||
+                contactGarrisonStructVal < 0 ||
+                contactGarrisonSlotByte > (byte)GarrisonSlotKind.Roof ||
+                ((contactGarrisonStructVal == 0) != (contactGarrisonSlotByte == 0)) ||
                 !frame.ContactIndices.TryAdd(contactId, i))
             {
                 return false;
@@ -1155,7 +1235,9 @@ public static class WireProtocol
                 supportSurface,
                 contactAltitude,
                 (FlightPhase)contactFlightPhase,
-                contactGunPitchRad);
+                contactGunPitchRad,
+                new StructureId(contactGarrisonStructVal),
+                (GarrisonSlotKind)contactGarrisonSlotByte);
         }
 
         int wrecksOffset = SnapshotHeaderSize + unitCount * UnitSize + contactCount * ContactSize;

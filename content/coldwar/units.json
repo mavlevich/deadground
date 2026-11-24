@@ -661,7 +661,36 @@
       "structural_armor": 15,
       "dust_cloud_radius": 18.0,
       "dust_cloud_height": 14.0,
-      "dust_cloud_duration_ticks": 180
+      "dust_cloud_duration_ticks": 180,
+      "garrison": {
+        "capacity": 12,
+        "entrance_local_offset": [ -1.8, 0.0, 6.4 ],
+        "cover_damage_multiplier": 0.35,
+        "rubble_cover_damage_multiplier": 0.55,
+        "roof_cover_damage_multiplier": 0.70,
+        "concealment_spot_range": 40.0,
+        "firing_reveal_ticks": 60,
+        "firing_ports": [
+          { "x": -5.4, "y": 1.42, "z": 5.9, "nx": 0.0, "nz": 1.0 },
+          { "x": -1.8, "y": 1.14, "z": 5.9, "nx": 0.0, "nz": 1.0 },
+          { "x": 1.8, "y": 1.42, "z": 5.9, "nx": 0.0, "nz": 1.0 },
+          { "x": 5.4, "y": 1.42, "z": 5.9, "nx": 0.0, "nz": 1.0 },
+          { "x": -5.4, "y": 1.42, "z": -5.9, "nx": 0.0, "nz": -1.0 },
+          { "x": -1.8, "y": 1.42, "z": -5.9, "nx": 0.0, "nz": -1.0 },
+          { "x": 1.8, "y": 1.42, "z": -5.9, "nx": 0.0, "nz": -1.0 },
+          { "x": 5.4, "y": 1.42, "z": -5.9, "nx": 0.0, "nz": -1.0 },
+          { "x": -7.2, "y": 1.44, "z": -2.7, "nx": -1.0, "nz": 0.0 },
+          { "x": -7.2, "y": 1.44, "z": 2.7, "nx": -1.0, "nz": 0.0 },
+          { "x": 7.2, "y": 1.44, "z": -2.7, "nx": 1.0, "nz": 0.0 },
+          { "x": 7.2, "y": 1.44, "z": 2.7, "nx": 1.0, "nz": 0.0 }
+        ],
+        "roof_ports": [
+          { "x": -4.2, "y": 1.15, "z": 3.8 },
+          { "x": 4.2, "y": 1.15, "z": 3.8 },
+          { "x": -4.2, "y": 1.15, "z": -3.8 },
+          { "x": 4.2, "y": 1.15, "z": -3.8 }
+        ]
+      }
     }
   ]
 }

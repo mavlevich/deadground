@@ -163,6 +163,44 @@ class PanelkaAssetTests(unittest.TestCase):
                 rebuilt_manifest.read_text(encoding="utf-8"),
                 "Checked-in manifest.json is out of date; re-run build_panelka_1_464.py.",
             )
+
+    def test_units_json_garrison_ports_match_glb_geometry(self):
+        units_json_path = _THIS_DIR.parents[1] / "content/coldwar/units.json"
+        raw_lines = [
+            line for line in units_json_path.read_text(encoding="utf-8").splitlines()
+            if not line.lstrip().startswith("//")
+        ]
+        catalog = json.loads("\n".join(raw_lines))
+        panelka = next((b for b in catalog.get("buildings", []) if b["id"] == "panelka_1_464"), None)
+        self.assertIsNotNone(panelka, "panelka_1_464 missing from content/coldwar/units.json")
+        self.assertAlmostEqual(panelka["floor_height"], FLOOR_HEIGHT, delta=0.01)
+        self.assertAlmostEqual(panelka["rubble_height"], RUBBLE_HEIGHT, delta=0.01)
+        garrison = panelka.get("garrison")
+        self.assertIsNotNone(garrison, "panelka_1_464 missing garrison metadata in units.json")
+        self.assertGreater(garrison["capacity"], 0)
+
+        ex, ey, ez = garrison["entrance_local_offset"]
+        self.assertAlmostEqual(ey, 0.0, delta=0.05)
+        self.assertGreater(ez, SECTION_DEPTH * 0.5, "Entrance offset must lie outside +Z courtyard facade")
+        self.assertLessEqual(abs(ex), SECTION_WIDTH * 0.5, "Entrance X must lie within section width")
+
+        ports = garrison["firing_ports"]
+        self.assertEqual(len(ports), 12)
+        for p in ports:
+            self.assertGreater(p["y"], 0.4)
+            self.assertLess(p["y"], FLOOR_HEIGHT - 0.3)
+            self.assertLessEqual(abs(p["x"]), SECTION_WIDTH * 0.5 + 0.05)
+            self.assertLessEqual(abs(p["z"]), SECTION_DEPTH * 0.5 + 0.05)
+            norm_len = (p["nx"] ** 2 + p["nz"] ** 2) ** 0.5
+            self.assertAlmostEqual(norm_len, 1.0, delta=0.01)
+
+        roof_ports = garrison["roof_ports"]
+        self.assertGreaterEqual(len(roof_ports), 4)
+        for rp in roof_ports:
+            self.assertGreater(rp["y"], 0.5)
+            self.assertLess(rp["y"], 2.0)
+            self.assertLess(abs(rp["x"]), SECTION_WIDTH * 0.5 - 0.5)
+            self.assertLess(abs(rp["z"]), SECTION_DEPTH * 0.5 - 0.5)
         manifest = json.loads((DEFAULT_OUTPUT_DIR / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["asset"], "panelka_1_464")
 
