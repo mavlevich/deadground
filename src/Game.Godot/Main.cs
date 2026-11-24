@@ -63,6 +63,8 @@ public partial class Main : Node3D
     private CombatEffects _combatEffects = null!;
     private HelicopterAudioController? _helicopterAudio;
     private SmokeView? _smokeView;
+    private BuildingDestructionView? _buildingDestructionView;
+    private readonly LineOfSightContext _clientLosContext = new();
     private MissionPanel? _missionPanel;
     private StaticGeometry? _scenarioGeometry;
     private UnitCatalog _catalog = null!;
@@ -623,6 +625,12 @@ public partial class Main : Node3D
                 _map = scenarioGeometry.HeightMap;
                 setup = AirDefensePlaygroundScenario.CreateMatchSetup(scenarioGeometry);
             }
+            else if (_scenario == "urban-destruction-playground")
+            {
+                scenarioGeometry = UrbanDestructionPlaygroundScenario.CreateStaticGeometry();
+                _map = scenarioGeometry.HeightMap;
+                setup = UrbanDestructionPlaygroundScenario.CreateMatchSetup(scenarioGeometry);
+            }
             else if (_scenario == "tank-battle")
             {
                 scenarioGeometry = TankBattleScenario.CreateStaticGeometry();
@@ -674,6 +682,7 @@ public partial class Main : Node3D
                     "helicopter-playground" => HelicopterPlaygroundScenario.CreateSimulation(scenarioGeometry!),
                     "artillery-playground" => ArtilleryPlaygroundScenario.CreateSimulation(scenarioGeometry!),
                     "air-defense-playground" => AirDefensePlaygroundScenario.CreateSimulation(scenarioGeometry!),
+                    "urban-destruction-playground" => UrbanDestructionPlaygroundScenario.CreateSimulation(scenarioGeometry!),
                     "tank-battle" => TankBattleScenario.CreateSimulation(scenarioGeometry!),
                     _ => PrototypeScenario.Create(_map)
                 };
@@ -821,6 +830,7 @@ public partial class Main : Node3D
             "helicopter-playground" => 180,
             "artillery-playground" => 220,
             "air-defense-playground" => 440,
+            "urban-destruction-playground" => 155,
             "tank-battle" => 160,
             _ => 112
         };
@@ -843,6 +853,7 @@ public partial class Main : Node3D
             "helicopter-playground" => new Vector3(HelicopterPlaygroundScenario.ChinookAlphaPos.X + 20f, 2f, HelicopterPlaygroundScenario.ChinookAlphaPos.Y),
             "artillery-playground" => new Vector3(1024f, 4f, ArtilleryPlaygroundScenario.GradAlphaPos.Y),
             "air-defense-playground" => new Vector3(1024f, 12f, 920f),
+            "urban-destruction-playground" => new Vector3(500f, 4f, 470f),
             "tank-battle" => new Vector3(TankBattleScenario.Center.X - TankBattleScenario.StartOffset, 4f, TankBattleScenario.Center.Y),
             _ => new Vector3(64, 0, 64)
         };
@@ -850,7 +861,7 @@ public partial class Main : Node3D
         _initialSpawnFocus = initialFocus;
         _initialSpawnSize = initialCameraSize;
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
-        if (_scenario == "ustye-ground" || _scenario == "ustye-raid" || _scenario == "tank-battle" || _scenario == "artillery-playground" || _scenario == "air-defense-playground")
+        if (_scenario == "ustye-ground" || _scenario == "ustye-raid" || _scenario == "tank-battle" || _scenario == "artillery-playground" || _scenario == "air-defense-playground" || _scenario == "urban-destruction-playground")
         {
             _cameraRig.Model.SetSizeLimits(30f, 5500f);
             _cameraRig.FarClipMargin = 3000f;
@@ -979,6 +990,7 @@ public partial class Main : Node3D
             _orderCursorOverlay,
             _destination,
             _orderNotification);
+        _previewController.SetLineOfSightContext(_clientLosContext);
         _unitViews.UpdateLod(_cameraRig.Size);
         _contactViews.UpdateLod(_cameraRig.Size);
         _wreckViews.UpdateLod(_cameraRig.Size);
@@ -1163,9 +1175,38 @@ public partial class Main : Node3D
 
             if (scenarioGeometry is not null)
             {
+                if (_scenario == "urban-destruction-playground")
+                {
+                    _buildingDestructionView = new BuildingDestructionView(
+                        _environmentRoot,
+                        scenarioGeometry,
+                        UrbanDestructionPlaygroundScenario.GetBuildingSpecs(),
+                        OnObservedStructureHeightChanged);
+                    SyncClientLosOverrides();
+                }
                 SetupStructures(scenarioGeometry);
             }
         }
+    }
+
+    private void OnObservedStructureHeightChanged(StructureId structureId, float newMaxY)
+    {
+        _fogOfWar?.UpdateStructureHeight(structureId, newMaxY);
+        SyncClientLosOverrides();
+    }
+
+    private void SyncClientLosOverrides()
+    {
+        if (_buildingDestructionView is not null)
+        {
+            float[] overrides = _buildingDestructionView.ObservedMaxYOverrides;
+            _clientLosContext.SetStructureMaxYOverrides(overrides, overrides.Length);
+        }
+        else
+        {
+            _clientLosContext.SetStructureMaxYOverrides(null, 0);
+        }
+        _previewController?.SetLineOfSightContext(_clientLosContext);
     }
 
     internal void RefreshCachedTerrainViewportHeight(Viewport? viewport = null)
@@ -1209,6 +1250,9 @@ public partial class Main : Node3D
         _terrainView = null;
         _activeShadowMapLayers = null;
         _environmentView?.SetShadowTarget(null);
+        _buildingDestructionView?.Dispose();
+        _buildingDestructionView = null;
+        _clientLosContext.SetStructureMaxYOverrides(null, 0);
         foreach (Node child in _environmentRoot.GetChildren())
         {
             _environmentRoot.RemoveChild(child);
@@ -1224,6 +1268,8 @@ public partial class Main : Node3D
 
         foreach (OpaqueStructure structure in geometry.Structures)
         {
+            if (_buildingDestructionView?.ContainsStructure(structure.Id) == true)
+                continue;
             float sizeX = structure.Max.X - structure.Min.X;
             float sizeY = structure.Max.Y - structure.Min.Y;
             float sizeZ = structure.Max.Z - structure.Min.Z;
@@ -1342,6 +1388,7 @@ public partial class Main : Node3D
         _combatEffects.UpdateMissileWarningAudio(_session.Replica, (float)delta);
         _wreckViews.ProcessEvents(_session.Replica.Events, _session.Tick);
         _smokeView?.Update((float)delta, _session.Replica, _session.RenderTick);
+        _buildingDestructionView?.Update(_session.Replica, (float)delta);
         _combatEffects.UpdateListener(_cameraRig.Focus);
         _helicopterAudio?.Update(_session.Replica, _cameraRig.Focus, _cameraRig.Size, delta);
         _missionPanel?.UpdateMission(_session.Mission, _session.Tick);
@@ -1587,6 +1634,35 @@ public partial class Main : Node3D
                 {
                     _destination.HideZoneCircle();
                     _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Blocked, "Invalid barrage target [Esc to cancel]");
+                }
+                _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
+            }
+            else if (_contextActionPanel?.TargetingMode == ContextTargetingMode.AttackGround)
+            {
+                if (_previewController is not null &&
+                    _previewController.TryRaycast(_camera, mousePos, out Vector3 hitPoint3D, out _, out _, out StructureId hitStructureId))
+                {
+                    _destination.ShowZoneCircle(_map, hitPoint3D.X, hitPoint3D.Z, 3.5f, true);
+                    string tip;
+                    if (hitStructureId != default &&
+                        _buildingDestructionView is not null &&
+                        _buildingDestructionView.TryGetSectionInfo(hitStructureId, out OpaqueStructure? stBounds, out StructureDestructionProfile stProfile, out byte standingFloors) &&
+                        stBounds is not null &&
+                        standingFloors > 0)
+                    {
+                        byte floorIdx = StructureDestructionMath.ResolveFloorIndex(hitPoint3D.Y, stBounds.MinY, in stProfile, standingFloors);
+                        tip = $"Attack Building Floor {floorIdx + 1}/{standingFloors} [LMB | Esc to cancel]";
+                    }
+                    else
+                    {
+                        tip = "Attack Ground Point [LMB | Esc to cancel]";
+                    }
+                    _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Valid, tip);
+                }
+                else
+                {
+                    _destination.HideZoneCircle();
+                    _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Blocked, "No target under cursor [Esc to cancel]");
                 }
                 _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
             }
@@ -1872,6 +1948,7 @@ public partial class Main : Node3D
                     "helicopter-playground" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 6,
                     "artillery-playground" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 4,
                     "air-defense-playground" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length >= 3,
+                    "urban-destruction-playground" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 4,
                     _ => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
                         _session.Replica.OwnUnits[0].Position.Y > 24
                 };
@@ -1892,6 +1969,7 @@ public partial class Main : Node3D
                     "helicopter-playground" => "HELICOPTER_PLAYGROUND_SMOKE",
                     "artillery-playground" => "ARTILLERY_PLAYGROUND_SMOKE",
                     "air-defense-playground" => "AIR_DEFENSE_PLAYGROUND_SMOKE",
+                    "urban-destruction-playground" => "URBAN_DESTRUCTION_PLAYGROUND_SMOKE",
                     _ => "M0_CLIENT_SMOKE"
                 };
                 string token = prefix + (ok ? "_OK" : "_FAILED");
@@ -2722,6 +2800,15 @@ public partial class Main : Node3D
                 GetViewport().SetInputAsHandled();
                 return;
             }
+
+            if ((key.Keycode == Key.T || key.PhysicalKeycode == Key.T) && _unitViews.Selected.Count > 0 && _contextActionPanel?.AttackGroundButton.Visible == true && !_contextActionPanel.AttackGroundButton.Disabled)
+            {
+                _contextActionPanel.SetTargetingMode(_contextActionPanel.TargetingMode == ContextTargetingMode.AttackGround
+                    ? ContextTargetingMode.None
+                    : ContextTargetingMode.AttackGround);
+                GetViewport().SetInputAsHandled();
+                return;
+            }
             return;
         }
 
@@ -3030,6 +3117,59 @@ public partial class Main : Node3D
                         string msg = "Target is outside artillery firing range (350m - 4000m)";
                         _orderNotification?.ShowNotification(msg);
                         _status.Text = msg;
+                    }
+                }
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if (_contextActionPanel?.TargetingMode == ContextTargetingMode.AttackGround)
+            {
+                if (_previewController is not null &&
+                    _previewController.TryRaycast(_camera, mouse.Position, out Vector3 hitPoint3D, out _, out _, out StructureId hitStructureId))
+                {
+                    System.Numerics.Vector3 targetPoint = new(hitPoint3D.X, hitPoint3D.Y, hitPoint3D.Z);
+                    int ordered = 0;
+                    foreach (EntityId unitId in _unitViews.Selected)
+                    {
+                        if (_session.Replica.TryGetOwnUnit(unitId, out OwnUnitObservation obs) &&
+                            obs.Ammunition > 0 &&
+                            obs.ContainerId == default &&
+                            obs.Definition < _catalog.Units.Length &&
+                            _catalog.Weapons is not null)
+                        {
+                            string? wId = _catalog.Units[obs.Definition].Weapon;
+                            WeaponData? weapon = null;
+                            if (wId is not null)
+                            {
+                                for (int wi = 0; wi < _catalog.Weapons.Length; wi++)
+                                {
+                                    if (string.Equals(_catalog.Weapons[wi].Id, wId, StringComparison.Ordinal))
+                                    {
+                                        weapon = _catalog.Weapons[wi];
+                                        break;
+                                    }
+                                }
+                            }
+                            if (weapon is not null && !weapon.IsIndirectFire && !weapon.AirTargetsOnly && weapon.StructuralDamage > 0)
+                            {
+                                if (_session.AttackGround(unitId, targetPoint, hitStructureId))
+                                    ordered++;
+                            }
+                        }
+                    }
+
+                    if (ordered > 0)
+                    {
+                        string targetDesc = hitStructureId != default ? "building" : "ground point";
+                        string msg = ordered == 1
+                            ? $"Attacking {targetDesc} (1 unit)"
+                            : $"Attacking {targetDesc} ({ordered} units)";
+                        _orderNotification?.ShowNotification(msg);
+                        _status.Text = msg;
+                        _contextActionPanel.CancelTargeting();
+                        _destination.HideZoneCircle();
+                        _orderCursorOverlay?.HideTooltip();
                     }
                 }
                 GetViewport().SetInputAsHandled();
@@ -4390,7 +4530,7 @@ public partial class Main : Node3D
                 float tgtGround = _map.GetHeight(targetPos.X, targetPos.Y);
                 System.Numerics.Vector3 targetEye = new(targetPos.X, tgtGround + 2.0f, targetPos.Y);
 
-                LineOfSightResult los = _scenarioGeometry.CheckLineOfSight(eye, targetEye);
+                LineOfSightResult los = _scenarioGeometry.CheckLineOfSight(eye, targetEye, _clientLosContext);
 
                 Vector3 startGodot = new(eye.X, eye.Y, eye.Z);
                 Vector3 endGodot = new(targetEye.X, targetEye.Y, targetEye.Z);
@@ -4914,6 +5054,7 @@ public partial class Main : Node3D
             _orderCursorOverlay,
             _destination,
             _orderNotification);
+        _previewController.SetLineOfSightContext(_clientLosContext);
 
         if (_missionPanel is not null)
         {
@@ -5047,6 +5188,17 @@ public partial class Main : Node3D
             Simulation localSimulation = AirDefensePlaygroundScenario.CreateSimulation(scenarioGeometry);
             _session = new LocalSession(localSimulation, player: 1);
         }
+        else if (scenarioName == "urban-destruction-playground")
+        {
+            scenarioGeometry = UrbanDestructionPlaygroundScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = UrbanDestructionPlaygroundScenario.CreateMatchSetup(scenarioGeometry);
+            _matchSetup = setup;
+            _scenarioGeometry = scenarioGeometry;
+            _catalog = ScenarioContent.LoadCatalog("urban-destruction-playground");
+            Simulation localSimulation = UrbanDestructionPlaygroundScenario.CreateSimulation(scenarioGeometry);
+            _session = new LocalSession(localSimulation, player: 1);
+        }
         else if (scenarioName == "ustye-ground")
         {
             scenarioGeometry = UstyeGroundScenario.CreateStaticGeometry();
@@ -5081,6 +5233,7 @@ public partial class Main : Node3D
             "helicopter-playground" => new Vector3(HelicopterPlaygroundScenario.ChinookAlphaPos.X + 20f, 2f, HelicopterPlaygroundScenario.ChinookAlphaPos.Y),
             "artillery-playground" => new Vector3(1024f, 4f, ArtilleryPlaygroundScenario.GradAlphaPos.Y),
             "air-defense-playground" => new Vector3(1024f, 12f, 920f),
+            "urban-destruction-playground" => new Vector3(500f, 4f, 470f),
             _ => new Vector3(64, 0, 64)
         };
         float initialCameraSize = scenarioName switch
@@ -5095,6 +5248,7 @@ public partial class Main : Node3D
             "helicopter-playground" => 180f,
             "artillery-playground" => 220f,
             "air-defense-playground" => 440f,
+            "urban-destruction-playground" => 155f,
             _ => 112f
         };
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
@@ -5139,6 +5293,7 @@ public partial class Main : Node3D
             _orderCursorOverlay,
             _destination,
             _orderNotification);
+        _previewController.SetLineOfSightContext(_clientLosContext);
 
         EnterGameSession(_session);
 
@@ -5313,6 +5468,7 @@ public partial class Main : Node3D
             "helicopter-playground" => "HELICOPTER FLIGHT PROVING GROUND",
             "artillery-playground" => "BM-21 GRAD ROCKET ARTILLERY PROVING GROUND",
             "air-defense-playground" => "9K35 STRELA-10 AIR DEFENSE & FLARES PROVING GROUND",
+            "urban-destruction-playground" => "SOVIET PANELKA 1-464 URBAN DESTRUCTION PROVING GROUND",
             _ => "M0 NETWORK TEST"
         };
         return $"DEAD GROUND   /   SIDE {assignedSide}   /   {name}";
@@ -5390,6 +5546,11 @@ public partial class Main : Node3D
         if (scenario == "air-defense-playground")
         {
             return new Vector3(1024f, 12f, 920f);
+        }
+
+        if (scenario == "urban-destruction-playground")
+        {
+            return new Vector3(500f, 4f, 470f);
         }
 
         return fallbackFocus;

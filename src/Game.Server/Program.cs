@@ -100,7 +100,8 @@ string[] validScenarios =
     "infantry-transport",
     "helicopter-playground",
     "artillery-playground",
-    "air-defense-playground"
+    "air-defense-playground",
+    "urban-destruction-playground"
 ];
 
 if (!validScenarios.Contains(scenario))
@@ -133,6 +134,7 @@ StaticGeometry? scenarioGeometry = scenario switch
     "helicopter-playground" => HelicopterPlaygroundScenario.CreateStaticGeometry(),
     "artillery-playground" => ArtilleryPlaygroundScenario.CreateStaticGeometry(),
     "air-defense-playground" => AirDefensePlaygroundScenario.CreateStaticGeometry(),
+    "urban-destruction-playground" => UrbanDestructionPlaygroundScenario.CreateStaticGeometry(),
     "prototype" => null,
     _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
 };
@@ -159,6 +161,7 @@ MatchSetup setup = scenario switch
     "helicopter-playground" => HelicopterPlaygroundScenario.CreateMatchSetup(scenarioGeometry!),
     "artillery-playground" => ArtilleryPlaygroundScenario.CreateMatchSetup(scenarioGeometry!),
     "air-defense-playground" => AirDefensePlaygroundScenario.CreateMatchSetup(scenarioGeometry!),
+    "urban-destruction-playground" => UrbanDestructionPlaygroundScenario.CreateMatchSetup(scenarioGeometry!),
     "prototype" => PrototypeScenario.CreateMatchSetup(map),
     _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
 };
@@ -197,6 +200,7 @@ Simulation CreateSimulation(ulong seed = 0)
         "helicopter-playground" => HelicopterPlaygroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "artillery-playground" => ArtilleryPlaygroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "air-defense-playground" => AirDefensePlaygroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
+        "urban-destruction-playground" => UrbanDestructionPlaygroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "prototype" => PrototypeScenario.Create(map),
         _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
     };
@@ -470,6 +474,35 @@ if (smokeTest)
         }
 
         Console.WriteLine($"AIR_DEFENSE_PLAYGROUND_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} launches={launchesSeen} flares={flaresSeen} detonations={detonationsSeen} max_missiles={maxActiveMissiles} alpha_id={alphaChinookId.Value}");
+        return;
+    }
+
+    if (scenario == "urban-destruction-playground")
+    {
+        for (int i = 0; i < 10; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.Replica.OwnUnits.Length != 4)
+            throw new InvalidOperationException($"Urban-destruction-playground smoke test: expected 4 own units, got {session.Replica.OwnUnits.Length}.");
+
+        EntityId t62West = session.Replica.OwnUnits[0].Id;
+        EntityId t62East = session.Replica.OwnUnits[1].Id;
+        session.AttackGround(t62West, new Vector3(494f, 3.5f, 512f), new StructureId(102));
+        session.AttackGround(t62East, new Vector3(506f, 3.5f, 512f), new StructureId(103));
+
+        bool collapsed = false;
+        for (int i = 0; i < 450; i++)
+        {
+            session.Advance(1d / Simulation.TickRate);
+            if (session.Replica.TryGetStructure(new StructureId(102), out StructureObservation s102) && s102.FloorsStanding == 0)
+            {
+                collapsed = true;
+                break;
+            }
+        }
+
+        if (!collapsed)
+            throw new InvalidOperationException("Urban-destruction-playground smoke test failed: panelka section 102 did not collapse.");
+
+        Console.WriteLine($"URBAN_DESTRUCTION_PLAYGROUND_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} structures={session.Replica.StructureCount}");
         return;
     }
 
