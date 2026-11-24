@@ -29,5 +29,6 @@ public interface IGameSession : IDisposable
     bool FireMission(EntityId unit, System.Numerics.Vector2 target, bool cancel = false);
     bool Stop(EntityId unit);
     bool DeployFlares(EntityId unit, bool toggleAuto = false);
+    bool AttackGround(EntityId unit, System.Numerics.Vector3 targetPoint, StructureId targetStructure = default);
     void Advance(double elapsedSeconds);
 }

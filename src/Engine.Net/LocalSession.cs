@@ -54,6 +54,7 @@ public sealed class LocalSession : IGameSession
     public bool FireMission(EntityId unit, Vector2 target, bool cancel = false) => _client.FireMission(unit, target, cancel);
     public bool Stop(EntityId unit) => _client.Stop(unit);
     public bool DeployFlares(EntityId unit, bool toggleAuto = false) => _client.DeployFlares(unit, toggleAuto);
+    public bool AttackGround(EntityId unit, Vector3 targetPoint, StructureId targetStructure = default) => _client.AttackGround(unit, targetPoint, targetStructure);
 
     public void Dispose()
     {

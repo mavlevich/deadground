@@ -282,6 +282,16 @@ public sealed class ClientSession : IGameSession
         return true;
     }
 
+    public bool AttackGround(EntityId unit, Vector3 targetPoint, StructureId targetStructure = default)
+    {
+        if (State != SessionConnectionState.Connected) return false;
+        AttackGroundCommand command = new(_nextCommand, Replica.LatestTick, unit, targetPoint, targetStructure);
+        WireProtocol.WriteAttackGround(_command, command);
+        if (!_transport.TrySend(_command.AsSpan(0, WireProtocol.AttackGroundSize))) return false;
+        _nextCommand = checked(_nextCommand + 1);
+        return true;
+    }
+
     private void Poll()
     {
         _transport.Poll(MaxMessagesPerPoll);
