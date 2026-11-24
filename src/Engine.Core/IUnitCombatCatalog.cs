@@ -103,7 +103,8 @@ public sealed record WeaponDefinition(
     float MissileProximityFuzeRadius = 6.0f,
     float IrCountermeasureResistance = 0f,
     int MissileMaxFlightTicks = 160,
-    int MissileMotorBurnTicks = 50)
+    int MissileMotorBurnTicks = 50,
+    int StructuralDamage = 0)
 {
     public bool IsGuidedMissile => GuidanceKind != MissileGuidanceKind.None;
     public float Dispersion => DispersionMils;

@@ -217,6 +217,69 @@ public sealed class WorldState : IDisposable
         _nextGuidedMissileId = 1;
     }
 
+    public const int MaxDestructibleStructures = 256;
+    private readonly DestructibleStructureState[] _destructibleStructures = new DestructibleStructureState[MaxDestructibleStructures];
+    private readonly Dictionary<StructureId, int> _destructibleStructureIndices = new(MaxDestructibleStructures);
+    private int _destructibleStructureCount;
+
+    public int DestructibleStructureCount => _destructibleStructureCount;
+    public ReadOnlySpan<DestructibleStructureState> DestructibleStructures =>
+        _destructibleStructures.AsSpan(0, _destructibleStructureCount);
+
+    public bool TryRegisterDestructibleStructure(
+        OpaqueStructure structure,
+        int geometryIndex,
+        in StructureDestructionProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(structure);
+        if (!profile.IsValid || geometryIndex < 0)
+            return false;
+        if (_destructibleStructureIndices.ContainsKey(structure.Id) ||
+            _destructibleStructureCount >= _destructibleStructures.Length)
+            return false;
+
+        int index = _destructibleStructureCount++;
+        _destructibleStructures[index] = new DestructibleStructureState
+        {
+            Id = structure.Id,
+            GeometryIndex = geometryIndex,
+            Min = structure.Min,
+            Max = structure.Max,
+            Profile = profile,
+            Health = profile.MaxHealth,
+            FloorsStanding = profile.FloorsTotal,
+            FloorBreachMask = 0,
+            FloorIntegrityPacked = StructureDestructionMath.CreateIntactFloorIntegrity(profile.FloorsTotal),
+            LastDamagedTick = -1,
+            CollapsedTick = -1
+        };
+        _destructibleStructureIndices[structure.Id] = index;
+        return true;
+    }
+
+    public bool TryGetDestructibleStructureIndex(StructureId id, out int index) =>
+        _destructibleStructureIndices.TryGetValue(id, out index);
+
+    public bool TryGetDestructibleStructure(StructureId id, out DestructibleStructureState state)
+    {
+        if (_destructibleStructureIndices.TryGetValue(id, out int index))
+        {
+            state = _destructibleStructures[index];
+            return true;
+        }
+        state = default;
+        return false;
+    }
+
+    public ref DestructibleStructureState GetDestructibleStructureRef(int index) =>
+        ref _destructibleStructures[index];
+
+    public void ClearDestructibleStructures()
+    {
+        _destructibleStructureCount = 0;
+        _destructibleStructureIndices.Clear();
+    }
+
     public int CopyGuidedMissileObservations(int currentTick, Span<GuidedMissileObservation> destination)
     {
         int count = Math.Min(_guidedMissileCount, destination.Length);
@@ -307,7 +370,10 @@ public sealed class WorldState : IDisposable
         EntityId LastTargetEntityId = default,
         Vector2 LastTargetPosition = default,
         int LastMovedTick = -1,
-        bool HasSwitchedTargetThisReload = false);
+        bool HasSwitchedTargetThisReload = false,
+        bool HasAttackGroundOrder = false,
+        Vector3 AttackGroundTarget = default,
+        StructureId AttackGroundStructureId = default);
 
     public record struct UnitSmokeState(
         bool Initialized,
@@ -942,8 +1008,27 @@ public sealed class WorldState : IDisposable
             combat.Status = AttackExecutionStatus.None;
         }
         combat.HasAttackOrder = false;
+        combat.HasAttackGroundOrder = false;
+        combat.AttackGroundTarget = default;
+        combat.AttackGroundStructureId = default;
         combat.PursuitDestination = default;
         combat.LastPursuitRequestTick = -1;
+        return true;
+    }
+
+    public bool SetAttackGroundOrder(EntityId id, Vector3 targetPoint, StructureId targetStructure = default)
+    {
+        if (!_indices.TryGetValue(id, out int index)) return false;
+        ref CombatState combat = ref _storage.Get<CombatState>(_entities[index]);
+        combat.HasAttackOrder = false;
+        combat.TargetContactId = default;
+        combat.TargetEntityId = default;
+        combat.PursuitDestination = default;
+        combat.LastPursuitRequestTick = -1;
+        combat.HasAttackGroundOrder = true;
+        combat.AttackGroundTarget = targetPoint;
+        combat.AttackGroundStructureId = targetStructure;
+        combat.Status = AttackExecutionStatus.None;
         return true;
     }
 
@@ -965,7 +1050,7 @@ public sealed class WorldState : IDisposable
         float delta = CombatSystem.ShorterArcDelta(combat.HullHeading, newHullHeading);
         if (MathF.Abs(delta) > 0.0001f)
         {
-            if (combat.TargetContactId.Value == 0)
+            if (combat.TargetContactId.Value == 0 && !combat.HasAttackGroundOrder)
                 combat.TurretYaw = CombatSystem.NormalizeYaw(combat.TurretYaw + delta);
             combat.HullHeading = CombatSystem.NormalizeYaw(newHullHeading);
             if (tick >= 0)
@@ -986,7 +1071,7 @@ public sealed class WorldState : IDisposable
     {
         if (step.LengthSquared() < MinHullStep * MinHullStep) return;
         float hull = MathF.Atan2(-step.X, -step.Y);
-        if (combat.TargetContactId.Value == 0)
+        if (combat.TargetContactId.Value == 0 && !combat.HasAttackGroundOrder)
             combat.TurretYaw = CombatSystem.NormalizeYaw(combat.TurretYaw + CombatSystem.ShorterArcDelta(combat.HullHeading, hull));
         combat.HullHeading = hull;
     }
@@ -1000,6 +1085,80 @@ public sealed class WorldState : IDisposable
         ref CombatState combat = ref _storage.Get<CombatState>(_entities[index]);
         combat.TurretYaw = yaw;
         return true;
+    }
+
+    /// <summary>
+    /// Computes a deterministic 64-bit FNV-1a hash of authoritative world state including
+    /// units, destructible structures, smoke clouds, wrecks, and guided missiles.
+    /// Allocation-free.
+    /// </summary>
+    public ulong ComputeStateHash()
+    {
+        const ulong offsetBasis = 14695981039346656037UL;
+        const ulong prime = 1099511628211UL;
+        ulong hash = offsetBasis;
+
+        static ulong Mix(ulong h, ulong value) => (h ^ value) * prime;
+        static ulong MixFloat(ulong h, float value) => Mix(h, (uint)BitConverter.SingleToInt32Bits(value));
+
+        hash = Mix(hash, (ulong)Count);
+        for (int i = 0; i < Count; i++)
+        {
+            Entity entity = _entities[i];
+            Identity id = _storage.Get<Identity>(entity);
+            Position pos = _storage.Get<Position>(entity);
+            CombatState combat = _storage.Get<CombatState>(entity);
+            hash = Mix(hash, id.Id.Value);
+            hash = Mix(hash, (ulong)id.Owner);
+            hash = Mix(hash, id.Definition);
+            hash = MixFloat(hash, pos.Value.X);
+            hash = MixFloat(hash, pos.Value.Y);
+            hash = Mix(hash, (ulong)combat.CurrentHealth);
+            hash = Mix(hash, (ulong)combat.Ammunition);
+            hash = Mix(hash, (ulong)combat.ReloadTicksRemaining);
+            hash = MixFloat(hash, combat.TurretYaw);
+            hash = MixFloat(hash, combat.HullHeading);
+        }
+
+        hash = Mix(hash, (ulong)_destructibleStructureCount);
+        for (int i = 0; i < _destructibleStructureCount; i++)
+        {
+            ref readonly DestructibleStructureState s = ref _destructibleStructures[i];
+            hash = Mix(hash, (ulong)(uint)s.Id.Value);
+            hash = Mix(hash, s.Health);
+            hash = Mix(hash, s.FloorsStanding);
+            hash = Mix(hash, s.FloorBreachMask);
+            hash = Mix(hash, s.FloorIntegrityPacked);
+            hash = Mix(hash, (ulong)s.CollapsedTick);
+        }
+
+        hash = Mix(hash, (ulong)_smokeCloudCount);
+        for (int i = 0; i < _smokeCloudCount; i++)
+        {
+            ref readonly SmokeCloudState sm = ref _smokeClouds[i];
+            hash = Mix(hash, sm.Id.Value);
+            hash = MixFloat(hash, sm.Position.X);
+            hash = MixFloat(hash, sm.Position.Y);
+            hash = Mix(hash, (ulong)sm.ExpiresTick);
+        }
+
+        hash = Mix(hash, (ulong)_wreckCount);
+        for (int i = 0; i < _wreckCount; i++)
+        {
+            hash = Mix(hash, _wrecks[i].Id.Value);
+        }
+
+        hash = Mix(hash, (ulong)_guidedMissileCount);
+        for (int i = 0; i < _guidedMissileCount; i++)
+        {
+            ref readonly GuidedMissileState m = ref _guidedMissiles[i];
+            hash = Mix(hash, m.MissileId);
+            hash = MixFloat(hash, m.Position.X);
+            hash = MixFloat(hash, m.Position.Y);
+            hash = MixFloat(hash, m.Position.Z);
+        }
+
+        return hash;
     }
 
     public void Dispose()

@@ -321,7 +321,8 @@ public sealed class ArtillerySystem : ISimulationSystem, IRandomStreamsAware
             impactTick,
             weapon.Damage,
             weapon.SplashRadius,
-            weapon.PenetrationNear);
+            weapon.PenetrationNear,
+            weapon.StructuralDamage);
 
         world.TryAddArtilleryProjectile(in projectile);
 

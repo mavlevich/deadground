@@ -19,9 +19,11 @@ public sealed class DetectionSystem : ISimulationSystem
     private readonly IUnitPerceptionCatalog _catalog;
     private readonly DetectionTuning _tuning;
     private readonly SmokeSystem? _smokeSystem;
+    private BuildingDestructionSystem? _buildingDestruction;
     private readonly SideContactTracker[] _trackers;
     private readonly SideWreckTracker[] _wreckTrackers;
     private readonly SideSmokeTracker[] _smokeTrackers;
+    private readonly SideStructureTracker[] _structureTrackers;
     private readonly UnitSpatialGrid _spatialGrid;
     private readonly LineOfSightContext _losContext;
     private readonly LineOfSightContext _staticOnlyLosContext;
@@ -58,6 +60,9 @@ public sealed class DetectionSystem : ISimulationSystem
     public DetectionTuning Tuning => _tuning;
     public StaticGeometry Geometry => _geometry;
     internal SmokeSystem? SmokeSystem => _smokeSystem;
+    internal BuildingDestructionSystem? BuildingDestruction => _buildingDestruction;
+    public void SetBuildingDestructionSystem(BuildingDestructionSystem? buildingDestruction) =>
+        _buildingDestruction = buildingDestruction;
     public int CandidateQueriesCount { get; private set; }
     public int LosQueriesCount { get; private set; }
     public int ObservationsCount { get; private set; }
@@ -81,7 +86,8 @@ public sealed class DetectionSystem : ISimulationSystem
         DetectionTuning? tuning = null,
         int maxUnits = 1024,
         int maxSides = Simulation.MaxPlayers,
-        SmokeSystem? smokeSystem = null)
+        SmokeSystem? smokeSystem = null,
+        BuildingDestructionSystem? buildingDestruction = null)
     {
         ArgumentNullException.ThrowIfNull(geometry);
         ArgumentNullException.ThrowIfNull(catalog);
@@ -90,15 +96,18 @@ public sealed class DetectionSystem : ISimulationSystem
         _catalog = catalog;
         _tuning = tuning ?? new DetectionTuning();
         _smokeSystem = smokeSystem;
+        _buildingDestruction = buildingDestruction;
         _trackers = new SideContactTracker[maxSides];
         _wreckTrackers = new SideWreckTracker[maxSides];
         _smokeTrackers = new SideSmokeTracker[maxSides];
+        _structureTrackers = new SideStructureTracker[maxSides];
 
         for (int i = 0; i < maxSides; i++)
         {
             _trackers[i] = new SideContactTracker(i + 1, _tuning);
             _wreckTrackers[i] = new SideWreckTracker();
             _smokeTrackers[i] = new SideSmokeTracker();
+            _structureTrackers[i] = new SideStructureTracker();
         }
 
         _maxUnits = maxUnits;
@@ -148,6 +157,17 @@ public sealed class DetectionSystem : ISimulationSystem
         else
         {
             _losContext.SetSmokeVolumes(null, 0);
+        }
+
+        if (_buildingDestruction is not null)
+        {
+            _buildingDestruction.CopyHeightOverridesTo(_losContext);
+            _buildingDestruction.CopyHeightOverridesTo(_staticOnlyLosContext);
+        }
+        else
+        {
+            _losContext.SetStructureMaxYOverrides(null, 0);
+            _staticOnlyLosContext.SetStructureMaxYOverrides(null, 0);
         }
 
         int unitCount = world.Count;
@@ -482,6 +502,131 @@ public sealed class DetectionSystem : ISimulationSystem
 
         // 8. Filter observed smoke clouds per side (own/allied clouds always visible; hostile clouds require LOS)
         UpdateVisibleSmokeClouds(world, unitCount, tick);
+
+        // 9. Update per-side last-observed state for damaged/collapsed destructible structures
+        UpdateKnownStructures(world, unitCount);
+    }
+
+    private void UpdateKnownStructures(WorldState world, int unitCount)
+    {
+        int structCount = world.DestructibleStructureCount;
+        if (structCount == 0)
+            return;
+
+        for (int s = 0; s < _structureTrackers.Length; s++)
+        {
+            SideStructureTracker tracker = _structureTrackers[s];
+            int sidePlayer = s + 1;
+            int sideTeam = world.GetPlayerTeam(sidePlayer);
+
+            for (int i = 0; i < structCount; i++)
+            {
+                ref readonly DestructibleStructureState st = ref world.GetDestructibleStructureRef(i);
+                if (!st.IsDamaged)
+                    continue;
+
+                if (IsStructureVisibleToTeam(in st, unitCount, sideTeam))
+                {
+                    tracker.TryUpsert(st.ToObservation());
+                }
+            }
+        }
+    }
+
+    public bool IsStructureObservedBy(int player, in DestructibleStructureState structure, WorldState world)
+    {
+        int index = player - 1;
+        if (index < 0 || index >= _structureTrackers.Length)
+            return false;
+
+        int team = world.GetPlayerTeam(player);
+        int unitCount = Math.Min(_lastUnitCount, _maxUnits);
+        return IsStructureVisibleToTeam(in structure, unitCount, team);
+    }
+
+    private bool IsStructureVisibleToTeam(
+        in DestructibleStructureState structure,
+        int unitCount,
+        int observerTeam)
+    {
+        float cx = (structure.Min.X + structure.Max.X) * 0.5f;
+        float cz = (structure.Min.Z + structure.Max.Z) * 0.5f;
+        float halfX = (structure.Max.X - structure.Min.X) * 0.5f;
+        float halfZ = (structure.Max.Z - structure.Min.Z) * 0.5f;
+        float approxRadius = MathF.Sqrt(halfX * halfX + halfZ * halfZ);
+        float currentMaxY = structure.CurrentMaxY;
+        float sampleY = currentMaxY > structure.Min.Y + 0.5f
+            ? MathF.Max(structure.Min.Y + 0.5f, currentMaxY - 0.35f)
+            : structure.Min.Y + 0.35f;
+        ReadOnlySpan<SmokeVolume> activeSmoke = _losContext.ActiveSmoke;
+
+        for (int u = 0; u < unitCount; u++)
+        {
+            if (!_unitHasSensor[u] || _unitTeams[u] != observerTeam)
+                continue;
+
+            Vector2 obsPos = _unitPositions[u];
+            float maxDist = _unitSensorRange[u] + approxRadius;
+            float dx = obsPos.X - cx;
+            float dz = obsPos.Y - cz;
+            float distSq = dx * dx + dz * dz;
+            if (distSq > maxDist * maxDist)
+                continue;
+
+            // Test nearest observer-facing point just outside the structure AABB so the structure
+            // itself does not self-occlude the sightline check.
+            float clampedX = Math.Clamp(obsPos.X, structure.Min.X, structure.Max.X);
+            float clampedZ = Math.Clamp(obsPos.Y, structure.Min.Z, structure.Max.Z);
+            float fdx = obsPos.X - clampedX;
+            float fdz = obsPos.Y - clampedZ;
+            float faceDistSq = fdx * fdx + fdz * fdz;
+            Vector3 targetPt;
+            if (faceDistSq > 1e-4f)
+            {
+                float inv = 1f / MathF.Sqrt(faceDistSq);
+                targetPt = new Vector3(clampedX + fdx * inv * 0.25f, sampleY, clampedZ + fdz * inv * 0.25f);
+            }
+            else
+            {
+                targetPt = new Vector3(cx, currentMaxY + 0.25f, cz);
+            }
+
+            LosQueriesCount++;
+            if (!_geometry.IsLineOfSightClear(_unitEyePos[u], targetPt, _staticOnlyLosContext, out _))
+                continue;
+
+            // Intervening tactical smoke screens still conceal the structure, but a dust cloud
+            // centered on this structure's own footprint does not hide its own collapse from observers.
+            if (activeSmoke.Length > 0 && IsBlockedByInterveningSmoke(_unitEyePos[u], targetPt, in structure, activeSmoke))
+                continue;
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsBlockedByInterveningSmoke(
+        Vector3 eyePos,
+        Vector3 targetPt,
+        in DestructibleStructureState structure,
+        ReadOnlySpan<SmokeVolume> activeSmoke)
+    {
+        for (int i = 0; i < activeSmoke.Length; i++)
+        {
+            ref readonly SmokeVolume vol = ref activeSmoke[i];
+            if (vol.CenterX >= structure.Min.X - 1f && vol.CenterX <= structure.Max.X + 1f &&
+                vol.CenterZ >= structure.Min.Z - 1f && vol.CenterZ <= structure.Max.Z + 1f)
+            {
+                continue;
+            }
+
+            if (!SmokeLos.IsSmokeClear(eyePos, targetPt, activeSmoke.Slice(i, 1)))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void UpdateVisibleSmokeClouds(WorldState world, int unitCount, int tick)
@@ -754,6 +899,15 @@ public sealed class DetectionSystem : ISimulationSystem
         return _smokeTrackers[index].ExportSmokeClouds();
     }
 
+    public ReadOnlySpan<StructureObservation> GetKnownStructures(int player)
+    {
+        int index = player - 1;
+        if (index < 0 || index >= _structureTrackers.Length)
+            return [];
+
+        return _structureTrackers[index].ExportStructures();
+    }
+
     /// <summary>
     /// Copies guided missiles currently visible to <paramref name="player"/> into <paramref name="destination"/>.
     /// Friendly missiles and missiles fired by directly spotted enemy launchers are visible immediately.
@@ -865,6 +1019,7 @@ public sealed class DetectionSystem : ISimulationSystem
         {
             _wreckTrackers[index].Clear();
             _smokeTrackers[index].Clear();
+            _structureTrackers[index].Clear();
         }
     }
 }

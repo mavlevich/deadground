@@ -102,9 +102,10 @@ public sealed class OpsRules : RuleSet
         NavigationSystem nav = new(new NavigationGrid(geometry, navTuning?.CellSize ?? NavigationTuning.DefaultCellSize, enableHierarchical: true, buildLimits: buildLimits, sectorSize: navTuning?.SectorSize ?? NavigationTuning.DefaultSectorSize), movementCatalog, navTuning);
         ContainerSystem container = new(nav);
         SmokeSystem? smoke = smokeCatalog is not null ? new SmokeSystem(geometry, smokeCatalog) : null;
-        DetectionSystem det = new(geometry, perceptionCatalog, detTuning, smokeSystem: smoke);
+        BuildingDestructionSystem buildingDestruction = new(geometry, smoke);
+        DetectionSystem det = new(geometry, perceptionCatalog, detTuning, smokeSystem: smoke, buildingDestruction: buildingDestruction);
         CombatSystem? combat = combatCatalog is not null
-            ? new CombatSystem(geometry, combatCatalog, perceptionCatalog, det, nav, combatRandom: combatRandom, flight: flight)
+            ? new CombatSystem(geometry, combatCatalog, perceptionCatalog, det, nav, combatRandom: combatRandom, flight: flight, buildingDestruction: buildingDestruction)
             : null;
         ArtillerySystem? artillery = combatCatalog is not null
             ? new ArtillerySystem(geometry, combatCatalog, nav)
@@ -113,10 +114,11 @@ public sealed class OpsRules : RuleSet
             ? new GuidedMissileSystem(geometry, countermeasureCatalog, combatCatalog)
             : null;
 
-        List<ISimulationSystem> list = new(9);
+        List<ISimulationSystem> list = new(10);
         if (flight is not null) list.Add(flight);
         list.Add(nav);
         list.Add(container);
+        list.Add(buildingDestruction);
         if (smoke is not null) list.Add(smoke);
         list.Add(det);
         if (combat is not null) list.Add(combat);
@@ -176,7 +178,8 @@ public sealed record WeaponData(
     float MissileProximityFuzeRadius = 11f,
     float IrCountermeasureResistance = 0.25f,
     int MissileMaxFlightTicks = 320,
-    int MissileMotorBurnTicks = 150);
+    int MissileMotorBurnTicks = 150,
+    int StructuralDamage = 0);
 
 public sealed record FlareData(
     int Charges,
@@ -532,7 +535,8 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
                     w.MissileProximityFuzeRadius,
                     w.IrCountermeasureResistance,
                     w.MissileMaxFlightTicks,
-                    w.MissileMotorBurnTicks);
+                    w.MissileMotorBurnTicks,
+                    w.StructuralDamage);
             }
         }
 
@@ -965,6 +969,8 @@ public static class PrototypeScenario
                 }
                 if (weapon.IsIndirectFire && (weapon.SplashRadius <= 0f || weapon.DispersionRadius <= 0f))
                     throw new InvalidOperationException("Indirect-fire weapon requires positive splash_radius and dispersion_radius.");
+                if (weapon.StructuralDamage < 0)
+                    throw new InvalidOperationException($"Weapon '{weapon.Id}' has negative structural_damage.");
                 if (!string.IsNullOrWhiteSpace(weapon.GuidanceKind))
                 {
                     _ = OpsCombatCatalog.ParseGuidanceKind(weapon.GuidanceKind);

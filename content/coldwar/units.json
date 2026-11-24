@@ -40,7 +40,8 @@
       "dispersion_mils": 3.0,
       "target_movement_penalty": 0.20,
       "ranging_bonus": 0.08,
-      "max_ranging_bonus": 0.24
+      "max_ranging_bonus": 0.24,
+      "structural_damage": 95
     },
     {
       "id": "gun_105mm_m68",
@@ -65,7 +66,8 @@
       "dispersion_mils": 2.8,
       "target_movement_penalty": 0.20,
       "ranging_bonus": 0.08,
-      "max_ranging_bonus": 0.24
+      "max_ranging_bonus": 0.24,
+      "structural_damage": 85
     },
     {
       "id": "mg_14_5mm_kpvt",
@@ -92,7 +94,8 @@
       "ranging_bonus": 0.06,
       "max_ranging_bonus": 0.18,
       "can_target_air": true,
-      "max_air_target_altitude": 80.0
+      "max_air_target_altitude": 80.0,
+      "structural_damage": 6
     },
     {
       "id": "mg_12_7mm_m2hb",
@@ -119,7 +122,8 @@
       "ranging_bonus": 0.06,
       "max_ranging_bonus": 0.18,
       "can_target_air": true,
-      "max_air_target_altitude": 70.0
+      "max_air_target_altitude": 70.0,
+      "structural_damage": 4
     },
     {
       "id": "mg_7_62mm_m60",
@@ -146,7 +150,8 @@
       "ranging_bonus": 0.05,
       "max_ranging_bonus": 0.15,
       "can_target_air": true,
-      "max_air_target_altitude": 40.0
+      "max_air_target_altitude": 40.0,
+      "structural_damage": 0
     },
     {
       "id": "mg_7_62mm_m60d",
@@ -172,7 +177,8 @@
       "ranging_bonus": 0.05,
       "max_ranging_bonus": 0.15,
       "can_target_air": true,
-      "max_air_target_altitude": 65.0
+      "max_air_target_altitude": 65.0,
+      "structural_damage": 0
     },
     {
       "id": "rifle_5_56mm_m16a1",
@@ -200,7 +206,8 @@
       "ranging_bonus": 0.05,
       "max_ranging_bonus": 0.15,
       "can_target_air": true,
-      "max_air_target_altitude": 25.0
+      "max_air_target_altitude": 25.0,
+      "structural_damage": 0
     },
     {
       "id": "rocket_122mm_9m22u",
@@ -225,7 +232,8 @@
       "splash_radius": 22.0,
       "projectile_speed": 160.0,
       "setup_seconds": 2.0,
-      "elevation_degrees": 32.0
+      "elevation_degrees": 32.0,
+      "structural_damage": 145
     },
     {
       "id": "sam_9m37",
@@ -253,7 +261,8 @@
       "missile_proximity_fuze_radius": 11.5,
       "ir_countermeasure_resistance": 0.25,
       "missile_max_flight_ticks": 360,
-      "missile_motor_burn_ticks": 140
+      "missile_motor_burn_ticks": 140,
+      "structural_damage": 30
     }
   ],
   "units": [

@@ -36,7 +36,9 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
     private readonly DetectionSystem _detection;
     private readonly NavigationSystem? _navigation;
     private FlightSystem? _flight;
+    private BuildingDestructionSystem? _buildingDestruction;
     private readonly LineOfSightContext _losContext;
+    private readonly StructureSplashResult[] _splashStructureResults = new StructureSplashResult[32];
     private DeterministicRandom? _combatRandom;
     private int _currentTick;
 
@@ -90,7 +92,8 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         int maxSides = Simulation.MaxPlayers,
         int maxEventsPerPlayer = DefaultMaxEventsPerPlayer,
         DeterministicRandom? combatRandom = null,
-        FlightSystem? flight = null)
+        FlightSystem? flight = null,
+        BuildingDestructionSystem? buildingDestruction = null)
     {
         ArgumentNullException.ThrowIfNull(geometry);
         ArgumentNullException.ThrowIfNull(combatCatalog);
@@ -103,6 +106,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         _detection = detection;
         _navigation = navigation;
         _flight = flight;
+        _buildingDestruction = buildingDestruction;
         _maxUnits = maxUnits;
         _maxSides = maxSides;
         _maxEventsPerPlayer = maxEventsPerPlayer;
@@ -120,6 +124,8 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
     }
 
     internal void SetFlightSystem(FlightSystem? flight) => _flight = flight;
+    internal void SetBuildingDestructionSystem(BuildingDestructionSystem? buildingDestruction) =>
+        _buildingDestruction = buildingDestruction;
 
     public static bool CanEngageTargetAltitude(WeaponDefinition weapon, WorldState world, EntityId targetId)
     {
@@ -669,6 +675,86 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         return false;
     }
 
+    public bool TryOrderAttackGround(int player, AttackGroundCommand command, WorldState world)
+    {
+        if (player < 1 || command.Sequence == 0)
+            return false;
+
+        if (!float.IsFinite(command.TargetPoint.X) ||
+            !float.IsFinite(command.TargetPoint.Y) ||
+            !float.IsFinite(command.TargetPoint.Z))
+            return false;
+
+        Vector2 target2D = new(command.TargetPoint.X, command.TargetPoint.Z);
+        if (!world.Map.Contains(target2D))
+            return false;
+
+        if (!world.TryGetUnit(command.Unit, out UnitState attacker) || attacker.Owner != player ||
+            world.IsContained(command.Unit) || world.IsCrashing(command.Unit) || world.IsSlung(command.Unit))
+            return false;
+
+        if (!_combatCatalog.TryGetProfile(attacker.Definition, out UnitCombatProfile profile) ||
+            profile.Weapon is null ||
+            profile.Weapon.IsIndirectFire ||
+            profile.Weapon.AirTargetsOnly)
+            return false;
+
+        Vector3 targetPoint = command.TargetPoint;
+        StructureId targetStructure = command.TargetStructure;
+        if (targetStructure != default)
+        {
+            if (world.TryGetDestructibleStructure(targetStructure, out DestructibleStructureState st))
+            {
+                if (st.FloorsStanding == 0)
+                    return false;
+                float maxY = st.CurrentMaxY;
+                targetPoint = new Vector3(
+                    Math.Clamp(targetPoint.X, st.Min.X, st.Max.X),
+                    Math.Clamp(targetPoint.Y, st.Min.Y + 0.25f, MathF.Max(st.Min.Y + 0.25f, maxY - 0.1f)),
+                    Math.Clamp(targetPoint.Z, st.Min.Z, st.Max.Z));
+                target2D = new Vector2(targetPoint.X, targetPoint.Z);
+            }
+            else if (!_geometry.TryGetStructureIndex(targetStructure, out _))
+            {
+                targetStructure = default;
+            }
+        }
+
+        SyncSmokeContext();
+        WeaponDefinition weapon = profile.Weapon;
+        float dist = Vector2.Distance(attacker.Position, target2D);
+        bool inRange = dist <= weapon.Range + RangeToleranceMargin;
+        bool hasClearShot = inRange && HasLineOfFireToPoint(attacker, weapon, targetPoint, targetStructure, world, out _, out _);
+
+        if (inRange && hasClearShot)
+        {
+            if (attacker.Moving)
+            {
+                StopUnitMovement(attacker, world);
+            }
+        }
+        else
+        {
+            OrderUnitToMove(player, command.Unit, target2D, world);
+        }
+
+        if (!world.SetAttackGroundOrder(command.Unit, targetPoint, targetStructure))
+            return false;
+
+        if (world.TryGetCombatState(command.Unit, out WorldState.CombatState cs))
+        {
+            cs.Status = hasClearShot
+                ? AttackExecutionStatus.Aiming
+                : (inRange ? AttackExecutionStatus.Obstructed : AttackExecutionStatus.OutOfRange);
+            cs.PursuitDestination = (inRange && hasClearShot) ? Vector2.Zero : target2D;
+            cs.LastPursuitRequestTick = -1;
+            world.SetCombatState(command.Unit, cs);
+            return true;
+        }
+
+        return false;
+    }
+
     private void SyncSmokeContext()
     {
         if (_detection.SmokeSystem is not null)
@@ -678,6 +764,15 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         else
         {
             _losContext.SetSmokeVolumes(null, 0);
+        }
+
+        if (_buildingDestruction is not null)
+        {
+            _buildingDestruction.CopyHeightOverridesTo(_losContext);
+        }
+        else
+        {
+            _losContext.SetStructureMaxYOverrides(null, 0);
         }
     }
 
@@ -842,6 +937,12 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                     world.SetCombatState(attacker.Id, cs);
                     continue;
                 }
+            }
+            else if (cs.HasAttackGroundOrder)
+            {
+                ActiveAttackersCount++;
+                ProcessAttackGroundOrder(tick, i, attacker, profile, weapon, ref cs, world);
+                continue;
             }
             else
             {
@@ -2001,6 +2102,31 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
 
         RecordArtilleryImpactEvent(tick, projectile.PresentationId, projectile.ShooterOwner, projectile.Origin, projectile.Target, world);
 
+        if (_buildingDestruction is not null && projectile.StructuralDamage > 0)
+        {
+            int affected = _buildingDestruction.ApplySplashDamage(
+                world,
+                tick,
+                projectile.Target,
+                splashRadius,
+                projectile.StructuralDamage,
+                _splashStructureResults);
+
+            for (int s = 0; s < affected; s++)
+            {
+                StructureSplashResult sr = _splashStructureResults[s];
+                RecordStructureImpactEvent(
+                    tick,
+                    projectile.PresentationId,
+                    projectile.ShooterOwner,
+                    sr.Id,
+                    projectile.Origin,
+                    sr.ImpactPoint,
+                    sr.FloorsLost > 0,
+                    world);
+            }
+        }
+
         float shotDistance = Vector2.Distance(
             new Vector2(projectile.Origin.X, projectile.Origin.Z),
             impact2D);
@@ -2440,5 +2566,246 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         int sideIndex = player - 1;
         if (sideIndex < 0 || sideIndex >= _maxSides) return 0;
         return _playerEventCount[sideIndex];
+    }
+
+    private void ProcessAttackGroundOrder(
+        int tick,
+        int unitIndex,
+        UnitState attacker,
+        UnitCombatProfile profile,
+        WeaponDefinition weapon,
+        ref WorldState.CombatState cs,
+        WorldState world)
+    {
+        StructureId targetStructure = cs.AttackGroundStructureId;
+        Vector3 targetPoint = cs.AttackGroundTarget;
+
+        // If targeting a destructible structure that has already collapsed completely, clear the order
+        if (targetStructure != default &&
+            world.TryGetDestructibleStructure(targetStructure, out DestructibleStructureState st))
+        {
+            if (st.FloorsStanding == 0)
+            {
+                cs.HasAttackGroundOrder = false;
+                cs.AttackGroundTarget = default;
+                cs.AttackGroundStructureId = default;
+                cs.Status = AttackExecutionStatus.None;
+                cs.PursuitDestination = Vector2.Zero;
+                cs.LastPursuitRequestTick = -1;
+                world.SetCombatState(attacker.Id, cs);
+                return;
+            }
+
+            // Clamp aim height to currently standing floors if upper floors collapsed
+            float standingMaxY = st.CurrentMaxY;
+            if (targetPoint.Y > standingMaxY - 0.1f)
+            {
+                targetPoint = new Vector3(
+                    targetPoint.X,
+                    MathF.Max(st.Min.Y + 0.25f, standingMaxY - 0.35f),
+                    targetPoint.Z);
+                cs.AttackGroundTarget = targetPoint;
+            }
+        }
+
+        Vector2 target2D = new(targetPoint.X, targetPoint.Z);
+        TurnTurret(ref cs, attacker.Position, target2D, profile.TurretTraverseRate);
+
+        float dist = Vector2.Distance(attacker.Position, target2D);
+        if (dist > weapon.Range + RangeToleranceMargin)
+        {
+            cs.Status = AttackExecutionStatus.OutOfRange;
+            TryPursueTarget(tick, attacker, target2D, ref cs, world);
+            world.SetCombatState(attacker.Id, cs);
+            return;
+        }
+
+        if (!HasLineOfFireToPoint(attacker, weapon, targetPoint, targetStructure, world, out Vector3 impactPoint, out Vector3 muzzlePos))
+        {
+            cs.Status = AttackExecutionStatus.Obstructed;
+            TryPursueTarget(tick, attacker, target2D, ref cs, world);
+            world.SetCombatState(attacker.Id, cs);
+            return;
+        }
+
+        if (attacker.Moving)
+        {
+            StopUnitMovement(attacker, world);
+            attacker = world.GetUnitAt(unitIndex);
+        }
+
+        cs.PursuitDestination = Vector2.Zero;
+        cs.LastPursuitRequestTick = -1;
+
+        if (cs.Ammunition <= 0)
+        {
+            cs.Status = AttackExecutionStatus.NoAmmo;
+            world.SetCombatState(attacker.Id, cs);
+            return;
+        }
+
+        if (cs.ReloadTicksRemaining > 0 || !IsTurretAligned(cs.TurretYaw, attacker.Position, target2D))
+        {
+            cs.Status = AttackExecutionStatus.Aiming;
+            world.SetCombatState(attacker.Id, cs);
+            return;
+        }
+
+        ExecuteAttackGroundShot(tick, attacker, weapon, muzzlePos, impactPoint, targetStructure, ref cs, world);
+    }
+
+    private bool HasLineOfFireToPoint(
+        UnitState attacker,
+        WeaponDefinition weapon,
+        Vector3 targetPoint,
+        StructureId targetStructure,
+        WorldState world,
+        out Vector3 impactPoint,
+        out Vector3 muzzlePos)
+    {
+        float attackerGround = _geometry.GetSurfaceHeight(attacker.Position, attacker.SupportSurface);
+        float attackerAlt = world.GetUnitAltitude(attacker.Id);
+        muzzlePos = new Vector3(attacker.Position.X, attackerGround + attackerAlt + weapon.MuzzleHeight, attacker.Position.Y);
+        impactPoint = targetPoint;
+
+        LineOfSightResult lof = _geometry.CheckLineOfFire(muzzlePos, targetPoint, _losContext, out _);
+        if (lof.IsClear)
+        {
+            return true;
+        }
+
+        if (targetStructure != default &&
+            lof.ObstructionKind == ObstructionKind.Structure &&
+            lof.ObstructingStructureId == targetStructure)
+        {
+            impactPoint = lof.HitPoint;
+            return true;
+        }
+
+        return false;
+    }
+
+    private void ExecuteAttackGroundShot(
+        int tick,
+        UnitState attacker,
+        WeaponDefinition weapon,
+        Vector3 muzzlePos,
+        Vector3 impactPoint,
+        StructureId targetStructure,
+        ref WorldState.CombatState cs,
+        WorldState world)
+    {
+        cs.Ammunition = Math.Max(0, cs.Ammunition - 1);
+        cs.ReloadTicksRemaining = weapon.ReloadDurationTicks;
+        cs.Status = cs.Ammunition <= 0 ? AttackExecutionStatus.NoAmmo : AttackExecutionStatus.Aiming;
+
+        TotalShotsFired++;
+        if (FirstShotTick < 0)
+        {
+            FirstShotTick = tick;
+            FirstShotDistance = Vector3.Distance(muzzlePos, impactPoint);
+        }
+
+        // Record knowledge-filtered ShotFired event for client tracer/muzzle presentation
+        uint shotEventId = _nextEventId++;
+        if (_nextEventId == 0) _nextEventId = 1;
+        for (int p = 1; p <= _maxSides; p++)
+        {
+            if (p == attacker.Owner)
+            {
+                AppendEvent(p, new CombatEventObservation(
+                    shotEventId,
+                    tick,
+                    CombatEventKind.ShotFired,
+                    weapon.PresentationId,
+                    muzzlePos,
+                    impactPoint,
+                    attacker.Id,
+                    HitResult.Penetrated));
+            }
+            else if (_detection.IsEntityObservedBy(p, attacker.Id))
+            {
+                AppendEvent(p, new CombatEventObservation(
+                    shotEventId,
+                    tick,
+                    CombatEventKind.ShotFired,
+                    weapon.PresentationId,
+                    muzzlePos,
+                    impactPoint,
+                    default,
+                    HitResult.Penetrated));
+            }
+        }
+
+        if (_buildingDestruction is not null && targetStructure != default && weapon.StructuralDamage > 0)
+        {
+            if (_buildingDestruction.ApplyDirectHit(
+                    world,
+                    tick,
+                    targetStructure,
+                    impactPoint,
+                    weapon.StructuralDamage,
+                    out _,
+                    out byte floorsLost,
+                    out bool sectionFullyCollapsed))
+            {
+                RecordStructureImpactEvent(
+                    tick,
+                    weapon.PresentationId,
+                    attacker.Owner,
+                    targetStructure,
+                    muzzlePos,
+                    impactPoint,
+                    floorsLost > 0,
+                    world);
+
+                if (sectionFullyCollapsed)
+                {
+                    cs.HasAttackGroundOrder = false;
+                    cs.AttackGroundTarget = default;
+                    cs.AttackGroundStructureId = default;
+                    cs.Status = cs.Ammunition <= 0 ? AttackExecutionStatus.NoAmmo : AttackExecutionStatus.None;
+                }
+            }
+        }
+
+        world.SetCombatState(attacker.Id, cs);
+    }
+
+    private void RecordStructureImpactEvent(
+        int tick,
+        ushort presentationId,
+        int shooterOwner,
+        StructureId structureId,
+        Vector3 origin,
+        Vector3 impactPoint,
+        bool collapsed,
+        WorldState world)
+    {
+        if (!world.TryGetDestructibleStructure(structureId, out DestructibleStructureState st))
+            return;
+
+        uint eventId = _nextEventId++;
+        if (_nextEventId == 0) _nextEventId = 1;
+        CombatEventKind kind = collapsed ? CombatEventKind.StructureCollapsed : CombatEventKind.StructureDamaged;
+
+        for (int p = 1; p <= _maxSides; p++)
+        {
+            // Strict knowledge filter: only notify sides that actually observe the struck structure.
+            if (!_detection.IsStructureObservedBy(p, in st, world))
+                continue;
+
+            AppendEvent(p, new CombatEventObservation(
+                eventId,
+                tick,
+                kind,
+                presentationId,
+                origin,
+                impactPoint,
+                default,
+                collapsed ? HitResult.Penetrated : HitResult.None));
+        }
+
+        _ = shooterOwner;
     }
 }

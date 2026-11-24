@@ -34,7 +34,8 @@ public readonly record struct RocketProjectileState(
     int ImpactTick,
     int Damage,
     float SplashRadius,
-    float Penetration);
+    float Penetration,
+    int StructuralDamage = 0);
 
 /// <summary>
 /// Shared deterministic parabolic trajectory helper used by both server artillery

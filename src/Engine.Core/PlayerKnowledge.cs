@@ -7,12 +7,14 @@ public sealed class PlayerKnowledge
     public const int DefaultWreckCapacity = 128;
     public const int DefaultSmokeCapacity = WorldState.MaxSmokeClouds;
     public const int DefaultMissileCapacity = WorldState.MaxGuidedMissiles;
+    public const int DefaultStructureCapacity = WorldState.MaxDestructibleStructures;
     private readonly OwnUnitObservation[] _ownUnits;
     private readonly ContactObservation[] _contacts;
     private readonly CombatEventObservation[] _events;
     private readonly WreckObservation[] _wrecks;
     private readonly SmokeCloudObservation[] _smokeClouds;
     private readonly GuidedMissileObservation[] _missiles;
+    private readonly StructureObservation[] _structures;
 
     public int Player { get; }
     public int Count { get; private set; }
@@ -21,6 +23,7 @@ public sealed class PlayerKnowledge
     public int WreckCount { get; private set; }
     public int SmokeCloudCount { get; private set; }
     public int MissileCount { get; private set; }
+    public int StructureCount { get; private set; }
     public MissionObservation Mission { get; set; }
 
     public ReadOnlySpan<OwnUnitObservation> OwnUnits => _ownUnits.AsSpan(0, Count);
@@ -29,6 +32,7 @@ public sealed class PlayerKnowledge
     public ReadOnlySpan<WreckObservation> Wrecks => _wrecks.AsSpan(0, WreckCount);
     public ReadOnlySpan<SmokeCloudObservation> SmokeClouds => _smokeClouds.AsSpan(0, SmokeCloudCount);
     public ReadOnlySpan<GuidedMissileObservation> Missiles => _missiles.AsSpan(0, MissileCount);
+    public ReadOnlySpan<StructureObservation> Structures => _structures.AsSpan(0, StructureCount);
 
     public PlayerKnowledge(
         int player,
@@ -37,7 +41,8 @@ public sealed class PlayerKnowledge
         int eventCapacity = DefaultEventCapacity,
         int wreckCapacity = DefaultWreckCapacity,
         int smokeCapacity = DefaultSmokeCapacity,
-        int missileCapacity = DefaultMissileCapacity)
+        int missileCapacity = DefaultMissileCapacity,
+        int structureCapacity = DefaultStructureCapacity)
     {
         if (player < 1) throw new ArgumentOutOfRangeException(nameof(player));
         Player = player;
@@ -47,6 +52,7 @@ public sealed class PlayerKnowledge
         _wrecks = new WreckObservation[wreckCapacity];
         _smokeClouds = new SmokeCloudObservation[smokeCapacity];
         _missiles = new GuidedMissileObservation[missileCapacity];
+        _structures = new StructureObservation[structureCapacity];
     }
 
     internal void Refresh(WorldState world) => Refresh(world, [], null, []);
@@ -65,7 +71,8 @@ public sealed class PlayerKnowledge
         ReadOnlySpan<WreckObservation> wrecks = default,
         ReadOnlySpan<SmokeCloudObservation> smokeClouds = default,
         int currentTick = 0,
-        DetectionSystem? detection = null)
+        DetectionSystem? detection = null,
+        ReadOnlySpan<StructureObservation> structures = default)
     {
         int count = 0;
         for (int i = 0; i < world.Count; i++)
@@ -246,6 +253,12 @@ public sealed class PlayerKnowledge
         MissileCount = detection is not null
             ? detection.CopyVisibleGuidedMissiles(world, Player, currentTick, _missiles)
             : world.CopyGuidedMissileObservations(currentTick, _missiles);
+
+        if (structures.Length > _structures.Length)
+            throw new InvalidOperationException("Structure knowledge capacity exceeded.");
+
+        structures.CopyTo(_structures.AsSpan(0, structures.Length));
+        StructureCount = structures.Length;
 
         Mission = mission;
     }

@@ -101,7 +101,9 @@ public enum CombatEventKind : byte
     ArtilleryImpact = 5,
     MissileLaunched = 6,
     MissileDetonated = 7,
-    FlaresDeployed = 8
+    FlaresDeployed = 8,
+    StructureDamaged = 9,
+    StructureCollapsed = 10
 }
 
 public enum HitResult : byte
