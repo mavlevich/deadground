@@ -3,17 +3,23 @@ using Godot;
 namespace DeadGround.Client;
 
 /// <summary>
-/// Physics-based granular procedural 3D spatial audio bank (44.1 kHz 16-bit PCM) for concrete
-/// shell impacts, window glass shatter, partial structural collapse, and full panelka demolition.
-/// Synthesizes discrete staggered masonry/slab impact grains, modal concrete fracture transients,
-/// non-periodic crystalline glass pings, low-passed brown-noise structural sub-bass (zero synth
-/// sine sweeps or periodic LFO warble), and urban courtyard slapback reflections. Pre-baked at
-/// startup and played through a fixed AudioStreamPlayer3D pool with zero runtime allocations.
+/// Non-tonal filtered-noise 3D spatial audio bank (44.1 kHz 16-bit PCM) matching CannonSound's
+/// dry military acoustic palette. Zero sine chimes, zero high-Q pitched resonators, zero LFO warble:
+/// combines Friedlander concrete fracture snaps, sweeping 2-pole low-pass structural slams,
+/// unpitched broadband gravel/rubble avalanche bursts, and dull urban courtyard echoes.
+/// Pre-baked at startup and played through a fixed AudioStreamPlayer3D pool with zero runtime allocations.
 /// </summary>
 internal sealed class BuildingDestructionSoundBank : IDisposable
 {
     private const int SampleRate = 44100;
     private const int PoolSize = 12;
+    private const float Peak = 0.94f;
+
+    private static readonly (float Delay, float Gain, float Cutoff)[] UrbanEchoes =
+    [
+        (0.24f, 0.14f, 680f),
+        (0.58f, 0.07f, 420f),
+    ];
 
     private readonly Node3D _root;
     private readonly AudioStreamPlayer3D[] _players = new AudioStreamPlayer3D[PoolSize];
@@ -52,13 +58,13 @@ internal sealed class BuildingDestructionSoundBank : IDisposable
     }
 
     internal void PlayConcreteHit(Vector3 worldPos) =>
-        PlayClip(_hitClips, worldPos, volumeDb: -1.5f, pitchBase: 0.94f, pitchStep: 0.06f);
+        PlayClip(_hitClips, worldPos, volumeDb: -2.0f, pitchBase: 0.94f, pitchStep: 0.06f);
 
     internal void PlayFloorCollapse(Vector3 worldPos) =>
-        PlayClip(_floorCollapseClips, worldPos, volumeDb: 1.5f, pitchBase: 0.93f, pitchStep: 0.05f);
+        PlayClip(_floorCollapseClips, worldPos, volumeDb: 1.0f, pitchBase: 0.93f, pitchStep: 0.05f);
 
     internal void PlayFullCollapse(Vector3 worldPos) =>
-        PlayClip(_fullCollapseClips, worldPos, volumeDb: 3.5f, pitchBase: 0.91f, pitchStep: 0.04f);
+        PlayClip(_fullCollapseClips, worldPos, volumeDb: 3.0f, pitchBase: 0.90f, pitchStep: 0.05f);
 
     private void PlayClip(AudioStreamWav[] clips, Vector3 worldPos, float volumeDb, float pitchBase, float pitchStep)
     {
@@ -79,298 +85,233 @@ internal sealed class BuildingDestructionSoundBank : IDisposable
     private static float[] RenderConcreteHit(int seed)
     {
         int count = (int)(SampleRate * 1.15f);
-        float[] buf = new float[count];
+        float[] dry = new float[count];
         Random rng = new(seed);
 
-        // 1. Sharp dry concrete fracture snap + low-end masonry punch (filtered brown noise, no pure sine)
-        AddFilteredBlastBurst(buf, rng, startSec: 0.000f, durationSec: 0.24f, cutoffHz: 140f, amp: 1.05f, attackSec: 0.003f, decaySec: 0.075f);
-        AddResonantConcreteCrack(buf, rng, startSec: 0.000f, amp: 0.88f, baseFreq: 420f);
-        AddResonantConcreteCrack(buf, rng, startSec: 0.012f, amp: 0.55f, baseFreq: 860f);
-
-        // 2. Staggered falling masonry chunks & concrete gravel trickle (24 discrete physics-timed impacts)
-        for (int g = 0; g < 24; g++)
+        float hp = 0f, hpPrev = 0f, b1 = 0f, b2 = 0f, phase = 0f;
+        for (int i = 0; i < count; i++)
         {
-            float u = (float)rng.NextDouble();
-            float tStart = 0.03f + u * u * 0.85f;
-            float grainAmp = (0.14f + 0.34f * (1f - u)) * (0.65f + 0.70f * (float)rng.NextDouble());
-            float grainFreq = 260f + (float)rng.NextDouble() * 1450f;
-            float grainDecay = 0.009f + (float)rng.NextDouble() * 0.022f;
-            AddMasonryGrain(buf, rng, tStart, grainAmp, grainFreq, grainDecay);
+            float t = (float)i / SampleRate;
+            float w = (float)rng.NextDouble() * 2f - 1f;
+
+            // Dry masonry shock snap (Friedlander transient + sharp high-pass crack)
+            float pulse = t < 0.045f ? (1f - t / 0.008f) * MathF.Exp(-t / 0.006f) : 0f;
+            hp = 0.86f * (hp + w - hpPrev);
+            hpPrev = w;
+            float crack = hp * MathF.Exp(-t / 0.011f);
+
+            // Heavy unpitched concrete impact thud sweeping 1.9 kHz -> 105 Hz
+            float k = Coefficient(105f + 1800f * MathF.Exp(-t / 0.055f));
+            b1 += (w - b1) * k;
+            b2 += (b1 - b2) * k;
+            float slam = b2 * MathF.Min(1f, t / 0.002f) * MathF.Exp(-t / 0.19f) * (1f + 2.2f * MathF.Exp(-t / 0.032f));
+
+            // Short damped sub-bass punch (52 Hz -> 28 Hz, strictly sub-bass, no pitch hang)
+            phase += MathF.Tau * (28f + 24f * MathF.Exp(-t / 0.06f)) / SampleRate;
+            float thump = MathF.Sin(phase) * MathF.Min(1f, t / 0.004f) * MathF.Exp(-t / 0.12f);
+
+            dry[i] = pulse * 0.85f + crack * 0.95f + slam * 2.6f + thump * 0.65f;
         }
 
-        // 3. Non-periodic shattering window glass shards (14 tiny high-Q crystalline pings)
-        for (int k = 0; k < 14; k++)
-        {
-            float tStart = 0.018f + (float)rng.NextDouble() * 0.36f;
-            float freq = 3100f + (float)rng.NextDouble() * 4600f;
-            float amp = 0.05f + 0.11f * (float)rng.NextDouble();
-            float decay = 0.008f + (float)rng.NextDouble() * 0.022f;
-            AddGlassShard(buf, tStart, amp, freq, decay);
-        }
+        // Unpitched broadband falling concrete rubble & grit trickle (zero resonance)
+        AddUnpitchedRubbleShower(dry, rng, burstCount: 16, startMinSec: 0.04f, spanSec: 0.72f, minCutoffHz: 320f, maxCutoffHz: 1850f, gainScale: 0.45f);
+        // Very subtle dry high-frequency dust/glass grit scatter (pure HP noise, zero sine tones)
+        AddUnpitchedRubbleShower(dry, rng, burstCount: 8, startMinSec: 0.02f, spanSec: 0.28f, minCutoffHz: 3200f, maxCutoffHz: 6200f, gainScale: 0.12f, highPassOnly: true);
 
-        ApplyUrbanCourtyardSlapback(buf, delay1Sec: 0.074f, gain1: 0.24f, delay2Sec: 0.148f, gain2: 0.13f);
-        SoftClipAndFadeOut(buf, drive: 1.25f, fadeTailSec: 0.12f);
-        return Normalize(buf, 0.90f);
+        return FinishWithEchoesAndSaturation(dry, rng, rumbleGain: 0.75f, rumbleDecaySec: 0.42f, drive: 1.45f, fadeTailSec: 0.18f);
     }
 
     private static float[] RenderFloorCollapse(int seed)
     {
-        int count = (int)(SampleRate * 2.35f);
-        float[] buf = new float[count];
+        int count = (int)(SampleRate * 2.25f);
+        float[] dry = new float[count];
         Random rng = new(seed);
 
-        // 1. Initial shear crack + heavy structural low-end slam (brown noise rumble, zero synth sweep)
-        AddResonantConcreteCrack(buf, rng, startSec: 0.000f, amp: 0.92f, baseFreq: 340f);
-        AddResonantConcreteCrack(buf, rng, startSec: 0.035f, amp: 0.65f, baseFreq: 680f);
-        AddFilteredBlastBurst(buf, rng, startSec: 0.000f, durationSec: 0.95f, cutoffHz: 115f, amp: 1.15f, attackSec: 0.008f, decaySec: 0.32f);
-        AddFilteredBlastBurst(buf, rng, startSec: 0.16f, durationSec: 1.15f, cutoffHz: 95f, amp: 1.25f, attackSec: 0.014f, decaySec: 0.38f);
+        // Two heavy staggered dry structural slams (initial floor shear + lower slab impact)
+        AddNoiseSlam(dry, rng, startSec: 0.00f, durationSec: 0.85f, startCutoffHz: 1550f, endCutoffHz: 85f, decaySec: 0.26f, amp: 2.5f, subFreqStart: 48f, subAmp: 0.75f);
+        AddNoiseSlam(dry, rng, startSec: 0.24f, durationSec: 1.15f, startCutoffHz: 1150f, endCutoffHz: 72f, decaySec: 0.36f, amp: 2.9f, subFreqStart: 42f, subAmp: 0.85f);
 
-        // 2. Soft low-mid dust/grit rushing bed (subtle, buried beneath discrete stone impacts)
-        AddFilteredBlastBurst(buf, rng, startSec: 0.08f, durationSec: 1.85f, cutoffHz: 360f, amp: 0.26f, attackSec: 0.18f, decaySec: 0.72f);
+        // Dry broadband concrete avalanche & settling debris chunks (100% unpitched noise bursts)
+        AddUnpitchedRubbleShower(dry, rng, burstCount: 38, startMinSec: 0.05f, spanSec: 1.65f, minCutoffHz: 190f, maxCutoffHz: 1350f, gainScale: 0.65f);
+        AddUnpitchedRubbleShower(dry, rng, burstCount: 12, startMinSec: 0.04f, spanSec: 0.55f, minCutoffHz: 2800f, maxCutoffHz: 5800f, gainScale: 0.10f, highPassOnly: true);
 
-        // 3. Dense granular cascade of 58 falling concrete slabs, bricks, and settling rubble
-        for (int g = 0; g < 58; g++)
-        {
-            float u = (float)rng.NextDouble();
-            // Cluster early-to-mid heavy slabs, taper into sparse rolling stones near 2.1 s
-            float tStart = 0.04f + MathF.Pow(u, 1.45f) * 1.95f;
-            bool heavySlab = g < 14;
-            float grainAmp = heavySlab
-                ? (0.32f + 0.45f * (float)rng.NextDouble())
-                : (0.09f + 0.28f * (1f - u * 0.7f) * (float)rng.NextDouble());
-            float grainFreq = heavySlab
-                ? (150f + (float)rng.NextDouble() * 340f)
-                : (380f + (float)rng.NextDouble() * 1550f);
-            float grainDecay = heavySlab
-                ? (0.025f + (float)rng.NextDouble() * 0.045f)
-                : (0.008f + (float)rng.NextDouble() * 0.024f);
-            AddMasonryGrain(buf, rng, tStart, grainAmp, grainFreq, grainDecay);
-        }
-
-        // 4. Shattering apartment windows during floor shear
-        for (int k = 0; k < 18; k++)
-        {
-            float tStart = 0.02f + (float)rng.NextDouble() * 0.55f;
-            float freq = 2900f + (float)rng.NextDouble() * 4800f;
-            AddGlassShard(buf, tStart, 0.04f + 0.09f * (float)rng.NextDouble(), freq, 0.010f + (float)rng.NextDouble() * 0.024f);
-        }
-
-        ApplyUrbanCourtyardSlapback(buf, delay1Sec: 0.082f, gain1: 0.28f, delay2Sec: 0.165f, gain2: 0.15f);
-        SoftClipAndFadeOut(buf, drive: 1.35f, fadeTailSec: 0.22f);
-        return Normalize(buf, 0.94f);
+        return FinishWithEchoesAndSaturation(dry, rng, rumbleGain: 1.75f, rumbleDecaySec: 0.88f, drive: 1.50f, fadeTailSec: 0.30f);
     }
 
     private static float[] RenderFullCollapse(int seed)
     {
-        int count = (int)(SampleRate * 3.15f);
-        float[] buf = new float[count];
+        int count = (int)(SampleRate * 3.10f);
+        float[] dry = new float[count];
         Random rng = new(seed);
 
-        // 1. Multi-stage heavy structural concrete failure & earth-shaking low-end slams
-        AddResonantConcreteCrack(buf, rng, startSec: 0.000f, amp: 0.98f, baseFreq: 290f);
-        AddResonantConcreteCrack(buf, rng, startSec: 0.065f, amp: 0.76f, baseFreq: 540f);
-        AddResonantConcreteCrack(buf, rng, startSec: 0.22f, amp: 0.72f, baseFreq: 380f);
+        // Three heavy cascading pancake structural collapses (pure sweeping filtered noise + deep earth thump)
+        AddNoiseSlam(dry, rng, startSec: 0.00f, durationSec: 1.00f, startCutoffHz: 1650f, endCutoffHz: 82f, decaySec: 0.30f, amp: 2.6f, subFreqStart: 46f, subAmp: 0.80f);
+        AddNoiseSlam(dry, rng, startSec: 0.32f, durationSec: 1.25f, startCutoffHz: 1300f, endCutoffHz: 68f, decaySec: 0.40f, amp: 3.1f, subFreqStart: 40f, subAmp: 0.95f);
+        AddNoiseSlam(dry, rng, startSec: 0.70f, durationSec: 1.45f, startCutoffHz: 980f, endCutoffHz: 60f, decaySec: 0.48f, amp: 2.8f, subFreqStart: 36f, subAmp: 0.85f);
 
-        AddFilteredBlastBurst(buf, rng, startSec: 0.00f, durationSec: 1.20f, cutoffHz: 110f, amp: 1.25f, attackSec: 0.010f, decaySec: 0.36f);
-        AddFilteredBlastBurst(buf, rng, startSec: 0.24f, durationSec: 1.40f, cutoffHz: 92f, amp: 1.35f, attackSec: 0.018f, decaySec: 0.45f);
-        AddFilteredBlastBurst(buf, rng, startSec: 0.58f, durationSec: 1.55f, cutoffHz: 84f, amp: 1.15f, attackSec: 0.022f, decaySec: 0.54f);
+        // Massive unpitched concrete slab & gravel avalanche tapering into quiet late settling dust
+        AddUnpitchedRubbleShower(dry, rng, burstCount: 64, startMinSec: 0.06f, spanSec: 2.35f, minCutoffHz: 160f, maxCutoffHz: 1250f, gainScale: 0.72f);
+        AddUnpitchedRubbleShower(dry, rng, burstCount: 16, startMinSec: 0.05f, spanSec: 0.90f, minCutoffHz: 2600f, maxCutoffHz: 5400f, gainScale: 0.10f, highPassOnly: true);
 
-        // 2. Expanding concrete dust rush & low rumble bed
-        AddFilteredBlastBurst(buf, rng, startSec: 0.12f, durationSec: 2.65f, cutoffHz: 320f, amp: 0.30f, attackSec: 0.26f, decaySec: 1.05f);
-
-        // 3. Heavy granular avalanche of 92 concrete wall panels, floor slabs, and late rolling boulders
-        for (int g = 0; g < 92; g++)
-        {
-            float u = (float)rng.NextDouble();
-            float tStart = 0.05f + MathF.Pow(u, 1.38f) * 2.65f;
-            bool heavySlab = g < 24;
-            float grainAmp = heavySlab
-                ? (0.36f + 0.52f * (float)rng.NextDouble())
-                : (0.08f + 0.26f * (1f - u * 0.65f) * (float)rng.NextDouble());
-            float grainFreq = heavySlab
-                ? (130f + (float)rng.NextDouble() * 320f)
-                : (360f + (float)rng.NextDouble() * 1650f);
-            float grainDecay = heavySlab
-                ? (0.028f + (float)rng.NextDouble() * 0.052f)
-                : (0.008f + (float)rng.NextDouble() * 0.025f);
-            AddMasonryGrain(buf, rng, tStart, grainAmp, grainFreq, grainDecay);
-        }
-
-        // 4. Shattering windows across collapsing facade
-        for (int k = 0; k < 24; k++)
-        {
-            float tStart = 0.02f + (float)rng.NextDouble() * 0.85f;
-            float freq = 2800f + (float)rng.NextDouble() * 5000f;
-            AddGlassShard(buf, tStart, 0.04f + 0.085f * (float)rng.NextDouble(), freq, 0.010f + (float)rng.NextDouble() * 0.026f);
-        }
-
-        ApplyUrbanCourtyardSlapback(buf, delay1Sec: 0.086f, gain1: 0.30f, delay2Sec: 0.176f, gain2: 0.16f);
-        SoftClipAndFadeOut(buf, drive: 1.40f, fadeTailSec: 0.28f);
-        return Normalize(buf, 0.95f);
+        return FinishWithEchoesAndSaturation(dry, rng, rumbleGain: 2.35f, rumbleDecaySec: 1.25f, drive: 1.55f, fadeTailSec: 0.38f);
     }
 
-    private static void AddFilteredBlastBurst(
+    private static void AddNoiseSlam(
         float[] buf,
         Random rng,
         float startSec,
         float durationSec,
-        float cutoffHz,
+        float startCutoffHz,
+        float endCutoffHz,
+        float decaySec,
         float amp,
-        float attackSec,
-        float decaySec)
+        float subFreqStart,
+        float subAmp)
     {
         int startIdx = Math.Clamp((int)(startSec * SampleRate), 0, buf.Length);
         int endIdx = Math.Clamp(startIdx + (int)(durationSec * SampleRate), startIdx, buf.Length);
-        float k = 1f - MathF.Exp(-MathF.Tau * cutoffHz / SampleRate);
-        float lp1 = 0f, lp2 = 0f, brown = 0f;
+        float hp = 0f, hpPrev = 0f, b1 = 0f, b2 = 0f, phase = 0f;
 
         for (int i = startIdx; i < endIdx; i++)
         {
             float t = (float)(i - startIdx) / SampleRate;
             float w = (float)rng.NextDouble() * 2f - 1f;
-            // Integrate into leaky brown noise for rich earthy low-end texture
-            brown = 0.96f * brown + 0.22f * w;
-            lp1 += (brown - lp1) * k;
-            lp2 += (lp1 - lp2) * k;
 
-            float env = (1f - MathF.Exp(-t / MathF.Max(0.001f, attackSec))) * MathF.Exp(-t / MathF.Max(0.01f, decaySec));
-            buf[i] += lp2 * env * amp;
+            // Brief unpitched shear tear on onset
+            hp = 0.84f * (hp + w - hpPrev);
+            hpPrev = w;
+            float tear = hp * MathF.Exp(-t / 0.018f) * 0.55f;
+
+            // Heavy sweeping 2-pole low-pass noise boom (exact acoustic weight of concrete slamming earth)
+            float cutoff = endCutoffHz + (startCutoffHz - endCutoffHz) * MathF.Exp(-t / (decaySec * 0.35f));
+            float k = Coefficient(cutoff);
+            b1 += (w - b1) * k;
+            b2 += (b1 - b2) * k;
+            float boom = b2 * MathF.Min(1f, t / 0.006f) * MathF.Exp(-t / decaySec) * (1f + 1.8f * MathF.Exp(-t / 0.06f));
+
+            // Damped sub-bass chest thump (strictly < 50 Hz, decays rapidly)
+            float subFreq = 22f + (subFreqStart - 22f) * MathF.Exp(-t / 0.10f);
+            phase += MathF.Tau * subFreq / SampleRate;
+            float sub = MathF.Sin(phase) * MathF.Min(1f, t / 0.008f) * MathF.Exp(-t / 0.22f);
+
+            buf[i] += tear + boom * amp + sub * subAmp;
         }
     }
 
-    private static void AddResonantConcreteCrack(float[] buf, Random rng, float startSec, float amp, float baseFreq)
+    private static void AddUnpitchedRubbleShower(
+        float[] buf,
+        Random rng,
+        int burstCount,
+        float startMinSec,
+        float spanSec,
+        float minCutoffHz,
+        float maxCutoffHz,
+        float gainScale,
+        bool highPassOnly = false)
     {
-        int startIdx = Math.Clamp((int)(startSec * SampleRate), 0, buf.Length);
-        int len = Math.Min((int)(0.16f * SampleRate), buf.Length - startIdx);
-        float f1 = baseFreq;
-        float f2 = baseFreq * 2.13f;
-        float f3 = baseFreq * 3.87f;
-
-        // 3 damped resonant modes excited by short broadband fracture impulse
-        float y1 = 0f, y1p = 0f, y2 = 0f, y2p = 0f, y3 = 0f, y3p = 0f;
-        float r1 = 0.988f, r2 = 0.982f, r3 = 0.975f;
-        float c1 = 2f * r1 * MathF.Cos(MathF.Tau * f1 / SampleRate);
-        float c2 = 2f * r2 * MathF.Cos(MathF.Tau * f2 / SampleRate);
-        float c3 = 2f * r3 * MathF.Cos(MathF.Tau * f3 / SampleRate);
-
-        for (int n = 0; n < len; n++)
+        for (int g = 0; g < burstCount; g++)
         {
-            float t = (float)n / SampleRate;
-            float exc = ((float)rng.NextDouble() * 2f - 1f) * MathF.Exp(-t / 0.009f);
+            float u = (float)rng.NextDouble();
+            float tStart = startMinSec + MathF.Pow(u, 1.35f) * spanSec;
+            float decaySec = highPassOnly
+                ? (0.006f + (float)rng.NextDouble() * 0.016f)
+                : (0.018f + (float)rng.NextDouble() * 0.065f);
+            int startIdx = Math.Clamp((int)(tStart * SampleRate), 0, buf.Length);
+            int len = Math.Min((int)(decaySec * 4.5f * SampleRate), buf.Length - startIdx);
+            if (len <= 4) continue;
 
-            float ny1 = c1 * y1 - (r1 * r1) * y1p + exc * 0.28f;
-            y1p = y1; y1 = ny1;
+            float cutoff = minCutoffHz + (float)rng.NextDouble() * (maxCutoffHz - minCutoffHz);
+            float kLp = Coefficient(cutoff);
+            float amp = gainScale * (1f - 0.55f * u) * (0.45f + 0.85f * (float)rng.NextDouble());
 
-            float ny2 = c2 * y2 - (r2 * r2) * y2p + exc * 0.22f;
-            y2p = y2; y2 = ny2;
-
-            float ny3 = c3 * y3 - (r3 * r3) * y3p + exc * 0.16f;
-            y3p = y3; y3 = ny3;
-
-            buf[startIdx + n] += (y1 * 0.55f + y2 * 0.35f + y3 * 0.25f + exc * 0.45f) * amp;
-        }
-    }
-
-    private static void AddMasonryGrain(float[] buf, Random rng, float startSec, float amp, float centerFreq, float decaySec)
-    {
-        int startIdx = Math.Clamp((int)(startSec * SampleRate), 0, buf.Length);
-        int len = Math.Min((int)(decaySec * 5.0f * SampleRate), buf.Length - startIdx);
-        if (len <= 4) return;
-
-        // Second-order resonant bandpass filter excited by a crisp stone-impact transient
-        float r = Math.Clamp(1f - (1.8f / (decaySec * SampleRate + 8f)), 0.92f, 0.994f);
-        float cosW = MathF.Cos(MathF.Tau * Math.Clamp(centerFreq, 80f, 6000f) / SampleRate);
-        float a1 = 2f * r * cosW;
-        float a2 = r * r;
-        float y1 = 0f, y2 = 0f;
-
-        for (int n = 0; n < len; n++)
-        {
-            float t = (float)n / SampleRate;
-            float impact = ((float)rng.NextDouble() * 2f - 1f) * MathF.Exp(-t / (decaySec * 0.32f));
-            float y = a1 * y1 - a2 * y2 + impact * (1f - r);
-            y2 = y1;
-            y1 = y;
-
-            float env = MathF.Exp(-t / decaySec);
-            buf[startIdx + n] += (y * 2.8f + impact * 0.28f) * env * amp;
-        }
-    }
-
-    private static void AddGlassShard(float[] buf, float startSec, float amp, float freqHz, float decaySec)
-    {
-        int startIdx = Math.Clamp((int)(startSec * SampleRate), 0, buf.Length);
-        int len = Math.Min((int)(decaySec * 5.0f * SampleRate), buf.Length - startIdx);
-        float w1 = MathF.Tau * freqHz / SampleRate;
-        float w2 = MathF.Tau * (freqHz * 1.47f) / SampleRate;
-
-        for (int n = 0; n < len; n++)
-        {
-            float t = (float)n / SampleRate;
-            float env = MathF.Exp(-t / decaySec);
-            buf[startIdx + n] += (MathF.Sin(w1 * n) * 0.65f + MathF.Sin(w2 * n) * 0.35f) * env * amp;
-        }
-    }
-
-    private static void ApplyUrbanCourtyardSlapback(float[] buf, float delay1Sec, float gain1, float delay2Sec, float gain2)
-    {
-        int d1 = (int)(delay1Sec * SampleRate);
-        int d2 = (int)(delay2Sec * SampleRate);
-        float[] dry = new float[buf.Length];
-        Array.Copy(buf, dry, buf.Length);
-
-        // Low-pass filter reflected walls energy so reflections feel distant and natural
-        float lp1 = 0f, lp2 = 0f;
-        float k1 = 1f - MathF.Exp(-MathF.Tau * 1400f / SampleRate);
-        float k2 = 1f - MathF.Exp(-MathF.Tau * 820f / SampleRate);
-
-        for (int i = 0; i < buf.Length; i++)
-        {
-            if (i >= d1)
+            // Pure critically-damped 1-pole / 2-pole filtered noise (Q <= 0.5, ZERO pitch/ringing!)
+            float lp1 = 0f, lp2 = 0f, hp = 0f, hpPrev = 0f;
+            float hpAlpha = highPassOnly ? 0.90f : 0.72f;
+            for (int n = 0; n < len; n++)
             {
-                lp1 += (dry[i - d1] - lp1) * k1;
-                buf[i] += lp1 * gain1;
-            }
-            if (i >= d2)
-            {
-                lp2 += (dry[i - d2] - lp2) * k2;
-                buf[i] += lp2 * gain2;
+                float t = (float)n / SampleRate;
+                float w = (float)rng.NextDouble() * 2f - 1f;
+                hp = hpAlpha * (hp + w - hpPrev);
+                hpPrev = w;
+
+                float sample;
+                if (highPassOnly)
+                {
+                    sample = hp;
+                }
+                else
+                {
+                    lp1 += (hp - lp1) * kLp;
+                    lp2 += (lp1 - lp2) * kLp;
+                    sample = lp2 * 2.2f;
+                }
+
+                float env = MathF.Min(1f, t / 0.003f) * MathF.Exp(-t / decaySec);
+                buf[startIdx + n] += sample * env * amp;
             }
         }
     }
 
-    private static void SoftClipAndFadeOut(float[] buf, float drive, float fadeTailSec)
+    private static float[] FinishWithEchoesAndSaturation(
+        float[] dry,
+        Random rng,
+        float rumbleGain,
+        float rumbleDecaySec,
+        float drive,
+        float fadeTailSec)
     {
-        int fadeSamples = Math.Min((int)(fadeTailSec * SampleRate), buf.Length);
-        int fadeStart = buf.Length - fadeSamples;
-        for (int i = 0; i < buf.Length; i++)
+        int count = dry.Length;
+        float[] output = (float[])dry.Clone();
+
+        // Dull distant concrete courtyard echoes (same 2-pole damped architecture as CannonSound)
+        foreach ((float delay, float gain, float cutoff) in UrbanEchoes)
         {
-            float s = MathF.Tanh(buf[i] * drive);
-            if (i >= fadeStart && fadeSamples > 0)
+            int offset = (int)(delay * SampleRate);
+            float k = Coefficient(cutoff);
+            float s1 = 0f, s2 = 0f;
+            for (int i = 0; i + offset < count; i++)
             {
-                float u = (float)(buf.Length - i) / fadeSamples;
-                s *= u * u;
+                s1 += (dry[i] - s1) * k;
+                s2 += (s1 - s2) * k;
+                output[i + offset] += s2 * gain;
             }
-            buf[i] = s;
         }
+
+        // Low-passed concrete dust & rolling debris rumble bed
+        float r1 = 0f, r2 = 0f;
+        for (int i = 0; i < count; i++)
+        {
+            float t = (float)i / SampleRate;
+            float w = (float)rng.NextDouble() * 2f - 1f;
+            float k = Coefficient(110f + 340f * MathF.Exp(-t / (rumbleDecaySec * 0.65f)));
+            r1 += (w - r1) * k;
+            r2 += (r1 - r2) * k;
+            float env = (1f - MathF.Exp(-t / 0.06f)) * MathF.Exp(-t / rumbleDecaySec);
+            output[i] += r2 * env * rumbleGain;
+        }
+
+        // Smooth tail fade to zero
+        int fade = Math.Min((int)(fadeTailSec * SampleRate), count);
+        for (int i = count - fade; i < count; i++)
+        {
+            float u = (float)(count - i) / fade;
+            output[i] *= u;
+        }
+
+        // Warm soft-clipping normalization matching CannonSound
+        float maxAbs = 0.0001f;
+        for (int i = 0; i < count; i++)
+            maxAbs = MathF.Max(maxAbs, MathF.Abs(output[i]));
+        float scaleIn = drive / maxAbs;
+        float scaleOut = Peak / MathF.Tanh(drive);
+        for (int i = 0; i < count; i++)
+            output[i] = MathF.Tanh(output[i] * scaleIn) * scaleOut;
+
+        return output;
     }
 
-    private static float[] Normalize(float[] samples, float targetPeak)
-    {
-        float peak = 0f;
-        for (int i = 0; i < samples.Length; i++)
-        {
-            float a = MathF.Abs(samples[i]);
-            if (a > peak) peak = a;
-        }
-        if (peak > 1e-5f)
-        {
-            float scale = targetPeak / peak;
-            for (int i = 0; i < samples.Length; i++)
-                samples[i] *= scale;
-        }
-        return samples;
-    }
+    private static float Coefficient(float cutoffHz) =>
+        1f - MathF.Exp(-MathF.Tau * cutoffHz / SampleRate);
 
     private static AudioStreamWav CreateWav(float[] samples)
     {
