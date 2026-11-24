@@ -348,9 +348,9 @@ public sealed class GuidedMissileFlareTests
     [Fact]
     public void WireProtocolV31_RoundTripsFlaresAndGuidedMissiles_AndRejectsV30Handshake()
     {
-        Assert.Equal(32, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(32, WireProtocol.Version);
-        Assert.Equal(73, WireProtocol.UnitSize);
+        Assert.Equal(33, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(33, WireProtocol.Version);
+        Assert.Equal(78, WireProtocol.UnitSize);
         Assert.Equal(31, WireProtocol.MissileSize);
         Assert.Equal(15, WireProtocol.DeployFlaresSize);
 

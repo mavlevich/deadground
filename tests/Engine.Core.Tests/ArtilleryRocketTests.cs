@@ -260,10 +260,10 @@ public sealed class ArtilleryRocketTests
     [Fact]
     public void WireProtocolV29_RoundTripsFireMissionArtillerySnapshotAndRejectsV28Handshake()
     {
-        Assert.Equal(32, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(32, WireProtocol.Version);
-        Assert.Equal(73, WireProtocol.UnitSize);
-        Assert.Equal(35, WireProtocol.ContactSize);
+        Assert.Equal(33, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(33, WireProtocol.Version);
+        Assert.Equal(78, WireProtocol.UnitSize);
+        Assert.Equal(40, WireProtocol.ContactSize);
 
         // 1. FireMissionCommand round-trip
         FireMissionCommand order = new(42, 120, new EntityId(7), new Vector2(1024.5f, 1580.25f), Cancel: false);

@@ -521,8 +521,8 @@ public sealed class HelicopterFlightTests
     [Fact]
     public void WireProtocol_V27_RoundTripsFlightStateAndRejectsV26Handshake()
     {
-        Assert.Equal(32, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(32, WireProtocol.Version);
+        Assert.Equal(33, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(33, WireProtocol.Version);
 
         // 1. HelicopterCommand round-trip
         byte[] cmdBuf = new byte[WireProtocol.HelicopterSize];

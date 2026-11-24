@@ -379,7 +379,13 @@ public sealed class WorldState : IDisposable
 
     private readonly Dictionary<EntityId, ContainerData> _containers = new();
     private readonly List<EntityId> _containerIds = new(32);
+    private readonly record struct GarrisonMembership(StructureId StructureId, GarrisonSlotKind SlotKind);
+    private readonly record struct PendingEnterBuildingOrder(StructureId StructureId, GarrisonSlotKind SlotKind, Vector2 EntrancePos);
+
     private readonly Dictionary<EntityId, EntityId> _containedIn = new();
+    private readonly Dictionary<EntityId, GarrisonMembership> _garrisonedIn = new(128);
+    private readonly Dictionary<EntityId, PendingEnterBuildingOrder> _pendingEnterOrders = new(128);
+    private readonly Dictionary<EntityId, int> _unitLastFiredTicks = new(256);
     private readonly Dictionary<EntityId, EntityId> _boardingOrders = new();
     private readonly Dictionary<EntityId, int> _boardingSlots = new();
     private readonly Dictionary<EntityId, PendingDisembarkOrder> _pendingDisembarks = new();
@@ -583,6 +589,9 @@ public sealed class WorldState : IDisposable
             _boardingSlots.Remove(id);
         }
         _pendingDisembarks.Remove(id);
+        _garrisonedIn.Remove(id);
+        _pendingEnterOrders.Remove(id);
+        _unitLastFiredTicks.Remove(id);
         if (_containedIn.Remove(id, out EntityId containerId))
         {
             if (_containers.TryGetValue(containerId, out ContainerData? c))
@@ -666,6 +675,66 @@ public sealed class WorldState : IDisposable
 
     public bool IsContained(EntityId unitId) => _containedIn.ContainsKey(unitId);
     public EntityId GetContainerId(EntityId unitId) => _containedIn.TryGetValue(unitId, out EntityId cId) ? cId : default;
+
+    public bool IsGarrisoned(EntityId unitId) => _garrisonedIn.ContainsKey(unitId);
+
+    public bool TryGetGarrison(EntityId unitId, out StructureId structureId, out GarrisonSlotKind slotKind)
+    {
+        if (_garrisonedIn.TryGetValue(unitId, out GarrisonMembership m))
+        {
+            structureId = m.StructureId;
+            slotKind = m.SlotKind;
+            return true;
+        }
+        structureId = default;
+        slotKind = GarrisonSlotKind.None;
+        return false;
+    }
+
+    public StructureId GetGarrisonStructureId(EntityId unitId) =>
+        _garrisonedIn.TryGetValue(unitId, out GarrisonMembership m) ? m.StructureId : default;
+
+    public GarrisonSlotKind GetGarrisonSlotKind(EntityId unitId) =>
+        _garrisonedIn.TryGetValue(unitId, out GarrisonMembership m) ? m.SlotKind : GarrisonSlotKind.None;
+
+    public void SetGarrisonMembership(EntityId unitId, StructureId structureId, GarrisonSlotKind slotKind)
+    {
+        if (structureId == default || slotKind == GarrisonSlotKind.None)
+        {
+            _garrisonedIn.Remove(unitId);
+            return;
+        }
+        _garrisonedIn[unitId] = new GarrisonMembership(structureId, slotKind);
+    }
+
+    public void ClearGarrisonMembership(EntityId unitId) => _garrisonedIn.Remove(unitId);
+
+    public bool TryGetPendingEnterOrder(EntityId unitId, out StructureId structureId, out GarrisonSlotKind slotKind, out Vector2 entrancePos)
+    {
+        if (_pendingEnterOrders.TryGetValue(unitId, out PendingEnterBuildingOrder order))
+        {
+            structureId = order.StructureId;
+            slotKind = order.SlotKind;
+            entrancePos = order.EntrancePos;
+            return true;
+        }
+        structureId = default;
+        slotKind = GarrisonSlotKind.None;
+        entrancePos = default;
+        return false;
+    }
+
+    public void SetPendingEnterOrder(EntityId unitId, StructureId structureId, GarrisonSlotKind slotKind, Vector2 entrancePos)
+    {
+        _pendingEnterOrders[unitId] = new PendingEnterBuildingOrder(structureId, slotKind, entrancePos);
+    }
+
+    public void ClearPendingEnterOrder(EntityId unitId) => _pendingEnterOrders.Remove(unitId);
+
+    public void RecordUnitFired(EntityId unitId, int tick) => _unitLastFiredTicks[unitId] = tick;
+
+    public int GetUnitLastFiredTick(EntityId unitId) =>
+        _unitLastFiredTicks.TryGetValue(unitId, out int t) ? t : -1;
 
     public ReadOnlySpan<EntityId> GetPassengers(EntityId transportId)
     {
@@ -1180,6 +1249,16 @@ public sealed class WorldState : IDisposable
             hash = Mix(hash, (ulong)combat.ReloadTicksRemaining);
             hash = MixFloat(hash, combat.TurretYaw);
             hash = MixFloat(hash, combat.HullHeading);
+            if (_garrisonedIn.TryGetValue(id.Id, out GarrisonMembership gm))
+            {
+                hash = Mix(hash, (ulong)(uint)gm.StructureId.Value);
+                hash = Mix(hash, (ulong)gm.SlotKind);
+            }
+            if (_pendingEnterOrders.TryGetValue(id.Id, out PendingEnterBuildingOrder pe))
+            {
+                hash = Mix(hash, (ulong)(uint)pe.StructureId.Value);
+                hash = Mix(hash, (ulong)pe.SlotKind);
+            }
         }
 
         hash = Mix(hash, (ulong)_destructibleStructureCount);

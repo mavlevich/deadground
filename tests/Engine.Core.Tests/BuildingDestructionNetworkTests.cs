@@ -11,8 +11,8 @@ public sealed class BuildingDestructionNetworkTests
     [Fact]
     public void WireProtocolV32_RoundTripsAttackGroundStructuresAndCollapseEvents_AndRejectsInvalidAndV31Handshake()
     {
-        Assert.Equal(32, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(32, WireProtocol.Version);
+        Assert.Equal(33, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(33, WireProtocol.Version);
         Assert.Equal(56, WireProtocol.SnapshotHeaderSize);
         Assert.Equal(8, WireProtocol.StructureSize);
         Assert.Equal(256, WireProtocol.MaxStructures);

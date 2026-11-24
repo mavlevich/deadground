@@ -33,6 +33,8 @@ public sealed class NullSession : IGameSession
     public bool Stop(EntityId unit) => false;
     public bool DeployFlares(EntityId unit, bool toggleAuto = false) => false;
     public bool AttackGround(EntityId unit, Vector3 targetPoint, StructureId targetStructure = default) => false;
+    public bool EnterBuilding(EntityId unit, StructureId targetStructure, GarrisonSlotKind slotKind = GarrisonSlotKind.Interior) => false;
+    public bool ExitBuilding(EntityId unit) => false;
     public void Advance(double elapsedSeconds) { }
     public void Dispose() { }
 }

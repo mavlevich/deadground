@@ -260,8 +260,8 @@ public sealed class SmokeNetworkTests
     [Fact]
     public void WireProtocol_DeploySmokeAndSmokeCloudSnapshot_RoundTripAndRejectInvalid()
     {
-        Assert.Equal(32, MatchSetup.CurrentProtocolVersion);
-        Assert.Equal(32, WireProtocol.Version);
+        Assert.Equal(33, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(33, WireProtocol.Version);
 
         byte[] cmdBuf = new byte[WireProtocol.DeploySmokeSize];
         DeploySmokeCommand cmd = new(77, 120, new EntityId(9), HasTarget: true, Target: new Vector2(210.5f, 340.25f), TargetSurface: 2);

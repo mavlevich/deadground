@@ -46,7 +46,9 @@ public readonly record struct ContactObservation(
     uint SupportSurface = 0,
     float Altitude = 0f,
     FlightPhase FlightPhase = FlightPhase.Ground,
-    float GunPitchRad = 0f)
+    float GunPitchRad = 0f,
+    StructureId GarrisonStructureId = default,
+    GarrisonSlotKind GarrisonSlotKind = GarrisonSlotKind.None)
 {
     public bool IsCurrent => State == ContactState.Current;
     public bool IsLastKnown => State == ContactState.LastKnown;

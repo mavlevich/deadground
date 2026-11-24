@@ -55,6 +55,8 @@ public sealed class LocalSession : IGameSession
     public bool Stop(EntityId unit) => _client.Stop(unit);
     public bool DeployFlares(EntityId unit, bool toggleAuto = false) => _client.DeployFlares(unit, toggleAuto);
     public bool AttackGround(EntityId unit, Vector3 targetPoint, StructureId targetStructure = default) => _client.AttackGround(unit, targetPoint, targetStructure);
+    public bool EnterBuilding(EntityId unit, StructureId targetStructure, GarrisonSlotKind slotKind = GarrisonSlotKind.Interior) => _client.EnterBuilding(unit, targetStructure, slotKind);
+    public bool ExitBuilding(EntityId unit) => _client.ExitBuilding(unit);
 
     public void Dispose()
     {

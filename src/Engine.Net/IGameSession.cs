@@ -30,5 +30,7 @@ public interface IGameSession : IDisposable
     bool Stop(EntityId unit);
     bool DeployFlares(EntityId unit, bool toggleAuto = false);
     bool AttackGround(EntityId unit, System.Numerics.Vector3 targetPoint, StructureId targetStructure = default);
+    bool EnterBuilding(EntityId unit, StructureId targetStructure, GarrisonSlotKind slotKind = GarrisonSlotKind.Interior);
+    bool ExitBuilding(EntityId unit);
     void Advance(double elapsedSeconds);
 }

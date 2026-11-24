@@ -347,6 +347,36 @@ public sealed class SimulationHost : IDisposable
                         DroppedCommandResults++;
                 }
             }
+            else if (kind == WireProtocol.EnterBuildingKind)
+            {
+                if (connectionId == 0 || _admittedConnectionIds[player - 1] != connectionId)
+                    continue;
+
+                if (WireProtocol.TryReadEnterBuilding(_receive.AsSpan(0, length), out EnterBuildingCommand command))
+                {
+                    bool queued = _simulation.TryEnqueue(player, command);
+                    WireProtocol.WriteCommandResult(_reply, new CommandResult(command.Sequence, Tick, queued));
+                    if (_transport.TrySend(player, _reply.AsSpan(0, WireProtocol.CommandResultSize)))
+                        BytesSent += WireProtocol.CommandResultSize;
+                    else
+                        DroppedCommandResults++;
+                }
+            }
+            else if (kind == WireProtocol.ExitBuildingKind)
+            {
+                if (connectionId == 0 || _admittedConnectionIds[player - 1] != connectionId)
+                    continue;
+
+                if (WireProtocol.TryReadExitBuilding(_receive.AsSpan(0, length), out ExitBuildingCommand command))
+                {
+                    bool queued = _simulation.TryEnqueue(player, command);
+                    WireProtocol.WriteCommandResult(_reply, new CommandResult(command.Sequence, Tick, queued));
+                    if (_transport.TrySend(player, _reply.AsSpan(0, WireProtocol.CommandResultSize)))
+                        BytesSent += WireProtocol.CommandResultSize;
+                    else
+                        DroppedCommandResults++;
+                }
+            }
         }
 
         // Bound work per call, not elapsed time. Later calls drain the remaining debt.

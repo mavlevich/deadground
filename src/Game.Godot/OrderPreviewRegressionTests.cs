@@ -1763,5 +1763,7 @@ internal static class OrderPreviewRegressionTests
         public bool Stop(EntityId unit) => true;
         public bool DeployFlares(EntityId unit, bool toggleAuto = false) => true;
         public bool AttackGround(EntityId unit, System.Numerics.Vector3 targetPoint, StructureId targetStructure = default) => true;
+        public bool EnterBuilding(EntityId unit, StructureId targetStructure, GarrisonSlotKind slotKind = GarrisonSlotKind.Interior) => true;
+        public bool ExitBuilding(EntityId unit) => true;
     }
 }

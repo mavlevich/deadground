@@ -526,7 +526,7 @@ public sealed class ReconRaidMissionTests
     [Fact]
     public void Review_HandshakeAndWireProtocol_AgreeOnCurrentVersion()
     {
-        Assert.Equal(32, MatchSetup.CurrentProtocolVersion);
+        Assert.Equal(33, MatchSetup.CurrentProtocolVersion);
         Assert.Equal(MatchSetup.CurrentProtocolVersion, WireProtocol.Version);
     }
 

@@ -292,6 +292,26 @@ public sealed class ClientSession : IGameSession
         return true;
     }
 
+    public bool EnterBuilding(EntityId unit, StructureId targetStructure, GarrisonSlotKind slotKind = GarrisonSlotKind.Interior)
+    {
+        if (State != SessionConnectionState.Connected) return false;
+        EnterBuildingCommand command = new(_nextCommand, Replica.LatestTick, unit, targetStructure, slotKind);
+        WireProtocol.WriteEnterBuilding(_command, command);
+        if (!_transport.TrySend(_command.AsSpan(0, WireProtocol.EnterBuildingSize))) return false;
+        _nextCommand = checked(_nextCommand + 1);
+        return true;
+    }
+
+    public bool ExitBuilding(EntityId unit)
+    {
+        if (State != SessionConnectionState.Connected) return false;
+        ExitBuildingCommand command = new(_nextCommand, Replica.LatestTick, unit);
+        WireProtocol.WriteExitBuilding(_command, command);
+        if (!_transport.TrySend(_command.AsSpan(0, WireProtocol.ExitBuildingSize))) return false;
+        _nextCommand = checked(_nextCommand + 1);
+        return true;
+    }
+
     private void Poll()
     {
         _transport.Poll(MaxMessagesPerPoll);

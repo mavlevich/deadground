@@ -82,6 +82,7 @@ public sealed class PlayerKnowledge
             if (count == _ownUnits.Length) throw new InvalidOperationException("Knowledge capacity exceeded.");
 
             EntityId containerId = world.GetContainerId(unit.Id);
+            world.TryGetGarrison(unit.Id, out StructureId garrisonStructureId, out GarrisonSlotKind garrisonSlotKind);
             byte passengerCount = (byte)Math.Clamp(world.GetPassengerCount(unit.Id), 0, 255);
             byte passengerCapacity = (byte)Math.Clamp(world.GetContainerCapacity(unit.Id), 0, 255);
 
@@ -188,7 +189,9 @@ public sealed class PlayerKnowledge
                     artilleryFlags,
                     flareCharges,
                     flareCooldown,
-                    countermeasureFlags);
+                    countermeasureFlags,
+                    garrisonStructureId,
+                    garrisonSlotKind);
             }
             else
             {
@@ -221,7 +224,9 @@ public sealed class PlayerKnowledge
                     ArtilleryFlags: artilleryFlags,
                     FlareCharges: flareCharges,
                     FlareCooldownTicks: flareCooldown,
-                    CountermeasureFlags: countermeasureFlags);
+                    CountermeasureFlags: countermeasureFlags,
+                    GarrisonStructureId: garrisonStructureId,
+                    GarrisonSlotKind: garrisonSlotKind);
             }
         }
         Count = count;

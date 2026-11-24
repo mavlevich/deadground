@@ -197,7 +197,9 @@ public readonly record struct OwnUnitObservation(
     ArtilleryFlags ArtilleryFlags = ArtilleryFlags.None,
     byte FlareCharges = 0,
     ushort FlareCooldownTicks = 0,
-    CountermeasureFlags CountermeasureFlags = CountermeasureFlags.None);
+    CountermeasureFlags CountermeasureFlags = CountermeasureFlags.None,
+    StructureId GarrisonStructureId = default,
+    GarrisonSlotKind GarrisonSlotKind = GarrisonSlotKind.None);
 
 public interface ISimulationRules
 {

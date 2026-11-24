@@ -178,7 +178,7 @@ public sealed class BridgeCrossingTests
     public void Clarification2_WireProtocol_Version16_RoundTripContact_PreservesSupportSurface_NoEntityIdLeak()
     {
         Assert.Equal(MatchSetup.CurrentProtocolVersion, WireProtocol.Version);
-        Assert.Equal(35, WireProtocol.ContactSize);
+        Assert.Equal(40, WireProtocol.ContactSize);
 
         byte[] snapshotBuffer = new byte[WireProtocol.MaxMessageSize];
 
