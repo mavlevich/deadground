@@ -58,6 +58,7 @@ internal sealed class OrderPreviewController
     private readonly OrderCursorOverlay _overlay;
     private readonly OrderDestinationView _destinationView;
     private readonly OrderNotification? _notification;
+    private LineOfSightContext? _losContext;
 
     private readonly CachedProfileEvaluation[] _profileCache = new CachedProfileEvaluation[16];
     private int _profileCacheCount;
@@ -141,12 +142,25 @@ internal sealed class OrderPreviewController
         _notification = notification;
     }
 
+    public void SetLineOfSightContext(LineOfSightContext? context) => _losContext = context;
+
     public bool TryRaycast(
         Camera3D camera,
         Vector2 screenPos,
         out Vector3 hitPoint3D,
         out uint supportSurface,
         out float surfaceHeight)
+    {
+        return TryRaycast(camera, screenPos, out hitPoint3D, out supportSurface, out surfaceHeight, out _);
+    }
+
+    public bool TryRaycast(
+        Camera3D camera,
+        Vector2 screenPos,
+        out Vector3 hitPoint3D,
+        out uint supportSurface,
+        out float surfaceHeight,
+        out StructureId hitStructureId)
     {
         Vector3 origin = camera.ProjectRayOrigin(screenPos);
         Vector3 dir = camera.ProjectRayNormal(screenPos);
@@ -155,7 +169,7 @@ internal sealed class OrderPreviewController
         System.Numerics.Vector3 start = new(origin.X, origin.Y, origin.Z);
         System.Numerics.Vector3 end = start + new System.Numerics.Vector3(dir.X, dir.Y, dir.Z) * rayFar;
 
-        LineOfSightResult los = _geometry.CheckLineOfSight(start, end);
+        LineOfSightResult los = _geometry.CheckLineOfSight(start, end, _losContext);
 
         if (!los.IsClear)
         {
@@ -166,11 +180,13 @@ internal sealed class OrderPreviewController
             {
                 supportSurface = (uint)bridge.Id.Value;
                 surfaceHeight = bridge.GetHeight(new System.Numerics.Vector2(los.HitPoint.X, los.HitPoint.Z));
+                hitStructureId = default;
             }
             else
             {
                 supportSurface = 0;
                 surfaceHeight = _map.GetHeight(los.HitPoint.X, los.HitPoint.Z);
+                hitStructureId = los.ObstructionKind == ObstructionKind.Structure ? los.ObstructingStructureId : default;
             }
             return true;
         }
@@ -181,12 +197,14 @@ internal sealed class OrderPreviewController
             hitPoint3D = new Vector3(terrainHit.X, terrainHit.Y, terrainHit.Z);
             supportSurface = 0;
             surfaceHeight = terrainHit.Y;
+            hitStructureId = default;
             return true;
         }
 
         hitPoint3D = default;
         supportSurface = 0;
         surfaceHeight = 0f;
+        hitStructureId = default;
         return false;
     }
 

@@ -1,0 +1,32 @@
+{
+  "asset": "panelka_1_464",
+  "series": "Soviet 1-464 5-story precast concrete panel apartment",
+  "section_footprint_m": [
+    12.0,
+    12.0
+  ],
+  "floor_height_m": 3.1,
+  "floors_total": 5,
+  "rubble_height_m": 1.5,
+  "modules": [
+    "Section_Intact_LOD0",
+    "Section_Intact_LOD1",
+    "Section_Intact_LOD2",
+    "Floor_Ground_Intact",
+    "Floor_Mid_Intact",
+    "Floor_Breached",
+    "Roof_Cap",
+    "Rubble_Mound",
+    "Debris_Slab_A",
+    "Debris_Slab_B",
+    "Debris_Chunk_C"
+  ],
+  "glb": {
+    "file": "panelka_1_464.glb",
+    "triangles": 5026,
+    "vertices": 9850,
+    "mesh_parts": 11,
+    "materials": 1,
+    "bytes": 1143220
+  }
+}

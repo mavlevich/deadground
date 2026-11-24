@@ -61,6 +61,12 @@ if (args.Length > 0 && (args[0] == "--ustye-vegetation" || args[0] == "--vegetat
     return;
 }
 
+if (args.Length > 0 && args[0] == "--building-destruction")
+{
+    RunBuildingDestructionBenchmark();
+    return;
+}
+
 if (args.Length > 0 && args[0] == "--probe")
 {
     RunProbe();
@@ -1750,6 +1756,115 @@ static void RunUstyeVegetationBenchmark()
     Console.WriteLine($"\n[3] Simulation 300 Ticks on Ustye (Raid Scenario):");
     RunSimulationTicksBenchmark("With Vegetation (current)", geoVeg);
     RunSimulationTicksBenchmark("Without Vegetation (baseline/main)", geoNoVeg);
+}
+
+static void RunBuildingDestructionBenchmark()
+{
+    Console.WriteLine("=== 30-Building (120-Section) Destructible Panelka Simulation Benchmark ===");
+    long setupStart = Stopwatch.GetTimestamp();
+
+    HeightMap map = UrbanDestructionPlaygroundScenario.CreateHeightMap();
+    const int buildings = 30;
+    const int sectionsPerBuilding = 4;
+    const int totalSections = buildings * sectionsPerBuilding;
+    OpaqueStructure[] structures = new OpaqueStructure[totalSections];
+
+    int idx = 0;
+    for (int b = 0; b < buildings; b++)
+    {
+        int col = b % 6;
+        int row = b / 6;
+        float baseX = 120f + col * 130f;
+        float baseZ = 220f + row * 120f;
+        for (int s = 0; s < sectionsPerBuilding; s++)
+        {
+            float minX = baseX + s * 12f;
+            float gy = map.GetHeight(minX + 6f, baseZ + 6f);
+            structures[idx] = new OpaqueStructure(
+                new StructureId(1000 + idx),
+                minX,
+                gy,
+                baseZ,
+                minX + 12f,
+                gy + 15.5f,
+                baseZ + 12f,
+                isGrounded: true);
+            idx++;
+        }
+    }
+
+    StaticGeometry geometry = new(map, structures);
+    UnitCatalog catalog = ColdWarContent.LoadCatalog();
+    OpsRules rules = new(geometry, catalog, new NavigationTuning(CellSize: 4.0f));
+    WorldState world = new(map);
+
+    UnitDefinition t62Def = catalog.RequireDefinition("t62");
+    ushort t62Idx = catalog.RequireDefinitionIndex("t62");
+    int t62Ammo = catalog.GetAmmoCapacity(t62Def);
+    UnitDefinition bm21Def = catalog.RequireDefinition("bm21");
+    ushort bm21Idx = catalog.RequireDefinitionIndex("bm21");
+    int bm21Ammo = catalog.GetAmmoCapacity(bm21Def);
+
+    EntityId[] tanks = new EntityId[8];
+    for (int i = 0; i < 8; i++)
+    {
+        tanks[i] = world.CreateUnit(1, t62Idx, new Vector2(140f + i * 95f, 150f), t62Def.Speed, t62Def.MaxHealth, t62Ammo);
+    }
+    EntityId grad1 = world.CreateUnit(1, bm21Idx, new Vector2(300f, 80f), bm21Def.Speed, bm21Def.MaxHealth, bm21Ammo);
+    EntityId grad2 = world.CreateUnit(1, bm21Idx, new Vector2(680f, 80f), bm21Def.Speed, bm21Def.MaxHealth, bm21Ammo);
+    for (int i = 0; i < 6; i++)
+    {
+        world.CreateUnit(2, t62Idx, new Vector2(180f + i * 115f, 840f), t62Def.Speed, t62Def.MaxHealth, t62Ammo);
+    }
+
+    using Simulation sim = new(world, rules, matchSeed: 30120UL);
+    StructureDestructionProfile profile = UrbanDestructionPlaygroundScenario.PanelkaProfile;
+    for (int i = 0; i < totalSections; i++)
+    {
+        sim.BuildingDestruction!.RegisterStructure(world, structures[i].Id, in profile);
+    }
+    double setupMs = Stopwatch.GetElapsedTime(setupStart).TotalMilliseconds;
+
+    uint seq = 1;
+    for (int i = 0; i < 6; i++)
+    {
+        OpaqueStructure target = structures[i * sectionsPerBuilding];
+        sim.TryEnqueue(1, new AttackGroundCommand(seq++, 0, tanks[i], new Vector3(target.MinX + 6f, target.MinY + 2f, target.MinZ), target.Id));
+    }
+    sim.TryEnqueue(1, new FireMissionCommand(seq++, 0, grad1, new Vector2(280f, 460f)));
+    sim.TryEnqueue(1, new FireMissionCommand(seq++, 0, grad2, new Vector2(660f, 460f)));
+
+    PlayerKnowledge p1 = new(1);
+    PlayerKnowledge p2 = new(2);
+    for (int i = 0; i < 30; i++)
+    {
+        sim.Step();
+        sim.UpdateKnowledge(p1);
+        sim.UpdateKnowledge(p2);
+    }
+
+    const int measuredTicks = 200;
+    double[] tickMs = new double[measuredTicks];
+    long maxAlloc = 0;
+
+    for (int i = 0; i < measuredTicks; i++)
+    {
+        long allocBefore = GC.GetAllocatedBytesForCurrentThread();
+        long t0 = Stopwatch.GetTimestamp();
+        sim.Step();
+        sim.UpdateKnowledge(p1);
+        sim.UpdateKnowledge(p2);
+        tickMs[i] = Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
+        long allocDelta = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
+        if (allocDelta > maxAlloc) maxAlloc = allocDelta;
+    }
+
+    Array.Sort(tickMs);
+    double p50 = tickMs[measuredTicks / 2];
+    double p95 = tickMs[(int)(measuredTicks * 0.95)];
+    double p99 = tickMs[(int)(measuredTicks * 0.99)];
+    double max = tickMs[measuredTicks - 1];
+    Console.WriteLine($"BUILDING_DESTRUCTION_SIM_BENCHMARK sections={totalSections} setup_ms={setupMs:F2} floors_collapsed={sim.BuildingDestruction!.TotalFloorsCollapsed} p50_ms={p50:F3} p95_ms={p95:F3} p99_ms={p99:F3} max_ms={max:F3} max_alloc_bytes={maxAlloc}");
 }
 
 static void RunSimulationTicksBenchmark(string label, StaticGeometry geometry)

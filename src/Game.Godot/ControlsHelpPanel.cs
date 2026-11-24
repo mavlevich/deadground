@@ -40,7 +40,7 @@ internal sealed partial class ControlsHelpPanel : CanvasLayer
         column.AddChild(table);
 
         AddRow(table, "SELECT", "Left-click or drag a box. Shift adds units; double-click selects a type. Click roster chips to focus.");
-        AddRow(table, "ORDERS", "Right-click to move or attack. Right-drag sets final facing. R + RMB reverses. E stops selected units.");
+        AddRow(table, "ORDERS", "Right-click to move or attack. Right-drag sets final facing. R + RMB reverses. T attacks ground/buildings. E stops selected units.");
         AddRow(table, "FIRE STANCE", "Z: fire at will. X: return fire. C: hold fire.");
         AddRow(table, "CAMERA", "WASD / arrows to pan. Wheel to zoom. Middle-drag or Alt + left-drag to orbit.");
         AddRow(table, "GROUPS", "Ctrl / Cmd + 1-9 stores a group; Shift + 1-9 adds. Tap twice to center.");

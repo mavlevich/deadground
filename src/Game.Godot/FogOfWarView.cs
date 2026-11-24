@@ -96,6 +96,8 @@ void fragment() {
     private readonly byte[] _textureBuffer;
     private readonly float[] _horizonBuffer;
     private readonly float[] _structureTops;
+    private readonly float[]? _structureMaxYOverrides;
+    private bool _structureHeightDirty;
     private readonly float[] _cellGroundY;
     private readonly float[] _cellBlockY;
     private readonly float[] _cellCenterX;
@@ -161,6 +163,11 @@ void fragment() {
         {
             var structures = geometry.Structures;
             int count = structures.Count;
+            _structureMaxYOverrides = count > 0 ? new float[count] : null;
+            if (_structureMaxYOverrides is not null)
+            {
+                Array.Fill(_structureMaxYOverrides, float.NaN);
+            }
             for (int i = 0; i < count; i++)
             {
                 OpaqueStructure s = structures[i];
@@ -290,11 +297,19 @@ void fragment() {
         {
             _publishPending = false;
             EndCycle();
+            if (_structureHeightDirty)
+            {
+                FlushStructureHeightDirty();
+            }
             return;
         }
 
         if (!_cycleInProgress)
         {
+            if (_structureHeightDirty)
+            {
+                FlushStructureHeightDirty();
+            }
             if (_timeSinceCycleStart < CycleInterval)
             {
                 return;
@@ -351,6 +366,7 @@ void fragment() {
     public void UpdateAllNow(ClientReplica replica, UnitCatalog catalog)
     {
         CancelInProgressSweep();
+        _structureHeightDirty = false;
         SyncSmokeVolumes(replica);
         ReadOnlySpan<OwnUnitObservation> ownUnits = replica.OwnUnits;
         BeginCycle(ownUnits);
@@ -428,10 +444,87 @@ void fragment() {
         return false;
     }
 
+    /// <summary>
+    /// Updates the effective top elevation of a destructible structure on the Fog of War blocking grid.
+    /// Recomputes only the cells overlapped by that structure's AABB (zero allocations) and invalidates
+    /// cached observer viewsheds so sight opens promptly once buildings collapse.
+    /// </summary>
+    public bool UpdateStructureHeight(StructureId structureId, float newMaxY)
+    {
+        if (_isDisposed || _geometry is null || _structureMaxYOverrides is null || !float.IsFinite(newMaxY))
+            return false;
+        if (!_geometry.TryGetStructureIndex(structureId, out int structIndex))
+            return false;
+
+        OpaqueStructure target = _geometry.Structures[structIndex];
+        float clampedMaxY = Math.Clamp(newMaxY, target.MinY, target.MaxY);
+        float prevMaxY = float.IsNaN(_structureMaxYOverrides[structIndex])
+            ? target.MaxY
+            : _structureMaxYOverrides[structIndex];
+        if (MathF.Abs(prevMaxY - clampedMaxY) < 0.01f)
+            return false;
+
+        _structureMaxYOverrides[structIndex] = clampedMaxY;
+
+        int minCx = Math.Clamp((int)MathF.Floor(target.MinX / CellSize), 0, Columns - 1);
+        int maxCx = Math.Clamp((int)MathF.Floor((target.MaxX - 1e-4f) / CellSize), 0, Columns - 1);
+        int minCz = Math.Clamp((int)MathF.Floor(target.MinZ / CellSize), 0, Rows - 1);
+        int maxCz = Math.Clamp((int)MathF.Floor((target.MaxZ - 1e-4f) / CellSize), 0, Rows - 1);
+
+        var structures = _geometry.Structures;
+        int totalStructures = structures.Count;
+        for (int cz = minCz; cz <= maxCz; cz++)
+        {
+            float cellMinZ = cz * CellSize;
+            float cellMaxZ = cellMinZ + CellSize;
+            int rowOffset = cz * Columns;
+            for (int cx = minCx; cx <= maxCx; cx++)
+            {
+                float cellMinX = cx * CellSize;
+                float cellMaxX = cellMinX + CellSize;
+                float maxTop = 0f;
+                for (int i = 0; i < totalStructures; i++)
+                {
+                    OpaqueStructure s = structures[i];
+                    if (s.MaxX <= cellMinX || s.MinX >= cellMaxX || s.MaxZ <= cellMinZ || s.MinZ >= cellMaxZ)
+                        continue;
+                    float effectiveMaxY = float.IsNaN(_structureMaxYOverrides[i]) ? s.MaxY : _structureMaxYOverrides[i];
+                    if (effectiveMaxY > maxTop)
+                    {
+                        maxTop = effectiveMaxY;
+                    }
+                }
+
+                int idx = rowOffset + cx;
+                _structureTops[idx] = maxTop;
+                float gy = _cellGroundY[idx];
+                _cellBlockY[idx] = maxTop > 0f ? Math.Max(gy, maxTop) : gy;
+            }
+        }
+
+        // Coalesce multiple height updates within a frame or during an active barrage instead of
+        // cancelling an in-flight sweep and starving publication. FlushStructureHeightDirty() triggers
+        // an immediate resweep at the next cycle boundary.
+        _structureHeightDirty = true;
+
+        return true;
+    }
+
+    private void FlushStructureHeightDirty()
+    {
+        _structureHeightDirty = false;
+        foreach (UnitViewshed viewshed in _viewsheds.Values)
+        {
+            viewshed.Swept = false;
+        }
+        _timeSinceCycleStart = CycleInterval;
+    }
+
     // Test helper: the view of a single observer, replacing everything seen before.
     public void UpdateUnitNow(NumericsVector2 position, float eyeHeight, float sensorRange)
     {
         CancelInProgressSweep();
+        _structureHeightDirty = false;
         foreach (UnitViewshed viewshed in _viewsheds.Values)
         {
             RemoveContribution(viewshed);

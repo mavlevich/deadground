@@ -177,11 +177,11 @@ internal static class SmokeRegressionTests
             long allocDelta = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
             Require(allocDelta == 0, $"ContextActionPanel steady-state UpdateContext must allocate 0 bytes, got {allocDelta}.");
 
-            // Selecting an M60A1 (no smoke capability) must hide SmokeButton and panel
+            // Selecting an M60A1 (no smoke capability) must hide SmokeButton while keeping AttackGround available
             selected.Clear();
             selected.Add(new EntityId(11));
             panel.UpdateContext(selected, replica);
-            Require(!panel.SmokeButton.Visible && !panel.Visible,
+            Require(!panel.SmokeButton.Visible && panel.AttackGroundButton.Visible,
                 "Selecting M60A1 without smoke capability must hide SmokeButton.");
 
             // Active smoke state disables button and updates label

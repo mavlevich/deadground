@@ -14,7 +14,8 @@ public enum ContextTargetingMode
     FastRope = 4,
     SlingPickup = 5,
     SlingDrop = 6,
-    FireMission = 7
+    FireMission = 7,
+    AttackGround = 8
 }
 
 /// <summary>
@@ -33,6 +34,7 @@ internal sealed partial class ContextActionPanel : PanelContainer
     private readonly Button _fastRopeButton;
     private readonly Button _slingButton;
     private readonly Button _fireMissionButton;
+    private readonly Button _attackGroundButton;
     private readonly Button _flareButton;
     private readonly Button _autoFlareButton;
     private readonly Label _passengerLabel;
@@ -51,6 +53,7 @@ internal sealed partial class ContextActionPanel : PanelContainer
     internal Button FastRopeButton => _fastRopeButton;
     internal Button SlingButton => _slingButton;
     internal Button FireMissionButton => _fireMissionButton;
+    internal Button AttackGroundButton => _attackGroundButton;
     internal Button FlareButton => _flareButton;
     internal Button AutoFlareButton => _autoFlareButton;
     internal Label PassengerLabel => _passengerLabel;
@@ -97,6 +100,8 @@ internal sealed partial class ContextActionPanel : PanelContainer
     private int _cachedFlareMinCooldownSec = -1;
     private int _cachedAutoFlaresOnCount = -1;
     private int _cachedMissileWarningCount = -1;
+    private int _cachedAttackGroundCapableCount = -1;
+    private int _cachedAttackGroundAmmoTotal = -1;
     private bool _cachedAllBoardable;
 
     public ContextActionPanel(UnitCatalog catalog)
@@ -233,6 +238,18 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _fireMissionButton.Pressed += OnFireMissionButtonPressed;
         hbox.AddChild(_fireMissionButton);
 
+        _attackGroundButton = new Button
+        {
+            Text = "ATTACK GROUND [T]",
+            ThemeTypeVariation = "CompactButton",
+            MouseFilter = MouseFilterEnum.Stop,
+            FocusMode = FocusModeEnum.None,
+            CustomMinimumSize = new Vector2(118, 22),
+            TooltipText = "T: direct-fire HE/cannon onto a building floor or ground point."
+        };
+        _attackGroundButton.Pressed += OnAttackGroundButtonPressed;
+        hbox.AddChild(_attackGroundButton);
+
         _flareButton = new Button
         {
             Text = "FLARES [G]",
@@ -288,6 +305,7 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _fastRopeButton.Visible = false;
         _slingButton.Visible = false;
         _fireMissionButton.Visible = false;
+        _attackGroundButton.Visible = false;
         _passengerLabel.Visible = false;
         _statusLabel.Visible = false;
     }
@@ -315,6 +333,7 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _fastRopeButton.Visible = false;
         _slingButton.Visible = false;
         _fireMissionButton.Visible = false;
+        _attackGroundButton.Visible = false;
         _passengerLabel.Visible = false;
         _statusLabel.Visible = false;
     }
@@ -365,6 +384,13 @@ internal sealed partial class ContextActionPanel : PanelContainer
         SetTargetingMode(TargetingMode == ContextTargetingMode.FireMission
             ? ContextTargetingMode.None
             : ContextTargetingMode.FireMission);
+    }
+
+    private void OnAttackGroundButtonPressed()
+    {
+        SetTargetingMode(TargetingMode == ContextTargetingMode.AttackGround
+            ? ContextTargetingMode.None
+            : ContextTargetingMode.AttackGround);
     }
 
     private WeaponData? FindWeaponData(string? weaponId)
@@ -436,6 +462,8 @@ internal sealed partial class ContextActionPanel : PanelContainer
                 _cachedFlareMinCooldownSec = -1;
                 _cachedAutoFlaresOnCount = -1;
                 _cachedMissileWarningCount = -1;
+                _cachedAttackGroundCapableCount = -1;
+                _cachedAttackGroundAmmoTotal = -1;
                 _cachedAllBoardable = false;
                 Visible = false;
             }
@@ -472,6 +500,8 @@ internal sealed partial class ContextActionPanel : PanelContainer
         int flareMinCooldownTicks = int.MaxValue;
         int autoFlaresOnCount = 0;
         int missileWarningCount = 0;
+        int attackGroundCapableCount = 0;
+        int attackGroundAmmoTotal = 0;
 
         foreach (EntityId id in selectedUnits)
         {
@@ -597,6 +627,11 @@ internal sealed partial class ContextActionPanel : PanelContainer
                     artilleryMinReloadTicks = obs.ReloadTicksRemaining;
                 }
             }
+            else if (weaponData is not null && !weaponData.AirTargetsOnly && weaponData.StructuralDamage > 0 && obs.ContainerId == default)
+            {
+                attackGroundCapableCount++;
+                attackGroundAmmoTotal += obs.Ammunition;
+            }
         }
 
         int passengerCount = hasTransport && count == 1 ? singleTransport.PassengerCount : -1;
@@ -644,6 +679,8 @@ internal sealed partial class ContextActionPanel : PanelContainer
             _cachedFlareMinCooldownSec == flareMinCooldownSec &&
             _cachedAutoFlaresOnCount == autoFlaresOnCount &&
             _cachedMissileWarningCount == missileWarningCount &&
+            _cachedAttackGroundCapableCount == attackGroundCapableCount &&
+            _cachedAttackGroundAmmoTotal == attackGroundAmmoTotal &&
             _cachedAllBoardable == allBoardable)
         {
             return;
@@ -680,7 +717,30 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _cachedFlareMinCooldownSec = flareMinCooldownSec;
         _cachedAutoFlaresOnCount = autoFlaresOnCount;
         _cachedMissileWarningCount = missileWarningCount;
+        _cachedAttackGroundCapableCount = attackGroundCapableCount;
+        _cachedAttackGroundAmmoTotal = attackGroundAmmoTotal;
         _cachedAllBoardable = allBoardable;
+
+        bool hasAttackGroundUi = attackGroundCapableCount > 0;
+        _attackGroundButton.Visible = hasAttackGroundUi;
+        if (hasAttackGroundUi)
+        {
+            if (TargetingMode == ContextTargetingMode.AttackGround)
+            {
+                _attackGroundButton.Disabled = false;
+                _attackGroundButton.Text = "CANCEL [Esc]";
+            }
+            else if (attackGroundAmmoTotal <= 0)
+            {
+                _attackGroundButton.Disabled = true;
+                _attackGroundButton.Text = "NO AMMO (0)";
+            }
+            else
+            {
+                _attackGroundButton.Disabled = false;
+                _attackGroundButton.Text = "ATTACK GROUND [T]";
+            }
+        }
 
         bool hasArtilleryUi = artilleryCount > 0;
         _fireMissionButton.Visible = hasArtilleryUi;
@@ -935,7 +995,8 @@ internal sealed partial class ContextActionPanel : PanelContainer
         }
         else if (hasSmokeUi)
         {
-            if (TargetingMode != ContextTargetingMode.None)
+            if (TargetingMode != ContextTargetingMode.None &&
+                !(hasAttackGroundUi && TargetingMode == ContextTargetingMode.AttackGround))
             {
                 CancelTargeting();
             }
@@ -945,13 +1006,32 @@ internal sealed partial class ContextActionPanel : PanelContainer
             _disembarkButton.Visible = false;
             _passengerLabel.Visible = false;
             _statusLabel.Visible = true;
-            _statusLabel.Text = smokeActiveCount > 0
-                ? "Smoke screen active (blocks sight)"
-                : smokeReadyCount > 0
-                    ? "Press G to lay smoke screen"
-                    : smokeChargesTotal > 0
-                        ? $"Smoke recharging ({smokeMinCooldownSec}s)"
-                        : "Smoke charges depleted";
+            _statusLabel.Text = TargetingMode == ContextTargetingMode.AttackGround
+                ? "Click building floor or ground point to fire (Esc to cancel)"
+                : smokeActiveCount > 0
+                    ? "Smoke screen active (blocks sight)"
+                    : smokeReadyCount > 0
+                        ? (hasAttackGroundUi ? "G: smoke screen  |  T: attack ground/building" : "Press G to lay smoke screen")
+                        : smokeChargesTotal > 0
+                            ? $"Smoke recharging ({smokeMinCooldownSec}s)"
+                            : "Smoke charges depleted";
+        }
+        else if (hasAttackGroundUi)
+        {
+            if (TargetingMode != ContextTargetingMode.None &&
+                TargetingMode != ContextTargetingMode.AttackGround)
+            {
+                CancelTargeting();
+            }
+            Visible = true;
+            _boardButton.Visible = false;
+            _disembarkHereButton.Visible = false;
+            _disembarkButton.Visible = false;
+            _passengerLabel.Visible = false;
+            _statusLabel.Visible = true;
+            _statusLabel.Text = TargetingMode == ContextTargetingMode.AttackGround
+                ? "Click building floor or ground point to fire (Esc to cancel)"
+                : "Press T to target a building floor or ground point";
         }
         else
         {
