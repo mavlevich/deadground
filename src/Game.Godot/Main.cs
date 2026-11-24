@@ -64,6 +64,9 @@ public partial class Main : Node3D
     private HelicopterAudioController? _helicopterAudio;
     private SmokeView? _smokeView;
     private BuildingDestructionView? _buildingDestructionView;
+    private BuildingGarrisonView? _buildingGarrisonView;
+    private Control? _garrisonBadgeRoot;
+    private StructureId _hoveredGarrisonStructure;
     private uint _pendingAttackGroundMinSeq;
     private uint _pendingAttackGroundMaxSeq;
     private uint _lastHandledAttackGroundResultSeq;
@@ -1188,6 +1191,12 @@ public partial class Main : Node3D
                         scenarioGeometry,
                         scenarioGeometry.DestructibleBuildings,
                         OnObservedStructureHeightChanged);
+                    _buildingGarrisonView = new BuildingGarrisonView(
+                        _environmentRoot,
+                        scenarioGeometry,
+                        scenarioGeometry.DestructibleBuildings,
+                        _garrisonBadgeRoot,
+                        OnGarrisonBadgeClicked);
                     if (_cameraRig is not null)
                     {
                         _buildingDestructionView.UpdateLod(_cameraRig.Size);
@@ -1262,6 +1271,9 @@ public partial class Main : Node3D
         _environmentView?.SetShadowTarget(null);
         _buildingDestructionView?.Dispose();
         _buildingDestructionView = null;
+        _buildingGarrisonView?.Dispose();
+        _buildingGarrisonView = null;
+        _hoveredGarrisonStructure = default;
         _pendingAttackGroundMinSeq = 0;
         _pendingAttackGroundMaxSeq = 0;
         _lastHandledAttackGroundResultSeq = 0;
@@ -1403,6 +1415,27 @@ public partial class Main : Node3D
         _wreckViews.ProcessEvents(_session.Replica.Events, _session.Tick);
         _smokeView?.Update((float)delta, _session.Replica, _session.RenderTick);
         _buildingDestructionView?.Update(_session.Replica, (float)delta);
+        if (_buildingGarrisonView is not null)
+        {
+            StructureId hoverStruct = default;
+            if (_previewController is not null && !IsUiOccludingMouse())
+            {
+                Vector2 mPos = GetViewport().GetMousePosition();
+                if (_buildingGarrisonView.TryGetBadgeAtScreenPoint(mPos, out StructureId badgeStruct))
+                {
+                    hoverStruct = badgeStruct;
+                }
+                else if (_previewController.TryRaycast(_camera, mPos, out _, out _, out _, out StructureId rayStruct) &&
+                         _buildingGarrisonView.IsGarrisonable(rayStruct))
+                {
+                    hoverStruct = rayStruct;
+                }
+            }
+            _hoveredGarrisonStructure = hoverStruct;
+            bool showEntranceHint = _unitViews.Selected.Count > 0 &&
+                (HasSelectedGarrisonableInfantry() || _contextActionPanel?.TargetingMode == ContextTargetingMode.EnterBuilding);
+            _buildingGarrisonView.Update(_session.Replica, _unitViews.Selected, _hoveredGarrisonStructure, showEntranceHint, _camera);
+        }
         if (_pendingAttackGroundMaxSeq != 0 &&
             _session.LastCommandResult is { } agResult &&
             agResult.Sequence != _lastHandledAttackGroundResultSeq &&
@@ -1698,6 +1731,27 @@ public partial class Main : Node3D
                 }
                 _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
             }
+            else if (_contextActionPanel?.TargetingMode == ContextTargetingMode.EnterBuilding)
+            {
+                if (_buildingGarrisonView is not null &&
+                    _hoveredGarrisonStructure != default &&
+                    _buildingGarrisonView.TryGetBuildingInfo(_hoveredGarrisonStructure, out System.Numerics.Vector2 entPos, out int cap, out _))
+                {
+                    _destination.ShowZoneCircle(_map, entPos.X, entPos.Y, 2.5f, true);
+                    int ownInside = CountOwnUnitsInBuilding(_hoveredGarrisonStructure);
+                    bool full = ownInside >= cap;
+                    string tip = full
+                        ? $"Building full ({ownInside}/{cap}) [Esc to cancel]"
+                        : $"Garrison building ({ownInside}/{cap}) [LMB | Esc to cancel]";
+                    _orderCursorOverlay?.SetCustomTooltip(true, full ? DestinationValidity.Blocked : DestinationValidity.Valid, tip);
+                }
+                else
+                {
+                    _destination.HideZoneCircle();
+                    _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Blocked, "Click a building section to garrison [Esc to cancel]");
+                }
+                _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
+            }
             else
             {
                 _destination.HideZoneCircle();
@@ -1719,6 +1773,20 @@ public partial class Main : Node3D
                     {
                         _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Blocked, $"{transName} is full [0 seats open]");
                     }
+                    _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
+                }
+                else if (!hasEnemyContact &&
+                         HasSelectedGarrisonableInfantry() &&
+                         _buildingGarrisonView is not null &&
+                         _hoveredGarrisonStructure != default &&
+                         _buildingGarrisonView.TryGetBuildingInfo(_hoveredGarrisonStructure, out _, out int garrCap, out _))
+                {
+                    int ownInside = CountOwnUnitsInBuilding(_hoveredGarrisonStructure);
+                    bool full = ownInside >= garrCap;
+                    string tip = full
+                        ? $"Building full ({ownInside}/{garrCap})"
+                        : $"Garrison building ({ownInside}/{garrCap}) [RMB]";
+                    _orderCursorOverlay?.SetCustomTooltip(true, full ? DestinationValidity.Blocked : DestinationValidity.Valid, tip);
                     _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
                 }
                 else
@@ -2841,6 +2909,29 @@ public partial class Main : Node3D
                 GetViewport().SetInputAsHandled();
                 return;
             }
+
+            if ((key.Keycode == Key.N || key.PhysicalKeycode == Key.N) && _unitViews.Selected.Count > 0 && _contextActionPanel?.EnterBuildingButton.Visible == true && !_contextActionPanel.EnterBuildingButton.Disabled)
+            {
+                _contextActionPanel.SetTargetingMode(_contextActionPanel.TargetingMode == ContextTargetingMode.EnterBuilding
+                    ? ContextTargetingMode.None
+                    : ContextTargetingMode.EnterBuilding);
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if ((key.Keycode == Key.U || key.PhysicalKeycode == Key.U) && _unitViews.Selected.Count > 0 && _contextActionPanel?.ExitBuildingButton.Visible == true && !_contextActionPanel.ExitBuildingButton.Disabled)
+            {
+                OnExitBuildingRequested();
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if ((key.Keycode == Key.Y || key.PhysicalKeycode == Key.Y) && _unitViews.Selected.Count > 0 && _contextActionPanel?.GarrisonRoofButton.Visible == true && !_contextActionPanel.GarrisonRoofButton.Disabled)
+            {
+                OnToggleGarrisonRoofRequested();
+                GetViewport().SetInputAsHandled();
+                return;
+            }
             return;
         }
 
@@ -3235,6 +3326,39 @@ public partial class Main : Node3D
                 return;
             }
 
+            if (_contextActionPanel?.TargetingMode == ContextTargetingMode.EnterBuilding)
+            {
+                StructureId targetBuilding = default;
+                if (_buildingGarrisonView is not null)
+                {
+                    if (_buildingGarrisonView.TryGetBadgeAtScreenPoint(mouse.Position, out StructureId badgeStruct))
+                    {
+                        targetBuilding = badgeStruct;
+                    }
+                    else if (_previewController is not null &&
+                             _previewController.TryRaycast(_camera, mouse.Position, out _, out _, out _, out StructureId hitStruct) &&
+                             _buildingGarrisonView.IsGarrisonable(hitStruct))
+                    {
+                        targetBuilding = hitStruct;
+                    }
+                }
+
+                if (targetBuilding != default)
+                {
+                    IssueEnterBuildingForSelection(targetBuilding);
+                    _contextActionPanel.CancelTargeting();
+                    _destination.HideZoneCircle();
+                    _orderCursorOverlay?.HideTooltip();
+                }
+                else
+                {
+                    _orderNotification?.ShowNotification("Click a building section to garrison");
+                    _status.Text = "Click a building section to garrison";
+                }
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
             if (_selectionController.BeginPress(mouse.Position, mouse.ShiftPressed, mouse.DoubleClick, _inputOccludingPanels))
             {
                 _selectionBoxOverlay?.HideBox();
@@ -3323,6 +3447,17 @@ public partial class Main : Node3D
                     }
                 }
 
+                if (HasSelectedGarrisonableInfantry() &&
+                    _buildingGarrisonView is not null &&
+                    TryPickGarrisonableBuilding(mouse.Position, out StructureId rmbBuildingId))
+                {
+                    if (IssueEnterBuildingForSelection(rmbBuildingId))
+                    {
+                        GetViewport().SetInputAsHandled();
+                        return;
+                    }
+                }
+
                 bool isReverse = Input.IsKeyPressed(Key.R);
                 MoveMode moveMode = isReverse ? MoveMode.Reverse : MoveMode.Forward;
                 if (_previewController.BeginFacingGesture(_camera, mouse.Position, _unitViews, _session, out string failMsg, moveMode))
@@ -3359,6 +3494,7 @@ public partial class Main : Node3D
         bool found = false;
         foreach ((ContactId id, ContactView view) in _contactViews.Views)
         {
+            if (!view.Root.Visible) continue;
             Vector3 center = view.Root.Position + Vector3.Up * (1.5f + view.Altitude);
             if (_camera.IsPositionBehind(center)) continue;
             float distance = _camera.UnprojectPosition(center).DistanceSquaredTo(mousePos);
@@ -3369,7 +3505,16 @@ public partial class Main : Node3D
                 found = true;
             }
         }
-        return found;
+        if (found) return true;
+
+        // Also allow targeting spotted enemy garrisons by hovering/clicking their building or tactical badge
+        if (_buildingGarrisonView is not null &&
+            TryPickGarrisonableBuilding(mousePos, out StructureId hitBuilding) &&
+            TryGetCurrentHostileContactInBuilding(hitBuilding, out targetContact))
+        {
+            return true;
+        }
+        return false;
     }
 
     private bool TryGetOwnUnitUnderMouse(Vector2 mousePos, out EntityId unitId)
@@ -3447,6 +3592,15 @@ public partial class Main : Node3D
 
         if (kind is SelectionReleaseKind.BoxSelect or SelectionReleaseKind.ClickSelect or SelectionReleaseKind.DoubleClickSelect)
         {
+            if (kind == SelectionReleaseKind.ClickSelect &&
+                _unitViews.Selected.Count == 0 &&
+                _contactViews.Selected.Count == 0 &&
+                _buildingGarrisonView is not null &&
+                TryPickGarrisonableBuilding(position, out StructureId clickedBuilding) &&
+                CountOwnUnitsInBuilding(clickedBuilding) > 0)
+            {
+                SelectOwnUnitsInBuilding(clickedBuilding, shiftPressed);
+            }
             _unitViews.UpdateSelectionVisuals();
             UpdateSelectionPresentation();
             _previewController?.OnUnitSelectionChanged();
@@ -3994,6 +4148,213 @@ public partial class Main : Node3D
             _status.Text = msg;
             _contextActionPanel?.CancelTargeting();
             _orderCursorOverlay?.HideTooltip();
+        }
+    }
+
+    private bool IsUiOccludingMouse()
+    {
+        RefreshOccludingPanels();
+        return SelectionController.IsPointOccluded(GetViewport().GetMousePosition(), _inputOccludingPanels);
+    }
+
+    private bool HasSelectedGarrisonableInfantry()
+    {
+        if (_catalog is null || _unitViews is null) return false;
+        foreach (EntityId id in _unitViews.Selected)
+        {
+            if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) &&
+                obs.ContainerId == default &&
+                obs.GarrisonStructureId == default &&
+                obs.SlungById == default &&
+                obs.Definition < _catalog.Units.Length &&
+                string.Equals(_catalog.Units[obs.Definition].Classification, "infantry", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private bool TryPickGarrisonableBuilding(Vector2 screenPos, out StructureId structureId)
+    {
+        structureId = default;
+        if (_buildingGarrisonView is null) return false;
+        if (_buildingGarrisonView.TryGetBadgeAtScreenPoint(screenPos, out StructureId badgeStruct) &&
+            _buildingGarrisonView.IsGarrisonable(badgeStruct))
+        {
+            structureId = badgeStruct;
+            return true;
+        }
+        if (_camera is not null &&
+            _previewController is not null &&
+            _previewController.TryRaycast(_camera, screenPos, out _, out _, out _, out StructureId hitStruct) &&
+            _buildingGarrisonView.IsGarrisonable(hitStruct))
+        {
+            structureId = hitStruct;
+            return true;
+        }
+        return false;
+    }
+
+    private int CountOwnUnitsInBuilding(StructureId structureId)
+    {
+        int count = 0;
+        ReadOnlySpan<OwnUnitObservation> units = _session.Replica.OwnUnits;
+        for (int i = 0; i < units.Length; i++)
+        {
+            if (units[i].GarrisonStructureId == structureId)
+                count++;
+        }
+        return count;
+    }
+
+    private bool TryGetCurrentHostileContactInBuilding(StructureId structureId, out ContactId contactId)
+    {
+        ReadOnlySpan<ContactObservation> contacts = _session.Replica.Contacts;
+        for (int i = 0; i < contacts.Length; i++)
+        {
+            if (contacts[i].State == ContactState.Current && contacts[i].GarrisonStructureId == structureId)
+            {
+                contactId = contacts[i].Id;
+                return true;
+            }
+        }
+        contactId = default;
+        return false;
+    }
+
+    private void SelectOwnUnitsInBuilding(StructureId structureId, bool additive)
+    {
+        if (!additive)
+        {
+            _unitViews.Selected.Clear();
+            _contactViews.Selected.Clear();
+        }
+        ReadOnlySpan<OwnUnitObservation> units = _session.Replica.OwnUnits;
+        for (int i = 0; i < units.Length; i++)
+        {
+            if (units[i].GarrisonStructureId == structureId)
+            {
+                _unitViews.Selected.Add(units[i].Id);
+            }
+        }
+    }
+
+    internal void OnGarrisonBadgeClicked(StructureId structureId)
+    {
+        if (CountOwnUnitsInBuilding(structureId) > 0)
+        {
+            SelectOwnUnitsInBuilding(structureId, Input.IsKeyPressed(Key.Shift));
+            _unitViews.UpdateSelectionVisuals();
+            UpdateSelectionPresentation();
+            _previewController?.OnUnitSelectionChanged();
+        }
+        else if (TryGetCurrentHostileContactInBuilding(structureId, out ContactId hostileContact))
+        {
+            if (_unitViews.Selected.Count > 0)
+            {
+                IssueAttackOrBarrageOnContact(hostileContact);
+            }
+            else
+            {
+                _contactViews.Selected.Clear();
+                _contactViews.Selected.Add(hostileContact);
+                UpdateSelectionPresentation();
+            }
+        }
+    }
+
+    internal bool IssueEnterBuildingForSelection(StructureId structureId, GarrisonSlotKind slotKind = GarrisonSlotKind.Interior)
+    {
+        if (_catalog is null || _unitViews is null) return false;
+        int sent = 0;
+        foreach (EntityId unitId in _unitViews.Selected)
+        {
+            if (_session.Replica.TryGetOwnUnit(unitId, out OwnUnitObservation obs) &&
+                obs.ContainerId == default &&
+                obs.GarrisonStructureId == default &&
+                obs.SlungById == default &&
+                obs.Definition < _catalog.Units.Length &&
+                string.Equals(_catalog.Units[obs.Definition].Classification, "infantry", StringComparison.OrdinalIgnoreCase))
+            {
+                if (_session.EnterBuilding(unitId, structureId, slotKind))
+                    sent++;
+            }
+        }
+        if (sent > 0)
+        {
+            string msg = sent == 1
+                ? "Ordering 1 infantry unit to garrison building"
+                : $"Ordering {sent} infantry units to garrison building";
+            _orderNotification?.ShowNotification(msg);
+            _status.Text = msg;
+            return true;
+        }
+        return false;
+    }
+
+    internal void OnExitBuildingRequested()
+    {
+        if (_unitViews is null) return;
+        int sent = 0;
+        foreach (EntityId unitId in _unitViews.Selected)
+        {
+            if (_session.Replica.TryGetOwnUnit(unitId, out OwnUnitObservation obs) &&
+                obs.GarrisonStructureId != default)
+            {
+                if (_session.ExitBuilding(unitId))
+                    sent++;
+            }
+        }
+        if (sent > 0)
+        {
+            string msg = sent == 1
+                ? "Exiting building (1 unit)"
+                : $"Exiting building ({sent} units)";
+            _orderNotification?.ShowNotification(msg);
+            _status.Text = msg;
+            _contextActionPanel?.CancelTargeting();
+            _orderCursorOverlay?.HideTooltip();
+        }
+    }
+
+    internal void OnToggleGarrisonRoofRequested()
+    {
+        if (_unitViews is null) return;
+        int garrisoned = 0;
+        int onRoof = 0;
+        foreach (EntityId unitId in _unitViews.Selected)
+        {
+            if (_session.Replica.TryGetOwnUnit(unitId, out OwnUnitObservation obs) &&
+                obs.GarrisonStructureId != default)
+            {
+                garrisoned++;
+                if (obs.GarrisonSlotKind == GarrisonSlotKind.Roof)
+                    onRoof++;
+            }
+        }
+        if (garrisoned == 0) return;
+
+        GarrisonSlotKind targetSlot = onRoof >= garrisoned ? GarrisonSlotKind.Interior : GarrisonSlotKind.Roof;
+        int sent = 0;
+        foreach (EntityId unitId in _unitViews.Selected)
+        {
+            if (_session.Replica.TryGetOwnUnit(unitId, out OwnUnitObservation obs) &&
+                obs.GarrisonStructureId != default &&
+                obs.GarrisonSlotKind != targetSlot)
+            {
+                if (_session.EnterBuilding(unitId, obs.GarrisonStructureId, targetSlot))
+                    sent++;
+            }
+        }
+        if (sent > 0)
+        {
+            string slotText = targetSlot == GarrisonSlotKind.Roof ? "rooftop" : "interior floors";
+            string msg = sent == 1
+                ? $"Moving 1 garrisoned unit to {slotText}"
+                : $"Moving {sent} garrisoned units to {slotText}";
+            _orderNotification?.ShowNotification(msg);
+            _status.Text = msg;
         }
     }
 
@@ -4707,6 +5068,14 @@ public partial class Main : Node3D
 
         _roleBadgeOverlay = new RoleBadgeOverlay(_catalog);
         canvas.AddChild(_roleBadgeOverlay);
+        _garrisonBadgeRoot = new Control
+        {
+            Name = "GarrisonBadgeRoot",
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        _garrisonBadgeRoot.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        canvas.AddChild(_garrisonBadgeRoot);
+        _buildingGarrisonView?.AttachBadgeOverlay(_garrisonBadgeRoot);
 
         _selectionBoxOverlay = new SelectionBoxOverlay();
         canvas.AddChild(_selectionBoxOverlay);
@@ -4832,6 +5201,8 @@ public partial class Main : Node3D
         _contextActionPanel.CancelFireMissionRequested += OnCancelFireMissionRequested;
         _contextActionPanel.DeployFlaresRequested += OnDeployFlaresRequested;
         _contextActionPanel.ToggleAutoFlaresRequested += OnToggleAutoFlaresRequested;
+        _contextActionPanel.ExitBuildingRequested += OnExitBuildingRequested;
+        _contextActionPanel.ToggleGarrisonRoofRequested += OnToggleGarrisonRoofRequested;
         canvas.AddChild(_contextActionPanel);
 
         _commandPanel = new UnitCommandPanel(_catalog);

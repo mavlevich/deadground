@@ -15,7 +15,8 @@ public enum ContextTargetingMode
     SlingPickup = 5,
     SlingDrop = 6,
     FireMission = 7,
-    AttackGround = 8
+    AttackGround = 8,
+    EnterBuilding = 9
 }
 
 /// <summary>
@@ -35,6 +36,9 @@ internal sealed partial class ContextActionPanel : PanelContainer
     private readonly Button _slingButton;
     private readonly Button _fireMissionButton;
     private readonly Button _attackGroundButton;
+    private readonly Button _enterBuildingButton;
+    private readonly Button _exitBuildingButton;
+    private readonly Button _garrisonRoofButton;
     private readonly Button _flareButton;
     private readonly Button _autoFlareButton;
     private readonly Label _passengerLabel;
@@ -54,6 +58,9 @@ internal sealed partial class ContextActionPanel : PanelContainer
     internal Button SlingButton => _slingButton;
     internal Button FireMissionButton => _fireMissionButton;
     internal Button AttackGroundButton => _attackGroundButton;
+    internal Button EnterBuildingButton => _enterBuildingButton;
+    internal Button ExitBuildingButton => _exitBuildingButton;
+    internal Button GarrisonRoofButton => _garrisonRoofButton;
     internal Button FlareButton => _flareButton;
     internal Button AutoFlareButton => _autoFlareButton;
     internal Label PassengerLabel => _passengerLabel;
@@ -67,6 +74,8 @@ internal sealed partial class ContextActionPanel : PanelContainer
     public event Action? CancelFireMissionRequested;
     public event Action? DeployFlaresRequested;
     public event Action? ToggleAutoFlaresRequested;
+    public event Action? ExitBuildingRequested;
+    public event Action? ToggleGarrisonRoofRequested;
 
     // Cached state for zero-allocation steady-state updates
     private int _cachedSelectionCount = -1;
@@ -102,6 +111,9 @@ internal sealed partial class ContextActionPanel : PanelContainer
     private int _cachedMissileWarningCount = -1;
     private int _cachedAttackGroundCapableCount = -1;
     private int _cachedAttackGroundAmmoTotal = -1;
+    private int _cachedGarrisonableInfantryCount = -1;
+    private int _cachedGarrisonedCount = -1;
+    private int _cachedGarrisonedRoofCount = -1;
     private bool _cachedAllBoardable;
 
     public ContextActionPanel(UnitCatalog catalog)
@@ -250,6 +262,43 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _attackGroundButton.Pressed += OnAttackGroundButtonPressed;
         hbox.AddChild(_attackGroundButton);
 
+        _enterBuildingButton = new Button
+        {
+            Text = "GARRISON [N]",
+            ThemeTypeVariation = "CompactButton",
+            ToggleMode = true,
+            MouseFilter = MouseFilterEnum.Stop,
+            FocusMode = FocusModeEnum.None,
+            CustomMinimumSize = new Vector2(96, 22),
+            TooltipText = "N (or RMB on building): garrison selected infantry inside a building section."
+        };
+        _enterBuildingButton.Pressed += OnEnterBuildingButtonPressed;
+        hbox.AddChild(_enterBuildingButton);
+
+        _exitBuildingButton = new Button
+        {
+            Text = "EXIT BLDG [U]",
+            ThemeTypeVariation = "CompactButton",
+            MouseFilter = MouseFilterEnum.Stop,
+            FocusMode = FocusModeEnum.None,
+            CustomMinimumSize = new Vector2(96, 22),
+            TooltipText = "U: exit selected infantry from their current building."
+        };
+        _exitBuildingButton.Pressed += () => ExitBuildingRequested?.Invoke();
+        hbox.AddChild(_exitBuildingButton);
+
+        _garrisonRoofButton = new Button
+        {
+            Text = "TO ROOF [Y]",
+            ThemeTypeVariation = "CompactButton",
+            MouseFilter = MouseFilterEnum.Stop,
+            FocusMode = FocusModeEnum.None,
+            CustomMinimumSize = new Vector2(88, 22),
+            TooltipText = "Y: move garrisoned infantry between interior floors and rooftop (intact buildings only)."
+        };
+        _garrisonRoofButton.Pressed += () => ToggleGarrisonRoofRequested?.Invoke();
+        hbox.AddChild(_garrisonRoofButton);
+
         _flareButton = new Button
         {
             Text = "FLARES [G]",
@@ -306,6 +355,9 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _slingButton.Visible = false;
         _fireMissionButton.Visible = false;
         _attackGroundButton.Visible = false;
+        _enterBuildingButton.Visible = false;
+        _exitBuildingButton.Visible = false;
+        _garrisonRoofButton.Visible = false;
         _passengerLabel.Visible = false;
         _statusLabel.Visible = false;
     }
@@ -334,6 +386,9 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _slingButton.Visible = false;
         _fireMissionButton.Visible = false;
         _attackGroundButton.Visible = false;
+        _enterBuildingButton.Visible = false;
+        _exitBuildingButton.Visible = false;
+        _garrisonRoofButton.Visible = false;
         _passengerLabel.Visible = false;
         _statusLabel.Visible = false;
     }
@@ -393,6 +448,13 @@ internal sealed partial class ContextActionPanel : PanelContainer
             : ContextTargetingMode.AttackGround);
     }
 
+    private void OnEnterBuildingButtonPressed()
+    {
+        SetTargetingMode(TargetingMode == ContextTargetingMode.EnterBuilding
+            ? ContextTargetingMode.None
+            : ContextTargetingMode.EnterBuilding);
+    }
+
     private WeaponData? FindWeaponData(string? weaponId)
     {
         if (weaponId is null || _catalog.Weapons is null) return null;
@@ -410,6 +472,7 @@ internal sealed partial class ContextActionPanel : PanelContainer
         TargetingMode = mode;
         _boardButton.SetPressedNoSignal(mode == ContextTargetingMode.BoardTransport);
         _disembarkButton.SetPressedNoSignal(mode == ContextTargetingMode.Disembark);
+        _enterBuildingButton.SetPressedNoSignal(mode == ContextTargetingMode.EnterBuilding);
         TargetingModeChanged?.Invoke(mode);
     }
 
@@ -464,6 +527,9 @@ internal sealed partial class ContextActionPanel : PanelContainer
                 _cachedMissileWarningCount = -1;
                 _cachedAttackGroundCapableCount = -1;
                 _cachedAttackGroundAmmoTotal = -1;
+                _cachedGarrisonableInfantryCount = -1;
+                _cachedGarrisonedCount = -1;
+                _cachedGarrisonedRoofCount = -1;
                 _cachedAllBoardable = false;
                 Visible = false;
             }
@@ -502,6 +568,9 @@ internal sealed partial class ContextActionPanel : PanelContainer
         int missileWarningCount = 0;
         int attackGroundCapableCount = 0;
         int attackGroundAmmoTotal = 0;
+        int garrisonableInfantryCount = 0;
+        int garrisonedCount = 0;
+        int garrisonedRoofCount = 0;
 
         foreach (EntityId id in selectedUnits)
         {
@@ -518,7 +587,23 @@ internal sealed partial class ContextActionPanel : PanelContainer
                 : null;
             string? classification = def?.Classification;
             bool isInfantry = string.Equals(classification, "infantry", StringComparison.OrdinalIgnoreCase);
-            bool canBoard = isInfantry || (def?.CanInternalLoad == true);
+            bool isGarrisoned = obs.GarrisonStructureId != default;
+            if (isInfantry && obs.ContainerId == default && obs.SlungById == default)
+            {
+                if (isGarrisoned)
+                {
+                    garrisonedCount++;
+                    if (obs.GarrisonSlotKind == GarrisonSlotKind.Roof)
+                    {
+                        garrisonedRoofCount++;
+                    }
+                }
+                else
+                {
+                    garrisonableInfantryCount++;
+                }
+            }
+            bool canBoard = (!isGarrisoned && isInfantry) || (!isGarrisoned && def?.CanInternalLoad == true);
             if (!isInfantry)
             {
                 allInfantry = false;
@@ -681,6 +766,9 @@ internal sealed partial class ContextActionPanel : PanelContainer
             _cachedMissileWarningCount == missileWarningCount &&
             _cachedAttackGroundCapableCount == attackGroundCapableCount &&
             _cachedAttackGroundAmmoTotal == attackGroundAmmoTotal &&
+            _cachedGarrisonableInfantryCount == garrisonableInfantryCount &&
+            _cachedGarrisonedCount == garrisonedCount &&
+            _cachedGarrisonedRoofCount == garrisonedRoofCount &&
             _cachedAllBoardable == allBoardable)
         {
             return;
@@ -719,7 +807,29 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _cachedMissileWarningCount = missileWarningCount;
         _cachedAttackGroundCapableCount = attackGroundCapableCount;
         _cachedAttackGroundAmmoTotal = attackGroundAmmoTotal;
+        _cachedGarrisonableInfantryCount = garrisonableInfantryCount;
+        _cachedGarrisonedCount = garrisonedCount;
+        _cachedGarrisonedRoofCount = garrisonedRoofCount;
         _cachedAllBoardable = allBoardable;
+
+        bool hasEnterBuildingUi = garrisonableInfantryCount > 0;
+        bool hasGarrisonedUi = garrisonedCount > 0;
+        _enterBuildingButton.Visible = hasEnterBuildingUi;
+        if (hasEnterBuildingUi)
+        {
+            _enterBuildingButton.Disabled = false;
+            _enterBuildingButton.Text = TargetingMode == ContextTargetingMode.EnterBuilding
+                ? "CANCEL [Esc]"
+                : "GARRISON [N]";
+        }
+        _exitBuildingButton.Visible = hasGarrisonedUi;
+        _garrisonRoofButton.Visible = hasGarrisonedUi;
+        if (hasGarrisonedUi)
+        {
+            _exitBuildingButton.Disabled = false;
+            _garrisonRoofButton.Disabled = false;
+            _garrisonRoofButton.Text = garrisonedRoofCount >= garrisonedCount ? "INSIDE [Y]" : "TO ROOF [Y]";
+        }
 
         bool hasAttackGroundUi = attackGroundCapableCount > 0;
         _attackGroundButton.Visible = hasAttackGroundUi;
@@ -869,7 +979,24 @@ internal sealed partial class ContextActionPanel : PanelContainer
             }
         }
 
-        if (allBoardable && count > 0)
+        if (hasGarrisonedUi && !allBoardable)
+        {
+            if (TargetingMode != ContextTargetingMode.None &&
+                !(hasEnterBuildingUi && TargetingMode == ContextTargetingMode.EnterBuilding))
+            {
+                CancelTargeting();
+            }
+            Visible = true;
+            _boardButton.Visible = false;
+            _disembarkHereButton.Visible = false;
+            _disembarkButton.Visible = false;
+            _passengerLabel.Visible = false;
+            _statusLabel.Visible = true;
+            _statusLabel.Text = garrisonedRoofCount >= garrisonedCount
+                ? $"Garrisoned on roof ({garrisonedCount}) - U: exit, Y: inside"
+                : $"Garrisoned inside ({garrisonedCount}) - U: exit, Y: roof";
+        }
+        else if (allBoardable && count > 0)
         {
             Visible = true;
             _boardButton.Visible = true;
@@ -880,13 +1007,15 @@ internal sealed partial class ContextActionPanel : PanelContainer
             _disembarkButton.Visible = false;
             _passengerLabel.Visible = false;
             _statusLabel.Visible = true;
-            _statusLabel.Text = TargetingMode == ContextTargetingMode.BoardTransport
-                ? (allInfantry
-                    ? "Click friendly transport to board (Esc to cancel)"
-                    : "Click landed cargo helicopter to drive up ramp (Esc to cancel)")
-                : (allInfantry
-                    ? (count == 1 ? "1 infantry selected" : $"{count} infantry selected")
-                    : "Light cargo vehicle (can load ramp)");
+            _statusLabel.Text = TargetingMode == ContextTargetingMode.EnterBuilding
+                ? "Click a building section to garrison (Esc to cancel)"
+                : TargetingMode == ContextTargetingMode.BoardTransport
+                    ? (allInfantry
+                        ? "Click friendly transport to board (Esc to cancel)"
+                        : "Click landed cargo helicopter to drive up ramp (Esc to cancel)")
+                    : (allInfantry
+                        ? (count == 1 ? "1 infantry selected (RMB building to garrison)" : $"{count} infantry selected (RMB building to garrison)")
+                        : "Light cargo vehicle (can load ramp)");
         }
         else if (hasTransport && count == 1)
         {
