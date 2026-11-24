@@ -897,6 +897,7 @@ public partial class Main : Node3D
         _unitViews.UpdateLod(_cameraRig.Size);
         _contactViews.UpdateLod(_cameraRig.Size);
         _wreckViews.UpdateLod(_cameraRig.Size);
+        _buildingDestructionView?.UpdateLod(_cameraRig.Size);
         _combatEffects = new CombatEffects(_map, _scenarioGeometry);
         _combatEffects.OnBlastImpulse = _cameraRig.AddBlastShake;
         AddChild(_combatEffects);
@@ -998,6 +999,7 @@ public partial class Main : Node3D
         _unitViews.UpdateLod(_cameraRig.Size);
         _contactViews.UpdateLod(_cameraRig.Size);
         _wreckViews.UpdateLod(_cameraRig.Size);
+        _buildingDestructionView?.UpdateLod(_cameraRig.Size);
         UpdateViews();
 
         if (activeSettings.CaptureViewsDir is not null)
@@ -1186,7 +1188,10 @@ public partial class Main : Node3D
                         scenarioGeometry,
                         scenarioGeometry.DestructibleBuildings,
                         OnObservedStructureHeightChanged);
-                    _buildingDestructionView.UpdateLod(_cameraRig.Size);
+                    if (_cameraRig is not null)
+                    {
+                        _buildingDestructionView.UpdateLod(_cameraRig.Size);
+                    }
                     SyncClientLosOverrides();
                 }
                 SetupStructures(scenarioGeometry);
@@ -4975,6 +4980,7 @@ public partial class Main : Node3D
         _unitViews.UpdateLod(_cameraRig.Size);
         _contactViews.UpdateLod(_cameraRig.Size);
         _wreckViews.UpdateLod(_cameraRig.Size);
+        _buildingDestructionView?.UpdateLod(_cameraRig.Size);
         UpdateViews();
 
         if (_session.Replica.OwnUnits.Length > 0)
@@ -5650,6 +5656,7 @@ public partial class Main : Node3D
         _unitViews.UpdateLod(_cameraRig.Size);
         _contactViews.UpdateLod(_cameraRig.Size);
         _wreckViews.UpdateLod(_cameraRig.Size);
+        _buildingDestructionView?.UpdateLod(_cameraRig.Size);
         UpdateViews();
         _minimap?.UpdateMinimap(0.016);
     }
