@@ -16,6 +16,8 @@ public sealed class LineOfSightContext
     internal int[]? ClearingsBuffer;
     internal SmokeVolume[]? SmokeVolumes;
     internal int SmokeVolumeCount;
+    internal float[]? StructureMaxYOverrides;
+    internal int StructureMaxYOverrideCount;
 
     public ReadOnlySpan<SmokeVolume> ActiveSmoke =>
         SmokeVolumes is not null && SmokeVolumeCount > 0
@@ -26,6 +28,26 @@ public sealed class LineOfSightContext
     {
         SmokeVolumes = volumes;
         SmokeVolumeCount = volumes is null || count <= 0 ? 0 : Math.Min(count, volumes.Length);
+    }
+
+    public void SetStructureMaxYOverrides(float[]? overrides, int count)
+    {
+        StructureMaxYOverrides = overrides;
+        StructureMaxYOverrideCount = overrides is null || count <= 0 ? 0 : Math.Min(count, overrides.Length);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    internal float GetEffectiveStructureMaxY(int structureIndex, float defaultMaxY)
+    {
+        if (StructureMaxYOverrides is not null && (uint)structureIndex < (uint)StructureMaxYOverrideCount)
+        {
+            float ov = StructureMaxYOverrides[structureIndex];
+            if (!float.IsNaN(ov))
+            {
+                return ov;
+            }
+        }
+        return defaultMaxY;
     }
 
     public LineOfSightContext(int initialCapacity = 64)

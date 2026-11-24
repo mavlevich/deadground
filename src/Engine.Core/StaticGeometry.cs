@@ -348,6 +348,20 @@ public sealed class StaticGeometry
     public bool TryGetBridge(StructureId id, out BridgeStructure bridge) =>
         TryGetBridge((uint)id.Value, out bridge);
 
+    public bool TryGetStructureIndex(StructureId id, out int index)
+    {
+        for (int i = 0; i < _structures.Length; i++)
+        {
+            if (_structures[i].Id == id)
+            {
+                index = i;
+                return true;
+            }
+        }
+        index = -1;
+        return false;
+    }
+
     public float GetSurfaceHeight(Vector2 position, uint supportSurface = 0)
     {
         if (supportSurface > 0 && TryGetBridge(supportSurface, out BridgeStructure bridge))
@@ -404,11 +418,11 @@ public sealed class StaticGeometry
                 blockedByTerrain = true;
                 return false;
             }
-            return _structures.Length == 0 || !TryGetContainingStructure(start, out _);
+            return _structures.Length == 0 || !TryGetContainingStructure(start, context, out _);
         }
 
 
-        if (TryGetContainingStructure(start, out _))
+        if (TryGetContainingStructure(start, context, out _))
             return false;
 
         if (_structures.Length > 0 && TryTraceAnyStructure(start, delta, totalDistance, context))
@@ -489,10 +503,10 @@ public sealed class StaticGeometry
                 blockedByTerrain = true;
                 return false;
             }
-            return _structures.Length == 0 || !TryGetContainingStructure(start, out _);
+            return _structures.Length == 0 || !TryGetContainingStructure(start, context, out _);
         }
 
-        if (TryGetContainingStructure(start, out _))
+        if (TryGetContainingStructure(start, context, out _))
             return false;
 
         if (_structures.Length > 0 && TryTraceAnyStructure(start, delta, totalDistance, context))
@@ -557,7 +571,7 @@ public sealed class StaticGeometry
         int visitedStructureCells = 0;
         int testedStructures = 0;
 
-        if (TryQueryPrologue(start, end, out Vector3 delta, out float totalDistance,
+        if (TryQueryPrologue(start, end, context, out Vector3 delta, out float totalDistance,
             out LineOfSightResult immediateResult, out float closestT, out ObstructionKind closestKind, ref visitedTerrainCells))
         {
             diagnostics = new LineOfSightDiagnostics(0, 0, 0);
@@ -669,7 +683,7 @@ public sealed class StaticGeometry
         int visitedStructureCells = 0;
         int testedStructures = 0;
 
-        if (TryQueryPrologue(start, end, out Vector3 delta, out float totalDistance,
+        if (TryQueryPrologue(start, end, context, out Vector3 delta, out float totalDistance,
             out LineOfSightResult immediateResult, out float closestT, out ObstructionKind closestKind, ref visitedTerrainCells))
         {
             diagnostics = new LineOfSightDiagnostics(0, 0, 0);
@@ -730,7 +744,7 @@ public sealed class StaticGeometry
     internal LineOfSightResult CheckLineOfSightBruteForce(Vector3 start, Vector3 end)
     {
         int dummy = 0;
-        if (TryQueryPrologue(start, end, out Vector3 delta, out float totalDistance,
+        if (TryQueryPrologue(start, end, null, out Vector3 delta, out float totalDistance,
             out LineOfSightResult immediateResult, out float closestT, out ObstructionKind closestKind, ref dummy))
         {
             return immediateResult;
@@ -959,6 +973,7 @@ public sealed class StaticGeometry
     private bool TryQueryPrologue(
         Vector3 start,
         Vector3 end,
+        LineOfSightContext? context,
         out Vector3 delta,
         out float totalDistance,
         out LineOfSightResult immediateResult,
@@ -979,7 +994,7 @@ public sealed class StaticGeometry
 
         if (totalDistance < 1e-7f)
         {
-            immediateResult = EvaluateCoincidentPoint(start);
+            immediateResult = EvaluateCoincidentPoint(start, context);
             return true;
         }
 
@@ -989,7 +1004,7 @@ public sealed class StaticGeometry
             return true;
         }
 
-        if (TryGetContainingStructure(start, out StructureId insideStructId))
+        if (TryGetContainingStructure(start, context, out StructureId insideStructId))
         {
             immediateResult = LineOfSightResult.BlockedByStructure(insideStructId, start, 0, 0);
             return true;
@@ -1005,12 +1020,12 @@ public sealed class StaticGeometry
         return false;
     }
 
-    private LineOfSightResult EvaluateCoincidentPoint(Vector3 point)
+    private LineOfSightResult EvaluateCoincidentPoint(Vector3 point, LineOfSightContext? context)
     {
         if (IsInsideTerrain(point))
             return LineOfSightResult.BlockedByTerrain(point, 0, 0);
 
-        if (TryGetContainingStructure(point, out StructureId structId))
+        if (TryGetContainingStructure(point, context, out StructureId structId))
             return LineOfSightResult.BlockedByStructure(structId, point, 0, 0);
 
         return LineOfSightResult.Clear(point, 0);
@@ -1021,7 +1036,7 @@ public sealed class StaticGeometry
         HeightMap.Contains(new Vector2(point.X, point.Z)) &&
         point.Y < HeightMap.GetHeight(point.X, point.Z) - GroundTolerance;
 
-    private bool TryGetContainingStructure(Vector3 point, out StructureId structureId)
+    private bool TryGetContainingStructure(Vector3 point, LineOfSightContext? context, out StructureId structureId)
     {
         structureId = default;
         if (point.X < 0 || point.X > HeightMap.Width || point.Z < 0 || point.Z > HeightMap.Depth)
@@ -1039,8 +1054,13 @@ public sealed class StaticGeometry
 
         for (int i = startIdx; i < endIdx; i++)
         {
-            OpaqueStructure s = _structures[_structureIndices[i]];
-            if (s.ContainsInterior(point, VolumeEpsilon))
+            int sIdx = _structureIndices[i];
+            OpaqueStructure s = _structures[sIdx];
+            float maxY = context is not null ? context.GetEffectiveStructureMaxY(sIdx, s.MaxY) : s.MaxY;
+            if (maxY > s.MinY + VolumeEpsilon &&
+                point.X > s.MinX + VolumeEpsilon && point.X < s.MaxX - VolumeEpsilon &&
+                point.Y > s.MinY + VolumeEpsilon && point.Y < maxY - VolumeEpsilon &&
+                point.Z > s.MinZ + VolumeEpsilon && point.Z < s.MaxZ - VolumeEpsilon)
             {
                 if (!found || s.Id.Value < bestId.Value)
                 {
@@ -1593,8 +1613,9 @@ public sealed class StaticGeometry
             for (int i = 0; i < _structures.Length; i++)
             {
                 OpaqueStructure s = _structures[i];
+                float maxY = context is not null ? context.GetEffectiveStructureMaxY(i, s.MaxY) : s.MaxY;
                 testedStructures++;
-                if (TryIntersectBox(s, start, delta, totalDistance, out float tNear))
+                if (TryIntersectBox(s, maxY, start, delta, totalDistance, out float tNear))
                 {
                     if (tNear <= maxT + VolumeEpsilon && IsBetterHit(tNear, s.Id, hitT, hitStructureId, foundHit))
                     {
@@ -1635,7 +1656,8 @@ public sealed class StaticGeometry
 
                 testedStructures++;
                 OpaqueStructure s = _structures[sIdx];
-                if (TryIntersectBox(s, start, delta, totalDistance, out float tNear))
+                float maxY = context is not null ? context.GetEffectiveStructureMaxY(sIdx, s.MaxY) : s.MaxY;
+                if (TryIntersectBox(s, maxY, start, delta, totalDistance, out float tNear))
                 {
                     if (IsBetterHit(tNear, s.Id, hitT, hitStructureId, foundHit))
                     {
@@ -1700,7 +1722,8 @@ public sealed class StaticGeometry
 
                 testedStructures++;
                 OpaqueStructure s = _structures[sIdx];
-                if (TryIntersectBox(s, start, delta, totalDistance, out float tNear))
+                float maxY = context is not null ? context.GetEffectiveStructureMaxY(sIdx, s.MaxY) : s.MaxY;
+                if (TryIntersectBox(s, maxY, start, delta, totalDistance, out float tNear))
                 {
                     if (IsBetterHit(tNear, s.Id, hitT, hitStructureId, foundHit))
                     {
@@ -1751,7 +1774,9 @@ public sealed class StaticGeometry
         {
             for (int i = 0; i < _structures.Length; i++)
             {
-                if (TryIntersectBox(_structures[i], start, delta, totalDistance, out _))
+                OpaqueStructure s = _structures[i];
+                float maxY = context is not null ? context.GetEffectiveStructureMaxY(i, s.MaxY) : s.MaxY;
+                if (TryIntersectBox(s, maxY, start, delta, totalDistance, out _))
                     return true;
             }
             return false;
@@ -1782,7 +1807,8 @@ public sealed class StaticGeometry
                 mailbox[sIdx] = queryId;
 
                 OpaqueStructure s = _structures[sIdx];
-                if (TryIntersectBox(s, start, delta, totalDistance, out _))
+                float maxY = context is not null ? context.GetEffectiveStructureMaxY(sIdx, s.MaxY) : s.MaxY;
+                if (TryIntersectBox(s, maxY, start, delta, totalDistance, out _))
                     return true;
             }
             return false;
@@ -1832,7 +1858,8 @@ public sealed class StaticGeometry
                 mailbox[sIdx] = queryId;
 
                 OpaqueStructure s = _structures[sIdx];
-                if (TryIntersectBox(s, start, delta, totalDistance, out _))
+                float maxY = context is not null ? context.GetEffectiveStructureMaxY(sIdx, s.MaxY) : s.MaxY;
+                if (TryIntersectBox(s, maxY, start, delta, totalDistance, out _))
                     return true;
             }
 
@@ -1859,9 +1886,14 @@ public sealed class StaticGeometry
         return false;
     }
 
-    private static bool TryIntersectBox(OpaqueStructure structure, Vector3 start, Vector3 delta, float totalDistance, out float hitT)
+    private static bool TryIntersectBox(OpaqueStructure structure, Vector3 start, Vector3 delta, float totalDistance, out float hitT) =>
+        TryIntersectBox(structure, structure.MaxY, start, delta, totalDistance, out hitT);
+
+    private static bool TryIntersectBox(OpaqueStructure structure, float maxY, Vector3 start, Vector3 delta, float totalDistance, out float hitT)
     {
         hitT = 1.0f;
+        if (maxY <= structure.MinY + VolumeEpsilon)
+            return false;
         float tNear = 0.0f;
         float tFar = 1.0f;
 
@@ -1886,7 +1918,7 @@ public sealed class StaticGeometry
         {
             float invDy = 1.0f / delta.Y;
             float t1 = (structure.MinY - start.Y) * invDy;
-            float t2 = (structure.MaxY - start.Y) * invDy;
+            float t2 = (maxY - start.Y) * invDy;
             if (t1 > t2) (t1, t2) = (t2, t1);
             if (t1 > tNear) tNear = t1;
             if (t2 < tFar) tFar = t2;
@@ -1894,7 +1926,7 @@ public sealed class StaticGeometry
         }
         else
         {
-            if (start.Y <= structure.MinY || start.Y >= structure.MaxY) return false;
+            if (start.Y <= structure.MinY || start.Y >= maxY) return false;
         }
 
         // Z slab
