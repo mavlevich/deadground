@@ -112,6 +112,7 @@ public struct DestructibleStructureState
     public byte FloorsStanding;
     public byte FloorBreachMask;
     public ulong FloorIntegrityPacked;
+    public SmokeCloudId DustCloudId;
     public int LastDamagedTick;
     public int CollapsedTick;
 

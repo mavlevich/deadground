@@ -107,14 +107,82 @@ public sealed class WorldState : IDisposable
         {
             _smokeClouds[_smokeCloudCount++] = cloud;
         }
+        else if (owner == 0)
+        {
+            // Neutral collapse dust only recycles older neutral dust and never evicts active player smoke
+            int evictIndex = -1;
+            for (int i = 0; i < _smokeCloudCount; i++)
+            {
+                if (_smokeClouds[i].Owner == 0)
+                {
+                    evictIndex = i;
+                    break;
+                }
+            }
+            if (evictIndex < 0)
+            {
+                return default;
+            }
+            int remaining = _smokeCloudCount - evictIndex - 1;
+            if (remaining > 0)
+            {
+                Array.Copy(_smokeClouds, evictIndex + 1, _smokeClouds, evictIndex, remaining);
+            }
+            _smokeClouds[^1] = cloud;
+        }
         else
         {
-            // Evict oldest cloud to stay bounded
-            Array.Copy(_smokeClouds, 1, _smokeClouds, 0, _smokeClouds.Length - 1);
+            // Player smoke prefers evicting oldest neutral dust before evicting older player smoke
+            int evictIndex = 0;
+            for (int i = 0; i < _smokeCloudCount; i++)
+            {
+                if (_smokeClouds[i].Owner == 0)
+                {
+                    evictIndex = i;
+                    break;
+                }
+            }
+            int remaining = _smokeCloudCount - evictIndex - 1;
+            if (remaining > 0)
+            {
+                Array.Copy(_smokeClouds, evictIndex + 1, _smokeClouds, evictIndex, remaining);
+            }
             _smokeClouds[^1] = cloud;
         }
 
         return cloud;
+    }
+
+    public bool TryRefreshSmokeCloud(
+        SmokeCloudId id,
+        float radius,
+        float height,
+        int createdTick,
+        int expiresTick,
+        ushort bloomTicks,
+        ushort fadeTicks)
+    {
+        if (id.Value == 0)
+            return false;
+
+        for (int i = 0; i < _smokeCloudCount; i++)
+        {
+            if (_smokeClouds[i].Id == id)
+            {
+                SmokeCloudState existing = _smokeClouds[i];
+                _smokeClouds[i] = existing with
+                {
+                    Radius = MathF.Max(existing.Radius, radius),
+                    Height = MathF.Max(existing.Height, height),
+                    CreatedTick = createdTick,
+                    ExpiresTick = Math.Max(existing.ExpiresTick, expiresTick),
+                    BloomTicks = bloomTicks,
+                    FadeTicks = fadeTicks
+                };
+                return true;
+            }
+        }
+        return false;
     }
 
     public int RemoveExpiredSmokeClouds(int tick)
@@ -273,12 +341,6 @@ public sealed class WorldState : IDisposable
 
     public ref DestructibleStructureState GetDestructibleStructureRef(int index) =>
         ref _destructibleStructures[index];
-
-    public void ClearDestructibleStructures()
-    {
-        _destructibleStructureCount = 0;
-        _destructibleStructureIndices.Clear();
-    }
 
     public int CopyGuidedMissileObservations(int currentTick, Span<GuidedMissileObservation> destination)
     {

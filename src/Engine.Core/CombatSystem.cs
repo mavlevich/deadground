@@ -38,7 +38,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
     private FlightSystem? _flight;
     private BuildingDestructionSystem? _buildingDestruction;
     private readonly LineOfSightContext _losContext;
-    private readonly StructureSplashResult[] _splashStructureResults = new StructureSplashResult[32];
+    private readonly StructureSplashResult[] _splashStructureResults = new StructureSplashResult[WorldState.MaxDestructibleStructures];
     private DeterministicRandom? _combatRandom;
     private int _currentTick;
 
@@ -663,6 +663,9 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         if (world.TryGetCombatState(command.Unit, out WorldState.CombatState cs))
         {
             cs.HasAttackOrder = true;
+            cs.HasAttackGroundOrder = false;
+            cs.AttackGroundTarget = default;
+            cs.AttackGroundStructureId = default;
             cs.TargetContactId = command.Target;
             cs.TargetEntityId = targetEntityId;
             cs.Status = hasClearShot ? AttackExecutionStatus.Aiming : (inRange ? AttackExecutionStatus.Obstructed : AttackExecutionStatus.OutOfRange);
@@ -699,18 +702,33 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
             profile.Weapon.AirTargetsOnly)
             return false;
 
+        WeaponDefinition weapon = profile.Weapon;
         Vector3 targetPoint = command.TargetPoint;
         StructureId targetStructure = command.TargetStructure;
         if (targetStructure != default)
         {
+            // Weapons without structural damage cannot be ordered to demolish buildings
+            if (weapon.StructuralDamage <= 0)
+                return false;
+
             if (world.TryGetDestructibleStructure(targetStructure, out DestructibleStructureState st))
             {
-                if (st.FloorsStanding == 0)
-                    return false;
-                float maxY = st.CurrentMaxY;
+                // Respect fog of war: only reject or clamp by what this player actually knows
+                float knownMaxY = st.Max.Y;
+                if (_detection.TryGetKnownStructure(player, targetStructure, out StructureObservation known))
+                {
+                    if (known.FloorsStanding == 0)
+                        return false;
+                    knownMaxY = StructureDestructionMath.ComputeCurrentHeight(
+                        st.Min.Y,
+                        st.Max.Y,
+                        in st.Profile,
+                        known.FloorsStanding);
+                }
+
                 targetPoint = new Vector3(
                     Math.Clamp(targetPoint.X, st.Min.X, st.Max.X),
-                    Math.Clamp(targetPoint.Y, st.Min.Y + 0.25f, MathF.Max(st.Min.Y + 0.25f, maxY - 0.1f)),
+                    Math.Clamp(targetPoint.Y, st.Min.Y + 0.25f, MathF.Max(st.Min.Y + 0.25f, knownMaxY - 0.1f)),
                     Math.Clamp(targetPoint.Z, st.Min.Z, st.Max.Z));
                 target2D = new Vector2(targetPoint.X, targetPoint.Z);
             }
@@ -721,7 +739,6 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         }
 
         SyncSmokeContext();
-        WeaponDefinition weapon = profile.Weapon;
         float dist = Vector2.Distance(attacker.Position, target2D);
         bool inRange = dist <= weapon.Range + RangeToleranceMargin;
         bool hasClearShot = inRange && HasLineOfFireToPoint(attacker, weapon, targetPoint, targetStructure, world, out _, out _);
@@ -2118,11 +2135,13 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                 RecordStructureImpactEvent(
                     tick,
                     projectile.PresentationId,
+                    default,
                     projectile.ShooterOwner,
                     sr.Id,
                     projectile.Origin,
                     sr.ImpactPoint,
-                    sr.FloorsLost > 0,
+                    sr.FloorsLost > 0 && !sr.SectionCollapsed,
+                    sr.SectionCollapsed,
                     world);
             }
         }
@@ -2580,11 +2599,12 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         StructureId targetStructure = cs.AttackGroundStructureId;
         Vector3 targetPoint = cs.AttackGroundTarget;
 
-        // If targeting a destructible structure that has already collapsed completely, clear the order
+        // Respect fog of war: only auto-clear or adjust aim height based on what the attacker's side knows
         if (targetStructure != default &&
-            world.TryGetDestructibleStructure(targetStructure, out DestructibleStructureState st))
+            world.TryGetDestructibleStructure(targetStructure, out DestructibleStructureState st) &&
+            _detection.TryGetKnownStructure(attacker.Owner, targetStructure, out StructureObservation known))
         {
-            if (st.FloorsStanding == 0)
+            if (known.FloorsStanding == 0)
             {
                 cs.HasAttackGroundOrder = false;
                 cs.AttackGroundTarget = default;
@@ -2596,13 +2616,17 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                 return;
             }
 
-            // Clamp aim height to currently standing floors if upper floors collapsed
-            float standingMaxY = st.CurrentMaxY;
-            if (targetPoint.Y > standingMaxY - 0.1f)
+            // Clamp aim height to known standing floors if upper floors collapsed
+            float knownMaxY = StructureDestructionMath.ComputeCurrentHeight(
+                st.Min.Y,
+                st.Max.Y,
+                in st.Profile,
+                known.FloorsStanding);
+            if (targetPoint.Y > knownMaxY - 0.1f)
             {
                 targetPoint = new Vector3(
                     targetPoint.X,
-                    MathF.Max(st.Min.Y + 0.25f, standingMaxY - 0.35f),
+                    MathF.Max(st.Min.Y + 0.25f, knownMaxY - 0.35f),
                     targetPoint.Z);
                 cs.AttackGroundTarget = targetPoint;
             }
@@ -2752,14 +2776,18 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                 RecordStructureImpactEvent(
                     tick,
                     weapon.PresentationId,
+                    attacker.Id,
                     attacker.Owner,
                     targetStructure,
                     muzzlePos,
                     impactPoint,
-                    floorsLost > 0,
+                    floorsLost > 0 && !sectionFullyCollapsed,
+                    sectionFullyCollapsed,
                     world);
 
-                if (sectionFullyCollapsed)
+                if (sectionFullyCollapsed &&
+                    world.TryGetDestructibleStructure(targetStructure, out DestructibleStructureState collapsedSt) &&
+                    _detection.IsStructureObservedBy(attacker.Owner, in collapsedSt, world))
                 {
                     cs.HasAttackGroundOrder = false;
                     cs.AttackGroundTarget = default;
@@ -2768,6 +2796,14 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                 }
             }
         }
+        else if (targetStructure == default)
+        {
+            // Pure ground-point AttackGround fires a single shot and returns the unit to normal auto-fire
+            cs.HasAttackGroundOrder = false;
+            cs.AttackGroundTarget = default;
+            cs.AttackGroundStructureId = default;
+            cs.Status = cs.Ammunition <= 0 ? AttackExecutionStatus.NoAmmo : AttackExecutionStatus.None;
+        }
 
         world.SetCombatState(attacker.Id, cs);
     }
@@ -2775,11 +2811,13 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
     private void RecordStructureImpactEvent(
         int tick,
         ushort presentationId,
+        EntityId shooterId,
         int shooterOwner,
         StructureId structureId,
         Vector3 origin,
         Vector3 impactPoint,
-        bool collapsed,
+        bool isFloorCollapse,
+        bool isFullCollapse,
         WorldState world)
     {
         if (!world.TryGetDestructibleStructure(structureId, out DestructibleStructureState st))
@@ -2787,7 +2825,9 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
 
         uint eventId = _nextEventId++;
         if (_nextEventId == 0) _nextEventId = 1;
-        CombatEventKind kind = collapsed ? CombatEventKind.StructureCollapsed : CombatEventKind.StructureDamaged;
+        CombatEventKind kind = isFullCollapse
+            ? CombatEventKind.StructureCollapsed
+            : (isFloorCollapse ? CombatEventKind.StructureFloorCollapsed : CombatEventKind.StructureDamaged);
 
         for (int p = 1; p <= _maxSides; p++)
         {
@@ -2795,17 +2835,20 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
             if (!_detection.IsStructureObservedBy(p, in st, world))
                 continue;
 
+            // Never leak a hidden artillery or direct-fire shooter's origin to sides that do not observe the shooter.
+            bool shooterVisible = p == shooterOwner ||
+                (shooterId.Value != 0 && _detection.IsEntityObservedBy(p, shooterId));
+            Vector3 safeOrigin = shooterVisible ? origin : impactPoint;
+
             AppendEvent(p, new CombatEventObservation(
                 eventId,
                 tick,
                 kind,
                 presentationId,
-                origin,
+                safeOrigin,
                 impactPoint,
                 default,
-                collapsed ? HitResult.Penetrated : HitResult.None));
+                (isFloorCollapse || isFullCollapse) ? HitResult.Penetrated : HitResult.None));
         }
-
-        _ = shooterOwner;
     }
 }
