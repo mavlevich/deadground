@@ -1666,8 +1666,9 @@ public partial class Main : Node3D
                 {
                     float dist = NumericsVector2.Distance(refLauncherPos, groundPos);
                     bool inRange = dist >= artyWeapon!.MinRange && dist <= artyWeapon.Range;
-                    float radius = artyWeapon.DispersionRadius > 0f ? artyWeapon.DispersionRadius : 55f;
-                    _destination.ShowZoneCircle(_map, groundPos.X, groundPos.Y, radius, inRange);
+                    float radius = artyWeapon.DispersionRadius > 0f ? artyWeapon.DispersionRadius : 45f;
+                    float outerBlastRadius = artyWeapon.SplashRadius > 0f ? radius + artyWeapon.SplashRadius : 0f;
+                    _destination.ShowZoneCircle(_map, groundPos.X, groundPos.Y, radius, inRange, outerBlastRadius);
 
                     string tip;
                     if (dist < artyWeapon.MinRange)
@@ -1690,7 +1691,9 @@ public partial class Main : Node3D
                             out _);
                         float flightSec = flightTicks * Simulation.TickSeconds;
                         int salvoTotal = readyLaunchers * Math.Max(1, artyWeapon.SalvoCount);
-                        tip = $"Barrage: {dist:0}m | Flight ~{flightSec:0.0}s | {salvoTotal} rockets [LMB]";
+                        tip = outerBlastRadius > radius
+                            ? $"Barrage: {dist:0}m | {radius:0}m impact / {outerBlastRadius:0}m blast | ~{flightSec:0.0}s | {salvoTotal} rockets [LMB]"
+                            : $"Barrage: {dist:0}m | Flight ~{flightSec:0.0}s | {salvoTotal} rockets [LMB]";
                     }
 
                     _orderCursorOverlay?.SetCustomTooltip(true, inRange ? DestinationValidity.Valid : DestinationValidity.Blocked, tip);
@@ -3490,17 +3493,35 @@ public partial class Main : Node3D
 
         if (_contactViews is null) return false;
 
-        float nearestContactDistance = 28 * 28;
+        float bestScoreSq = float.MaxValue;
         bool found = false;
         foreach ((ContactId id, ContactView view) in _contactViews.Views)
         {
             if (!view.Root.Visible) continue;
+            bool isAirborne = view.Altitude > 2.0f;
+            float maxPickSq = isAirborne ? (42f * 42f) : (28f * 28f);
+
             Vector3 center = view.Root.Position + Vector3.Up * (1.5f + view.Altitude);
-            if (_camera.IsPositionBehind(center)) continue;
-            float distance = _camera.UnprojectPosition(center).DistanceSquaredTo(mousePos);
-            if (distance < nearestContactDistance)
+            float distSq = float.MaxValue;
+            if (!_camera.IsPositionBehind(center))
             {
-                nearestContactDistance = distance;
+                distSq = _camera.UnprojectPosition(center).DistanceSquaredTo(mousePos);
+            }
+            if (isAirborne)
+            {
+                // Also allow clicking an airborne contact's ground ring/shadow marker
+                Vector3 groundMarker = view.Root.Position + Vector3.Up * 0.5f;
+                if (!_camera.IsPositionBehind(groundMarker))
+                {
+                    float groundDistSq = _camera.UnprojectPosition(groundMarker).DistanceSquaredTo(mousePos);
+                    if (groundDistSq < distSq)
+                        distSq = groundDistSq;
+                }
+            }
+
+            if (distSq < maxPickSq && distSq < bestScoreSq)
+            {
+                bestScoreSq = distSq;
                 targetContact = id;
                 found = true;
             }

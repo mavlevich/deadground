@@ -186,6 +186,7 @@ internal partial class CombatEffects : Node3D
         public Vector3 IncomingDirection;
         public HitResult Result;
         public bool IsMachineGun;
+        public bool IsRifle;
         public float DelayRemaining;
         public bool Active;
     }
@@ -1321,7 +1322,7 @@ void fragment() {
                         }
                         else if (ev.Result == HitResult.Miss)
                         {
-                            TriggerGroundImpactFeedback(target, hitElapsed);
+                            TriggerGroundImpactFeedback(target, hitElapsed, isMachineGun: isMg, isRifle: isRifle);
                         }
                         else
                         {
@@ -1390,7 +1391,7 @@ void fragment() {
                     }
                     else if (ev.Result == HitResult.Miss)
                     {
-                        TriggerGroundImpactFeedback(target, ageSeconds);
+                        TriggerGroundImpactFeedback(target, ageSeconds, isMachineGun: isMg, isRifle: isRifle);
                     }
                     else
                     {
@@ -1724,7 +1725,11 @@ void fragment() {
         }
     }
 
-    internal void TriggerGroundImpactFeedback(Vector3 position, float elapsedOffset = 0f)
+    internal void TriggerGroundImpactFeedback(
+        Vector3 position,
+        float elapsedOffset = 0f,
+        bool isMachineGun = false,
+        bool isRifle = false)
     {
         if (elapsedOffset >= SmokePuffLifetime)
         {
@@ -1734,26 +1739,60 @@ void fragment() {
         SpawnSmokePuff(position, isImpactSmoke: true, elapsedOffset);
         if (elapsedOffset < 0.12f)
         {
-            // Kick up a compact soil clod & dust geyser for missed direct-fire rounds hitting earth
-            int burstIdx = _nextArtilleryBurst;
-            _nextArtilleryBurst = (_nextArtilleryBurst + 1) % MaxArtilleryBursts;
-            GpuParticles3D debris = _artilleryDebris[burstIdx];
-            debris.Position = position + new Vector3(0f, 0.2f, 0f);
-            debris.Scale = Vector3.One * 0.42f;
-            debris.AmountRatio = 0.28f;
-            debris.Preprocess = elapsedOffset;
-            debris.Restart();
+            if (isRifle)
+            {
+                // Small crisp dirt puff for rifle misses
+                GpuParticles3D dust = _blastDust[_nextBlastDust];
+                _nextBlastDust = (_nextBlastDust + 1) % MaxBlastDust;
+                dust.Transform = new Transform3D(Basis.Identity, position + new Vector3(0f, 0.25f, 0f));
+                dust.AmountRatio = 0.18f;
+                dust.Preprocess = elapsedOffset;
+                dust.Restart();
+            }
+            else if (isMachineGun)
+            {
+                // Medium soil kickup for heavy machine gun misses
+                int burstIdx = _nextArtilleryBurst;
+                _nextArtilleryBurst = (_nextArtilleryBurst + 1) % MaxArtilleryBursts;
+                GpuParticles3D debris = _artilleryDebris[burstIdx];
+                debris.Position = position + new Vector3(0f, 0.2f, 0f);
+                debris.Scale = Vector3.One * 0.36f;
+                debris.AmountRatio = 0.24f;
+                debris.Preprocess = elapsedOffset;
+                debris.Restart();
 
-            GpuParticles3D dust = _blastDust[_nextBlastDust];
-            _nextBlastDust = (_nextBlastDust + 1) % MaxBlastDust;
-            dust.Transform = new Transform3D(Basis.Identity, position + new Vector3(0f, 0.4f, 0f));
-            dust.AmountRatio = 0.42f;
-            dust.Preprocess = elapsedOffset;
-            dust.Restart();
+                GpuParticles3D dust = _blastDust[_nextBlastDust];
+                _nextBlastDust = (_nextBlastDust + 1) % MaxBlastDust;
+                dust.Transform = new Transform3D(Basis.Identity, position + new Vector3(0f, 0.35f, 0f));
+                dust.AmountRatio = 0.36f;
+                dust.Preprocess = elapsedOffset;
+                dust.Restart();
+            }
+            else
+            {
+                // High-energy cannon shell ground miss: dramatic soil geyser, debris clods, and impact flash
+                int burstIdx = _nextArtilleryBurst;
+                _nextArtilleryBurst = (_nextArtilleryBurst + 1) % MaxArtilleryBursts;
+                GpuParticles3D debris = _artilleryDebris[burstIdx];
+                debris.Position = position + new Vector3(0f, 0.25f, 0f);
+                debris.Scale = Vector3.One * 0.72f;
+                debris.AmountRatio = 0.55f;
+                debris.Preprocess = elapsedOffset;
+                debris.Restart();
+
+                GpuParticles3D dust = _blastDust[_nextBlastDust];
+                _nextBlastDust = (_nextBlastDust + 1) % MaxBlastDust;
+                dust.Transform = new Transform3D(Basis.Identity, position + new Vector3(0f, 0.45f, 0f));
+                dust.AmountRatio = 0.72f;
+                dust.Preprocess = elapsedOffset;
+                dust.Restart();
+
+                SpawnFlashLight(position + new Vector3(0f, 0.9f, 0f), energy: 4.5f, range: 18f, lifetime: 0.14f);
+            }
         }
         if (elapsedOffset < 0.1f)
         {
-            PlaySound(_groundImpactAudio, position, SoundPriority.TookFire);
+            PlaySound(_groundImpactAudio, position, isRifle ? SoundPriority.TookFire : SoundPriority.MachineGunBurst);
         }
     }
 
@@ -1955,7 +1994,8 @@ void fragment() {
         pi.Target = target;
         pi.IncomingDirection = incomingDirection;
         pi.Result = result;
-        pi.IsMachineGun = isMachineGun || isRifle;
+        pi.IsMachineGun = isMachineGun;
+        pi.IsRifle = isRifle;
         pi.DelayRemaining = delay;
     }
 
@@ -2698,11 +2738,11 @@ void fragment() {
                 pi.Active = false;
                 if (pi.Result == HitResult.Deflected)
                 {
-                    TriggerRicochetFeedback(pi.Target, pi.IncomingDirection, overshoot, isMachineGun: pi.IsMachineGun);
+                    TriggerRicochetFeedback(pi.Target, pi.IncomingDirection, overshoot, isMachineGun: pi.IsMachineGun || pi.IsRifle);
                 }
                 else if (pi.Result == HitResult.Miss)
                 {
-                    TriggerGroundImpactFeedback(pi.Target, overshoot);
+                    TriggerGroundImpactFeedback(pi.Target, overshoot, isMachineGun: pi.IsMachineGun, isRifle: pi.IsRifle);
                 }
                 else
                 {

@@ -214,7 +214,6 @@ public sealed class TankBattleScenarioTests
                     if (ev.Kind != CombatEventKind.ShotFired || ev.ShooterUnitId.Value == 0 || fired[player]) continue;
                     Assert.True(sim.World.TryGetUnit(ev.ShooterUnitId, out UnitState shooter));
                     Assert.Equal(player, shooter.Owner);
-                    Assert.False(shooter.Moving);
                     float offset = MathF.Abs(shooter.Position.X - TankBattleScenario.Center.X);
                     Assert.True(offset > TankBattleScenario.FiringOffset + TankBattleScenario.RowSpacing + 10f,
                         $"Side {player} waited until the scripted end of its advance before firing at tick {sim.Tick}.");

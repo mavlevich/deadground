@@ -104,9 +104,11 @@ public sealed record WeaponDefinition(
     float IrCountermeasureResistance = 0f,
     int MissileMaxFlightTicks = 160,
     int MissileMotorBurnTicks = 50,
-    int StructuralDamage = 0)
+    int StructuralDamage = 0,
+    float MovingAccuracyMultiplier = 0f)
 {
     public bool IsGuidedMissile => GuidanceKind != MissileGuidanceKind.None;
+    public bool CanFireOnMove => MovingAccuracyMultiplier > 0f && !IsIndirectFire && !IsGuidedMissile;
     public float Dispersion => DispersionMils;
 
     public float GetAccuracyAt(float distance)

@@ -172,10 +172,10 @@ public sealed class UrbanDestructionScenarioTests
         Assert.True(sim.TryEnqueue(1, new FireMissionCommand(seq++, 0, grad1, new Vector2(280f, 460f))));
         Assert.True(sim.TryEnqueue(1, new FireMissionCommand(seq++, 0, grad2, new Vector2(660f, 460f))));
 
-        // Warmup 30 ticks
-        for (int i = 0; i < 30; i++) sim.Step();
+        // Warmup 90 ticks so tanks and Grad rockets begin breaching durable 760 HP sections
+        for (int i = 0; i < 90; i++) sim.Step();
 
-        const int measuredTicks = 120;
+        const int measuredTicks = 160;
         long maxAlloc = 0;
         PlayerKnowledge p1 = new(1);
         PlayerKnowledge p2 = new(2);
@@ -193,5 +193,55 @@ public sealed class UrbanDestructionScenarioTests
         Assert.Equal(120, world.DestructibleStructureCount);
         Assert.True(sim.BuildingDestruction!.TotalFloorsCollapsed > 0, "Expected collapsing sections during 30-building stress test.");
         Assert.Equal(0, maxAlloc);
+    }
+
+    [Fact]
+    public void RubbleOvershootMisses_ClearCollapsedRubbleAndImpactGroundBehindTarget()
+    {
+        StaticGeometry geometry = UrbanDestructionPlaygroundScenario.CreateStaticGeometry();
+        using Simulation sim = UrbanDestructionPlaygroundScenario.CreateSimulation(geometry, matchSeed: 46411UL);
+
+        // Collapse central section 102 and 103 to rubble (1.65 m above BaseHeight 2.0 m -> 3.65 m)
+        for (int sid = 102; sid <= 103; sid++)
+        {
+            Assert.True(sim.World.TryGetDestructibleStructureIndex(new StructureId(sid), out int idx));
+            ref DestructibleStructureState st = ref sim.World.GetDestructibleStructureRef(idx);
+            st.FloorsStanding = 0;
+            st.FloorBreachMask = 0;
+            st.Health = 0;
+        }
+        sim.BuildingDestruction!.SyncOverridesFromWorld(sim.World);
+        sim.Step();
+
+        UnitCatalog catalog = ColdWarContent.LoadCatalog();
+        OpsCombatCatalog combatCatalog = new(catalog);
+        Assert.True(combatCatalog.TryGetProfile(catalog.RequireDefinitionIndex("t62"), out UnitCombatProfile t62Profile));
+
+        Vector2 attackerPos = UrbanDestructionPlaygroundScenario.SovietT62WestPos;
+        Vector2 targetPos = UrbanDestructionPlaygroundScenario.UsM60WestPos;
+        Vector3 muzzlePos = new(attackerPos.X, UrbanDestructionPlaygroundScenario.BaseHeight + t62Profile.Weapon!.MuzzleHeight, attackerPos.Y);
+        Vector3 aimedTurret = new(targetPos.X, UrbanDestructionPlaygroundScenario.BaseHeight + 2.9f, targetPos.Y);
+
+        int impactsBeyondTarget = 0;
+        for (int i = 0; i < 40; i++)
+        {
+            Vector3 missPt = sim.Combat!.CalculateMissImpactPoint(
+                muzzlePos,
+                attackerPos,
+                targetPos,
+                targetRadius: 1.8f,
+                t62Profile.Weapon,
+                targetSupportSurface: 0,
+                targetAltitude: 0f,
+                aimedHitPoint: aimedTurret,
+                isAttackerMoving: false);
+            if (missPt.Z > targetPos.Y + 1.0f)
+            {
+                impactsBeyondTarget++;
+            }
+        }
+
+        Assert.True(impactsBeyondTarget >= 12,
+            $"Expected long/wide misses aimed over collapsed rubble to sail past and hit ground behind target, got {impactsBeyondTarget}/40.");
     }
 }

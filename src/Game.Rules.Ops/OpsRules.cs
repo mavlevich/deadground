@@ -208,7 +208,8 @@ public sealed record WeaponData(
     float IrCountermeasureResistance = 0.25f,
     int MissileMaxFlightTicks = 320,
     int MissileMotorBurnTicks = 150,
-    int StructuralDamage = 0);
+    int StructuralDamage = 0,
+    float MovingAccuracyMultiplier = 0f);
 
 public sealed record FlareData(
     int Charges,
@@ -698,7 +699,8 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
                     w.IrCountermeasureResistance,
                     w.MissileMaxFlightTicks,
                     w.MissileMotorBurnTicks,
-                    w.StructuralDamage);
+                    w.StructuralDamage,
+                    w.MovingAccuracyMultiplier);
             }
         }
 
@@ -1140,6 +1142,8 @@ public static class PrototypeScenario
                     throw new InvalidOperationException("Indirect-fire weapon requires positive splash_radius and dispersion_radius.");
                 if (weapon.StructuralDamage < 0)
                     throw new InvalidOperationException($"Weapon '{weapon.Id}' has negative structural_damage.");
+                if (!float.IsFinite(weapon.MovingAccuracyMultiplier) || weapon.MovingAccuracyMultiplier < 0f || weapon.MovingAccuracyMultiplier > 1f)
+                    throw new InvalidOperationException($"Weapon '{weapon.Id}' has invalid moving_accuracy_multiplier.");
                 if (!string.IsNullOrWhiteSpace(weapon.GuidanceKind))
                 {
                     _ = OpsCombatCatalog.ParseGuidanceKind(weapon.GuidanceKind);

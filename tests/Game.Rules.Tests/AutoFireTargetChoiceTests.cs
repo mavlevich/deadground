@@ -640,4 +640,174 @@ public sealed class AutoFireTargetChoiceTests
             Assert.True(combat.HasEligibleAutoFireTarget(brdmUnit, brdmProfile.Weapon!, brdmCs, tracker, world));
         }
     }
+
+    [Fact]
+    public void TankEngagingDistantTank_SwitchesToCloseFlankingTank()
+    {
+        var (sim, world, rules, catalog) = CreateTestContext();
+        using (sim)
+        {
+            UnitDefinition t62Def = catalog.RequireDefinition("t62");
+            ushort t62Idx = catalog.RequireDefinitionIndex("t62");
+            UnitDefinition m60Def = catalog.RequireDefinition("m60a1");
+            ushort m60Idx = catalog.RequireDefinitionIndex("m60a1");
+
+            EntityId shooter = world.CreateUnit(1, t62Idx, new Vector2(200f, 500f), t62Def.Speed, t62Def.MaxHealth, 40, initialTurretYaw: -MathF.PI / 2f);
+            world.SetFireStance(shooter, FireStance.HoldFire);
+
+            // Distant enemy tank near max range (1450m east)
+            EntityId distantTank = world.CreateUnit(2, m60Idx, new Vector2(1650f, 500f), m60Def.Speed, 2000, 0);
+            world.SetFireStance(distantTank, FireStance.HoldFire);
+
+            for (int i = 0; i < 4; i++) sim.Step();
+            DetectionSystem detection = rules.FindSystem<DetectionSystem>()!;
+            Assert.True(detection.TryGetContactByEntity(1, distantTank, out ContactObservation cDistant));
+
+            world.SetFireStance(shooter, FireStance.FireAtWill);
+            sim.Step();
+
+            Assert.True(world.TryGetCombatState(shooter, out WorldState.CombatState cs));
+            Assert.Equal(cDistant.Id, cs.TargetContactId);
+
+            // Close flanking enemy tank appears 140m north
+            EntityId closeTank = world.CreateUnit(2, m60Idx, new Vector2(200f, 640f), m60Def.Speed, 2000, 0);
+            world.SetFireStance(closeTank, FireStance.HoldFire);
+            for (int i = 0; i < 4; i++) sim.Step();
+            Assert.True(detection.TryGetContactByEntity(1, closeTank, out ContactObservation cClose));
+
+            world.TryGetCombatState(shooter, out cs);
+            cs.ReloadTicksRemaining = 0;
+            cs.HasSwitchedTargetThisReload = false;
+            world.SetCombatState(shooter, cs);
+
+            sim.Step();
+
+            Assert.True(world.TryGetCombatState(shooter, out cs));
+            Assert.Equal(cClose.Id, cs.TargetContactId);
+            Assert.Equal(closeTank, cs.TargetEntityId);
+        }
+    }
+
+    [Fact]
+    public void ThreeStrela10s_DistributeAutoFireAcrossThreeHelicopters_WhileManualFocusOverrides()
+    {
+        var (sim, world, rules, catalog) = CreateTestContext();
+        using (sim)
+        {
+            UnitDefinition strelaDef = catalog.RequireDefinition("strela10");
+            ushort strelaIdx = catalog.RequireDefinitionIndex("strela10");
+            UnitDefinition heliDef = catalog.RequireDefinition("ch47d");
+            ushort heliIdx = catalog.RequireDefinitionIndex("ch47d");
+
+            // Spawn 3 Soviet Strela-10 SAM vehicles on a line facing north
+            EntityId aa1 = world.CreateUnit(1, strelaIdx, new Vector2(460f, 300f), strelaDef.Speed, strelaDef.MaxHealth, 8, initialTurretYaw: MathF.PI);
+            EntityId aa2 = world.CreateUnit(1, strelaIdx, new Vector2(500f, 300f), strelaDef.Speed, strelaDef.MaxHealth, 8, initialTurretYaw: MathF.PI);
+            EntityId aa3 = world.CreateUnit(1, strelaIdx, new Vector2(540f, 300f), strelaDef.Speed, strelaDef.MaxHealth, 8, initialTurretYaw: MathF.PI);
+            world.SetFireStance(aa1, FireStance.HoldFire);
+            world.SetFireStance(aa2, FireStance.HoldFire);
+            world.SetFireStance(aa3, FireStance.HoldFire);
+
+            // Spawn 3 airborne US helicopters inside SAM range (~800m north, 55m altitude)
+            EntityId h1 = world.CreateUnit(2, heliIdx, new Vector2(450f, 1100f), heliDef.Speed, heliDef.MaxHealth, 0);
+            EntityId h2 = world.CreateUnit(2, heliIdx, new Vector2(500f, 1100f), heliDef.Speed, heliDef.MaxHealth, 0);
+            EntityId h3 = world.CreateUnit(2, heliIdx, new Vector2(550f, 1100f), heliDef.Speed, heliDef.MaxHealth, 0);
+            foreach (EntityId h in new[] { h1, h2, h3 })
+            {
+                world.SetFireStance(h, FireStance.HoldFire);
+                world.TryGetFlightState(h, out WorldState.UnitFlightState fs);
+                fs.Initialized = true;
+                fs.HasCapability = true;
+                fs.Phase = FlightPhase.Airborne;
+                fs.Altitude = 55f;
+                fs.DesiredBand = AltitudeBand.High;
+                world.SetFlightState(h, fs);
+            }
+
+            for (int i = 0; i < 4; i++) sim.Step();
+
+            world.SetFireStance(aa1, FireStance.FireAtWill);
+            world.SetFireStance(aa2, FireStance.FireAtWill);
+            world.SetFireStance(aa3, FireStance.FireAtWill);
+            sim.Step();
+
+            Assert.True(world.TryGetCombatState(aa1, out WorldState.CombatState cs1));
+            Assert.True(world.TryGetCombatState(aa2, out WorldState.CombatState cs2));
+            Assert.True(world.TryGetCombatState(aa3, out WorldState.CombatState cs3));
+
+            HashSet<EntityId> distinctTargets = [cs1.TargetEntityId, cs2.TargetEntityId, cs3.TargetEntityId];
+            Assert.Equal(3, distinctTargets.Count);
+            Assert.Contains(h1, distinctTargets);
+            Assert.Contains(h2, distinctTargets);
+            Assert.Contains(h3, distinctTargets);
+
+            // Explicit AttackCommand must override auto-spread and focus all 3 AAs on helicopter #2
+            DetectionSystem detection = rules.FindSystem<DetectionSystem>()!;
+            Assert.True(detection.TryGetContactByEntity(1, h2, out ContactObservation cH2));
+            Assert.True(sim.TryEnqueue(1, new AttackCommand(1, sim.Tick, aa1, cH2.Id)));
+            Assert.True(sim.TryEnqueue(1, new AttackCommand(2, sim.Tick, aa2, cH2.Id)));
+            Assert.True(sim.TryEnqueue(1, new AttackCommand(3, sim.Tick, aa3, cH2.Id)));
+            sim.Step();
+
+            Assert.True(world.TryGetCombatState(aa1, out cs1));
+            Assert.True(world.TryGetCombatState(aa2, out cs2));
+            Assert.True(world.TryGetCombatState(aa3, out cs3));
+            Assert.Equal(h2, cs1.TargetEntityId);
+            Assert.Equal(h2, cs2.TargetEntityId);
+            Assert.Equal(h2, cs3.TargetEntityId);
+        }
+    }
+
+    [Fact]
+    public void StabilizedTank_FiresOnTheMoveWithoutHalting_WithAccuracyPenalty_WhileUnstabilizedInfantryHoldsFire()
+    {
+        UnitCatalog catalog = ColdWarContent.LoadCatalog();
+        const int size = 129;
+        HeightMap map = new(size, size, 8f, 0.01f, new ushort[size * size]);
+        StaticGeometry geo = new(map, []);
+        OpsRules rules = new(geo, catalog, new NavigationTuning(CellSize: 4.0f));
+        WorldState world = new(map);
+        using Simulation sim = new(world, rules, matchSeed: 7777UL);
+
+        UnitDefinition t62Def = catalog.RequireDefinition("t62");
+        ushort t62Idx = catalog.RequireDefinitionIndex("t62");
+        UnitDefinition infDef = catalog.RequireDefinition("us_rifleman");
+        ushort infIdx = catalog.RequireDefinitionIndex("us_rifleman");
+        UnitDefinition m60Def = catalog.RequireDefinition("m60a1");
+        ushort m60Idx = catalog.RequireDefinitionIndex("m60a1");
+
+        // Verify moving accuracy multiplier lowers hit probability compared to stationary fire
+        OpsCombatCatalog combatCatalog = new(catalog);
+        Assert.True(combatCatalog.TryGetProfile(t62Idx, out UnitCombatProfile t62Profile));
+        float stationaryProb = CombatSystem.CalculateHitProbability(t62Profile.Weapon!, 500f, 1.0f, false, 0, isAttackerMoving: false);
+        float movingProb = CombatSystem.CalculateHitProbability(t62Profile.Weapon!, 500f, 1.0f, false, 0, isAttackerMoving: true);
+        Assert.True(movingProb > 0f && movingProb < stationaryProb, $"Expected moving hit prob ({movingProb}) < stationary ({stationaryProb}).");
+
+        // Moving T-62 driving north across a firing lane should fire on the move without halting
+        EntityId movingTank = world.CreateUnit(1, t62Idx, new Vector2(200f, 400f), t62Def.Speed, t62Def.MaxHealth, 40, initialTurretYaw: -MathF.PI / 2f);
+        EntityId movingInf = world.CreateUnit(1, infIdx, new Vector2(220f, 400f), infDef.Speed, infDef.MaxHealth, 210);
+        EntityId target = world.CreateUnit(2, m60Idx, new Vector2(450f, 380f), m60Def.Speed, 2000, 0);
+        world.SetFireStance(target, FireStance.HoldFire);
+
+        Assert.True(sim.TryEnqueue(1, new MoveCommand(1, sim.Tick, movingTank, new Vector2(200f, 80f))));
+        Assert.True(sim.TryEnqueue(1, new MoveCommand(2, sim.Tick, movingInf, new Vector2(220f, 80f))));
+
+        bool tankFiredWhileMoving = false;
+        for (int i = 0; i < 160; i++)
+        {
+            sim.Step();
+            Assert.True(world.TryGetUnit(movingTank, out UnitState tankUnit));
+            Assert.True(world.TryGetCombatState(movingTank, out WorldState.CombatState tankCs));
+            if (tankUnit.Moving && tankCs.Ammunition < 40)
+            {
+                tankFiredWhileMoving = true;
+                Assert.Equal(0, tankCs.ConsecutiveShotsOnTarget);
+            }
+            Assert.True(world.TryGetCombatState(movingInf, out WorldState.CombatState infCs));
+            Assert.Equal(210, infCs.Ammunition);
+        }
+
+        Assert.True(tankFiredWhileMoving, "Stabilized T-62 should fire on the move during a Move order without halting.");
+        Assert.True(world.TryGetUnit(movingTank, out UnitState finalTank) && finalTank.Position.Y < 380f,
+            $"T-62 should have continued driving north instead of braking to shoot, final pos={finalTank.Position}.");
+    }
 }
