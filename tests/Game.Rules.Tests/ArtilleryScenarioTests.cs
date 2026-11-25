@@ -29,7 +29,7 @@ public sealed class ArtilleryScenarioTests
         Assert.Equal(350f, profile.Weapon.MinRange);
         Assert.Equal(4000f, profile.Weapon.Range);
         Assert.Equal(20, profile.Weapon.SalvoCount);
-        Assert.Equal(55f, profile.Weapon.DispersionRadius);
+        Assert.Equal(45f, profile.Weapon.DispersionRadius);
         Assert.Equal(22f, profile.Weapon.SplashRadius);
 
         OpsPerceptionCatalog perceptionCatalog = new(catalog);
@@ -85,6 +85,57 @@ public sealed class ArtilleryScenarioTests
         int remainingEnemies = CountPlayerUnits(sim.World, 2);
         Assert.True(remainingEnemies < initialEnemyCount,
             $"Expected 40-rocket BM-21 Grad barrage to destroy US camp units (remaining {remainingEnemies}/{initialEnemyCount}).");
+    }
+
+    [Fact]
+    public void Bm21Grad_AllRocketsLandInsideDispersionRadius_AndTwoSalvosDestroyStationaryTanks()
+    {
+        UnitCatalog catalog = ColdWarContent.LoadCatalog();
+        const int size = 129;
+        HeightMap map = new(size, size, 8f, 0.01f, new ushort[size * size]);
+        StaticGeometry geometry = new(map, []);
+        OpsRules rules = new(geometry, catalog, null);
+        WorldState world = new(map);
+        using Simulation sim = new(world, rules, matchSeed: 2121UL);
+
+        ushort bm21Idx = catalog.RequireDefinitionIndex("bm21");
+        UnitDefinition bm21Def = catalog.RequireDefinition("bm21");
+        ushort m60Idx = catalog.RequireDefinitionIndex("m60a1");
+        UnitDefinition m60Def = catalog.RequireDefinition("m60a1");
+
+        Vector2 targetCenter = new(500f, 548f);
+        EntityId grad = world.CreateUnit(1, bm21Idx, new Vector2(500f, 110f), bm21Def.Speed, bm21Def.MaxHealth, 40);
+        EntityId tankA = world.CreateUnit(2, m60Idx, new Vector2(492f, 548f), m60Def.Speed, m60Def.MaxHealth, 0);
+        EntityId tankB = world.CreateUnit(2, m60Idx, new Vector2(508f, 548f), m60Def.Speed, m60Def.MaxHealth, 0);
+        world.SetFireStance(tankA, FireStance.HoldFire);
+        world.SetFireStance(tankB, FireStance.HoldFire);
+
+        float maxObservedOffset = 0f;
+        int impactsObserved = 0;
+        ArtillerySystem artillery = sim.Artillery!;
+        Action<WorldState, int, RocketProjectileState>? prevImpact = artillery.OnRocketImpact;
+        artillery.OnRocketImpact = (w, t, proj) =>
+        {
+            float offset = Vector2.Distance(targetCenter, new Vector2(proj.Target.X, proj.Target.Z));
+            if (offset > maxObservedOffset) maxObservedOffset = offset;
+            impactsObserved++;
+            prevImpact?.Invoke(w, t, proj);
+        };
+
+        // Fire first 20-rocket salvo, wait for impact, then fire second 20-rocket salvo
+        Assert.True(sim.TryEnqueue(1, new FireMissionCommand(1, sim.Tick, grad, targetCenter)));
+        for (int i = 0; i < 420; i++) sim.Step();
+
+        // Reload completes after 30s (600 ticks); advance and fire second salvo
+        for (int i = 0; i < 420; i++) sim.Step();
+        Assert.True(sim.TryEnqueue(1, new FireMissionCommand(2, sim.Tick, grad, targetCenter)));
+        for (int i = 0; i < 420; i++) sim.Step();
+
+        Assert.Equal(40, impactsObserved);
+        Assert.True(maxObservedOffset <= 45.01f, $"All rockets must land inside 45m dispersion radius, got max {maxObservedOffset:F2}m.");
+
+        int survivingTanks = CountPlayerUnits(world, 2);
+        Assert.True(survivingTanks == 0, $"Expected 2 full BM-21 Grad salvos directly on 2 stationary M60A1s to destroy both, remaining={survivingTanks}.");
     }
 
     private static int CountPlayerUnits(WorldState world, int player)

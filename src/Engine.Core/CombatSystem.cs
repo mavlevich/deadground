@@ -28,6 +28,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
     public const float TargetMovedRangingResetDistance = 10.0f;
     public const float MinHitProbability = 0.02f;
     public const float MaxHitProbability = 0.98f;
+    public const float AutoFireSwitchHysteresis = 140f;
 
     private readonly StaticGeometry _geometry;
     private readonly DestinationEvaluator _destinationEvaluator;
@@ -367,9 +368,11 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         float distance,
         float visibleShare,
         bool isTargetMoving,
-        int consecutiveShots)
+        int consecutiveShots,
+        bool isAttackerMoving = false)
     {
         if (visibleShare <= 0f) return 0f;
+        if (isAttackerMoving && !weapon.CanFireOnMove) return 0f;
 
         float baseAccuracy = weapon.GetAccuracyAt(distance);
         float prob = baseAccuracy * visibleShare;
@@ -377,8 +380,15 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         {
             prob -= weapon.TargetMovementPenalty;
         }
-        float bonus = MathF.Min(weapon.MaxRangingBonus, consecutiveShots * weapon.RangingBonus);
-        prob += bonus;
+        if (isAttackerMoving)
+        {
+            prob *= weapon.MovingAccuracyMultiplier;
+        }
+        else
+        {
+            float bonus = MathF.Min(weapon.MaxRangingBonus, consecutiveShots * weapon.RangingBonus);
+            prob += bonus;
+        }
         return Math.Clamp(prob, MinHitProbability, MaxHitProbability);
     }
 
@@ -389,7 +399,9 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         float targetRadius,
         WeaponDefinition weapon,
         uint targetSupportSurface = 0,
-        float targetAltitude = 0f)
+        float targetAltitude = 0f,
+        Vector3? aimedHitPoint = null,
+        bool isAttackerMoving = false)
     {
         Vector2 lineOfFire = targetPos - attackerPos;
         float lineLen = lineOfFire.Length();
@@ -397,16 +409,17 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         Vector2 lateralDir = new(-fireDir.Y, fireDir.X);
 
         float mils = weapon.DispersionMils > 0f ? weapon.DispersionMils : 3.0f;
+        float effectiveMils = isAttackerMoving ? mils * 2.25f : mils;
         // 1 mil is 1 meter lateral/vertical displacement per 1,000 meters range
-        float dispersionMeters = MathF.Max(0.5f, lineLen * (mils / 1000f));
-        float forwardSign = (CombatRandom.Next(2) == 0) ? 1f : -1f;
+        float dispersionMeters = MathF.Max(0.75f, lineLen * (effectiveMils / 1000f));
+        float forwardSign = (CombatRandom.Next(10) < 6) ? 1f : -1f;
 
         // Ensure impact point is strictly outside target radius
-        float minForward = targetRadius + 0.3f;
-        float maxForward = MathF.Max(minForward + 0.5f, dispersionMeters);
+        float minForward = targetRadius + 0.4f;
+        float maxForward = MathF.Max(minForward + 1.0f, dispersionMeters * (isAttackerMoving ? 1.85f : 1.45f));
         float forwardDist = minForward + (float)CombatRandom.NextDouble() * (maxForward - minForward);
 
-        float lateralMax = MathF.Max(0.5f, dispersionMeters * 0.35f);
+        float lateralMax = MathF.Max(0.75f, dispersionMeters * (isAttackerMoving ? 0.65f : 0.45f));
         float lateralDist = ((float)CombatRandom.NextDouble() * 2f - 1f) * lateralMax;
 
         Vector2 miss2D = targetPos + fireDir * (forwardSign * forwardDist) + lateralDir * lateralDist;
@@ -424,6 +437,24 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
             : groundY;
         Vector3 miss3D = new(miss2D.X, missY, miss2D.Y);
 
+        // For ground overshoots (long/wide shots), trace along the aimed elevation past low intervening
+        // cover (such as collapsed rubble) before descending onto the ground behind the target.
+        if (forwardSign > 0f && aimedHitPoint.HasValue && targetAltitude <= FlightSystem.MinCrashAltitude)
+        {
+            Vector3 passPoint = new(
+                targetPos.X + lateralDir.X * lateralDist,
+                aimedHitPoint.Value.Y,
+                targetPos.Y + lateralDir.Y * lateralDist);
+            LineOfSightResult approachLos = _geometry.CheckLineOfFire(muzzlePos, passPoint, _losContext);
+            if (!approachLos.IsClear)
+            {
+                return approachLos.HitPoint;
+            }
+
+            LineOfSightResult descendLos = _geometry.CheckLineOfFire(passPoint, miss3D, _losContext);
+            return !descendLos.IsClear ? descendLos.HitPoint : miss3D;
+        }
+
         LineOfSightResult los = _geometry.CheckLineOfFire(muzzlePos, miss3D, _losContext);
         return !los.IsClear ? los.HitPoint : miss3D;
     }
@@ -439,6 +470,114 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         ContactClassification.Infantry => 5,
         _ => 6
     };
+
+    private static float GetBaseTargetThreatScore(WeaponDefinition weapon, ContactClassification classification)
+    {
+        if (weapon.AirTargetsOnly)
+        {
+            return 1000f;
+        }
+
+        return classification switch
+        {
+            ContactClassification.Tank => 1000f,
+            ContactClassification.Artillery => 820f,
+            ContactClassification.AntiAir => 820f,
+            ContactClassification.Apc => 640f,
+            ContactClassification.Helicopter => 540f,
+            ContactClassification.Recon => 420f,
+            ContactClassification.Infantry => 300f,
+            _ => 200f
+        };
+    }
+
+    private static void CountAlliedCommitmentsOnTarget(
+        WorldState world,
+        int owner,
+        EntityId excludeAttackerId,
+        EntityId targetEntityId,
+        out int alliedAttackers,
+        out int alliedMissilesInFlight)
+    {
+        alliedAttackers = 0;
+        alliedMissilesInFlight = 0;
+
+        int unitCount = world.Count;
+        for (int i = 0; i < unitCount; i++)
+        {
+            UnitState other = world.GetUnitAt(i);
+            if (other.Owner != owner || other.Id == excludeAttackerId)
+                continue;
+            if (world.IsContained(other.Id) || world.IsCrashing(other.Id) || world.IsSlung(other.Id))
+                continue;
+            if (world.TryGetCombatState(other.Id, out WorldState.CombatState otherCs) &&
+                otherCs.TargetEntityId == targetEntityId &&
+                otherCs.Status != AttackExecutionStatus.None &&
+                otherCs.Status != AttackExecutionStatus.NoAmmo)
+            {
+                alliedAttackers++;
+            }
+        }
+
+        ReadOnlySpan<GuidedMissileState> missiles = world.GuidedMissiles;
+        for (int m = 0; m < missiles.Length; m++)
+        {
+            ref readonly GuidedMissileState missile = ref missiles[m];
+            if (missile.Owner == owner &&
+                !missile.Decoyed &&
+                missile.TargetId == targetEntityId)
+            {
+                alliedMissilesInFlight++;
+            }
+        }
+    }
+
+    private static float ComputeAutoFireTargetScore(
+        UnitState attacker,
+        WeaponDefinition weapon,
+        in WorldState.CombatState cs,
+        ContactObservation candidate,
+        EntityId candidateEntityId,
+        float distance,
+        WorldState world)
+    {
+        float score = GetBaseTargetThreatScore(weapon, candidate.Classification);
+
+        // Quadratic close-range urgency so close threats outrank distant targets
+        float normDist = Math.Clamp(distance / MathF.Max(1f, weapon.Range), 0f, 1f);
+        float proximity = 1f - normDist;
+        score += proximity * proximity * 320f;
+
+        // Mild turret alignment preference to avoid unnecessary 180-degree swings
+        Vector2 dir = candidate.Position - attacker.Position;
+        if (dir.LengthSquared() > 0.0001f)
+        {
+            float desiredYaw = MathF.Atan2(-dir.X, -dir.Y);
+            float yawDelta = MathF.Abs(ShorterArcDelta(cs.TurretYaw, desiredYaw));
+            score += (1f - yawDelta / MathF.PI) * 45f;
+        }
+
+        // Anti-overkill distribution across allied units and in-flight guided missiles (own-side data only)
+        CountAlliedCommitmentsOnTarget(
+            world,
+            attacker.Owner,
+            attacker.Id,
+            candidateEntityId,
+            out int alliedAttackers,
+            out int alliedMissilesInFlight);
+
+        if (weapon.IsGuidedMissile)
+        {
+            score -= 280f * alliedAttackers;
+            score -= 420f * alliedMissilesInFlight;
+        }
+        else
+        {
+            score -= 45f * Math.Min(3, alliedAttackers);
+        }
+
+        return score;
+    }
 
     public static float NormalizeYaw(float yaw)
     {
@@ -1135,11 +1274,11 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                     cs.HasSwitchedTargetThisReload = false;
                 }
 
-                if (attacker.Moving || cs.Stance == FireStance.HoldFire)
+                if (cs.Stance == FireStance.HoldFire || (attacker.Moving && !weapon.CanFireOnMove))
                 {
-                    // Moving units do not fire. A unit driving off keeps its gun on the target it was
-                    // engaging while that target stays valid (a tank pulling back watches the enemy over
-                    // its rear deck); otherwise the gun goes back over the front.
+                    // Units on HoldFire or with unstabilized weapons cannot fire while moving.
+                    // A unit driving off keeps its gun on the target it was engaging while valid;
+                    // otherwise the gun returns over the front.
                     if (targetRetained && world.TryGetUnit(cs.TargetEntityId, out UnitState watched))
                         TurnTurret(ref cs, attacker.Position, watched.Position, profile.TurretTraverseRate);
                     else
@@ -1148,10 +1287,10 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                     continue;
                 }
 
-                // Auto-fire target selection and threat-based re-evaluation
+                // Auto-fire target selection and threat/overkill-aware re-evaluation
                 bool shouldScan = !targetRetained
                     ? (cs.ReloadTicksRemaining == 0 && cs.Ammunition > 0)
-                    : (cs.ReloadTicksRemaining == 0 && cs.Ammunition > 0 && !cs.HasSwitchedTargetThisReload && GetTargetClassPriority(retainedContact.Classification) > 0);
+                    : (cs.ReloadTicksRemaining == 0 && cs.Ammunition > 0 && !cs.HasSwitchedTargetThisReload);
 
                 if (!targetRetained && !shouldScan)
                 {
@@ -1162,9 +1301,15 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
 
                 if (shouldScan)
                 {
-                    int currentPriority = targetRetained ? GetTargetClassPriority(retainedContact.Classification) : int.MaxValue;
-                    int bestPriority = currentPriority;
-                    float bestDistSq = float.MaxValue;
+                    float currentScore = float.NegativeInfinity;
+                    if (targetRetained)
+                    {
+                        float retainedDist = Vector2.Distance(attacker.Position, retainedContact.Position);
+                        currentScore = ComputeAutoFireTargetScore(
+                            attacker, weapon, in cs, retainedContact, cs.TargetEntityId, retainedDist, world);
+                    }
+
+                    float bestScore = targetRetained ? currentScore + AutoFireSwitchHysteresis : float.NegativeInfinity;
                     ContactId bestContactId = default;
                     EntityId bestEntityId = default;
                     Vector3 bestHit = Vector3.Zero;
@@ -1209,19 +1354,17 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                         if (ComputeVisibleShare(attacker, candidateUnit, world) <= 0f)
                             continue;
 
-                        int priority = GetTargetClassPriority(candidate.Classification);
-                        float distSq = distToCandidate * distToCandidate;
+                        float score = ComputeAutoFireTargetScore(
+                            attacker, weapon, in cs, candidate, candidateEntityId, distToCandidate, world);
 
-                        bool isBetter = priority < bestPriority ||
-                            (priority == bestPriority && priority < currentPriority && distSq < bestDistSq) ||
-                            (priority == bestPriority && priority < currentPriority && MathF.Abs(distSq - bestDistSq) < 0.001f && candidate.Id.Value < bestContactId.Value);
+                        bool isBetter = score > bestScore + 0.001f ||
+                            (bestContactId.Value != 0 && MathF.Abs(score - bestScore) <= 0.001f && candidate.Id.Value < bestContactId.Value);
 
                         if (isBetter)
                         {
                             bestContactId = candidate.Id;
                             bestEntityId = candidateEntityId;
-                            bestPriority = priority;
-                            bestDistSq = distSq;
+                            bestScore = score;
                             bestHit = candHit;
                             bestMuzzle = candMuzzle;
                             bestCandidatePos = candidateUnit.Position;
@@ -1420,8 +1563,13 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
 
         TotalShotsFired++;
 
-        // 1. Ranging bonus calculation
-        if (targetUnit.Id.Value != 0 && targetUnit.Id == cs.LastTargetEntityId)
+        // 1. Ranging bonus calculation (no static ranging while firing on the move)
+        bool isAttackerMoving = attacker.Moving;
+        if (isAttackerMoving)
+        {
+            cs.ConsecutiveShotsOnTarget = 0;
+        }
+        else if (targetUnit.Id.Value != 0 && targetUnit.Id == cs.LastTargetEntityId)
         {
             float targetMovedDistance = Vector2.Distance(targetUnit.Position, cs.LastTargetPosition);
             if (targetMovedDistance > TargetMovedRangingResetDistance)
@@ -1436,8 +1584,11 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
 
         int currentRangingCount = cs.ConsecutiveShotsOnTarget;
 
-        // Advance ranging for next shot at this target
-        cs.ConsecutiveShotsOnTarget++;
+        // Advance ranging for next shot at this target only when firing stationary
+        if (!isAttackerMoving)
+        {
+            cs.ConsecutiveShotsOnTarget++;
+        }
         cs.LastTargetEntityId = targetUnit.Id;
         cs.LastTargetPosition = targetUnit.Position;
         world.SetCombatState(attacker.Id, cs);
@@ -1460,7 +1611,13 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
             FirstShotDistance = shotDistance;
         }
 
-        float hitProb = CalculateHitProbability(weapon, shotDistance, visibleShare, isTargetMoving, currentRangingCount);
+        float hitProb = CalculateHitProbability(
+            weapon,
+            shotDistance,
+            visibleShare,
+            isTargetMoving,
+            currentRangingCount,
+            isAttackerMoving);
 
         // 5. Roll from combat random stream
         float roll = (float)CombatRandom.NextDouble();
@@ -1519,7 +1676,9 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                 targetRadius,
                 weapon,
                 targetUnit.SupportSurface,
-                world.GetUnitAltitude(targetUnit.Id));
+                world.GetUnitAltitude(targetUnit.Id),
+                hitPoint,
+                isAttackerMoving);
             hitResult = HitResult.Miss;
         }
 
@@ -2229,13 +2388,13 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                 float topOrSideArmor = MathF.Min(targetProfile.Armor.Side, targetProfile.Armor.Rear);
                 if (topOrSideArmor > projectile.Penetration)
                 {
-                    // Heavy armor resists outer fragmentation; direct or near top-deck hits still cause damage
-                    if (dist <= 4.0f)
-                        armorMultiplier = 0.42f;
-                    else if (dist <= splashRadius * 0.55f)
-                        armorMultiplier = 0.16f;
+                    // Heavy armor resists outer fragments, while near top-deck hits and heavy concussive blasts inflict real damage
+                    if (dist <= 6.5f)
+                        armorMultiplier = 0.75f;
+                    else if (dist <= splashRadius * 0.70f)
+                        armorMultiplier = 0.36f;
                     else
-                        armorMultiplier = 0f;
+                        armorMultiplier = 0.15f;
                 }
                 else if (topOrSideArmor > 0f)
                 {

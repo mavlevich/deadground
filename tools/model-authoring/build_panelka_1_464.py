@@ -415,52 +415,52 @@ def _build_roof_cap(m, parent, mats):
 
 
 def _build_rubble_ruin(m, parent, mats, mirror_x=False):
-    """Impassable war-torn ground-floor battle ruin (2.1 m central rubble choke + 2.6-3.4 m jagged corner walls).
+    """Impassable war-torn ground-floor battle ruin (1.65 m rubble crest + 1.85-2.05 m jagged corner stubs).
 
-    Replaces the old flat rubble pile with authentic blown-out concrete piers, scorched window
-    stubs, leaning precast slabs, and tangled rebar so vehicles clearly cannot drive through.
+    Matches logical rubble_height (1.65 m) closely so tank turrets (2.2-2.9 m) clearly sight and fire
+    over the collapsed ruins while blown-out masonry piers and leaning slabs block vehicle movement.
     """
     sx = -1.0 if mirror_x else 1.0
     pfx = "RubB" if mirror_x else "RubA"
 
-    # Heavy concrete rubble core choking the interior (2.0-2.1 m saddle across center)
-    _add_box(m, f"{pfx}_Base", (SECTION_WIDTH - 0.4, 0.68, SECTION_DEPTH - 0.4), (0.0, 0.34, 0.0), mats["broken"], parent, tint=0.80)
-    _add_box(m, f"{pfx}_Tier1", (SECTION_WIDTH - 2.6, 0.62, SECTION_DEPTH - 2.4), (sx * 0.25, 0.96, -0.15), mats["broken"], parent, tint=0.84)
-    _add_box(m, f"{pfx}_Tier2", (7.8, 0.56, 6.2), (sx * -0.45, 1.48, 0.25), mats["broken"], parent, tint=0.88)
-    _add_box(m, f"{pfx}_Crest", (4.2, 0.40, 3.4), (sx * -0.35, 1.90, 0.10), mats["concrete"], parent, tint=0.84)
+    # Heavy concrete rubble core choking the interior (1.65 m crest matching logical rubble_height)
+    _add_box(m, f"{pfx}_Base", (SECTION_WIDTH - 0.4, 0.58, SECTION_DEPTH - 0.4), (0.0, 0.29, 0.0), mats["broken"], parent, tint=0.80)
+    _add_box(m, f"{pfx}_Tier1", (SECTION_WIDTH - 2.6, 0.52, SECTION_DEPTH - 2.4), (sx * 0.25, 0.82, -0.15), mats["broken"], parent, tint=0.84)
+    _add_box(m, f"{pfx}_Tier2", (7.8, 0.46, 6.2), (sx * -0.45, 1.24, 0.25), mats["broken"], parent, tint=0.88)
+    _add_box(m, f"{pfx}_Crest", (4.2, 0.30, 3.4), (sx * -0.35, 1.50, 0.10), mats["concrete"], parent, tint=0.84)
 
     # Dark scorched blast craters & ash
-    _add_box(m, f"{pfx}_Soot1", (4.6, 0.16, 2.9), (sx * 2.6, 0.72, 2.4), mats["soot"], parent)
-    _add_box(m, f"{pfx}_Soot2", (3.8, 0.16, 3.1), (sx * -3.2, 0.68, -2.2), mats["soot"], parent)
-    _add_box(m, f"{pfx}_Soot3", (3.4, 0.14, 2.4), (0.0, 1.78, 0.3), mats["soot"], parent)
+    _add_box(m, f"{pfx}_Soot1", (4.6, 0.14, 2.9), (sx * 2.6, 0.62, 2.4), mats["soot"], parent)
+    _add_box(m, f"{pfx}_Soot2", (3.8, 0.14, 3.1), (sx * -3.2, 0.58, -2.2), mats["soot"], parent)
+    _add_box(m, f"{pfx}_Soot3", (3.4, 0.12, 2.4), (0.0, 1.48, 0.3), mats["soot"], parent)
 
-    # Jagged surviving ground-floor corner walls & stairwell piers (2.6-3.4 m tall -> unmistakable tank obstacle!)
-    # Corner 1: tall broken stairwell/front-left concrete corner pier (3.35 m peak!)
-    _add_box(m, f"{pfx}_WallFL_Base", (3.8, 2.65, 0.42), (sx * -5.1, 1.325, HALF_D - 0.25), mats["concrete"], parent, tint=0.86)
-    _add_box(m, f"{pfx}_WallFL_Tooth", (1.8, 0.72, 0.40), (sx * -6.0, 2.98, HALF_D - 0.25), mats["broken"], parent, tint=0.82)
-    _add_box(m, f"{pfx}_WallFL_Side", (0.42, 2.95, 4.4), (sx * (-HALF_W + 0.25), 1.475, 3.4), mats["concrete"], parent, tint=0.84)
-    _add_box(m, f"{pfx}_WallFL_WinSoot", (1.45, 1.15, 0.10), (sx * -4.6, 1.55, HALF_D - 0.02), mats["soot"], parent)
+    # Jagged surviving ground-floor corner stubs (1.75-2.05 m peak -> impassable ruin without clipping tank LOS)
+    # Corner 1: broken stairwell/front-left concrete corner pier (2.05 m peak)
+    _add_box(m, f"{pfx}_WallFL_Base", (3.8, 1.65, 0.42), (sx * -5.1, 0.825, HALF_D - 0.25), mats["concrete"], parent, tint=0.86)
+    _add_box(m, f"{pfx}_WallFL_Tooth", (1.8, 0.40, 0.40), (sx * -6.0, 1.85, HALF_D - 0.25), mats["broken"], parent, tint=0.82)
+    _add_box(m, f"{pfx}_WallFL_Side", (0.42, 1.85, 4.4), (sx * (-HALF_W + 0.25), 0.925, 3.4), mats["concrete"], parent, tint=0.84)
+    _add_box(m, f"{pfx}_WallFL_WinSoot", (1.45, 0.82, 0.10), (sx * -4.6, 1.05, HALF_D - 0.02), mats["soot"], parent)
 
-    # Corner 2: rear-right shattered corner pier (2.95 m peak)
-    _add_box(m, f"{pfx}_WallRB_Base", (4.2, 2.35, 0.42), (sx * 4.8, 1.175, -HALF_D + 0.25), mats["concrete"], parent, tint=0.83)
-    _add_box(m, f"{pfx}_WallRB_Tooth", (2.1, 0.62, 0.40), (sx * 5.7, 2.64, -HALF_D + 0.25), mats["broken"], parent, tint=0.79)
-    _add_box(m, f"{pfx}_WallRB_Side", (0.42, 2.55, 4.6), (sx * (HALF_W - 0.25), 1.275, -3.3), mats["concrete"], parent, tint=0.81)
-    _add_box(m, f"{pfx}_WallRB_WinSoot", (1.48, 1.12, 0.10), (sx * 4.4, 1.35, -HALF_D + 0.02), mats["soot"], parent)
+    # Corner 2: rear-right shattered corner pier (1.92 m peak)
+    _add_box(m, f"{pfx}_WallRB_Base", (4.2, 1.54, 0.42), (sx * 4.8, 0.77, -HALF_D + 0.25), mats["concrete"], parent, tint=0.83)
+    _add_box(m, f"{pfx}_WallRB_Tooth", (2.1, 0.38, 0.40), (sx * 5.7, 1.73, -HALF_D + 0.25), mats["broken"], parent, tint=0.79)
+    _add_box(m, f"{pfx}_WallRB_Side", (0.42, 1.72, 4.6), (sx * (HALF_W - 0.25), 0.86, -3.3), mats["concrete"], parent, tint=0.81)
+    _add_box(m, f"{pfx}_WallRB_WinSoot", (1.48, 0.80, 0.10), (sx * 4.4, 0.98, -HALF_D + 0.02), mats["soot"], parent)
 
-    # Corner 3: lower broken front-right pier stub (1.85 m) + interior partition stub (2.25 m)
-    _add_box(m, f"{pfx}_WallFR_Stub", (2.8, 1.78, 0.40), (sx * 5.4, 0.89, HALF_D - 0.25), mats["broken"], parent, tint=0.82)
-    _add_box(m, f"{pfx}_IntPier", (0.34, 2.18, 4.2), (sx * -1.4, 1.09, -2.4), mats["broken"], parent, tint=0.76)
+    # Corner 3: lower broken front-right pier stub (1.45 m) + interior partition stub (1.60 m)
+    _add_box(m, f"{pfx}_WallFR_Stub", (2.8, 1.45, 0.40), (sx * 5.4, 0.725, HALF_D - 0.25), mats["broken"], parent, tint=0.82)
+    _add_box(m, f"{pfx}_IntPier", (0.34, 1.60, 4.2), (sx * -1.4, 0.80, -2.4), mats["broken"], parent, tint=0.76)
 
     # Leaning fractured precast wall panels (huge concrete slabs slumped across the ruins)
     slab_specs = [
-        ((sx * -3.6, 1.15, 2.6), (3.4, 0.24, 2.3), (0.38 * sx, 0.34, -0.24 * sx), "concrete", 0.94),
-        ((sx * 3.5, 1.08, 2.1), (3.1, 0.24, 2.1), (-0.42 * sx, -0.30, 0.26 * sx), "concrete", 0.90),
-        ((sx * -2.8, 1.25, -3.2), (3.5, 0.24, 2.2), (0.24 * sx, -0.34, 0.20 * sx), "broken", 0.88),
-        ((sx * 2.9, 1.18, -2.5), (3.2, 0.24, 2.2), (-0.30 * sx, 0.30, -0.22 * sx), "concrete", 0.92),
-        ((sx * 0.2, 1.65, 1.2), (3.0, 0.22, 1.9), (0.16 * sx, 0.26, 0.18 * sx), "concrete", 0.96),
-        ((sx * -0.8, 1.55, -1.3), (2.8, 0.22, 1.8), (-0.22 * sx, -0.24, -0.18 * sx), "broken", 0.84),
-        ((sx * -5.4, 0.92, -0.9), (2.4, 0.26, 1.7), (0.48 * sx, 0.18, 0.24 * sx), "broken", 0.80),
-        ((sx * 5.2, 0.94, 0.6), (2.5, 0.26, 1.7), (-0.45 * sx, -0.18, -0.24 * sx), "concrete", 0.86),
+        ((sx * -3.6, 0.98, 2.6), (3.4, 0.24, 2.3), (0.38 * sx, 0.34, -0.24 * sx), "concrete", 0.94),
+        ((sx * 3.5, 0.92, 2.1), (3.1, 0.24, 2.1), (-0.42 * sx, -0.30, 0.26 * sx), "concrete", 0.90),
+        ((sx * -2.8, 1.05, -3.2), (3.5, 0.24, 2.2), (0.24 * sx, -0.34, 0.20 * sx), "broken", 0.88),
+        ((sx * 2.9, 1.00, -2.5), (3.2, 0.24, 2.2), (-0.30 * sx, 0.30, -0.22 * sx), "concrete", 0.92),
+        ((sx * 0.2, 1.38, 1.2), (3.0, 0.22, 1.9), (0.16 * sx, 0.26, 0.18 * sx), "concrete", 0.96),
+        ((sx * -0.8, 1.32, -1.3), (2.8, 0.22, 1.8), (-0.22 * sx, -0.24, -0.18 * sx), "broken", 0.84),
+        ((sx * -5.4, 0.84, -0.9), (2.4, 0.26, 1.7), (0.48 * sx, 0.18, 0.24 * sx), "broken", 0.80),
+        ((sx * 5.2, 0.86, 0.6), (2.5, 0.26, 1.7), (-0.45 * sx, -0.18, -0.24 * sx), "concrete", 0.86),
     ]
     for i, (center, size, rot, mat_key, tint) in enumerate(slab_specs):
         axes = _ortho_axes(*rot)
@@ -481,13 +481,13 @@ def _build_rubble_ruin(m, parent, mats, mirror_x=False):
 
     # Twisted rebar spikes jutting out of corner walls and rubble core
     rebar_spikes = [
-        ((sx * -5.6, 3.15, HALF_D - 0.25), (sx * -4.9, 3.55, HALF_D - 0.05)),
-        ((sx * -4.0, 2.55, HALF_D - 0.25), (sx * -3.2, 2.95, HALF_D + 0.12)),
-        ((sx * 5.2, 2.82, -HALF_D + 0.25), (sx * 4.5, 3.28, -HALF_D - 0.05)),
-        ((sx * -1.4, 2.12, -1.6), (sx * -0.8, 2.68, -0.9)),
-        ((sx * 1.4, 1.42, 1.4), (sx * 2.1, 2.08, 2.1)),
-        ((sx * -2.6, 1.35, 0.4), (sx * -3.4, 1.98, 1.0)),
-        ((sx * 3.1, 1.22, -1.8), (sx * 3.8, 1.88, -2.4)),
+        ((sx * -5.6, 1.95, HALF_D - 0.25), (sx * -4.9, 2.25, HALF_D - 0.05)),
+        ((sx * -4.0, 1.60, HALF_D - 0.25), (sx * -3.2, 1.92, HALF_D + 0.12)),
+        ((sx * 5.2, 1.82, -HALF_D + 0.25), (sx * 4.5, 2.15, -HALF_D - 0.05)),
+        ((sx * -1.4, 1.54, -1.6), (sx * -0.8, 1.95, -0.9)),
+        ((sx * 1.4, 1.22, 1.4), (sx * 2.1, 1.72, 2.1)),
+        ((sx * -2.6, 1.18, 0.4), (sx * -3.4, 1.68, 1.0)),
+        ((sx * 3.1, 1.08, -1.8), (sx * 3.8, 1.58, -2.4)),
     ]
     for i, (p0, p1) in enumerate(rebar_spikes):
         rod(m, f"{pfx}_Rebar{i}", p0, p1, 0.032, mats["rebar"], parent, sides=5)

@@ -507,10 +507,10 @@ public sealed class TurretTraverseTests
     }
 
     [Fact]
-    public void PullingBack_KeepsTheGunOnTheEngagedTargetWithoutFiring()
+    public void PullingBack_KeepsTheGunOnTheEngagedTargetAndStabilizedTankCanFireOnTheMove()
     {
-        // A tank that drives off from a fight keeps watching its target over the rear deck. It fires
-        // only once it halts again (mobile fire is a later rule).
+        // A stabilized tank driving off from a fight keeps watching its target over the rear deck
+        // and may return fire on the move under FireAtWill (while HoldFire keeps watching silently).
         (Simulation sim, WorldState world, UnitCatalog catalog) = FlatWorld();
         using Simulation _ = sim;
         EntityId tank = Spawn(world, catalog, 1, "t62", new Vector2(300f, 300f), MathF.PI);
@@ -520,16 +520,18 @@ public sealed class TurretTraverseTests
         world.TryGetCombatState(tank, out WorldState.CombatState engaged);
         Assert.NotEqual(0u, engaged.TargetContactId.Value);
 
+        // Stabilized T-62 pulling back under FireAtWill keeps watching over the rear deck and returns fire on the move
         Assert.True(sim.TryEnqueue(1, new MoveCommand(1, sim.Tick, tank, new Vector2(300f, 60f))));
-        int ammo = -1;
+        int startAmmo = -1;
+        bool firedWhileMoving = false;
         bool reachedBackFacing = false;
         for (int tick = 1; tick <= 140; tick++)
         {
             sim.Step();
             world.TryGetCombatState(tank, out WorldState.CombatState cs);
             if (!world.TryGetUnit(tank, out UnitState unit) || !unit.Moving) continue;
-            if (ammo < 0) ammo = cs.Ammunition;
-            Assert.Equal(ammo, cs.Ammunition);
+            if (startAmmo < 0) startAmmo = cs.Ammunition;
+            if (cs.Ammunition < startAmmo) firedWhileMoving = true;
             if (MathF.Abs(CombatSystem.ShorterArcDelta(cs.HullHeading, 0f)) < 0.001f)
             {
                 reachedBackFacing = true;
@@ -537,8 +539,9 @@ public sealed class TurretTraverseTests
             Assert.True(MathF.Abs(CombatSystem.ShorterArcDelta(cs.TurretYaw, MathF.PI)) <= CombatSystem.TurretAlignmentTolerance,
                 $"Tick {tick}: the gun must stay on the enemy behind, yaw {cs.TurretYaw}");
         }
-        Assert.True(ammo >= 0, "The tank never drove off.");
+        Assert.True(startAmmo >= 0, "The tank never drove off.");
         Assert.True(reachedBackFacing, "The hull must turn to face the way back.");
+        Assert.True(firedWhileMoving, "Stabilized T-62 pulling back under FireAtWill should fire on the move.");
     }
 
     [Fact]

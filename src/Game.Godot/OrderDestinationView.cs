@@ -37,9 +37,12 @@ internal sealed partial class OrderDestinationView : Node3D
     private readonly MeshInstance3D _zoneCircle;
     private readonly StandardMaterial3D _matZoneValid;
     private readonly StandardMaterial3D _matZoneBlocked;
+    private readonly StandardMaterial3D _matZoneOuterValid;
+    private readonly StandardMaterial3D _matZoneOuterBlocked;
     private float _cachedZoneX = float.NaN;
     private float _cachedZoneZ = float.NaN;
     private float _cachedZoneRadius = -1f;
+    private float _cachedZoneOuterRadius = -1f;
     private bool _cachedZoneValid;
 
     internal bool IsZoneCircleVisible => _zoneCircle.Visible;
@@ -191,6 +194,24 @@ internal sealed partial class OrderDestinationView : Node3D
         _matZoneBlocked = new StandardMaterial3D
         {
             AlbedoColor = new Color(0.96f, 0.28f, 0.24f, 0.85f),
+            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+            CullMode = BaseMaterial3D.CullModeEnum.Disabled,
+            DisableFog = true
+        };
+
+        _matZoneOuterValid = new StandardMaterial3D
+        {
+            AlbedoColor = new Color(0.96f, 0.72f, 0.24f, 0.42f),
+            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+            CullMode = BaseMaterial3D.CullModeEnum.Disabled,
+            DisableFog = true
+        };
+
+        _matZoneOuterBlocked = new StandardMaterial3D
+        {
+            AlbedoColor = new Color(0.96f, 0.28f, 0.24f, 0.35f),
             ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
             Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
             CullMode = BaseMaterial3D.CullModeEnum.Disabled,
@@ -682,12 +703,20 @@ internal sealed partial class OrderDestinationView : Node3D
         HideFacingArrow();
     }
 
-    public void ShowZoneCircle(DeadGround.Engine.HeightMap map, float centerX, float centerZ, float radius, bool valid)
+    public void ShowZoneCircle(
+        DeadGround.Engine.HeightMap map,
+        float centerX,
+        float centerZ,
+        float radius,
+        bool valid,
+        float outerSplashRadius = 0f)
     {
+        float effectiveOuter = outerSplashRadius > radius + 0.5f ? outerSplashRadius : 0f;
         if (_zoneCircle.Visible &&
             MathF.Abs(centerX - _cachedZoneX) < 0.15f &&
             MathF.Abs(centerZ - _cachedZoneZ) < 0.15f &&
             MathF.Abs(radius - _cachedZoneRadius) < 0.05f &&
+            MathF.Abs(effectiveOuter - _cachedZoneOuterRadius) < 0.05f &&
             valid == _cachedZoneValid)
         {
             return;
@@ -696,13 +725,15 @@ internal sealed partial class OrderDestinationView : Node3D
         _cachedZoneX = centerX;
         _cachedZoneZ = centerZ;
         _cachedZoneRadius = radius;
+        _cachedZoneOuterRadius = effectiveOuter;
         _cachedZoneValid = valid;
 
         _zoneCircleMesh.ClearSurfaces();
         const int segments = 48;
         const float step = Mathf.Tau / segments;
-        float innerR = MathF.Max(0.25f, radius - 0.35f);
-        float outerR = radius + 0.35f;
+        float halfBand = Math.Clamp(radius * 0.016f, 0.35f, 0.80f);
+        float innerR = MathF.Max(0.25f, radius - halfBand);
+        float outerR = radius + halfBand;
         StandardMaterial3D mat = valid ? _matZoneValid : _matZoneBlocked;
 
         _zoneCircleMesh.SurfaceBegin(Mesh.PrimitiveType.TriangleStrip, mat);
@@ -721,6 +752,31 @@ internal sealed partial class OrderDestinationView : Node3D
             _zoneCircleMesh.SurfaceAddVertex(new Vector3(ox, oy, oz));
         }
         _zoneCircleMesh.SurfaceEnd();
+
+        if (effectiveOuter > 0f)
+        {
+            float outerBand = Math.Clamp(effectiveOuter * 0.012f, 0.30f, 0.65f);
+            float sInnerR = MathF.Max(0.25f, effectiveOuter - outerBand);
+            float sOuterR = effectiveOuter + outerBand;
+            StandardMaterial3D outerMat = valid ? _matZoneOuterValid : _matZoneOuterBlocked;
+            _zoneCircleMesh.SurfaceBegin(Mesh.PrimitiveType.TriangleStrip, outerMat);
+            for (int i = 0; i <= segments; i++)
+            {
+                float ang = i * step;
+                float cos = MathF.Cos(ang);
+                float sin = MathF.Sin(ang);
+                float ix = Math.Clamp(centerX + cos * sInnerR, 0f, map.Width);
+                float iz = Math.Clamp(centerZ + sin * sInnerR, 0f, map.Depth);
+                float ox = Math.Clamp(centerX + cos * sOuterR, 0f, map.Width);
+                float oz = Math.Clamp(centerZ + sin * sOuterR, 0f, map.Depth);
+                float iy = map.GetHeight(ix, iz) + 0.24f;
+                float oy = map.GetHeight(ox, oz) + 0.24f;
+                _zoneCircleMesh.SurfaceAddVertex(new Vector3(ix, iy, iz));
+                _zoneCircleMesh.SurfaceAddVertex(new Vector3(ox, oy, oz));
+            }
+            _zoneCircleMesh.SurfaceEnd();
+        }
+
         _zoneCircle.Visible = true;
     }
 

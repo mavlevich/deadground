@@ -552,17 +552,17 @@ public sealed class GarrisonSystem : ISimulationSystem
             if (!world.TryGetUnit(occId, out _) || !world.TryGetGarrison(occId, out StructureId st, out GarrisonSlotKind slot) || st != structureId)
                 continue;
 
-            int damage = Math.Max(1, effectiveStructuralDamage / 14);
+            int damage = Math.Max(1, effectiveStructuralDamage / 32);
             if (floorsLost > 0)
             {
                 if (slot == GarrisonSlotKind.Roof)
                 {
-                    damage += Math.Max(8, floorsLost * 6);
+                    damage += Math.Max(6, floorsLost * 5);
                     world.SetGarrisonMembership(occId, structureId, GarrisonSlotKind.Interior);
                 }
                 else
                 {
-                    damage += Math.Max(4, floorsLost * 4);
+                    damage += Math.Max(2, floorsLost * 3);
                 }
             }
             if (sectionCollapsed)

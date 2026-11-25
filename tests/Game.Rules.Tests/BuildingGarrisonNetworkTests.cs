@@ -33,9 +33,9 @@ public sealed class BuildingGarrisonNetworkTests
         Assert.Equal(12, profile.Capacity);
         Assert.Equal(12, profile.FiringPorts.Length);
         Assert.Equal(4, profile.RoofPorts.Length);
-        Assert.Equal(0.35f, profile.CoverDamageMultiplier);
-        Assert.Equal(0.55f, profile.RubbleCoverDamageMultiplier);
-        Assert.Equal(0.70f, profile.RoofCoverDamageMultiplier);
+        Assert.Equal(0.25f, profile.CoverDamageMultiplier);
+        Assert.Equal(0.45f, profile.RubbleCoverDamageMultiplier);
+        Assert.Equal(0.65f, profile.RoofCoverDamageMultiplier);
         Assert.Equal(40.0f, profile.ConcealmentSpotRange);
         Assert.Equal(60, profile.FiringRevealTicks);
 
