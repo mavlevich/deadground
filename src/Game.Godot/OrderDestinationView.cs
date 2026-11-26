@@ -43,6 +43,7 @@ internal sealed partial class OrderDestinationView : Node3D
     private float _cachedZoneZ = float.NaN;
     private float _cachedZoneRadius = -1f;
     private float _cachedZoneOuterRadius = -1f;
+    private float _cachedZoneElevOffset = float.NaN;
     private bool _cachedZoneValid;
 
     internal bool IsZoneCircleVisible => _zoneCircle.Visible;
@@ -164,6 +165,7 @@ internal sealed partial class OrderDestinationView : Node3D
     internal bool IsFacingArrowVisibleInTree => _facingArrowRoot.IsVisibleInTree();
     internal float FacingArrowYaw => _facingArrowRoot.Rotation.Y;
     internal Vector3 FacingArrowPosition => _facingArrowRoot.Position;
+    internal float ZoneCircleElevationOffset => _cachedZoneElevOffset;
 
     public OrderDestinationView()
     {
@@ -709,7 +711,8 @@ internal sealed partial class OrderDestinationView : Node3D
         float centerZ,
         float radius,
         bool valid,
-        float outerSplashRadius = 0f)
+        float outerSplashRadius = 0f,
+        float elevationOffset = 0f)
     {
         float effectiveOuter = outerSplashRadius > radius + 0.5f ? outerSplashRadius : 0f;
         if (_zoneCircle.Visible &&
@@ -717,6 +720,7 @@ internal sealed partial class OrderDestinationView : Node3D
             MathF.Abs(centerZ - _cachedZoneZ) < 0.15f &&
             MathF.Abs(radius - _cachedZoneRadius) < 0.05f &&
             MathF.Abs(effectiveOuter - _cachedZoneOuterRadius) < 0.05f &&
+            MathF.Abs(elevationOffset - _cachedZoneElevOffset) < 0.05f &&
             valid == _cachedZoneValid)
         {
             return;
@@ -726,6 +730,7 @@ internal sealed partial class OrderDestinationView : Node3D
         _cachedZoneZ = centerZ;
         _cachedZoneRadius = radius;
         _cachedZoneOuterRadius = effectiveOuter;
+        _cachedZoneElevOffset = elevationOffset;
         _cachedZoneValid = valid;
 
         _zoneCircleMesh.ClearSurfaces();
@@ -746,8 +751,8 @@ internal sealed partial class OrderDestinationView : Node3D
             float iz = Math.Clamp(centerZ + sin * innerR, 0f, map.Depth);
             float ox = Math.Clamp(centerX + cos * outerR, 0f, map.Width);
             float oz = Math.Clamp(centerZ + sin * outerR, 0f, map.Depth);
-            float iy = map.GetHeight(ix, iz) + 0.25f;
-            float oy = map.GetHeight(ox, oz) + 0.25f;
+            float iy = map.GetHeight(ix, iz) + elevationOffset + 0.25f;
+            float oy = map.GetHeight(ox, oz) + elevationOffset + 0.25f;
             _zoneCircleMesh.SurfaceAddVertex(new Vector3(ix, iy, iz));
             _zoneCircleMesh.SurfaceAddVertex(new Vector3(ox, oy, oz));
         }

@@ -1594,7 +1594,27 @@ public partial class Main : Node3D
             }
             else if (_contextActionPanel?.TargetingMode == ContextTargetingMode.FastRope)
             {
-                if (TryGetGroundPositionUnderMouse(mousePos, out NumericsVector2 groundPos) && _scenarioGeometry is not null)
+                if (_buildingGarrisonView is not null &&
+                    TryPickGarrisonableBuilding(mousePos, out StructureId hoverRoofStruct) &&
+                    _buildingGarrisonView.TryGetRoofFastRopeInfo(hoverRoofStruct, out NumericsVector2 roofCenter, out float roofHeightAboveGround, out byte roofFloorsTotal, out int roofCap))
+                {
+                    bool roofIntactObserved = !_session.Replica.TryGetStructure(hoverRoofStruct, out StructureObservation roofObs) ||
+                        roofObs.FloorsStanding >= roofFloorsTotal;
+                    int ownInside = CountOwnUnitsInBuilding(hoverRoofStruct);
+                    bool full = ownInside >= roofCap;
+                    bool roofValid = roofIntactObserved && !full;
+                    bool hasHostile = TryGetCurrentHostileContactInBuilding(hoverRoofStruct, out _);
+                    _destination.ShowZoneCircle(_map, roofCenter.X, roofCenter.Y, 4.2f, roofValid, elevationOffset: roofHeightAboveGround);
+                    string frTip = !roofIntactObserved
+                        ? "Fast-Rope Blocked: Roof Collapsed [Esc to cancel]"
+                        : full
+                            ? $"Fast-Rope Blocked: Building Full ({ownInside}/{roofCap}) [Esc to cancel]"
+                            : hasHostile
+                                ? $"Fast-Rope Roof Assault (CQB) ({ownInside}/{roofCap}) [LMB]"
+                                : $"Fast-Rope onto Building Roof ({ownInside}/{roofCap}) [LMB]";
+                    _orderCursorOverlay?.SetCustomTooltip(true, roofValid ? DestinationValidity.Valid : DestinationValidity.Blocked, frTip);
+                }
+                else if (TryGetGroundPositionUnderMouse(mousePos, out NumericsVector2 groundPos) && _scenarioGeometry is not null)
                 {
                     FastRopeZoneStatus frStatus = FlightSystem.EvaluateFastRopeZone(_scenarioGeometry, groundPos);
                     bool frValid = frStatus == FastRopeZoneStatus.Valid;
@@ -3097,7 +3117,27 @@ public partial class Main : Node3D
 
             if (_contextActionPanel?.TargetingMode == ContextTargetingMode.FastRope)
             {
-                if (TryGetGroundPositionUnderMouse(mouse.Position, out NumericsVector2 groundPos))
+                bool isRoofTarget = false;
+                bool hasHostileRoof = false;
+                bool hasRopePos = false;
+                NumericsVector2 ropeTargetPos = default;
+
+                if (_buildingGarrisonView is not null &&
+                    TryPickGarrisonableBuilding(mouse.Position, out StructureId clickedRoofStruct) &&
+                    _buildingGarrisonView.TryGetRoofFastRopeInfo(clickedRoofStruct, out NumericsVector2 roofCenter, out _, out _, out _))
+                {
+                    ropeTargetPos = roofCenter;
+                    isRoofTarget = true;
+                    hasHostileRoof = TryGetCurrentHostileContactInBuilding(clickedRoofStruct, out _);
+                    hasRopePos = true;
+                }
+                else if (TryGetGroundPositionUnderMouse(mouse.Position, out NumericsVector2 groundPos))
+                {
+                    ropeTargetPos = groundPos;
+                    hasRopePos = true;
+                }
+
+                if (hasRopePos)
                 {
                     int ordered = 0;
                     foreach (EntityId unitId in _unitViews.Selected)
@@ -3106,22 +3146,26 @@ public partial class Main : Node3D
                             obs.HasFlightCapability &&
                             obs.FlightPhase != FlightPhase.Crashing)
                         {
-                            if (_session.OrderHelicopter(unitId, HelicopterOrderKind.FastRope, obs.AltitudeBand, hasTarget: true, target: groundPos))
+                            if (_session.OrderHelicopter(unitId, HelicopterOrderKind.FastRope, obs.AltitudeBand, hasTarget: true, target: ropeTargetPos))
                                 ordered++;
                         }
                     }
                     if (ordered > 0)
                     {
-                        string msg = ordered == 1
-                            ? "Fast-rope insertion ordered (1 helicopter)"
-                            : $"Fast-rope insertion ordered ({ordered} helicopters)";
+                        string msg = isRoofTarget
+                            ? (hasHostileRoof
+                                ? $"Fast-rope rooftop assault ordered ({ordered} {(ordered == 1 ? "helicopter" : "helicopters")})"
+                                : $"Fast-rope rooftop insertion ordered ({ordered} {(ordered == 1 ? "helicopter" : "helicopters")})")
+                            : (ordered == 1
+                                ? "Fast-rope insertion ordered (1 helicopter)"
+                                : $"Fast-rope insertion ordered ({ordered} helicopters)");
                         _orderNotification?.ShowNotification(msg);
                         _status.Text = msg;
                     }
                     else
                     {
-                        _orderNotification?.ShowNotification("Fast-rope requires embarked infantry and clear land/forest");
-                        _status.Text = "Fast-rope requires embarked infantry and clear land/forest";
+                        _orderNotification?.ShowNotification("Fast-rope requires embarked infantry and intact roof or clear land");
+                        _status.Text = "Fast-rope requires embarked infantry and intact roof or clear land";
                     }
                     _contextActionPanel.CancelTargeting();
                     _destination.HideZoneCircle();

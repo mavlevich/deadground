@@ -105,6 +105,7 @@ public sealed class OpsRules : RuleSet
         BuildingDestructionSystem buildingDestruction = new(geometry, smoke);
         GarrisonSystem garrison = new(geometry, def => perceptionCatalog.TryGetProfile(def, out UnitPerceptionProfile p) && p.Classification == ContactClassification.Infantry);
         garrison.SetNavigationSystem(nav);
+        flight?.SetGarrisonSystem(garrison);
         if (geometry.DestructibleBuildings.Count > 0)
         {
             for (int i = 0; i < geometry.DestructibleBuildings.Count; i++)

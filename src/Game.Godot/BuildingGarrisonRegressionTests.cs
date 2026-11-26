@@ -149,6 +149,21 @@ internal static class BuildingGarrisonRegressionTests
             Require(view.ContestedBuildingCount == 1, $"Expected 1 contested CQB building, got {view.ContestedBuildingCount}.");
             Require(view.ActiveFigureCount == 3, $"Expected 3 total figures (2 own + 1 hostile) in CQB section, got {view.ActiveFigureCount}.");
             Require(view.ActiveXRayCount == 2, $"Expected X-Ray ONLY for 2 own troops in CQB (never hostile), got {view.ActiveXRayCount}.");
+
+            // 6. Roof Fast-Rope preview metadata & elevated roof-deck zone circle
+            StructureId section106 = new(106);
+            Require(view.TryGetRoofFastRopeInfo(section106, out NumericsVector2 roofCenter, out float roofHeight, out byte roofFloors, out int roofCap),
+                "Section 106 must expose rooftop fast-rope info.");
+            Require(roofFloors == 5 && roofCap >= 4 && roofHeight > 13.0f && roofHeight < 14.5f,
+                $"Unexpected roof fast-rope metadata for section 106: floors={roofFloors}, cap={roofCap}, height={roofHeight}.");
+
+            OrderDestinationView orderView = new();
+            host3D.AddChild(orderView);
+            orderView.ShowZoneCircle(geometry.HeightMap, roofCenter.X, roofCenter.Y, radius: 4.5f, valid: true, elevationOffset: roofHeight);
+            Require(orderView.IsZoneCircleVisible && MathF.Abs(orderView.ZoneCircleElevationOffset - roofHeight) < 0.01f,
+                "OrderDestinationView must render elevated fast-rope zone circle at roof deck height.");
+            orderView.HideZoneCircle();
+            Require(!orderView.IsZoneCircleVisible, "HideZoneCircle must hide the rooftop preview ring.");
             _ = clickedBadge;
         }
         finally

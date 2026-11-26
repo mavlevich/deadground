@@ -121,6 +121,13 @@ public sealed class DetectionSystem : ISimulationSystem
         _spatialGrid = new UnitSpatialGrid(geometry.HeightMap.Width, geometry.HeightMap.Depth, maxUnits);
         _losContext = new LineOfSightContext(geometry.Structures.Count);
         _staticOnlyLosContext = new LineOfSightContext(geometry.Structures.Count);
+        if (geometry.VegetationZones.Count > 0)
+        {
+            int vegCap = Math.Max(64, geometry.VegetationZones.Count * 2);
+            int zoneCap = Math.Max(16, geometry.VegetationZones.Count * 2);
+            _losContext.EnsureVegetationCapacity(vegCap, zoneCap, geometry.VegetationClearings.Count);
+            _staticOnlyLosContext.EnsureVegetationCapacity(vegCap, zoneCap, geometry.VegetationClearings.Count);
+        }
         _candidateBuffer = new int[maxUnits];
         _observedBitmask = new uint[maxSides * _wordsPerSide];
         _observedTargetsBuffer = new SideContactTracker.ObservedTarget[maxSides * maxUnits];

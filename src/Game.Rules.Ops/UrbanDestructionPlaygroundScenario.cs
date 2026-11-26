@@ -198,6 +198,10 @@ public static class UrbanDestructionPlaygroundScenario
         ushort rifleIdx = catalog.RequireDefinitionIndex("us_rifleman");
         int rifleAmmo = catalog.GetAmmoCapacity(rifleDef);
 
+        UnitDefinition ch47Def = catalog.RequireDefinition("ch47d");
+        ushort ch47Idx = catalog.RequireDefinitionIndex("ch47d");
+        int ch47Ammo = catalog.GetAmmoCapacity(ch47Def);
+
         // Player 1 (Soviet) facing +Z toward the central panelka block
         const float facingPlusZ = MathF.PI;
         world.CreateUnit(1, t62Idx, SovietT62WestPos, t62Def.Speed, t62Def.MaxHealth, t62Ammo, facingPlusZ);
@@ -210,6 +214,23 @@ public static class UrbanDestructionPlaygroundScenario
         world.CreateUnit(1, rifleIdx, new Vector2(496.0f, 472.0f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingPlusZ);
         world.CreateUnit(1, rifleIdx, new Vector2(504.0f, 472.0f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingPlusZ);
         world.CreateUnit(1, rifleIdx, new Vector2(512.0f, 472.0f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingPlusZ);
+
+        // Player 1 CH-47D assault transport staged on the south pad with 4 embarked riflemen ready for rooftop Fast-Rope
+        Vector2 chinookPos = new(548.0f, 368.0f);
+        EntityId chinookId = world.CreateUnit(
+            1,
+            ch47Idx,
+            chinookPos,
+            ch47Def.Speed > 0f ? ch47Def.Speed : 18.0f,
+            ch47Def.MaxHealth,
+            ch47Ammo,
+            facingPlusZ,
+            passengerCapacity: ch47Def.PassengerCapacity);
+        for (int r = 0; r < 4; r++)
+        {
+            EntityId airAssault = world.CreateUnit(1, rifleIdx, chinookPos, rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingPlusZ);
+            world.Board(chinookId, airAssault);
+        }
 
         // Player 2 (US) behind central panelka facing -Z toward the courtyard,
         // plus a 2-man ambush fireteam pre-garrisoned inside east flanking panelka section 106 for CQB testing

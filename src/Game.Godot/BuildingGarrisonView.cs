@@ -459,6 +459,28 @@ internal sealed class BuildingGarrisonView : IDisposable
         return false;
     }
 
+    public bool TryGetRoofFastRopeInfo(
+        StructureId structureId,
+        out NumericsVector2 centerXZ,
+        out float roofHeightAboveGround,
+        out byte floorsTotal,
+        out int capacity)
+    {
+        if (_byId.TryGetValue(structureId, out BuildingVisualEntry? entry))
+        {
+            centerXZ = entry.CenterXZ;
+            roofHeightAboveGround = MathF.Max(0f, entry.Bounds.MaxY - entry.Bounds.MinY);
+            floorsTotal = entry.DestructionProfile.FloorsTotal;
+            capacity = entry.GarrisonProfile.Capacity;
+            return true;
+        }
+        centerXZ = default;
+        roofHeightAboveGround = 0f;
+        floorsTotal = 0;
+        capacity = 0;
+        return false;
+    }
+
     public bool TryGetBadgeAtScreenPoint(Vector2 screenPoint, out StructureId structureId)
     {
         for (int i = 0; i < VisibleBadgeCount && i < _badgePool.Length; i++)

@@ -170,6 +170,59 @@ public sealed class GarrisonSystem : ISimulationSystem
     public bool IsRegistered(StructureId structureId) => _buildings.ContainsKey(structureId);
 
     /// <summary>
+    /// Finds a registered garrisonable building section whose ground footprint contains <paramref name="position"/>.
+    /// Zero allocations.
+    /// </summary>
+    public bool TryFindBuildingContaining(
+        Vector2 position,
+        out StructureId structureId,
+        out Vector2 centerXZ,
+        out float roofHeightAboveGround)
+    {
+        for (int i = 0; i < _buildingCount; i++)
+        {
+            BuildingEntry e = _buildingList[i];
+            if (position.X >= e.Bounds.MinX && position.X <= e.Bounds.MaxX &&
+                position.Y >= e.Bounds.MinZ && position.Y <= e.Bounds.MaxZ)
+            {
+                structureId = e.Id;
+                centerXZ = e.CenterXZ;
+                roofHeightAboveGround = MathF.Max(0f, e.Bounds.MaxY - e.Bounds.MinY);
+                return true;
+            }
+        }
+        structureId = default;
+        centerXZ = default;
+        roofHeightAboveGround = 0f;
+        return false;
+    }
+
+    public bool CanCommitRoofFastRope(WorldState world, StructureId structureId, EntityId unitId)
+    {
+        if (!_buildings.TryGetValue(structureId, out BuildingEntry? entry))
+            return false;
+        if (!world.TryGetUnit(unitId, out UnitState unit) || !_isInfantryDefinition(unit.Definition))
+            return false;
+        if (!CanOccupyRoof(world, structureId))
+            return false;
+        int unitTeam = world.GetPlayerTeam(unit.Owner);
+        if (CountTeamOccupants(entry, world, unitTeam) >= entry.Profile.Capacity)
+            return false;
+        return entry.OccupantCount < BuildingGarrisonProfile.MaxOccupantsPerStructure;
+    }
+
+    /// <summary>
+    /// Commits a freshly fast-roped infantryman directly into a building section's rooftop slot
+    /// (bypassing ground entrance walk-in and initiating CQB if enemy troops already hold the section).
+    /// </summary>
+    public bool TryCommitFastRopeRoofEntry(WorldState world, EntityId unitId, StructureId structureId)
+    {
+        if (!_buildings.TryGetValue(structureId, out BuildingEntry? entry))
+            return false;
+        return TryCommitEntry(entry, unitId, GarrisonSlotKind.Roof, world, _navigation);
+    }
+
+    /// <summary>
     /// Places an infantry unit directly into a registered building section during scenario setup
     /// (bypassing entrance walk-in).
     /// </summary>
@@ -907,7 +960,7 @@ public sealed class GarrisonSystem : ISimulationSystem
         _pendingEnterUnits[last] = default;
     }
 
-    private bool CanOccupyRoof(WorldState world, StructureId structureId)
+    public bool CanOccupyRoof(WorldState world, StructureId structureId)
     {
         if (world.TryGetDestructibleStructure(structureId, out DestructibleStructureState destState))
         {

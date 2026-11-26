@@ -1199,14 +1199,18 @@ internal sealed class UnitView
                     _fastRopeRoot.Visible = showRopes;
                 if (showRopes && _fastRopeLeft is not null && _fastRopeRight is not null)
                 {
-                    float ropeHeight = _altitude + 1.2f;
+                    // On open ground (~18 m hover) ropes reach ground; over a building roof (> 20 m hover)
+                    // terminate ropes cleanly at the rooftop deck (~15.2 m drop from rear ramp).
+                    float rampY = _altitude + 1.2f;
+                    float ropeHeight = _altitude > 20.0f ? FlightSystem.RoofFastRopeClearanceAboveRoofMeters + 1.2f : rampY;
+                    float ropeCenterY = rampY - ropeHeight * 0.5f;
                     // Hang twin braided ropes from the lowered rear ramp of the helicopter
                     Vector3 rearOffset = new Vector3(MathF.Sin(_heading), 0f, MathF.Cos(_heading)) * 5.8f;
                     Vector3 sideOffset = new Vector3(MathF.Cos(_heading), 0f, -MathF.Sin(_heading)) * 0.85f;
                     _fastRopeLeft.Scale = new Vector3(1f, ropeHeight, 1f);
-                    _fastRopeLeft.Position = rearOffset - sideOffset + new Vector3(0f, ropeHeight * 0.5f, 0f);
+                    _fastRopeLeft.Position = rearOffset - sideOffset + new Vector3(0f, ropeCenterY, 0f);
                     _fastRopeRight.Scale = new Vector3(1f, ropeHeight, 1f);
-                    _fastRopeRight.Position = rearOffset + sideOffset + new Vector3(0f, ropeHeight * 0.5f, 0f);
+                    _fastRopeRight.Position = rearOffset + sideOffset + new Vector3(0f, ropeCenterY, 0f);
                 }
             }
 
