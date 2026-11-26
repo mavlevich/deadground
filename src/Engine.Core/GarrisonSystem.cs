@@ -14,7 +14,7 @@ public sealed class GarrisonSystem : ISimulationSystem
     public const float EntranceArrivalRadius = 3.5f;
     public const float AdjacencyMaxGapMeters = 2.5f;
     public const float AdjacencyMinOverlapMeters = 2.0f;
-    public const int AdjacentTransferTicks = 20;
+    public const int AdjacentTransferTicks = 4;
     public const float CqbSameBandDamageMultiplier = 0.70f;
     public const float CqbCrossBandDamageMultiplier = 0.55f;
     private const float FootClearanceRadius = 0.45f;
@@ -168,6 +168,21 @@ public sealed class GarrisonSystem : ISimulationSystem
     }
 
     public bool IsRegistered(StructureId structureId) => _buildings.ContainsKey(structureId);
+
+    /// <summary>
+    /// Places an infantry unit directly into a registered building section during scenario setup
+    /// (bypassing entrance walk-in).
+    /// </summary>
+    public bool TryPlaceInitialGarrison(
+        WorldState world,
+        EntityId unitId,
+        StructureId structureId,
+        GarrisonSlotKind slotKind = GarrisonSlotKind.Interior)
+    {
+        if (!_buildings.TryGetValue(structureId, out BuildingEntry? entry))
+            return false;
+        return TryCommitEntry(entry, unitId, slotKind, world, _navigation);
+    }
 
     public bool AreSectionsAdjacent(StructureId a, StructureId b)
     {

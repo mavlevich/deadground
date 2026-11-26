@@ -21,6 +21,19 @@ internal sealed class BuildingGarrisonView : IDisposable
     private const int MaxBadges = 64;
     private const int MaxScratchUnitsPerBuilding = 16;
     private const int MaxAdjacentPerBuilding = 8;
+    private const int MaxTrackedOwnFigures = 128;
+    private const float InteriorRunSpeedMetersPerSec = 8.5f;
+    private const float ThreatWatchRangeMeters = 450.0f;
+
+    private struct TrackedOwnFigure
+    {
+        public EntityId UnitId;
+        public Vector3 Position;
+        public float YawRad;
+        public float RunPhase;
+        public int LastSeenFrame;
+        public bool Active;
+    }
 
     private readonly struct WorldFiringPort
     {
@@ -81,10 +94,15 @@ internal sealed class BuildingGarrisonView : IDisposable
         public int HostileCurrentRoofCount;
         public int HostileLastKnownCount;
         public byte ObservedFloorsStanding;
+        public readonly EntityId[] OwnInteriorIds = new EntityId[MaxScratchUnitsPerBuilding];
         public readonly float[] OwnInteriorAimYaws = new float[MaxScratchUnitsPerBuilding];
         public readonly bool[] OwnInteriorHasAim = new bool[MaxScratchUnitsPerBuilding];
+        public readonly EntityId[] OwnRoofIds = new EntityId[MaxScratchUnitsPerBuilding];
         public readonly float[] HostileInteriorAimYaws = new float[MaxScratchUnitsPerBuilding];
         public readonly bool[] HostileInteriorHasAim = new bool[MaxScratchUnitsPerBuilding];
+        public bool HasThreatWatchDir;
+        public float ThreatWatchDirX;
+        public float ThreatWatchDirZ;
     }
 
     private sealed class BadgeSlot
@@ -134,7 +152,9 @@ internal sealed class BuildingGarrisonView : IDisposable
     private readonly Dictionary<StructureId, BuildingVisualEntry> _byId;
     private readonly BuildingVisualEntry[] _entries;
     private readonly bool[] _portUsedMask = new bool[32];
+    private readonly TrackedOwnFigure[] _trackedOwnFigures = new TrackedOwnFigure[MaxTrackedOwnFigures];
     private readonly int _entryCount;
+    private int _frameCounter;
     private float _cqbPulseTime;
     private bool _disposed;
 
@@ -464,7 +484,9 @@ internal sealed class BuildingGarrisonView : IDisposable
     {
         if (_disposed) return;
 
-        _cqbPulseTime += MathF.Max(0f, deltaSeconds);
+        _frameCounter++;
+        float dt = Math.Clamp(deltaSeconds, 0f, 0.25f);
+        _cqbPulseTime += dt;
         float cqbPulse = 0.5f + 0.5f * MathF.Sin(_cqbPulseTime * 7.5f);
 
         // 1. Reset per-building frame counters (0 allocations)
@@ -477,6 +499,9 @@ internal sealed class BuildingGarrisonView : IDisposable
             e.HostileCurrentInteriorCount = 0;
             e.HostileCurrentRoofCount = 0;
             e.HostileLastKnownCount = 0;
+            e.HasThreatWatchDir = false;
+            e.ThreatWatchDirX = 0f;
+            e.ThreatWatchDirZ = 0f;
             e.ObservedFloorsStanding = replica.TryGetStructure(e.Id, out StructureObservation obs)
                 ? obs.FloorsStanding
                 : e.DestructionProfile.FloorsTotal;
@@ -494,6 +519,10 @@ internal sealed class BuildingGarrisonView : IDisposable
 
             if (u.GarrisonSlotKind == GarrisonSlotKind.Roof)
             {
+                if (entry.OwnRoofCount < MaxScratchUnitsPerBuilding)
+                {
+                    entry.OwnRoofIds[entry.OwnRoofCount] = u.Id;
+                }
                 entry.OwnRoofCount++;
             }
             else
@@ -501,6 +530,7 @@ internal sealed class BuildingGarrisonView : IDisposable
                 int slotIdx = entry.OwnInteriorCount;
                 if (slotIdx < MaxScratchUnitsPerBuilding)
                 {
+                    entry.OwnInteriorIds[slotIdx] = u.Id;
                     entry.OwnInteriorAimYaws[slotIdx] = u.TurretYaw;
                     entry.OwnInteriorHasAim[slotIdx] = u.AttackStatus != AttackExecutionStatus.None;
                 }
@@ -544,6 +574,44 @@ internal sealed class BuildingGarrisonView : IDisposable
             }
         }
 
+        // 3b. Compute nearest spotted external enemy threat direction for occupied friendly buildings
+        // so garrisoned infantry watch windows facing spotted tanks/infantry even before opening fire.
+        float watchRangeSq = ThreatWatchRangeMeters * ThreatWatchRangeMeters;
+        for (int i = 0; i < _entryCount; i++)
+        {
+            BuildingVisualEntry e = _entries[i];
+            if (e.OwnInteriorCount == 0) continue;
+
+            float bestDistSq = watchRangeSq;
+            float dirX = 0f;
+            float dirZ = 0f;
+            bool foundThreat = false;
+            for (int c = 0; c < contacts.Length; c++)
+            {
+                ref readonly ContactObservation obs = ref contacts[c];
+                if (obs.State != ContactState.Current) continue;
+                if (obs.GarrisonStructureId == e.Id) continue;
+
+                float dx = obs.Position.X - e.CenterXZ.X;
+                float dz = obs.Position.Y - e.CenterXZ.Y;
+                float dSq = dx * dx + dz * dz;
+                if (dSq > 1e-2f && dSq < bestDistSq)
+                {
+                    bestDistSq = dSq;
+                    float invLen = 1f / MathF.Sqrt(dSq);
+                    dirX = dx * invLen;
+                    dirZ = dz * invLen;
+                    foundThreat = true;
+                }
+            }
+            if (foundThreat)
+            {
+                e.HasThreatWatchDir = true;
+                e.ThreatWatchDirX = dirX;
+                e.ThreatWatchDirZ = dirZ;
+            }
+        }
+
         // 4. Populate figures MultiMesh & Variant A X-Ray MultiMesh
         int figCount = 0;
         int xrayCount = 0;
@@ -571,18 +639,21 @@ internal sealed class BuildingGarrisonView : IDisposable
             int maskLen = Math.Min(e.FiringPorts.Length, _portUsedMask.Length);
             for (int m = 0; m < maskLen; m++) _portUsedMask[m] = false;
 
-            // Own interior / rubble figures + Variant A X-Ray silhouettes
+            // Own interior / rubble figures + Variant A X-Ray silhouettes (with smooth room/pod'ezd running)
             if (e.OwnInteriorCount > 0)
             {
                 AppendInteriorFigures(
                     e,
                     e.OwnInteriorCount,
+                    e.OwnInteriorIds,
                     e.OwnInteriorAimYaws,
                     e.OwnInteriorHasAim,
+                    useThreatWatchFallback: true,
                     OwnFigureColor,
                     emitXRay: true,
                     xrayTint,
                     rubblePhaseOffset: 0f,
+                    dt,
                     ref figCount,
                     ref xrayCount);
             }
@@ -590,7 +661,7 @@ internal sealed class BuildingGarrisonView : IDisposable
             // Own rooftop figures (full upright figures on parapet, plus subtle X-Ray if selected or in CQB)
             if (e.OwnRoofCount > 0)
             {
-                AppendRoofFigures(e, e.OwnRoofCount, OwnRoofFigureColor, emitXRay: isSelected || isContested, xrayTint, ref figCount, ref xrayCount);
+                AppendRoofFigures(e, e.OwnRoofCount, e.OwnRoofIds, OwnRoofFigureColor, emitXRay: isSelected || isContested, xrayTint, dt, ref figCount, ref xrayCount);
             }
 
             // Spotted hostile CURRENT interior figures (NEVER X-Ray, NEVER for LastKnown or concealed enemies)
@@ -599,12 +670,15 @@ internal sealed class BuildingGarrisonView : IDisposable
                 AppendInteriorFigures(
                     e,
                     e.HostileCurrentInteriorCount,
+                    ownUnitIds: null,
                     e.HostileInteriorAimYaws,
                     e.HostileInteriorHasAim,
+                    useThreatWatchFallback: false,
                     HostileFigureColor,
                     emitXRay: false,
                     default,
                     rubblePhaseOffset: MathF.PI * 0.5f,
+                    dt,
                     ref figCount,
                     ref xrayCount);
             }
@@ -612,7 +686,7 @@ internal sealed class BuildingGarrisonView : IDisposable
             // Spotted hostile CURRENT rooftop figures
             if (e.HostileCurrentRoofCount > 0)
             {
-                AppendRoofFigures(e, e.HostileCurrentRoofCount, HostileFigureColor, emitXRay: false, default, ref figCount, ref xrayCount);
+                AppendRoofFigures(e, e.HostileCurrentRoofCount, ownUnitIds: null, HostileFigureColor, emitXRay: false, default, dt, ref figCount, ref xrayCount);
             }
 
             // Project clickable tactical badge if overlay & camera available
@@ -641,6 +715,16 @@ internal sealed class BuildingGarrisonView : IDisposable
                         cqbPulse,
                         screenPos);
                 }
+            }
+        }
+
+        // Prune stale tracked own figures that exited buildings or died
+        for (int t = 0; t < MaxTrackedOwnFigures; t++)
+        {
+            if (_trackedOwnFigures[t].Active && _trackedOwnFigures[t].LastSeenFrame != _frameCounter)
+            {
+                _trackedOwnFigures[t].Active = false;
+                _trackedOwnFigures[t].UnitId = default;
             }
         }
 
@@ -684,12 +768,15 @@ internal sealed class BuildingGarrisonView : IDisposable
     private void AppendInteriorFigures(
         BuildingVisualEntry e,
         int unitCount,
+        EntityId[]? ownUnitIds,
         float[] aimYaws,
         bool[] hasAim,
+        bool useThreatWatchFallback,
         Color figureColor,
         bool emitXRay,
         Color xrayColor,
         float rubblePhaseOffset,
+        float dt,
         ref int figCount,
         ref int xrayCount)
     {
@@ -703,7 +790,13 @@ internal sealed class BuildingGarrisonView : IDisposable
                 float angle = (MathF.Tau * k) / Math.Max(1, shown) + e.YawRad + rubblePhaseOffset;
                 float rx = e.CenterXZ.X + MathF.Cos(angle) * 2.8f;
                 float rz = e.CenterXZ.Y + MathF.Sin(angle) * 2.8f;
-                Transform3D xform = new(Basis.FromEuler(new Vector3(0f, -angle, 0f)).Scaled(new Vector3(0.95f, 0.82f, 0.95f)), new Vector3(rx, rubbleY, rz));
+                Vector3 targetPos = new(rx, rubbleY, rz);
+                float targetYaw = -angle;
+                if (ownUnitIds is not null && k < MaxScratchUnitsPerBuilding && ownUnitIds[k] != default)
+                {
+                    ResolveSmoothedOwnPose(ownUnitIds[k], targetPos, targetYaw, dt, out targetPos, out targetYaw, out _);
+                }
+                Transform3D xform = new(Basis.FromEuler(new Vector3(0f, targetYaw, 0f)).Scaled(new Vector3(0.95f, 0.82f, 0.95f)), targetPos);
                 AddInstance(in xform, figureColor, emitXRay, xrayColor, ref figCount, ref xrayCount);
             }
             return;
@@ -712,7 +805,8 @@ internal sealed class BuildingGarrisonView : IDisposable
         int portCount = e.FiringPorts.Length;
         if (portCount == 0) return;
 
-        // Place figures dynamically at top-standing-floor window ports matching each unit's active firing side
+        // Place figures dynamically at top-standing-floor window ports matching each unit's active firing
+        // or nearest spotted enemy threat direction
         float topFloorBaseY = e.Bounds.MinY + (e.ObservedFloorsStanding - 1) * e.DestructionProfile.FloorHeight;
         int shownPorts = Math.Min(unitCount, portCount);
         int stride = shownPorts <= 4 && portCount >= 12 ? 3 : 1;
@@ -721,11 +815,25 @@ internal sealed class BuildingGarrisonView : IDisposable
         for (int k = 0; k < shownPorts; k++)
         {
             int chosenIdx = -1;
+            bool hasDesiredDir = false;
+            float aimX = 0f;
+            float aimZ = 0f;
+
             if (k < MaxScratchUnitsPerBuilding && hasAim[k])
             {
-                // Shift soldier to the best unoccupied window facing their active TurretYaw direction
-                float aimX = -MathF.Sin(aimYaws[k]);
-                float aimZ = -MathF.Cos(aimYaws[k]);
+                aimX = -MathF.Sin(aimYaws[k]);
+                aimZ = -MathF.Cos(aimYaws[k]);
+                hasDesiredDir = true;
+            }
+            else if (useThreatWatchFallback && e.HasThreatWatchDir)
+            {
+                aimX = e.ThreatWatchDirX;
+                aimZ = e.ThreatWatchDirZ;
+                hasDesiredDir = true;
+            }
+
+            if (hasDesiredDir)
+            {
                 float bestDot = float.NegativeInfinity;
                 for (int p = 0; p < portCount; p++)
                 {
@@ -742,7 +850,7 @@ internal sealed class BuildingGarrisonView : IDisposable
 
             if (chosenIdx < 0)
             {
-                // Idle soldier (or all preferred ports taken): pick first unoccupied port with facade spread
+                // Idle soldier with no nearby spotted threat: spread across unoccupied facades
                 int startIdx = (k * stride) % portCount;
                 for (int step = 0; step < portCount; step++)
                 {
@@ -761,18 +869,38 @@ internal sealed class BuildingGarrisonView : IDisposable
             WorldFiringPort wp = e.FiringPorts[chosenIdx];
             // Position figure so head + rifle align with window sill height (port.LocalY)
             float figureBaseY = topFloorBaseY + MathF.Max(0.05f, wp.LocalY - 1.15f);
-            Basis basis = Basis.FromEuler(new Vector3(0f, wp.YawRad, 0f));
-            Transform3D xform = new(basis, new Vector3(wp.WorldX, figureBaseY, wp.WorldZ));
-            AddInstance(in xform, figureColor, emitXRay, xrayColor, ref figCount, ref xrayCount);
+            Vector3 targetPos = new(wp.WorldX, figureBaseY, wp.WorldZ);
+            float targetYaw = wp.YawRad;
+            bool isRunningInside = false;
+
+            if (ownUnitIds is not null && k < MaxScratchUnitsPerBuilding && ownUnitIds[k] != default)
+            {
+                ResolveSmoothedOwnPose(ownUnitIds[k], targetPos, targetYaw, dt, out targetPos, out targetYaw, out isRunningInside);
+            }
+
+            Basis basis = Basis.FromEuler(new Vector3(0f, targetYaw, 0f));
+            Transform3D xform = new(basis, targetPos);
+            // While sprinting indoors across rooms/adjacent pod'ezds, render the X-Ray silhouette smoothly
+            // along the interior corridor and show the solid window figure once settled at the sill
+            if (isRunningInside && emitXRay)
+            {
+                AddXRayOnlyInstance(in xform, xrayColor, ref xrayCount);
+            }
+            else
+            {
+                AddInstance(in xform, figureColor, emitXRay, xrayColor, ref figCount, ref xrayCount);
+            }
         }
     }
 
     private void AppendRoofFigures(
         BuildingVisualEntry e,
         int unitCount,
+        EntityId[]? ownUnitIds,
         Color figureColor,
         bool emitXRay,
         Color xrayColor,
+        float dt,
         ref int figCount,
         ref int xrayCount)
     {
@@ -786,9 +914,112 @@ internal sealed class BuildingGarrisonView : IDisposable
             float lateralJitter = k >= portCount ? 1.15f : 0f;
             float rx = rp.WorldX + MathF.Cos(rp.YawRad) * lateralJitter;
             float rz = rp.WorldZ - MathF.Sin(rp.YawRad) * lateralJitter;
-            Basis basis = Basis.FromEuler(new Vector3(0f, rp.YawRad, 0f));
-            Transform3D xform = new(basis, new Vector3(rx, rp.WorldY, rz));
+            Vector3 targetPos = new(rx, rp.WorldY, rz);
+            float targetYaw = rp.YawRad;
+            if (ownUnitIds is not null && k < MaxScratchUnitsPerBuilding && ownUnitIds[k] != default)
+            {
+                ResolveSmoothedOwnPose(ownUnitIds[k], targetPos, targetYaw, dt, out targetPos, out targetYaw, out _);
+            }
+            Basis basis = Basis.FromEuler(new Vector3(0f, targetYaw, 0f));
+            Transform3D xform = new(basis, targetPos);
             AddInstance(in xform, figureColor, emitXRay, xrayColor, ref figCount, ref xrayCount);
+        }
+    }
+
+    private void ResolveSmoothedOwnPose(
+        EntityId unitId,
+        Vector3 targetPos,
+        float targetYaw,
+        float dt,
+        out Vector3 outPos,
+        out float outYaw,
+        out bool isRunningInside)
+    {
+        int foundIdx = -1;
+        int freeIdx = -1;
+        for (int i = 0; i < MaxTrackedOwnFigures; i++)
+        {
+            if (_trackedOwnFigures[i].Active && _trackedOwnFigures[i].UnitId == unitId)
+            {
+                foundIdx = i;
+                break;
+            }
+            if (freeIdx < 0 && !_trackedOwnFigures[i].Active)
+            {
+                freeIdx = i;
+            }
+        }
+
+        if (foundIdx < 0)
+        {
+            if (freeIdx >= 0)
+            {
+                _trackedOwnFigures[freeIdx] = new TrackedOwnFigure
+                {
+                    UnitId = unitId,
+                    Position = targetPos,
+                    YawRad = targetYaw,
+                    RunPhase = 0f,
+                    LastSeenFrame = _frameCounter,
+                    Active = true
+                };
+            }
+            outPos = targetPos;
+            outYaw = targetYaw;
+            isRunningInside = false;
+            return;
+        }
+
+        ref TrackedOwnFigure tr = ref _trackedOwnFigures[foundIdx];
+        tr.LastSeenFrame = _frameCounter;
+        Vector3 delta = targetPos - tr.Position;
+        float dist = delta.Length();
+
+        if (dist > 32f || dt <= 0f)
+        {
+            // Too far to be an adjacent/interior move (e.g., exited and re-entered far away): snap cleanly
+            tr.Position = targetPos;
+            tr.YawRad = targetYaw;
+            tr.RunPhase = 0f;
+            outPos = targetPos;
+            outYaw = targetYaw;
+            isRunningInside = false;
+            return;
+        }
+
+        float maxStep = InteriorRunSpeedMetersPerSec * dt;
+        if (dist <= maxStep || dist <= 0.08f)
+        {
+            tr.Position = targetPos;
+            tr.YawRad = targetYaw;
+            tr.RunPhase = 0f;
+            outPos = targetPos;
+            outYaw = targetYaw;
+            isRunningInside = false;
+            return;
+        }
+
+        Vector3 dir = delta / dist;
+        tr.Position += dir * maxStep;
+        tr.RunPhase += maxStep * 3.4f;
+        float runYaw = (delta.X * delta.X + delta.Z * delta.Z) > 0.001f
+            ? MathF.Atan2(delta.X, delta.Z)
+            : targetYaw;
+        tr.YawRad = runYaw;
+
+        float strideBob = MathF.Abs(MathF.Sin(tr.RunPhase)) * 0.14f;
+        outPos = new Vector3(tr.Position.X, tr.Position.Y + strideBob, tr.Position.Z);
+        outYaw = runYaw;
+        isRunningInside = dist > 0.35f;
+    }
+
+    private void AddXRayOnlyInstance(in Transform3D xform, Color xrayColor, ref int xrayCount)
+    {
+        if (xrayCount < MaxInstances)
+        {
+            _xrayMesh.SetInstanceTransform(xrayCount, xform);
+            _xrayMesh.SetInstanceColor(xrayCount, xrayColor);
+            xrayCount++;
         }
     }
 
