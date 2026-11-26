@@ -782,4 +782,210 @@ public sealed class VehicleSeparationSystem
 
         return alpha;
     }
+
+    /// <summary>
+    /// Zero-allocation check whether a candidate detour point is clear of other ground units
+    /// on the same vertical band (excluding self and own boarding target).
+    /// </summary>
+    public bool IsPointClearOfUnits(
+        WorldState world,
+        IUnitMovementCatalog catalog,
+        int selfUnitIndex,
+        Vector2 point,
+        uint surface,
+        float selfCollisionRadius,
+        float selfHeight,
+        float extraMargin = 0.25f)
+    {
+        float queryRadius = selfCollisionRadius + 8.0f;
+        int candidateCount = _spatialGrid.QueryNeighbors(point, queryRadius, ref _candidateBuffer);
+        if (candidateCount == 0)
+            return true;
+
+        float selfSurfaceY = _navGrid.Evaluator.GetSurfaceHeight(point, surface);
+        float selfTopY = selfSurfaceY + selfHeight;
+        UnitState selfUnit = world.GetUnitAt(selfUnitIndex);
+        bool hasBoardingTarget = world.TryGetBoardingTarget(selfUnit.Id, out EntityId boardingTarget);
+
+        for (int i = 0; i < candidateCount; i++)
+        {
+            int otherIndex = _candidateBuffer[i];
+            if (otherIndex == selfUnitIndex) continue;
+
+            UnitState other = world.GetUnitAt(otherIndex);
+            if (world.IsContained(other.Id) || world.IsAirborne(other.Id) || world.IsSlung(other.Id)) continue;
+            if (hasBoardingTarget && other.Id == boardingTarget) continue;
+
+            float otherRadius = 0f;
+            float otherHeight = 2.5f;
+            if (catalog.TryGetProfile(other.Definition, out UnitMovementProfile otherProfile))
+            {
+                otherRadius = otherProfile.EffectiveCollisionRadius;
+                otherHeight = otherProfile.Height;
+            }
+            if (otherRadius <= 0f) continue;
+
+            float otherSurfaceY = _navGrid.Evaluator.GetSurfaceHeight(other.Position, other.SupportSurface);
+            float otherTopY = otherSurfaceY + otherHeight;
+            if (MathF.Max(selfSurfaceY, otherSurfaceY) >= MathF.Min(selfTopY, otherTopY))
+                continue;
+
+            float minDist = selfCollisionRadius + otherRadius + extraMargin;
+            if (Vector2.DistanceSquared(point, _spatialGrid.GetPosition(otherIndex)) < minDist * minDist)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Zero-allocation check whether the straight segment [segA, segB] maintains lateral clearance
+    /// from all other ground units on the same vertical band.
+    /// </summary>
+    public bool IsSegmentClearOfUnits(
+        WorldState world,
+        IUnitMovementCatalog catalog,
+        int selfUnitIndex,
+        Vector2 segA,
+        Vector2 segB,
+        uint surface,
+        float selfCollisionRadius,
+        float selfHeight,
+        float extraMargin = 0.65f)
+    {
+        Vector2 mid = (segA + segB) * 0.5f;
+        float halfLen = Vector2.Distance(segA, segB) * 0.5f;
+        float queryRadius = halfLen + selfCollisionRadius + 8.0f;
+        int candidateCount = _spatialGrid.QueryNeighbors(mid, queryRadius, ref _candidateBuffer);
+        if (candidateCount == 0)
+            return true;
+
+        float selfSurfaceY = _navGrid.Evaluator.GetSurfaceHeight(mid, surface);
+        float selfTopY = selfSurfaceY + selfHeight;
+        UnitState selfUnit = world.GetUnitAt(selfUnitIndex);
+        bool hasBoardingTarget = world.TryGetBoardingTarget(selfUnit.Id, out EntityId boardingTarget);
+
+        for (int i = 0; i < candidateCount; i++)
+        {
+            int otherIndex = _candidateBuffer[i];
+            if (otherIndex == selfUnitIndex) continue;
+
+            UnitState other = world.GetUnitAt(otherIndex);
+            if (other.Moving) continue;
+            if (world.IsContained(other.Id) || world.IsAirborne(other.Id) || world.IsSlung(other.Id)) continue;
+            if (hasBoardingTarget && other.Id == boardingTarget) continue;
+
+            float otherRadius = 0f;
+            float otherHeight = 2.5f;
+            if (catalog.TryGetProfile(other.Definition, out UnitMovementProfile otherProfile))
+            {
+                otherRadius = otherProfile.EffectiveCollisionRadius;
+                otherHeight = otherProfile.Height;
+            }
+            if (otherRadius <= 0f) continue;
+
+            float otherSurfaceY = _navGrid.Evaluator.GetSurfaceHeight(other.Position, other.SupportSurface);
+            float otherTopY = otherSurfaceY + otherHeight;
+            if (MathF.Max(selfSurfaceY, otherSurfaceY) >= MathF.Min(selfTopY, otherTopY))
+                continue;
+
+            Vector2 otherPos = _spatialGrid.GetPosition(otherIndex);
+            float minDist = selfCollisionRadius + otherRadius + extraMargin;
+            float endDist = Vector2.Distance(otherPos, segB);
+            if (endDist < minDist)
+            {
+                return false;
+            }
+            float startDist = Vector2.Distance(otherPos, segA);
+            float allowedMidDist = startDist < minDist ? MathF.Max(selfCollisionRadius + otherRadius + 0.05f, startDist - 0.05f) : minDist;
+            if (DistancePointToSegment(otherPos, segA, segB) < allowedMidDist)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Finds the nearest stationary (or nearly stopped) unit directly obstructing a movement ray.
+    /// Zero allocations.
+    /// </summary>
+    public bool TryFindBlockingStationaryUnit(
+        WorldState world,
+        IUnitMovementCatalog catalog,
+        int selfUnitIndex,
+        Vector2 selfPos,
+        Vector2 forwardDir,
+        uint surface,
+        float selfCollisionRadius,
+        float selfHeight,
+        float maxLookahead,
+        out int blockerIndex,
+        out Vector2 blockerPos,
+        out float blockerRadius)
+    {
+        blockerIndex = -1;
+        blockerPos = default;
+        blockerRadius = 0f;
+
+        float queryRadius = selfCollisionRadius + maxLookahead + 6.0f;
+        int candidateCount = _spatialGrid.QueryNeighbors(selfPos, queryRadius, ref _candidateBuffer);
+        if (candidateCount == 0)
+            return false;
+
+        float selfSurfaceY = _navGrid.Evaluator.GetSurfaceHeight(selfPos, surface);
+        float selfTopY = selfSurfaceY + selfHeight;
+        UnitState selfUnit = world.GetUnitAt(selfUnitIndex);
+        bool hasBoardingTarget = world.TryGetBoardingTarget(selfUnit.Id, out EntityId boardingTarget);
+        Vector2 right = new(-forwardDir.Y, forwardDir.X);
+
+        float bestForward = float.MaxValue;
+        for (int i = 0; i < candidateCount; i++)
+        {
+            int otherIndex = _candidateBuffer[i];
+            if (otherIndex == selfUnitIndex) continue;
+
+            UnitState other = world.GetUnitAt(otherIndex);
+            if (other.Moving) continue;
+            if (world.IsContained(other.Id) || world.IsAirborne(other.Id) || world.IsSlung(other.Id)) continue;
+            if (hasBoardingTarget && other.Id == boardingTarget) continue;
+
+            float otherRadius = 0f;
+            float otherHeight = 2.5f;
+            if (catalog.TryGetProfile(other.Definition, out UnitMovementProfile otherProfile))
+            {
+                otherRadius = otherProfile.EffectiveCollisionRadius;
+                otherHeight = otherProfile.Height;
+            }
+            if (otherRadius <= 0f) continue;
+
+            float otherSurfaceY = _navGrid.Evaluator.GetSurfaceHeight(other.Position, other.SupportSurface);
+            float otherTopY = otherSurfaceY + otherHeight;
+            if (MathF.Max(selfSurfaceY, otherSurfaceY) >= MathF.Min(selfTopY, otherTopY))
+                continue;
+
+            Vector2 otherPos = _spatialGrid.GetPosition(otherIndex);
+            Vector2 delta = otherPos - selfPos;
+            float fwdDist = Vector2.Dot(delta, forwardDir);
+            if (fwdDist < -otherRadius * 0.25f || fwdDist > maxLookahead + otherRadius + selfCollisionRadius)
+                continue;
+
+            float latDist = MathF.Abs(Vector2.Dot(delta, right));
+            if (latDist > selfCollisionRadius + otherRadius + 0.45f)
+                continue;
+
+            if (fwdDist < bestForward)
+            {
+                bestForward = fwdDist;
+                blockerIndex = otherIndex;
+                blockerPos = otherPos;
+                blockerRadius = otherRadius;
+            }
+        }
+
+        return blockerIndex >= 0;
+    }
 }

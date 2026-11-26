@@ -129,6 +129,8 @@ public sealed class NavigationSystem : ISimulationSystem
     private readonly bool[] _unitChunkPending;
     private readonly int[] _unitChunkWaitTicks;
     private readonly int[] _unitClearanceWaitTicks;
+    private readonly int[] _unitDetourCooldownTicks;
+    private readonly int[] _unitStationaryBlockTicks;
     private readonly GroupUnitInput[] _groupUnitInputsBuffer = new GroupUnitInput[GroupDestinationDistribution.MaxCandidates];
     private uint _nextOrderGeneration;
 
@@ -228,6 +230,7 @@ public sealed class NavigationSystem : ISimulationSystem
 
     public int ChunkRequestsCompleted { get; private set; }
     public int ChunkWaitTicks { get; private set; }
+    public int StationaryDetoursInserted { get; private set; }
 
     /// <summary>Diagnostic timing only, non-deterministic. Must not be used in gameplay logic.</summary>
     public double LastTickGlobalPlanMs { get; private set; }
@@ -381,6 +384,8 @@ public sealed class NavigationSystem : ISimulationSystem
         _unitChunkPending = new bool[_maxUnits];
         _unitChunkWaitTicks = new int[_maxUnits];
         _unitClearanceWaitTicks = new int[_maxUnits];
+        _unitDetourCooldownTicks = new int[_maxUnits];
+        _unitStationaryBlockTicks = new int[_maxUnits];
 
         _slotNextChunkWaypoints = new Vector2[_maxUnits * _tuning.MaxWaypointsPerRoute];
         _slotNextChunkCounts = new int[_maxUnits];
@@ -511,6 +516,8 @@ public sealed class NavigationSystem : ISimulationSystem
                 _unitChunkPending[slot] = false;
                 _unitChunkWaitTicks[slot] = 0;
                 _unitClearanceWaitTicks[slot] = 0;
+                _unitDetourCooldownTicks[slot] = 0;
+                _unitStationaryBlockTicks[slot] = 0;
                 _slotNextChunkCounts[slot] = 0;
                 _slotGlobalPortalCounts[slot] = 0;
                 _slotGlobalPortalIndices[slot] = 0;
@@ -584,6 +591,9 @@ public sealed class NavigationSystem : ISimulationSystem
         _unitIsBrakingToHalt[slot] = false;
         _unitChunkPending[slot] = false;
         _unitChunkWaitTicks[slot] = 0;
+        _unitClearanceWaitTicks[slot] = 0;
+        _unitDetourCooldownTicks[slot] = 0;
+        _unitStationaryBlockTicks[slot] = 0;
         _slotNextChunkCounts[slot] = 0;
         _slotGlobalPortalCounts[slot] = 0;
         _slotGlobalPortalIndices[slot] = 0;
@@ -839,6 +849,9 @@ public sealed class NavigationSystem : ISimulationSystem
         _unitStatuses[slot] = PathRequestStatus.Pending;
         _unitChunkPending[slot] = false;
         _unitChunkWaitTicks[slot] = 0;
+        _unitClearanceWaitTicks[slot] = 0;
+        _unitDetourCooldownTicks[slot] = 0;
+        _unitStationaryBlockTicks[slot] = 0;
         _slotNextChunkCounts[slot] = 0;
         _slotGlobalPortalCounts[slot] = 0;
         _slotGlobalPortalIndices[slot] = 0;
@@ -2470,6 +2483,8 @@ public sealed class NavigationSystem : ISimulationSystem
                 _routeIndices[slot] = 0;
                 _unitChunkWaitTicks[slot] = 0;
                 _unitClearanceWaitTicks[slot] = 0;
+                _unitDetourCooldownTicks[slot] = 0;
+                _unitStationaryBlockTicks[slot] = 0;
                 world.UpdateUnitNavigation(_activeRequest.Unit, unit.Position, _unitFinalTargets[slot], true, supportSurface: unit.SupportSurface);
             }
             else if (_unitHasActiveRoutes[slot])
@@ -2492,6 +2507,8 @@ public sealed class NavigationSystem : ISimulationSystem
                 _routeOrderGenerations[slot] = _activeRequest.OrderGeneration;
                 _unitChunkWaitTicks[slot] = 0;
                 _unitClearanceWaitTicks[slot] = 0;
+                _unitDetourCooldownTicks[slot] = 0;
+                _unitStationaryBlockTicks[slot] = 0;
                 world.UpdateUnitNavigation(_activeRequest.Unit, unit.Position, _unitFinalTargets[slot], true, supportSurface: unit.SupportSurface);
             }
         }
@@ -3018,6 +3035,39 @@ public sealed class NavigationSystem : ISimulationSystem
 
                 if (isWaitingForClearanceK)
                 {
+                    if (_unitDetourCooldownTicks[slot] > 0) _unitDetourCooldownTicks[slot]--;
+                    if (effectiveColRadius <= 0.55f && _unitDetourCooldownTicks[slot] == 0)
+                    {
+                        Vector2 fwdK = new(-MathF.Sin(newHeading), -MathF.Cos(newHeading));
+                        if (_separation.TryFindBlockingStationaryUnit(
+                            world,
+                            _catalog,
+                            i,
+                            currentPosK,
+                            fwdK,
+                            supportSurface,
+                            effectiveColRadius,
+                            vehicleHeight,
+                            maxLookahead: 4.5f,
+                            out _,
+                            out Vector2 blockerPosK,
+                            out float blockerColRadiusK))
+                        {
+                            TryInsertStationaryBlockerDetour(
+                                world,
+                                i,
+                                slot,
+                                currentPosK,
+                                blockerPosK,
+                                blockerColRadiusK,
+                                radius,
+                                effectiveColRadius,
+                                vehicleHeight,
+                                capabilities,
+                                supportSurface);
+                        }
+                    }
+
                     _unitClearanceWaitTicks[slot]++;
                     if (_unitClearanceWaitTicks[slot] >= 120)
                     {
@@ -3565,6 +3615,65 @@ public sealed class NavigationSystem : ISimulationSystem
                     }
                 }
 
+                if (_unitDetourCooldownTicks[slot] > 0)
+                {
+                    _unitDetourCooldownTicks[slot]--;
+                }
+
+                // Proactive local flow-around for agile infantry encountering a stationary vehicle or standing unit:
+                // steer smoothly around the blocker instead of halting indefinitely behind parked armor.
+                const float InfantryMaxCollisionRadius = 0.55f;
+                if (effectiveColRadius <= InfantryMaxCollisionRadius)
+                {
+                    if (blockingUnitIdx >= 0 && sFree <= 6.5f && MathF.Abs(blockingForwardSpeed) <= 0.35f)
+                    {
+                        UnitState blocker = world.GetUnitAt(blockingUnitIdx);
+                        bool isOwnBoardingTarget = world.TryGetBoardingTarget(unit.Id, out EntityId boardTarget) && boardTarget == blocker.Id;
+                        if (!blocker.Moving && !isOwnBoardingTarget && !world.IsContained(blocker.Id))
+                        {
+                            _unitStationaryBlockTicks[slot]++;
+                            if (_unitDetourCooldownTicks[slot] == 0 &&
+                                _catalog.TryGetProfile(blocker.Definition, out UnitMovementProfile blockerProf) &&
+                                blockerProf.EffectiveCollisionRadius > 0f &&
+                                TryInsertStationaryBlockerDetour(
+                                    world,
+                                    i,
+                                    slot,
+                                    currentPos,
+                                    blocker.Position,
+                                    blockerProf.EffectiveCollisionRadius,
+                                    radius,
+                                    effectiveColRadius,
+                                    vehicleHeight,
+                                    capabilities,
+                                    supportSurface))
+                            {
+                                count = _routeCounts[slot];
+                                Vector2 detourWp = _routeWaypoints[offset + idx];
+                                Vector2 toDetour = detourWp - currentPos;
+                                if (toDetour.LengthSquared() > 1e-4f)
+                                {
+                                    desiredHeading = currentMode == MoveMode.Forward
+                                        ? MathF.Atan2(-toDetour.X, -toDetour.Y)
+                                        : MathF.Atan2(toDetour.X, toDetour.Y);
+                                    headingError = CombatSystem.ShorterArcDelta(currentHeading, desiredHeading);
+                                    absHeadingError = MathF.Abs(headingError);
+                                    vTarget = MathF.Min(maxCruiseSpeed, vStop);
+                                    blockedAheadByVehicle = false;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            _unitStationaryBlockTicks[slot] = 0;
+                        }
+                    }
+                    else
+                    {
+                        _unitStationaryBlockTicks[slot] = 0;
+                    }
+                }
+
                 if (blockingUnitIdx >= 0 && effectiveColRadius > 0.5f)
                 {
                     UnitState blocker = world.GetUnitAt(blockingUnitIdx);
@@ -3877,6 +3986,59 @@ public sealed class NavigationSystem : ISimulationSystem
             bool isWaitingForClearance = (blockedAheadByVehicle || sweptClamped) && v <= 1e-4f && distToFinal > 0.15f;
             if (isWaitingForClearance)
             {
+                // Fallback detour for infantry stopped at an angle or by swept clamping against a stationary unit
+                if (radius <= 0.55f && _unitDetourCooldownTicks[slot] == 0)
+                {
+                    Vector2 fwdLook = new(-MathF.Sin(newHeading), -MathF.Cos(newHeading));
+                    if (_separation.TryFindBlockingStationaryUnit(
+                        world,
+                        _catalog,
+                        i,
+                        currentPos,
+                        fwdLook,
+                        supportSurface,
+                        radius,
+                        2.0f,
+                        maxLookahead: 4.5f,
+                        out _,
+                        out Vector2 blockerPos,
+                        out float blockerColRadius))
+                    {
+                        if (!TryInsertStationaryBlockerDetour(
+                            world,
+                            i,
+                            slot,
+                            currentPos,
+                            blockerPos,
+                            blockerColRadius,
+                            radius,
+                            radius,
+                            2.0f,
+                            capabilities,
+                            supportSurface))
+                        {
+                            // If final destination itself sits inside the parked blocker, settle cleanly beside it
+                            if (distToFinal <= radius + blockerColRadius + 0.75f)
+                            {
+                                _unitClearanceWaitTicks[slot]++;
+                                if (_unitClearanceWaitTicks[slot] >= 15)
+                                {
+                                    _unitHasActiveRoutes[slot] = false;
+                                    _routeCounts[slot] = 0;
+                                    _routeIndices[slot] = 0;
+                                    _unitClearanceWaitTicks[slot] = 0;
+                                    if (_routeOrderGenerations[slot] == _unitOrderGenerations[slot])
+                                    {
+                                        _unitStatuses[slot] = PathRequestStatus.PathFound;
+                                    }
+                                    world.UpdateUnitNavigation(unit.Id, currentPos, currentPos, false, _currentTick, supportSurface, newHeading);
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if (blockedAheadByInfantry)
                 {
                     _unitClearanceWaitTicks[slot]++;
@@ -4072,6 +4234,120 @@ public sealed class NavigationSystem : ISimulationSystem
                 TargetSurface: infantry.SupportSurface);
             EnqueueCommand(infantry.Owner, stepCmd, world);
         }
+    }
+
+    /// <summary>
+    /// Inserts 1-2 deterministic local detour waypoints around a stationary blocking unit
+    /// so infantry smoothly flows around parked tanks/vehicles without halting indefinitely.
+    /// Strictly zero heap allocations.
+    /// </summary>
+    private bool TryInsertStationaryBlockerDetour(
+        WorldState world,
+        int unitIndex,
+        int slot,
+        Vector2 currentPos,
+        Vector2 blockerPos,
+        float blockerColRadius,
+        float navRadius,
+        float selfColRadius,
+        float selfHeight,
+        TraversabilityCapabilities capabilities,
+        uint supportSurface)
+    {
+        int count = _routeCounts[slot];
+        int idx = _routeIndices[slot];
+        if (count <= 0 || idx >= count || count + 2 > _tuning.MaxWaypointsPerRoute)
+            return false;
+
+        Vector2 finalTarget = _unitFinalTargets[slot];
+        float minGoalClearance = selfColRadius + blockerColRadius + 0.35f;
+        if (Vector2.DistanceSquared(finalTarget, blockerPos) <= minGoalClearance * minGoalClearance)
+            return false;
+
+        Vector2 toBlocker = blockerPos - currentPos;
+        float distToBlocker = toBlocker.Length();
+        Vector2 fwd = distToBlocker > 1e-4f
+            ? toBlocker / distToBlocker
+            : Vector2.Normalize(_routeWaypoints[slot * _tuning.MaxWaypointsPerRoute + idx] - currentPos);
+        if (!float.IsFinite(fwd.X) || !float.IsFinite(fwd.Y) || fwd.LengthSquared() < 0.5f)
+            return false;
+
+        Vector2 right = new(-fwd.Y, fwd.X);
+
+        // Prefer the side the unit is already offset toward relative to the goal line;
+        // tie-break deterministically by EntityId parity so squads split cleanly around both flanks.
+        Vector2 goalVec = finalTarget - currentPos;
+        float goalLen = goalVec.Length();
+        float lateralBias = 0f;
+        if (goalLen > 1e-3f)
+        {
+            Vector2 goalRight = new(-goalVec.Y / goalLen, goalVec.X / goalLen);
+            lateralBias = Vector2.Dot(currentPos - blockerPos, goalRight);
+        }
+
+        UnitState unit = world.GetUnitAt(unitIndex);
+        float preferredSign = MathF.Abs(lateralBias) > 0.20f
+            ? (lateralBias >= 0f ? 1f : -1f)
+            : ((unit.Id.Value & 1u) == 0u ? 1f : -1f);
+
+        // Clearance must exceed separation lateral margin (0.5m) + separation buffer (1.0m)
+        // so the detour arc never re-triggers LookaheadClearance braking against the parked hull.
+        float baseLateral = selfColRadius + blockerColRadius + 2.0f;
+        float entryBackOffset = MathF.Min(blockerColRadius * 0.45f, 1.5f);
+        float pastAdvance = selfColRadius + blockerColRadius + 2.0f;
+
+        for (int m = 0; m < 4; m++)
+        {
+            float mult = m switch
+            {
+                0 => 1.0f,
+                1 => 1.55f,
+                2 => 2.25f,
+                _ => 3.10f
+            };
+            float lateral = baseLateral * mult;
+
+            for (int sidePass = 0; sidePass < 2; sidePass++)
+            {
+                float sideSign = sidePass == 0 ? preferredSign : -preferredSign;
+                Vector2 entryPt = blockerPos - fwd * entryBackOffset + right * (sideSign * lateral);
+
+                if (!_grid.IsPointClear(entryPt, navRadius, capabilities, supportSurface))
+                    continue;
+                if (!_grid.IsSegmentClear(currentPos, entryPt, navRadius, capabilities, supportSurface))
+                    continue;
+                if (!_separation.IsSegmentClearOfUnits(world, _catalog, unitIndex, currentPos, entryPt, supportSurface, selfColRadius, selfHeight, extraMargin: 0.65f))
+                    continue;
+
+                Vector2 exitPt = blockerPos + fwd * pastAdvance + right * (sideSign * lateral);
+                bool includeExit =
+                    Vector2.DistanceSquared(exitPt, finalTarget) < Vector2.DistanceSquared(entryPt, finalTarget) &&
+                    Vector2.DistanceSquared(exitPt, finalTarget) > 1.0f &&
+                    _grid.IsPointClear(exitPt, navRadius, capabilities, supportSurface) &&
+                    _grid.IsSegmentClear(entryPt, exitPt, navRadius, capabilities, supportSurface) &&
+                    _separation.IsSegmentClearOfUnits(world, _catalog, unitIndex, entryPt, exitPt, supportSurface, selfColRadius, selfHeight, extraMargin: 0.65f);
+
+                int insertCount = includeExit ? 2 : 1;
+                int offset = slot * _tuning.MaxWaypointsPerRoute;
+                for (int w = count - 1; w >= idx; w--)
+                {
+                    _routeWaypoints[offset + w + insertCount] = _routeWaypoints[offset + w];
+                }
+                _routeWaypoints[offset + idx] = entryPt;
+                if (includeExit)
+                {
+                    _routeWaypoints[offset + idx + 1] = exitPt;
+                }
+                _routeCounts[slot] = count + insertCount;
+                _unitDetourCooldownTicks[slot] = 14;
+                _unitStationaryBlockTicks[slot] = 0;
+                StationaryDetoursInserted++;
+                return true;
+            }
+        }
+
+        _unitDetourCooldownTicks[slot] = 10;
+        return false;
     }
 
     // Local window coordinate calculations
