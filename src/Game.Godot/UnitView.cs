@@ -3,6 +3,14 @@ using Godot;
 
 namespace DeadGround.Client;
 
+internal enum GarrisonXRayMode : byte
+{
+    None = 0,
+    Idle = 1,
+    Selected = 2,
+    Cqb = 3
+}
+
 internal sealed class UnitView
 {
     // Orthographic camera sizes where the client switches to LOD1 and LOD2.
@@ -41,6 +49,7 @@ internal sealed class UnitView
         internal float LastBlurBlend = -1f;
         internal Node3D? RearRamp;
         internal Vector3 RearRampBindRotation;
+        internal GeometryInstance3D[] AllMeshes = [];
     }
 
     public Node3D Root { get; } = new();
@@ -103,6 +112,11 @@ internal sealed class UnitView
     private string _currentAnim = "";
     private StringName? _currentAnimName;
     private float _aimingTimer;
+    private bool _isGarrisonedVisual;
+    private GarrisonXRayMode _garrisonXRayMode = GarrisonXRayMode.None;
+    private bool _garrisonIsRunning;
+    internal bool IsGarrisonedVisual => _isGarrisonedVisual;
+    internal GarrisonXRayMode ActiveGarrisonXRayMode => _garrisonXRayMode;
     internal int ActiveLod => _activeLod;
     internal int LodCount => _rigs.Length;
     internal float Altitude => _altitude;
@@ -619,6 +633,7 @@ internal sealed class UnitView
         ConfigureSolidRotorVisual(rig.RearRotor);
         rig.SolidRotorGeoms = CollectGeometryInstances(rig.FrontRotor, rig.RearRotor);
         rig.BlurRotorGeoms = CollectGeometryInstances(rig.FrontRotorBlur, rig.RearRotorBlur);
+        rig.AllMeshes = CollectGeometryInstances(lod, null);
         return rig;
     }
 
@@ -885,6 +900,8 @@ internal sealed class UnitView
         PushTrackTravel();
         if (IsHelicopter)
             ApplyHelicopterRigState(nextRig);
+        if (_isGarrisonedVisual)
+            ApplyGarrisonXRayToRig(nextRig, _garrisonXRayMode);
         VehicleLod.TransferAnimationState(prevPlayer, nextRig.AnimPlayer, _currentAnimName, prevPlayer?.SpeedScale ?? 1.0f);
         return true;
     }
@@ -1452,6 +1469,11 @@ internal sealed class UnitView
             ApplyHullPose();
         }
 
+        if (_isGarrisonedVisual)
+        {
+            _dustSpeed = _garrisonIsRunning ? 4.5f : 0f;
+        }
+
         AnimationPlayer? animPlayer = ActiveRig.AnimPlayer;
         if (animPlayer is not null)
         {
@@ -1555,6 +1577,157 @@ internal sealed class UnitView
     {
         if (_rangeIndicatorsVisible == visible) return;
         _rangeIndicatorsVisible = visible;
+        SetSelected(_isSelected);
+    }
+
+    private static Shader? s_garrisonXRayShader;
+    private static ShaderMaterial? s_garrisonXRayIdle;
+    private static ShaderMaterial? s_garrisonXRaySelected;
+    private static ShaderMaterial? s_garrisonXRayCqb;
+
+    private static ShaderMaterial? GetGarrisonXRayMaterial(GarrisonXRayMode mode)
+    {
+        if (mode == GarrisonXRayMode.None) return null;
+        s_garrisonXRayShader ??= new Shader
+        {
+            Code = """
+                shader_type spatial;
+                render_mode unshaded, depth_draw_never, depth_test_disabled, cull_back;
+
+                uniform vec4 xray_color : source_color = vec4(0.28, 0.90, 0.80, 0.45);
+                uniform sampler2D depth_tex : hint_depth_texture, filter_nearest;
+
+                void fragment() {
+                    float scene_depth = texture(depth_tex, SCREEN_UV).r;
+                    vec3 ndc_scene = vec3(SCREEN_UV * 2.0 - 1.0, scene_depth);
+                    vec4 view_scene = INV_PROJECTION_MATRIX * vec4(ndc_scene, 1.0);
+                    float scene_dist = -(view_scene.z / view_scene.w);
+
+                    vec3 ndc_frag = vec3(SCREEN_UV * 2.0 - 1.0, FRAGCOORD.z);
+                    vec4 view_frag = INV_PROJECTION_MATRIX * vec4(ndc_frag, 1.0);
+                    float frag_dist = -(view_frag.z / view_frag.w);
+
+                    // Render X-Ray silhouette only when occluded behind a wall/roof (>= 0.35 m closer to camera)
+                    if (frag_dist <= scene_dist + 0.35) {
+                        discard;
+                    }
+
+                    float fresnel = pow(1.0 - clamp(abs(dot(normalize(NORMAL), normalize(VIEW))), 0.0, 1.0), 1.3);
+                    ALBEDO = xray_color.rgb;
+                    ALPHA = clamp(xray_color.a * (0.55 + 0.65 * fresnel), 0.14, 0.88);
+                }
+                """
+        };
+        return mode switch
+        {
+            GarrisonXRayMode.Idle => s_garrisonXRayIdle ??= CreateXRayMat(new Color(0.28f, 0.90f, 0.80f, 0.44f)),
+            GarrisonXRayMode.Selected => s_garrisonXRaySelected ??= CreateXRayMat(new Color(0.42f, 1.00f, 0.88f, 0.72f)),
+            GarrisonXRayMode.Cqb => s_garrisonXRayCqb ??= CreateXRayMat(new Color(1.00f, 0.54f, 0.18f, 0.78f)),
+            _ => null
+        };
+
+        static ShaderMaterial CreateXRayMat(Color color)
+        {
+            ShaderMaterial mat = new()
+            {
+                Shader = s_garrisonXRayShader,
+                RenderPriority = 10
+            };
+            mat.SetShaderParameter("xray_color", color);
+            return mat;
+        }
+    }
+
+    private static void ApplyGarrisonXRayToRig(Rig? rig, GarrisonXRayMode mode)
+    {
+        if (rig is null) return;
+        ShaderMaterial? mat = GetGarrisonXRayMaterial(mode);
+        GeometryInstance3D[] meshes = rig.AllMeshes;
+        for (int i = 0; i < meshes.Length; i++)
+        {
+            if (meshes[i].MaterialOverlay != mat)
+            {
+                meshes[i].MaterialOverlay = mat;
+            }
+        }
+    }
+
+    internal void ApplyGarrisonPresentation(
+        Vector3 worldPos,
+        float yawRad,
+        bool isRunning,
+        bool isAiming,
+        bool isRoof,
+        bool isSelected,
+        GarrisonXRayMode xrayMode)
+    {
+        _isGarrisonedVisual = true;
+        _garrisonIsRunning = isRunning;
+        _altitude = 0f;
+        _rockAngle = 0f;
+        _rockVelocity = 0f;
+        _pitchRad = 0f;
+        _rollRad = 0f;
+        _heading = yawRad;
+        _hasHeading = true;
+        _turretRotation = Vector3.Zero;
+        _hasAim = isAiming;
+        _previousPosition = worldPos;
+        _hasPosition = true;
+        _distanceSinceEffects = 0f;
+        _dustSpeed = isRunning ? 4.5f : 0f;
+
+        Root.Position = worldPos;
+        Model.Position = _modelBindPosition;
+        Model.Rotation = new Vector3(0f, yawRad, 0f);
+        if (_healthBarRoot.Visible)
+        {
+            _healthBarRoot.Visible = false;
+        }
+        _isSelected = isSelected;
+        bool showGroundRing = isSelected && isRoof;
+        if (_selection.Visible != showGroundRing)
+        {
+            _selection.Visible = showGroundRing;
+        }
+        bool showWeaponRange = isSelected && _rangeIndicatorsVisible && _weaponRange > 0f;
+        bool showSensorRange = isSelected && _rangeIndicatorsVisible && _sensorRange > 0f;
+        if (_weaponRangeRing.Visible != showWeaponRange) _weaponRangeRing.Visible = showWeaponRange;
+        if (_sensorRangeRing.Visible != showSensorRange) _sensorRangeRing.Visible = showSensorRange;
+        if (isSelected && _rangeIndicatorsVisible && (!_ringsDraped || (Root.Position - _lastDrapedPosition).LengthSquared() >= MinRedrapeDistanceSquared))
+        {
+            DrapeRings();
+        }
+
+        if (_garrisonXRayMode != xrayMode)
+        {
+            _garrisonXRayMode = xrayMode;
+            ApplyGarrisonXRayToRig(ActiveRig, xrayMode);
+        }
+
+        if (!Root.Visible)
+        {
+            Root.Visible = true;
+        }
+    }
+
+    internal void ClearGarrisonPresentation()
+    {
+        if (!_isGarrisonedVisual) return;
+        _isGarrisonedVisual = false;
+        _garrisonIsRunning = false;
+        if (_garrisonXRayMode != GarrisonXRayMode.None)
+        {
+            _garrisonXRayMode = GarrisonXRayMode.None;
+            for (int i = 0; i < _rigs.Length; i++)
+            {
+                ApplyGarrisonXRayToRig(_rigs[i], GarrisonXRayMode.None);
+            }
+        }
+        if (!_healthBarRoot.Visible)
+        {
+            _healthBarRoot.Visible = true;
+        }
         SetSelected(_isSelected);
     }
 

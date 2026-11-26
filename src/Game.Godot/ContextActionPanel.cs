@@ -823,12 +823,12 @@ internal sealed partial class ContextActionPanel : PanelContainer
                 : (garrisonableInfantryCount > 0 ? "GARRISON [N]" : "MOVE / ASSAULT [N]");
         }
         _exitBuildingButton.Visible = hasGarrisonedUi;
-        _garrisonRoofButton.Visible = hasGarrisonedUi;
+        // Infantry auto-distributes inside buildings and auto-descends from rooftop after Fast-Rope;
+        // hide manual roof/inside toggle for standard riflemen to keep controls clean.
+        _garrisonRoofButton.Visible = false;
         if (hasGarrisonedUi)
         {
             _exitBuildingButton.Disabled = false;
-            _garrisonRoofButton.Disabled = false;
-            _garrisonRoofButton.Text = garrisonedRoofCount >= garrisonedCount ? "INSIDE [Y]" : "TO ROOF [Y]";
         }
 
         bool hasAttackGroundUi = attackGroundCapableCount > 0;

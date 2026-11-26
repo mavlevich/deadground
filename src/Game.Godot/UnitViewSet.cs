@@ -148,7 +148,7 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
         return (sensorRange, weaponRange);
     }
 
-    internal void Sync(ClientReplica replica, double renderTick)
+    internal void Sync(ClientReplica replica, double renderTick, bool externalGarrisonVisuals = false)
     {
         _present.Clear();
         foreach (OwnUnitObservation unit in replica.OwnUnits)
@@ -171,6 +171,10 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
             if (unit.ContainerId != default)
             {
                 Selected.Remove(unit.Id);
+                if (view.IsGarrisonedVisual)
+                {
+                    view.ClearGarrisonPresentation();
+                }
                 if (view.Root.Visible)
                 {
                     view.SetContainedHidden();
@@ -179,13 +183,23 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
             }
             if (unit.GarrisonStructureId != default)
             {
-                // Keep garrisoned infantry selectable (for Exit/Roof/Attack orders) while hiding the ground mesh
-                // so BuildingGarrisonView renders window/roof silhouettes and X-Ray markers cleanly.
-                if (view.Root.Visible)
+                int garrMaxHealth = _maxHealthProvider?.Invoke(unit.Definition) ?? GetDefaultMaxHealth(unit.Definition);
+                view.UpdateHealth(unit.Health, garrMaxHealth);
+                if (unit.AttackStatus == AttackExecutionStatus.Aiming || unit.ReloadTicksRemaining > 0 || unit.TargetContactId.Value != 0)
+                {
+                    view.SetAiming(true);
+                }
+                // When BuildingGarrisonView drives garrison visuals, keep the real UnitView model
+                // alive so it positions at windows/roof with wall-occluded X-Ray silhouette.
+                if (!externalGarrisonVisuals && view.Root.Visible)
                 {
                     view.SetContainedHidden();
                 }
                 continue;
+            }
+            if (view.IsGarrisonedVisual)
+            {
+                view.ClearGarrisonPresentation();
             }
             System.Numerics.Vector2 position = replica.SamplePosition(unit.Id, renderTick);
             float groundY = geometry is not null

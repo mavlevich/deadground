@@ -1436,7 +1436,7 @@ public partial class Main : Node3D
                 (HasSelectedGarrisonableInfantry() ||
                  HasSelectedTransferableGarrisonInfantry(_hoveredGarrisonStructure) ||
                  _contextActionPanel?.TargetingMode == ContextTargetingMode.EnterBuilding);
-            _buildingGarrisonView.Update(_session.Replica, _unitViews.Selected, _hoveredGarrisonStructure, showEntranceHint, _camera, (float)delta);
+            _buildingGarrisonView.Update(_session.Replica, _unitViews.Selected, _hoveredGarrisonStructure, showEntranceHint, _camera, (float)delta, _unitViews, _contactViews);
         }
         if (_pendingAttackGroundMaxSeq != 0 &&
             _session.LastCommandResult is { } agResult &&
@@ -4831,8 +4831,9 @@ public partial class Main : Node3D
         _unitViews.SetRangeIndicatorsVisible(_showRangeRings);
         int selectedUnits = _unitViews.Selected.Count;
         int selectedContacts = _contactViews.Selected.Count;
-        _unitViews.Sync(_session.Replica, _session.RenderTick);
-        _contactViews.Sync(_session.Replica, _session.RenderTick, (float)deltaSeconds);
+        bool hasGarrisonVisuals = _buildingGarrisonView is not null;
+        _unitViews.Sync(_session.Replica, _session.RenderTick, externalGarrisonVisuals: hasGarrisonVisuals);
+        _contactViews.Sync(_session.Replica, _session.RenderTick, (float)deltaSeconds, externalGarrisonVisuals: hasGarrisonVisuals);
         _wreckViews.Sync(_session.Replica);
         if (selectedUnits != _unitViews.Selected.Count || selectedContacts != _contactViews.Selected.Count)
         {

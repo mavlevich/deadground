@@ -233,14 +233,16 @@ public static class UrbanDestructionPlaygroundScenario
         }
 
         // Player 2 (US) behind central panelka facing -Z toward the courtyard,
-        // plus a 2-man ambush fireteam pre-garrisoned inside east flanking panelka section 106 for CQB testing
+        // plus a 3-man ambush fireteam pre-garrisoned inside east flanking panelka section 106 for CQB testing
         const float facingMinusZ = 0f;
         world.CreateUnit(2, m60Idx, UsM60WestPos, m60Def.Speed, m60Def.MaxHealth, m60Ammo, facingMinusZ);
         world.CreateUnit(2, m60Idx, UsM60EastPos, m60Def.Speed, m60Def.MaxHealth, m60Ammo, facingMinusZ);
         EntityId opforInf1 = world.CreateUnit(2, rifleIdx, new Vector2(567.9f, 479.6f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, MathF.PI * 0.5f);
         EntityId opforInf2 = world.CreateUnit(2, rifleIdx, new Vector2(567.9f, 479.6f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, MathF.PI * 0.5f);
+        EntityId opforInf3 = world.CreateUnit(2, rifleIdx, new Vector2(567.9f, 479.6f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, MathF.PI * 0.5f);
         world.SetFireStance(opforInf1, FireStance.ReturnFire);
         world.SetFireStance(opforInf2, FireStance.ReturnFire);
+        world.SetFireStance(opforInf3, FireStance.ReturnFire);
 
         Simulation simulation = new(world, rules, matchSeed: matchSeed);
         if (simulation.BuildingDestruction is not null)
@@ -259,6 +261,7 @@ public static class UrbanDestructionPlaygroundScenario
             StructureId ambushSection = new(106);
             simulation.Garrison.TryPlaceInitialGarrison(world, opforInf1, ambushSection, GarrisonSlotKind.Interior);
             simulation.Garrison.TryPlaceInitialGarrison(world, opforInf2, ambushSection, GarrisonSlotKind.Interior);
+            simulation.Garrison.TryPlaceInitialGarrison(world, opforInf3, ambushSection, GarrisonSlotKind.Interior);
         }
 
         return simulation;

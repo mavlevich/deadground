@@ -280,10 +280,11 @@ public sealed class UrbanDestructionScenarioTests
             Target: roof106Center)));
 
         bool observedRoofHoverAlt = false;
+        bool observedRoofSlot = false;
         bool observedContestedCqb = false;
         long maxAllocDuringFastRope = 0;
 
-        for (int t = 0; t < 480; t++)
+        for (int t = 0; t < 560; t++)
         {
             bool measureAlloc = t > 20 &&
                 sim.World.TryGetFlightState(chinookId, out WorldState.UnitFlightState fsCheck) &&
@@ -306,6 +307,21 @@ public sealed class UrbanDestructionScenarioTests
                 }
             }
 
+            if (!observedRoofSlot)
+            {
+                ReadOnlySpan<EntityId> curOccs = sim.Garrison!.GetOccupants(targetSection);
+                for (int k = 0; k < curOccs.Length; k++)
+                {
+                    if (sim.World.TryGetUnit(curOccs[k], out UnitState u) &&
+                        u.Owner == 1 &&
+                        sim.World.GetGarrisonSlotKind(u.Id) == GarrisonSlotKind.Roof)
+                    {
+                        observedRoofSlot = true;
+                        break;
+                    }
+                }
+            }
+
             if (sim.Garrison!.IsContested(sim.World, targetSection))
             {
                 observedContestedCqb = true;
@@ -313,14 +329,15 @@ public sealed class UrbanDestructionScenarioTests
         }
 
         Assert.True(observedRoofHoverAlt, "CH-47D must hover at elevated rooftop clearance (>= 25m above ground) during roof Fast-Rope.");
+        Assert.True(observedRoofSlot, "Fast-roped assault troopers must land onto GarrisonSlotKind.Roof first.");
         Assert.Equal(4, sim.Flight!.TotalRoofFastRopeInsertions);
         Assert.Equal(0, sim.World.GetPassengers(chinookId).Length);
         Assert.True(observedContestedCqb, "Fast-roping onto enemy-occupied section 106 must trigger contested CQB.");
         Assert.Equal(0L, maxAllocDuringFastRope);
 
-        // Verify surviving Player 1 assault troopers hold section 106 Roof and eliminated the 2 OPFOR ambush defenders
+        // Verify surviving Player 1 assault troopers auto-descended into Interior cover and cleared the OPFOR ambush
         int p1In106 = 0;
-        int p1OnRoof = 0;
+        int p1Interior = 0;
         int p2In106 = 0;
         ReadOnlySpan<EntityId> occs = sim.Garrison!.GetOccupants(targetSection);
         for (int i = 0; i < occs.Length; i++)
@@ -330,7 +347,7 @@ public sealed class UrbanDestructionScenarioTests
                 if (occ.Owner == 1)
                 {
                     p1In106++;
-                    if (sim.World.GetGarrisonSlotKind(occ.Id) == GarrisonSlotKind.Roof) p1OnRoof++;
+                    if (sim.World.GetGarrisonSlotKind(occ.Id) == GarrisonSlotKind.Interior) p1Interior++;
                 }
                 else if (occ.Owner == 2)
                 {
@@ -339,7 +356,8 @@ public sealed class UrbanDestructionScenarioTests
             }
         }
 
-        Assert.True(p1In106 >= 1 && p1OnRoof >= 1, $"Expected surviving Player 1 rooftop troopers in section 106, got p1={p1In106} roof={p1OnRoof}.");
+        Assert.True(p1In106 >= 1 && p1Interior == p1In106,
+            $"Expected surviving Player 1 rooftop assault troopers to auto-descend into Interior cover, got p1={p1In106} interior={p1Interior}.");
         Assert.Equal(0, p2In106);
     }
 

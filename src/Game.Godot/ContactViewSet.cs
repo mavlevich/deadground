@@ -27,7 +27,7 @@ internal sealed class ContactViewSet(
     {
     }
 
-    internal void Sync(ClientReplica replica, double renderTick = 0, float deltaSeconds = Simulation.TickSeconds)
+    internal void Sync(ClientReplica replica, double renderTick = 0, float deltaSeconds = Simulation.TickSeconds, bool externalGarrisonVisuals = false)
     {
         _present.Clear();
         foreach (ContactObservation contact in replica.Contacts)
@@ -42,10 +42,14 @@ internal sealed class ContactViewSet(
             }
             if (contact.GarrisonStructureId != default)
             {
-                // BuildingGarrisonView renders spotted hostile window/roof figures and tactical badges
-                if (view.Root.Visible)
+                // Strict FoW: LastKnown garrison contacts never render a live 3D model or ground marker.
+                // Spotted Current hostile garrison contacts are positioned on windows/roof by BuildingGarrisonView.
+                if (!externalGarrisonVisuals || contact.State != ContactState.Current)
                 {
-                    view.Root.Visible = false;
+                    if (view.Root.Visible)
+                    {
+                        view.Root.Visible = false;
+                    }
                 }
                 continue;
             }

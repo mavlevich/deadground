@@ -15,8 +15,9 @@ public sealed class GarrisonSystem : ISimulationSystem
     public const float AdjacencyMaxGapMeters = 2.5f;
     public const float AdjacencyMinOverlapMeters = 2.0f;
     public const int AdjacentTransferTicks = 4;
-    public const float CqbSameBandDamageMultiplier = 0.70f;
-    public const float CqbCrossBandDamageMultiplier = 0.55f;
+    public const int FastRopeRoofHoldTicks = 50;
+    public const float CqbSameBandDamageMultiplier = 0.45f;
+    public const float CqbCrossBandDamageMultiplier = 0.35f;
     private const float FootClearanceRadius = 0.45f;
     private const int ExitFanSlotCount = 20;
     private const int MaxPendingEnterUnits = 1024;
@@ -63,9 +64,12 @@ public sealed class GarrisonSystem : ISimulationSystem
     private readonly BuildingEntry[] _buildingList = new BuildingEntry[WorldState.MaxDestructibleStructures];
     private readonly EntityId[] _scratchOccupants = new EntityId[BuildingGarrisonProfile.MaxOccupantsPerStructure];
     private readonly EntityId[] _pendingEnterUnits = new EntityId[MaxPendingEnterUnits];
+    private readonly EntityId[] _roofAutoDescendUnits = new EntityId[MaxPendingEnterUnits];
+    private readonly int[] _roofAutoDescendTicks = new int[MaxPendingEnterUnits];
     private NavigationSystem? _navigation;
     private int _buildingCount;
     private int _pendingEnterCount;
+    private int _roofAutoDescendCount;
 
     public int RegisteredBuildingCount => _buildingCount;
     public int TotalEntries { get; private set; }
@@ -214,12 +218,16 @@ public sealed class GarrisonSystem : ISimulationSystem
     /// <summary>
     /// Commits a freshly fast-roped infantryman directly into a building section's rooftop slot
     /// (bypassing ground entrance walk-in and initiating CQB if enemy troops already hold the section).
+    /// Schedules automatic descent into interior cover after <see cref="FastRopeRoofHoldTicks"/> ticks.
     /// </summary>
     public bool TryCommitFastRopeRoofEntry(WorldState world, EntityId unitId, StructureId structureId)
     {
         if (!_buildings.TryGetValue(structureId, out BuildingEntry? entry))
             return false;
-        return TryCommitEntry(entry, unitId, GarrisonSlotKind.Roof, world, _navigation);
+        if (!TryCommitEntry(entry, unitId, GarrisonSlotKind.Roof, world, _navigation))
+            return false;
+        TrackRoofAutoDescend(unitId, FastRopeRoofHoldTicks);
+        return true;
     }
 
     /// <summary>
@@ -551,6 +559,30 @@ public sealed class GarrisonSystem : ISimulationSystem
                 }
                 i++;
             }
+        }
+
+        // 1b. Auto-descend fast-roped rooftop assault infantry into sheltered interior floors
+        int r = 0;
+        while (r < _roofAutoDescendCount)
+        {
+            EntityId unitId = _roofAutoDescendUnits[r];
+            if (!world.TryGetUnit(unitId, out _) ||
+                !world.TryGetGarrison(unitId, out StructureId structId, out GarrisonSlotKind slot) ||
+                slot != GarrisonSlotKind.Roof)
+            {
+                RemoveRoofAutoDescendAt(r);
+                continue;
+            }
+
+            if (_roofAutoDescendTicks[r] > 1)
+            {
+                _roofAutoDescendTicks[r]--;
+                r++;
+                continue;
+            }
+
+            world.SetGarrisonMembership(unitId, structId, GarrisonSlotKind.Interior);
+            RemoveRoofAutoDescendAt(r);
         }
 
         // 2. Complete or cancel tracked pending enter orders and adjacent section transfers in O(pending) time
@@ -958,6 +990,36 @@ public sealed class GarrisonSystem : ISimulationSystem
             _pendingEnterUnits[index] = _pendingEnterUnits[last];
         }
         _pendingEnterUnits[last] = default;
+    }
+
+    private void TrackRoofAutoDescend(EntityId unitId, int ticks)
+    {
+        for (int i = 0; i < _roofAutoDescendCount; i++)
+        {
+            if (_roofAutoDescendUnits[i] == unitId)
+            {
+                _roofAutoDescendTicks[i] = ticks;
+                return;
+            }
+        }
+        if (_roofAutoDescendCount < _roofAutoDescendUnits.Length)
+        {
+            _roofAutoDescendUnits[_roofAutoDescendCount] = unitId;
+            _roofAutoDescendTicks[_roofAutoDescendCount] = ticks;
+            _roofAutoDescendCount++;
+        }
+    }
+
+    private void RemoveRoofAutoDescendAt(int index)
+    {
+        int last = --_roofAutoDescendCount;
+        if (index != last)
+        {
+            _roofAutoDescendUnits[index] = _roofAutoDescendUnits[last];
+            _roofAutoDescendTicks[index] = _roofAutoDescendTicks[last];
+        }
+        _roofAutoDescendUnits[last] = default;
+        _roofAutoDescendTicks[last] = 0;
     }
 
     public bool CanOccupyRoof(WorldState world, StructureId structureId)

@@ -149,6 +149,34 @@ internal sealed class ContactView
     public void Update(ContactObservation contact, float groundY, bool isSelected) =>
         Update(contact, contact.Position, groundY, isSelected, contact.TurretYaw, contact.HullHeading, contact.Altitude, contact.GunPitchRad);
 
+    public void ApplyGarrisonPresentation(
+        ContactObservation contact,
+        Vector3 worldPos,
+        float yawRad,
+        bool isAiming,
+        bool isSelected,
+        float deltaSeconds)
+    {
+        if (contact.State != ContactState.Current)
+        {
+            if (Root.Visible) Root.Visible = false;
+            return;
+        }
+        if (isAiming) SetAiming(true);
+        Update(
+            contact,
+            new System.Numerics.Vector2(worldPos.X, worldPos.Z),
+            worldPos.Y,
+            isSelected,
+            turretYaw: yawRad,
+            hullHeading: yawRad,
+            altitude: 0f,
+            gunPitchRad: 0f,
+            deltaSeconds: deltaSeconds);
+        _selection.Visible = false;
+        if (!Root.Visible) Root.Visible = true;
+    }
+
     public void Update(ContactObservation contact, System.Numerics.Vector2 position, float groundY, bool isSelected,
         float turretYaw, float hullHeading, float altitude = 0f, float gunPitchRad = 0f,
         float deltaSeconds = Simulation.TickSeconds)
