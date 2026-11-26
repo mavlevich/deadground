@@ -170,6 +170,7 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
             }
             if (unit.ContainerId != default)
             {
+                view.WasContainedInTransport = true;
                 Selected.Remove(unit.Id);
                 if (view.IsGarrisonedVisual)
                 {
@@ -180,6 +181,12 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
                     view.SetContainedHidden();
                 }
                 continue;
+            }
+            bool justDisembarked = view.WasContainedInTransport;
+            if (justDisembarked)
+            {
+                view.WasContainedInTransport = false;
+                TryStartFastRopeSlideFromNearbyHelicopter(unit, view);
             }
             if (unit.GarrisonStructureId != default)
             {
@@ -261,6 +268,36 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
         foreach (UnitView view in Views.Values)
         {
             if (view.Root.Visible) view.FaceHealthBar(cameraBasis);
+        }
+    }
+
+    private void TryStartFastRopeSlideFromNearbyHelicopter(in OwnUnitObservation unit, UnitView soldierView)
+    {
+        if (!soldierView.IsInfantry) return;
+        const float maxDistSq = 18.0f * 18.0f;
+        UnitView? bestHeli = null;
+        float bestDistSq = maxDistSq;
+        foreach (UnitView candidate in Views.Values)
+        {
+            if (!candidate.IsHelicopter || !candidate.AreFastRopesVisible) continue;
+            float dx = candidate.Root.Position.X - unit.Position.X;
+            float dz = candidate.Root.Position.Z - unit.Position.Y;
+            float dSq = dx * dx + dz * dz;
+            if (dSq < bestDistSq)
+            {
+                bestDistSq = dSq;
+                bestHeli = candidate;
+            }
+        }
+        if (bestHeli is null) return;
+        bool leftRope = (unit.Id.Value & 1u) == 0u;
+        if (bestHeli.TryGetFastRopeWorldEndpoints(leftRope, out Vector3 ropeTop, out Vector3 ropeBottom))
+        {
+            float landingY = unit.GarrisonSlotKind == GarrisonSlotKind.Roof
+                ? ropeBottom.Y
+                : (geometry is not null ? geometry.GetSurfaceHeight(unit.Position, unit.SupportSurface) : map.GetHeight(unit.Position.X, unit.Position.Y));
+            Vector3 landingTarget = new(unit.Position.X, landingY, unit.Position.Y);
+            soldierView.StartFastRopeDescent(ropeTop, ropeBottom, landingTarget, bestHeli.Heading);
         }
     }
 

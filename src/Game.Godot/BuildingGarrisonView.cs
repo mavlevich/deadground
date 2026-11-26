@@ -629,25 +629,24 @@ internal sealed class BuildingGarrisonView : IDisposable
                     ref xrayCount);
             }
 
-            // Own rooftop real soldier models (unoccluded soldiers render 100% normally; X-Ray only behind walls)
+            // Own rooftop real soldier models (exposed on open rooftop: never apply X-Ray tint)
             if (e.OwnRoofCount > 0)
             {
                 ApplyOwnRoofPoses(
                     e,
                     selectedUnits,
-                    ownXRayMode,
                     dt,
                     unitViews,
-                    ref figCount,
-                    ref xrayCount);
+                    ref figCount);
             }
 
-            // Spotted hostile CURRENT interior real soldier models (NEVER X-Ray, NEVER LastKnown)
+            // Spotted hostile CURRENT interior real soldier models (red wall-occluded X-Ray ONLY during active CQB)
             if (e.HostileCurrentInteriorCount > 0)
             {
                 ApplyHostileInteriorPoses(
                     e,
                     contacts,
+                    isContested,
                     dt,
                     contactViews,
                     ref figCount);
@@ -814,11 +813,9 @@ internal sealed class BuildingGarrisonView : IDisposable
     private void ApplyOwnRoofPoses(
         BuildingVisualEntry e,
         HashSet<EntityId>? selectedUnits,
-        GarrisonXRayMode xrayMode,
         float dt,
         UnitViewSet? unitViews,
-        ref int figCount,
-        ref int xrayCount)
+        ref int figCount)
     {
         int portCount = e.RoofPorts.Length;
         if (portCount == 0) return;
@@ -847,16 +844,16 @@ internal sealed class BuildingGarrisonView : IDisposable
                     isAiming: e.OwnRoofHasAim[k] || e.HasThreatWatchDir,
                     isRoof: true,
                     unitSelected,
-                    xrayMode);
+                    GarrisonXRayMode.None);
             }
             figCount++;
-            xrayCount++;
         }
     }
 
     private void ApplyHostileInteriorPoses(
         BuildingVisualEntry e,
         ReadOnlySpan<ContactObservation> contacts,
+        bool isContested,
         float dt,
         ContactViewSet? contactViews,
         ref int figCount)
@@ -874,7 +871,7 @@ internal sealed class BuildingGarrisonView : IDisposable
                 float yaw = e.HostileInteriorHasAim[k] ? e.HostileInteriorAimYaws[k] : MathF.Atan2(-MathF.Cos(angle), -MathF.Sin(angle));
                 if (contactViews is not null && contactViews.Views.TryGetValue(c.Id, out ContactView? view))
                 {
-                    view.ApplyGarrisonPresentation(c, pos, yaw, isAiming: true, isSelected: false, dt);
+                    view.ApplyGarrisonPresentation(c, pos, yaw, isAiming: true, isSelected: false, dt, isCqbContested: isContested);
                 }
                 figCount++;
             }
@@ -906,7 +903,7 @@ internal sealed class BuildingGarrisonView : IDisposable
             float yaw = wp.YawRad;
             if (contactViews is not null && contactViews.Views.TryGetValue(c.Id, out ContactView? view))
             {
-                view.ApplyGarrisonPresentation(c, pos, yaw, isAiming: true, isSelected: false, dt);
+                view.ApplyGarrisonPresentation(c, pos, yaw, isAiming: true, isSelected: false, dt, isCqbContested: isContested);
             }
             figCount++;
         }

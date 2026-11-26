@@ -138,6 +138,8 @@ internal static class BuildingGarrisonRegressionTests
             Require(view.ActiveXRayCount == 0, $"Spotted hostile roof contact must render 0 X-Ray silhouettes, got {view.ActiveXRayCount}.");
             Require(contactViews.Views[hostileCurrentRoof.Id].Root.Visible && contactViews.Views[hostileCurrentRoof.Id].Root.Position.Y > 14.0f,
                 "Spotted hostile roof contact must render real ContactView soldier on rooftop.");
+            Require(!contactViews.Views[hostileCurrentRoof.Id].HasHostileCqbXRay,
+                "Non-CQB hostile rooftop contact must never enable CQB X-Ray.");
             Require(view.GetBadgeTextForTesting(0) == "! 1 / 12 ROOF", $"Expected '! 1 / 12 ROOF' badge, got '{view.GetBadgeTextForTesting(0)}'.");
 
             // 5. Contested CQB in section 101 (2 own aiming north + 1 spotted hostile interior) + adjacency check
@@ -159,10 +161,34 @@ internal static class BuildingGarrisonRegressionTests
             view.Update(replica, selected, default, showEntranceHint: false, cam, 0.05f, unitViews, contactViews);
             Require(view.ContestedBuildingCount == 1, $"Expected 1 contested CQB building, got {view.ContestedBuildingCount}.");
             Require(view.ActiveFigureCount == 3, $"Expected 3 total figures (2 own + 1 hostile) in CQB section, got {view.ActiveFigureCount}.");
-            Require(view.ActiveXRayCount == 2, $"Expected X-Ray ONLY for 2 own troops in CQB (never hostile), got {view.ActiveXRayCount}.");
+            Require(view.ActiveXRayCount == 2, $"Expected own interior X-Ray count of 2 in CQB, got {view.ActiveXRayCount}.");
             Require(unitViews.Views[own1.Id].ActiveGarrisonXRayMode == GarrisonXRayMode.Cqb,
-                "CQB own infantry must switch to Cqb X-Ray overlay mode.");
+                "CQB own interior infantry must switch to Cqb X-Ray overlay mode.");
+            Require(contactViews.Views[hostileCqb.Id].HasHostileCqbXRay,
+                "Spotted CQB hostile interior contact must enable red CQB X-Ray silhouette.");
             Require(view.GetBadgeTextForTesting(0) == "CQB 2 v 1", $"Expected 'CQB 2 v 1' badge, got '{view.GetBadgeTextForTesting(0)}'.");
+
+            // 5b. Own soldier on roof must NEVER show orange/teal X-Ray tint, and fast-rope descent slides smoothly down rope
+            OwnUnitObservation ownRoofUnit = own1 with { GarrisonSlotKind = GarrisonSlotKind.Roof };
+            ApplySnapshot(replica, snapBuf, seq: 6, tick: 6, [ownRoofUnit], [hostileCqb]);
+            unitViews.Sync(replica, 6, externalGarrisonVisuals: true);
+            contactViews.Sync(replica, 6, 0.1f, externalGarrisonVisuals: true);
+            view.Update(replica, selected, default, showEntranceHint: false, cam, 0.05f, unitViews, contactViews);
+            UnitView roofSoldierView = unitViews.Views[ownRoofUnit.Id];
+            Require(roofSoldierView.ActiveGarrisonXRayMode == GarrisonXRayMode.None,
+                "Rooftop soldiers on open roof deck must NEVER receive X-Ray overlay tint.");
+            Vector3 ropeTop = new(567.9f, 29.0f, 479.6f);
+            Vector3 ropeBottom = new(567.9f, 15.75f, 479.6f);
+            Vector3 roofSpot = new(570.0f, 15.75f, 481.0f);
+            roofSoldierView.StartFastRopeDescent(ropeTop, ropeBottom, roofSpot, 0f);
+            Require(roofSoldierView.IsFastRoping && roofSoldierView.Root.Position.Y > 25.0f,
+                "Fast-rope descent must begin near the helicopter ramp top.");
+            roofSoldierView.UpdateEffects(0.45);
+            Require(roofSoldierView.IsFastRoping && roofSoldierView.Root.Position.Y < 26.0f && roofSoldierView.Root.Position.Y > 15.8f,
+                $"Soldier must smoothly slide downward along rope, got Y={roofSoldierView.Root.Position.Y}.");
+            roofSoldierView.UpdateEffects(0.80);
+            Require(!roofSoldierView.IsFastRoping && roofSoldierView.Root.Position.DistanceTo(roofSpot) < 0.05f,
+                "Soldier must complete fast-rope slide and step off to roof position.");
 
             // 6. Roof Fast-Rope preview metadata & elevated roof-deck zone circle
             StructureId section106 = new(106);
