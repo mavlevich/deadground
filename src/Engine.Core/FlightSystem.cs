@@ -14,6 +14,7 @@ public sealed class FlightSystem : ISimulationSystem
     public const float AltitudeTolerance = 0.08f;
     public const float HoverStopSpeed = 0.25f;
     public const float MinCrashAltitude = 0.5f;
+    public const float RoofFastRopeClearanceAboveRoofMeters = 14.0f;
     public const float SlingPickupDistance = 3.5f;
     public const int SlingHookupTicks = 20;
     public const int SlingDropTicks = 10;
@@ -21,6 +22,7 @@ public sealed class FlightSystem : ISimulationSystem
     private readonly StaticGeometry _geometry;
     private readonly DestinationEvaluator _destinationEvaluator;
     private readonly IUnitFlightCatalog _catalog;
+    private GarrisonSystem? _garrison;
     private readonly int _maxUnits;
 
     private readonly EntityId[] _airIds;
@@ -52,6 +54,7 @@ public sealed class FlightSystem : ISimulationSystem
     public int TotalLandings { get; private set; }
     public int TotalCrashImpacts { get; private set; }
     public int TotalFastRopeInsertions { get; private set; }
+    public int TotalRoofFastRopeInsertions { get; private set; }
     public int TotalSlingPickups { get; private set; }
     public int TotalSlingDrops { get; private set; }
 
@@ -77,6 +80,8 @@ public sealed class FlightSystem : ISimulationSystem
         _impactDefinitions = new ushort[_maxUnits];
         _impactOwners = new int[_maxUnits];
     }
+
+    public void SetGarrisonSystem(GarrisonSystem? garrison) => _garrison = garrison;
 
     public void EnsureUnitsInitialized(WorldState world)
     {
@@ -320,8 +325,25 @@ public sealed class FlightSystem : ISimulationSystem
                     return false;
 
                 Vector2 ropeTarget = command.HasTarget ? command.Target : unit.Position;
-                if (EvaluateFastRopeZone(_geometry, ropeTarget) != FastRopeZoneStatus.Valid)
+                // Do not inspect unobserved roof collapse at enqueue time (FoW anti-oracle);
+                // roof intactness is enforced authoritatively on hover arrival.
+                if (EvaluateFastRopeZone(
+                    _geometry,
+                    ropeTarget,
+                    _garrison,
+                    world,
+                    checkRoofIntact: false,
+                    out StructureId roofStructId,
+                    out Vector2 roofCenterXZ,
+                    out _) != FastRopeZoneStatus.Valid)
+                {
                     return false;
+                }
+
+                if (roofStructId != default)
+                {
+                    ropeTarget = roofCenterXZ;
+                }
 
                 ClearIncomingBoardingOrders(world, command.Unit);
                 state.LandOnArrival = false;
@@ -561,7 +583,7 @@ public sealed class FlightSystem : ISimulationSystem
 
                 case FlightPhase.TakingOff:
                     {
-                        float targetAlt = ResolveTargetAltitude(in state, in profile, pos);
+                        float targetAlt = ResolveTargetAltitude(in state, in profile, pos, _geometry, _garrison);
                         float climbRate = profile.ClimbRate * slingPerfMult;
                         state.Altitude = MathF.Min(targetAlt, state.Altitude + climbRate * dt);
                         state.Velocity = MoveToward(state.Velocity, Vector2.Zero, profile.Deceleration * dt);
@@ -601,7 +623,7 @@ public sealed class FlightSystem : ISimulationSystem
                         }
 
                         // Adjust altitude smoothly toward desired band or active cargo/insertion maneuver altitude
-                        float desiredAlt = ResolveTargetAltitude(in state, in profile, pos);
+                        float desiredAlt = ResolveTargetAltitude(in state, in profile, pos, _geometry, _garrison);
                         float climbRate = profile.ClimbRate * slingPerfMult;
                         if (state.Altitude < desiredAlt - AltitudeTolerance)
                             state.Altitude = MathF.Min(desiredAlt, state.Altitude + climbRate * dt);
@@ -763,11 +785,23 @@ public sealed class FlightSystem : ISimulationSystem
                                     }
                                 }
                             }
-                            // C. Fast-rope hover insertion of infantry passengers
+                            // C. Fast-rope hover insertion of infantry passengers (open ground/forest or intact building roof)
                             else if (state.FastRopePending || state.FastRopeActive)
                             {
-                                if (!HasInfantryPassenger(world, unit.Id) ||
-                                    EvaluateFastRopeZone(_geometry, nextPos) != FastRopeZoneStatus.Valid)
+                                FastRopeZoneStatus zoneStatus = EvaluateFastRopeZone(
+                                    _geometry,
+                                    nextPos,
+                                    _garrison,
+                                    world,
+                                    checkRoofIntact: true,
+                                    out StructureId roofId,
+                                    out Vector2 roofCenterXZ,
+                                    out float roofHeightAboveGround);
+                                float requiredFastRopeAlt = roofId != default
+                                    ? MathF.Max(profile.FastRopeAltitude, roofHeightAboveGround + RoofFastRopeClearanceAboveRoofMeters)
+                                    : profile.FastRopeAltitude;
+
+                                if (!HasInfantryPassenger(world, unit.Id) || zoneStatus != FastRopeZoneStatus.Valid)
                                 {
                                     state.FastRopePending = false;
                                     state.FastRopeActive = false;
@@ -775,7 +809,7 @@ public sealed class FlightSystem : ISimulationSystem
                                 }
                                 else if (!state.FastRopeActive)
                                 {
-                                    if (MathF.Abs(state.Altitude - profile.FastRopeAltitude) <= 1.5f && horizSpeedSq <= 4.0f)
+                                    if (MathF.Abs(state.Altitude - requiredFastRopeAlt) <= 1.5f && horizSpeedSq <= 4.0f)
                                     {
                                         state.FastRopeActive = true;
                                         state.FastRopeCooldownTicks = 0;
@@ -787,9 +821,13 @@ public sealed class FlightSystem : ISimulationSystem
                                     {
                                         state.FastRopeCooldownTicks--;
                                     }
-                                    else if (TryDeployNextFastRopeSoldier(world, unit.Id, nextPos))
+                                    else if (TryDeployNextFastRopeSoldier(world, unit.Id, nextPos, roofId, roofCenterXZ))
                                     {
                                         TotalFastRopeInsertions++;
+                                        if (roofId != default)
+                                        {
+                                            TotalRoofFastRopeInsertions++;
+                                        }
                                         if (HasInfantryPassenger(world, unit.Id))
                                         {
                                             state.FastRopeCooldownTicks = Math.Max(1, profile.FastRopeIntervalTicks);
@@ -1073,12 +1111,28 @@ public sealed class FlightSystem : ISimulationSystem
 
     /// <summary>
     /// Deterministic, zero-allocation evaluation of whether infantry can fast-rope at a position.
-    /// Dense forests and steep hills are allowed; water and solid structures are blocked.
+    /// Dense forests, steep hills, and intact garrisonable building roofs are allowed; water and
+    /// non-garrisonable/collapsed structures are blocked.
     /// Shared by FlightSystem (authoritative) and Godot UI (fast-rope preview cursor).
     /// </summary>
-    public static FastRopeZoneStatus EvaluateFastRopeZone(StaticGeometry geometry, Vector2 position)
+    public static FastRopeZoneStatus EvaluateFastRopeZone(StaticGeometry geometry, Vector2 position) =>
+        EvaluateFastRopeZone(geometry, position, garrison: null, world: null, checkRoofIntact: false, out _, out _, out _);
+
+    public static FastRopeZoneStatus EvaluateFastRopeZone(
+        StaticGeometry geometry,
+        Vector2 position,
+        GarrisonSystem? garrison,
+        WorldState? world,
+        bool checkRoofIntact,
+        out StructureId roofStructureId,
+        out Vector2 roofCenterXZ,
+        out float roofHeightAboveGround)
     {
         ArgumentNullException.ThrowIfNull(geometry);
+        roofStructureId = default;
+        roofCenterXZ = default;
+        roofHeightAboveGround = 0f;
+
         HeightMap map = geometry.HeightMap;
         const float margin = 2.0f;
         if (!float.IsFinite(position.X) || !float.IsFinite(position.Y) ||
@@ -1086,6 +1140,26 @@ public sealed class FlightSystem : ISimulationSystem
             position.X > map.Width - margin || position.Y > map.Depth - margin)
         {
             return FastRopeZoneStatus.OutOfBounds;
+        }
+
+        // Check if position lands on a garrisonable building rooftop
+        bool foundRoof = garrison is not null &&
+            garrison.TryFindBuildingContaining(position, out roofStructureId, out roofCenterXZ, out roofHeightAboveGround);
+        if (!foundRoof && TryFindFastRopeRoof(geometry, position, out roofStructureId, out roofCenterXZ, out roofHeightAboveGround))
+        {
+            foundRoof = true;
+        }
+
+        if (foundRoof)
+        {
+            if (checkRoofIntact && garrison is not null && world is not null && !garrison.CanOccupyRoof(world, roofStructureId))
+            {
+                roofStructureId = default;
+                roofCenterXZ = default;
+                roofHeightAboveGround = 0f;
+                return FastRopeZoneStatus.BlockedByStructure;
+            }
+            return FastRopeZoneStatus.Valid;
         }
 
         const float checkRadius = 1.2f;
@@ -1109,6 +1183,40 @@ public sealed class FlightSystem : ISimulationSystem
         }
 
         return FastRopeZoneStatus.Valid;
+    }
+
+    /// <summary>
+    /// Checks static geometry for a destructible/garrisonable building footprint containing <paramref name="position"/>.
+    /// Zero allocations.
+    /// </summary>
+    public static bool TryFindFastRopeRoof(
+        StaticGeometry geometry,
+        Vector2 position,
+        out StructureId structureId,
+        out Vector2 roofCenterXZ,
+        out float roofHeightAboveGround)
+    {
+        IReadOnlyList<DestructibleBuildingSpec> buildings = geometry.DestructibleBuildings;
+        for (int i = 0; i < buildings.Count; i++)
+        {
+            StructureId bid = buildings[i].Id;
+            if (!geometry.TryGetStructureIndex(bid, out int idx))
+                continue;
+            OpaqueStructure s = geometry.Structures[idx];
+            if (position.X >= s.MinX && position.X <= s.MaxX &&
+                position.Y >= s.MinZ && position.Y <= s.MaxZ)
+            {
+                structureId = bid;
+                roofCenterXZ = new Vector2((s.MinX + s.MaxX) * 0.5f, (s.MinZ + s.MaxZ) * 0.5f);
+                roofHeightAboveGround = MathF.Max(0f, s.MaxY - s.MinY);
+                return true;
+            }
+        }
+
+        structureId = default;
+        roofCenterXZ = default;
+        roofHeightAboveGround = 0f;
+        return false;
     }
 
     /// <summary>
@@ -1195,12 +1303,24 @@ public sealed class FlightSystem : ISimulationSystem
         return SlingDropZoneStatus.Valid;
     }
 
-    private static float ResolveTargetAltitude(in WorldState.UnitFlightState state, in FlightProfile profile, Vector2 currentPos)
+    private static float ResolveTargetAltitude(
+        in WorldState.UnitFlightState state,
+        in FlightProfile profile,
+        Vector2 currentPos,
+        StaticGeometry geometry,
+        GarrisonSystem? garrison)
     {
         const float approachDescentDistSq = 180f * 180f;
         if (state.FastRopeActive ||
             (state.FastRopePending && (!state.HasMoveTarget || Vector2.DistanceSquared(currentPos, state.TargetPosition) <= approachDescentDistSq)))
         {
+            Vector2 probePos = state.HasMoveTarget ? state.TargetPosition : currentPos;
+            bool overRoof = (garrison is not null && garrison.TryFindBuildingContaining(probePos, out _, out _, out float roofHeight)) ||
+                TryFindFastRopeRoof(geometry, probePos, out _, out _, out roofHeight);
+            if (overRoof && roofHeight > 0f)
+            {
+                return MathF.Max(profile.FastRopeAltitude, roofHeight + RoofFastRopeClearanceAboveRoofMeters);
+            }
             return profile.FastRopeAltitude;
         }
         if (state.PendingSlingTargetId != default &&
@@ -1287,7 +1407,12 @@ public sealed class FlightSystem : ISimulationSystem
         world.UpdateUnitNavigation(loadId, heliPos, heliPos, false, tick, supportSurface: 0, hullHeading: heliHeading);
     }
 
-    private bool TryDeployNextFastRopeSoldier(WorldState world, EntityId heliId, Vector2 hoverPos)
+    private bool TryDeployNextFastRopeSoldier(
+        WorldState world,
+        EntityId heliId,
+        Vector2 hoverPos,
+        StructureId roofStructureId,
+        Vector2 roofCenterXZ)
     {
         ReadOnlySpan<EntityId> passengers = world.GetPassengers(heliId);
         EntityId infantryId = default;
@@ -1301,6 +1426,23 @@ public sealed class FlightSystem : ISimulationSystem
         }
         if (infantryId == default)
             return false;
+
+        if (roofStructureId != default && _garrison is not null)
+        {
+            if (!_garrison.CanCommitRoofFastRope(world, roofStructureId, infantryId))
+                return false;
+
+            if (!world.Disembark(heliId, infantryId, roofCenterXZ, supportSurface: 0))
+                return false;
+
+            if (!_garrison.TryCommitFastRopeRoofEntry(world, infantryId, roofStructureId))
+            {
+                // Safety fallback: re-board if commit unexpectedly fails
+                world.Board(heliId, infantryId);
+                return false;
+            }
+            return true;
+        }
 
         if (!PassengerDistribution.TryFindFastRopeSpot(world, _destinationEvaluator, hoverPos, 0, infantryId, out Vector2 spot))
             return false;

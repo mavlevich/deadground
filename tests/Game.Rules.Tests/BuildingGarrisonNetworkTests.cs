@@ -36,7 +36,7 @@ public sealed class BuildingGarrisonNetworkTests
         Assert.Equal(0.25f, profile.CoverDamageMultiplier);
         Assert.Equal(0.45f, profile.RubbleCoverDamageMultiplier);
         Assert.Equal(0.65f, profile.RoofCoverDamageMultiplier);
-        Assert.Equal(40.0f, profile.ConcealmentSpotRange);
+        Assert.Equal(75.0f, profile.ConcealmentSpotRange);
         Assert.Equal(60, profile.FiringRevealTicks);
 
         using Simulation sim = UrbanDestructionPlaygroundScenario.CreateSimulation(catalog: catalog);

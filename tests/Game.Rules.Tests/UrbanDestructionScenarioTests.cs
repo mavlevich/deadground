@@ -18,8 +18,13 @@ public sealed class UrbanDestructionScenarioTests
         for (int i = 0; i < 20; i++) sim.Step();
         sim.UpdateKnowledge(p1);
 
-        Assert.Equal(8, p1.OwnUnits.Length);
-        Assert.Equal(0, p1.ContactCount);
+        Assert.Equal(13, p1.OwnUnits.Length);
+        // US M60A1 tanks behind the central panelka must be concealed (0 tank contacts);
+        // garrisoned ambush infantry in adjacent courtyard buildings (< 75m) are spotted normally.
+        for (int c = 0; c < p1.Contacts.Length; c++)
+        {
+            Assert.NotEqual(ContactClassification.Tank, p1.Contacts[c].Classification);
+        }
         Assert.Equal(0, p1.StructureCount);
 
         // Order both Soviet T-62 tanks to demolish central panelka sections 102 and 103
@@ -50,11 +55,16 @@ public sealed class UrbanDestructionScenarioTests
         {
             sim.Step();
             sim.UpdateKnowledge(p1);
-            if (p1.ContactCount > 0)
+            for (int c = 0; c < p1.Contacts.Length; c++)
             {
-                spottedUsTankThroughRuins = true;
-                break;
+                if (p1.Contacts[c].Classification == ContactClassification.Tank && p1.Contacts[c].State == ContactState.Current)
+                {
+                    spottedUsTankThroughRuins = true;
+                    break;
+                }
             }
+            if (spottedUsTankThroughRuins)
+                break;
         }
 
         Assert.True(spottedUsTankThroughRuins, "Collapsing central panelka sections and letting dust clear must expose US M60A1 tanks behind the ruins.");
@@ -243,5 +253,181 @@ public sealed class UrbanDestructionScenarioTests
 
         Assert.True(impactsBeyondTarget >= 12,
             $"Expected long/wide misses aimed over collapsed rubble to sail past and hit ground behind target, got {impactsBeyondTarget}/40.");
+    }
+
+    [Fact]
+    public void ChinookFastRope_OntoEnemyHeldPanelkaRoof_HoversAboveRoof_DeploysToRoofSlot_AndClearsAmbushInCqb()
+    {
+        StaticGeometry geometry = UrbanDestructionPlaygroundScenario.CreateStaticGeometry();
+        using Simulation sim = UrbanDestructionPlaygroundScenario.CreateSimulation(geometry, matchSeed: 4747UL);
+
+        PlayerKnowledge p1 = new(1);
+        sim.UpdateKnowledge(p1);
+
+        // Locate Player 1's CH-47D Chinook (with 4 embarked assault riflemen)
+        EntityId chinookId = default;
+        foreach (OwnUnitObservation u in p1.OwnUnits)
+        {
+            if (u.HasFlightCapability)
+            {
+                chinookId = u.Id;
+                break;
+            }
+        }
+        Assert.NotEqual(default, chinookId);
+        Assert.Equal(4, sim.World.GetPassengers(chinookId).Length);
+
+        // Put Player 1 ground units on HoldFire so the test isolates the CH-47D rooftop CQB assault cleanly
+        // (ambush defenders in sections 103 & 106 are immediately spotted within 75m tactical recon range)
+        foreach (OwnUnitObservation u in p1.OwnUnits)
+        {
+            if (u.Id != chinookId && u.ContainerId == default)
+            {
+                sim.World.SetFireStance(u.Id, FireStance.HoldFire);
+            }
+        }
+        sim.Step();
+        sim.Step();
+        sim.UpdateKnowledge(p1);
+        Assert.True(p1.Contacts.Length >= 2, "Nearby courtyard scouts/infantry must spot garrisoned OPFOR buildings within 75m.");
+
+        // Order CH-47D to fast-rope onto east flanking panelka section 106 (occupied by 3 OPFOR ambush riflemen)
+        StructureId targetSection = new(106);
+        Vector2 roof106Center = new(567.9f, 479.6f);
+        Assert.True(sim.TryEnqueue(1, new HelicopterCommand(
+            1u,
+            sim.Tick,
+            chinookId,
+            HelicopterOrderKind.FastRope,
+            AltitudeBand.Low,
+            HasTarget: true,
+            Target: roof106Center)));
+
+        bool observedRoofHoverAlt = false;
+        bool observedRoofSlot = false;
+        bool observedContestedCqb = false;
+        long maxAllocDuringFastRope = 0;
+
+        for (int t = 0; t < 560; t++)
+        {
+            bool measureAlloc = t > 20 &&
+                sim.World.TryGetFlightState(chinookId, out WorldState.UnitFlightState fsCheck) &&
+                fsCheck.FastRopeActive;
+
+            long before = measureAlloc ? GC.GetAllocatedBytesForCurrentThread() : 0;
+            sim.Step();
+            if (measureAlloc)
+            {
+                long delta = GC.GetAllocatedBytesForCurrentThread() - before;
+                if (delta > maxAllocDuringFastRope) maxAllocDuringFastRope = delta;
+            }
+
+            if (sim.World.TryGetFlightState(chinookId, out WorldState.UnitFlightState fs) && fs.FastRopeActive)
+            {
+                // Hover altitude over 13.75m 5-story panelka roof must clear the roof deck (~27.75m above ground)
+                if (fs.Altitude >= 25.0f)
+                {
+                    observedRoofHoverAlt = true;
+                }
+            }
+
+            if (!observedRoofSlot)
+            {
+                ReadOnlySpan<EntityId> curOccs = sim.Garrison!.GetOccupants(targetSection);
+                for (int k = 0; k < curOccs.Length; k++)
+                {
+                    if (sim.World.TryGetUnit(curOccs[k], out UnitState u) &&
+                        u.Owner == 1 &&
+                        sim.World.GetGarrisonSlotKind(u.Id) == GarrisonSlotKind.Roof)
+                    {
+                        observedRoofSlot = true;
+                        break;
+                    }
+                }
+            }
+
+            if (sim.Garrison!.IsContested(sim.World, targetSection))
+            {
+                observedContestedCqb = true;
+            }
+        }
+
+        Assert.True(observedRoofHoverAlt, "CH-47D must hover at elevated rooftop clearance (>= 25m above ground) during roof Fast-Rope.");
+        Assert.True(observedRoofSlot, "Fast-roped assault troopers must land onto GarrisonSlotKind.Roof first.");
+        Assert.Equal(4, sim.Flight!.TotalRoofFastRopeInsertions);
+        Assert.Equal(0, sim.World.GetPassengers(chinookId).Length);
+        Assert.True(observedContestedCqb, "Fast-roping onto enemy-occupied section 106 must trigger contested CQB.");
+        Assert.Equal(0L, maxAllocDuringFastRope);
+
+        // Verify surviving Player 1 assault troopers auto-descended into Interior cover and cleared the OPFOR ambush
+        int p1In106 = 0;
+        int p1Interior = 0;
+        int p2In106 = 0;
+        ReadOnlySpan<EntityId> occs = sim.Garrison!.GetOccupants(targetSection);
+        for (int i = 0; i < occs.Length; i++)
+        {
+            if (sim.World.TryGetUnit(occs[i], out UnitState occ))
+            {
+                if (occ.Owner == 1)
+                {
+                    p1In106++;
+                    if (sim.World.GetGarrisonSlotKind(occ.Id) == GarrisonSlotKind.Interior) p1Interior++;
+                }
+                else if (occ.Owner == 2)
+                {
+                    p2In106++;
+                }
+            }
+        }
+
+        Assert.True(p1In106 >= 1 && p1Interior == p1In106,
+            $"Expected surviving Player 1 rooftop assault troopers to auto-descend into Interior cover, got p1={p1In106} interior={p1Interior}.");
+        Assert.Equal(0, p2In106);
+    }
+
+    [Fact]
+    public void ChinookFastRope_OntoCollapsedRoof_DoesNotLeakAtEnqueue_AndAbortsSafelyOnArrival()
+    {
+        StaticGeometry geometry = UrbanDestructionPlaygroundScenario.CreateStaticGeometry();
+        using Simulation sim = UrbanDestructionPlaygroundScenario.CreateSimulation(geometry, matchSeed: 4748UL);
+
+        // Damage top floor of section 105 so its roof is destroyed
+        StructureId damagedSection = new(105);
+        Assert.True(sim.World.TryGetDestructibleStructureIndex(damagedSection, out int idx));
+        ref DestructibleStructureState st = ref sim.World.GetDestructibleStructureRef(idx);
+        st.FloorsStanding = 3;
+        sim.BuildingDestruction!.SyncOverridesFromWorld(sim.World);
+
+        PlayerKnowledge p1 = new(1);
+        sim.UpdateKnowledge(p1);
+        EntityId chinookId = default;
+        foreach (OwnUnitObservation u in p1.OwnUnits)
+        {
+            if (u.HasFlightCapability)
+            {
+                chinookId = u.Id;
+                break;
+            }
+        }
+        Assert.NotEqual(default, chinookId);
+
+        // Enqueueing Fast-Rope onto section 105 succeeds (anti-FoW-oracle), then aborts cleanly on hover arrival
+        Vector2 roof105Center = new(567.9f, 465.2f);
+        Assert.True(sim.TryEnqueue(1, new HelicopterCommand(
+            1u,
+            sim.Tick,
+            chinookId,
+            HelicopterOrderKind.FastRope,
+            AltitudeBand.Low,
+            HasTarget: true,
+            Target: roof105Center)));
+
+        for (int t = 0; t < 260; t++) sim.Step();
+
+        Assert.Equal(0, sim.Flight!.TotalRoofFastRopeInsertions);
+        Assert.Equal(4, sim.World.GetPassengers(chinookId).Length);
+        Assert.True(sim.World.TryGetFlightState(chinookId, out WorldState.UnitFlightState finalFs));
+        Assert.False(finalFs.FastRopePending);
+        Assert.False(finalFs.FastRopeActive);
     }
 }

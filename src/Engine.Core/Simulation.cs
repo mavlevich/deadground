@@ -173,6 +173,7 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
             _garrison.SetNavigationSystem(_navigation);
             _detection?.SetGarrisonSystem(_garrison);
             _combat?.SetGarrisonSystem(_garrison);
+            _flight?.SetGarrisonSystem(_garrison);
         }
         if (_flight is not null && _combat is not null)
         {

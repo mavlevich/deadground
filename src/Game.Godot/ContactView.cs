@@ -23,7 +23,8 @@ internal sealed class ContactView
         Node3D? FrontRotorBlur,
         Node3D? RearRotorBlur,
         Node3D? RearRamp,
-        Node3D[] LaunchTubes);
+        Node3D[] LaunchTubes,
+        GeometryInstance3D[] AllMeshes);
 
     private readonly MeshInstance3D _ghostBase;
     private readonly MeshInstance3D _selection;
@@ -43,6 +44,9 @@ internal sealed class ContactView
     private Node3D? _rearRotorBlur;
     private Node3D? _rearRamp;
     private Node3D[] _launchTubes = Array.Empty<Node3D>();
+    private GeometryInstance3D[] _allMeshes = [];
+    private bool _hostileCqbXRayActive;
+    internal bool HasHostileCqbXRay => _hostileCqbXRayActive;
     private int _nextLaunchTubeIdx;
     private float _altitude;
     private float _rotorAngle;
@@ -149,6 +153,56 @@ internal sealed class ContactView
     public void Update(ContactObservation contact, float groundY, bool isSelected) =>
         Update(contact, contact.Position, groundY, isSelected, contact.TurretYaw, contact.HullHeading, contact.Altitude, contact.GunPitchRad);
 
+    public void ApplyGarrisonPresentation(
+        ContactObservation contact,
+        Vector3 worldPos,
+        float yawRad,
+        bool isAiming,
+        bool isSelected,
+        float deltaSeconds,
+        bool isCqbContested = false)
+    {
+        if (contact.State != ContactState.Current)
+        {
+            SetHostileCqbXRay(false);
+            if (Root.Visible) Root.Visible = false;
+            return;
+        }
+        if (isAiming) SetAiming(true);
+        Update(
+            contact,
+            new System.Numerics.Vector2(worldPos.X, worldPos.Z),
+            worldPos.Y,
+            isSelected,
+            turretYaw: yawRad,
+            hullHeading: yawRad,
+            altitude: 0f,
+            gunPitchRad: 0f,
+            deltaSeconds: deltaSeconds);
+        _selection.Visible = false;
+        SetHostileCqbXRay(isCqbContested && contact.GarrisonSlotKind != GarrisonSlotKind.Roof);
+        if (!Root.Visible) Root.Visible = true;
+    }
+
+    private void SetHostileCqbXRay(bool active)
+    {
+        if (_hostileCqbXRayActive == active && _allMeshes.Length > 0)
+        {
+            // Still ensure overlay matches after model/LOD creation
+            ShaderMaterial? expected = active ? UnitView.GetGarrisonXRayMaterial(GarrisonXRayMode.HostileCqb) : null;
+            if (_allMeshes[0].MaterialOverlay == expected) return;
+        }
+        _hostileCqbXRayActive = active;
+        ShaderMaterial? mat = active ? UnitView.GetGarrisonXRayMaterial(GarrisonXRayMode.HostileCqb) : null;
+        for (int i = 0; i < _allMeshes.Length; i++)
+        {
+            if (_allMeshes[i].MaterialOverlay != mat)
+            {
+                _allMeshes[i].MaterialOverlay = mat;
+            }
+        }
+    }
+
     public void Update(ContactObservation contact, System.Numerics.Vector2 position, float groundY, bool isSelected,
         float turretYaw, float hullHeading, float altitude = 0f, float gunPitchRad = 0f,
         float deltaSeconds = Simulation.TickSeconds)
@@ -190,6 +244,11 @@ internal sealed class ContactView
             : isHelicopter
                 ? new Vector3(2.4f, 0.15f, 2.4f)
                 : new Vector3(1, 0.15f, 1);
+
+        if (contact.GarrisonStructureId == default && _hostileCqbXRayActive)
+        {
+            SetHostileCqbXRay(false);
+        }
 
         if (contact.State == ContactState.Current)
         {
@@ -480,7 +539,8 @@ internal sealed class ContactView
             }
         }
         Node3D[] launchTubes = tubes is not null ? tubes.ToArray() : Array.Empty<Node3D>();
-        rig = new ContactRig(turret, gunPitch, muzzle, animPlayer, frontRotor, rearRotor, frontRotorBlur, rearRotorBlur, rearRamp, launchTubes);
+        GeometryInstance3D[] allMeshes = UnitView.CollectGeometryInstances(lodNode, null);
+        rig = new ContactRig(turret, gunPitch, muzzle, animPlayer, frontRotor, rearRotor, frontRotorBlur, rearRotorBlur, rearRamp, launchTubes, allMeshes);
         _rigs[lod] = rig;
         return rig;
     }
@@ -497,6 +557,11 @@ internal sealed class ContactView
         _rearRotorBlur = rig.RearRotorBlur;
         _rearRamp = rig.RearRamp;
         _launchTubes = rig.LaunchTubes;
+        _allMeshes = rig.AllMeshes;
+        if (_hostileCqbXRayActive)
+        {
+            SetHostileCqbXRay(true);
+        }
     }
 
     private void ClearEnemyModel()

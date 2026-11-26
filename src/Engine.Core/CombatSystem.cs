@@ -117,6 +117,13 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
 
         _destinationEvaluator = new DestinationEvaluator(geometry);
         _losContext = new LineOfSightContext(geometry.Structures.Count);
+        if (geometry.VegetationZones.Count > 0)
+        {
+            _losContext.EnsureVegetationCapacity(
+                Math.Max(64, geometry.VegetationZones.Count * 2),
+                Math.Max(16, geometry.VegetationZones.Count * 2),
+                geometry.VegetationClearings.Count);
+        }
         _destroyedBuffer = new EntityId[maxUnits];
         _crashSplashKilledBuffer = new EntityId[maxUnits];
         _playerEvents = new CombatEventObservation[maxSides * maxEventsPerPlayer];

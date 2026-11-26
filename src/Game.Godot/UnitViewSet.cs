@@ -148,7 +148,7 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
         return (sensorRange, weaponRange);
     }
 
-    internal void Sync(ClientReplica replica, double renderTick)
+    internal void Sync(ClientReplica replica, double renderTick, bool externalGarrisonVisuals = false)
     {
         _present.Clear();
         foreach (OwnUnitObservation unit in replica.OwnUnits)
@@ -170,22 +170,43 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
             }
             if (unit.ContainerId != default)
             {
+                view.WasContainedInTransport = true;
                 Selected.Remove(unit.Id);
+                if (view.IsGarrisonedVisual)
+                {
+                    view.ClearGarrisonPresentation();
+                }
                 if (view.Root.Visible)
                 {
                     view.SetContainedHidden();
                 }
                 continue;
             }
+            bool justDisembarked = view.WasContainedInTransport;
+            if (justDisembarked)
+            {
+                view.WasContainedInTransport = false;
+                TryStartFastRopeSlideFromNearbyHelicopter(unit, view);
+            }
             if (unit.GarrisonStructureId != default)
             {
-                // Keep garrisoned infantry selectable (for Exit/Roof/Attack orders) while hiding the ground mesh
-                // so BuildingGarrisonView renders window/roof silhouettes and X-Ray markers cleanly.
-                if (view.Root.Visible)
+                int garrMaxHealth = _maxHealthProvider?.Invoke(unit.Definition) ?? GetDefaultMaxHealth(unit.Definition);
+                view.UpdateHealth(unit.Health, garrMaxHealth);
+                if (unit.AttackStatus == AttackExecutionStatus.Aiming || unit.ReloadTicksRemaining > 0 || unit.TargetContactId.Value != 0)
+                {
+                    view.SetAiming(true);
+                }
+                // When BuildingGarrisonView drives garrison visuals, keep the real UnitView model
+                // alive so it positions at windows/roof with wall-occluded X-Ray silhouette.
+                if (!externalGarrisonVisuals && view.Root.Visible)
                 {
                     view.SetContainedHidden();
                 }
                 continue;
+            }
+            if (view.IsGarrisonedVisual)
+            {
+                view.ClearGarrisonPresentation();
             }
             System.Numerics.Vector2 position = replica.SamplePosition(unit.Id, renderTick);
             float groundY = geometry is not null
@@ -247,6 +268,36 @@ internal sealed class UnitViewSet(Node3D parent, HeightMap map, Func<ushort, int
         foreach (UnitView view in Views.Values)
         {
             if (view.Root.Visible) view.FaceHealthBar(cameraBasis);
+        }
+    }
+
+    private void TryStartFastRopeSlideFromNearbyHelicopter(in OwnUnitObservation unit, UnitView soldierView)
+    {
+        if (!soldierView.IsInfantry) return;
+        const float maxDistSq = 18.0f * 18.0f;
+        UnitView? bestHeli = null;
+        float bestDistSq = maxDistSq;
+        foreach (UnitView candidate in Views.Values)
+        {
+            if (!candidate.IsHelicopter || !candidate.AreFastRopesVisible) continue;
+            float dx = candidate.Root.Position.X - unit.Position.X;
+            float dz = candidate.Root.Position.Z - unit.Position.Y;
+            float dSq = dx * dx + dz * dz;
+            if (dSq < bestDistSq)
+            {
+                bestDistSq = dSq;
+                bestHeli = candidate;
+            }
+        }
+        if (bestHeli is null) return;
+        bool leftRope = (unit.Id.Value & 1u) == 0u;
+        if (bestHeli.TryGetFastRopeWorldEndpoints(leftRope, out Vector3 ropeTop, out Vector3 ropeBottom))
+        {
+            float landingY = unit.GarrisonSlotKind == GarrisonSlotKind.Roof
+                ? ropeBottom.Y
+                : (geometry is not null ? geometry.GetSurfaceHeight(unit.Position, unit.SupportSurface) : map.GetHeight(unit.Position.X, unit.Position.Y));
+            Vector3 landingTarget = new(unit.Position.X, landingY, unit.Position.Y);
+            soldierView.StartFastRopeDescent(ropeTop, ropeBottom, landingTarget, bestHeli.Heading);
         }
     }
 

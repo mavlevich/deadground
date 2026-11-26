@@ -7,17 +7,18 @@ using NumericsVector3 = System.Numerics.Vector3;
 namespace DeadGround.Client;
 
 /// <summary>
-/// Client presentation for building garrisons (Stage 2, PR 2.2):
-/// - Renders data-driven window and rooftop infantry figures via a single MultiMesh (1 draw call).
-/// - Renders Variant A X-Ray silhouettes through walls/roofs for own interior garrisons via a
-///   second NoDepthTest MultiMesh (1 draw call), preserving building batching.
-/// - Projects pre-pooled clickable tactical garrison badges over occupied/spotted sections.
+/// Client presentation coordinator for building garrisons (Stage 2, PR 2.2 - PR 2.4):
+/// - Positions real animated soldier models (UnitView / ContactView) at building window ports,
+///   rooftops, and rubble crests with smooth indoor running interpolation (8.5 m/s).
+/// - Applies a wall-occluded X-Ray MaterialOverlay to own UnitViews so exposed rooftop/window
+///   parts render normally while wall-occluded silhouettes remain readable through concrete.
+/// - Projects pre-pooled clickable tactical garrison badges (own count, spotted enemy count,
+///   "? / cap" FoW last-known markers, and pulsing "CQB own v enemy" assault indicators).
 /// - Strictly Fog-of-War driven from ClientReplica (OwnUnits + Contacts only).
 /// - Zero managed heap allocations during steady-state Update frames.
 /// </summary>
 internal sealed class BuildingGarrisonView : IDisposable
 {
-    private const int MaxInstances = 512;
     private const int MaxBadges = 64;
     private const int MaxScratchUnitsPerBuilding = 16;
     private const int MaxAdjacentPerBuilding = 8;
@@ -30,7 +31,6 @@ internal sealed class BuildingGarrisonView : IDisposable
         public EntityId UnitId;
         public Vector3 Position;
         public float YawRad;
-        public float RunPhase;
         public int LastSeenFrame;
         public bool Active;
     }
@@ -98,8 +98,14 @@ internal sealed class BuildingGarrisonView : IDisposable
         public readonly float[] OwnInteriorAimYaws = new float[MaxScratchUnitsPerBuilding];
         public readonly bool[] OwnInteriorHasAim = new bool[MaxScratchUnitsPerBuilding];
         public readonly EntityId[] OwnRoofIds = new EntityId[MaxScratchUnitsPerBuilding];
+        public readonly float[] OwnRoofAimYaws = new float[MaxScratchUnitsPerBuilding];
+        public readonly bool[] OwnRoofHasAim = new bool[MaxScratchUnitsPerBuilding];
+        public readonly int[] HostileInteriorContactIndices = new int[MaxScratchUnitsPerBuilding];
         public readonly float[] HostileInteriorAimYaws = new float[MaxScratchUnitsPerBuilding];
         public readonly bool[] HostileInteriorHasAim = new bool[MaxScratchUnitsPerBuilding];
+        public readonly int[] HostileRoofContactIndices = new int[MaxScratchUnitsPerBuilding];
+        public readonly float[] HostileRoofAimYaws = new float[MaxScratchUnitsPerBuilding];
+        public readonly bool[] HostileRoofHasAim = new bool[MaxScratchUnitsPerBuilding];
         public bool HasThreatWatchDir;
         public float ThreatWatchDirX;
         public float ThreatWatchDirZ;
@@ -119,31 +125,19 @@ internal sealed class BuildingGarrisonView : IDisposable
         public bool CachedHovered;
     }
 
-    private static readonly Color OwnFigureColor = new(0.45f, 0.56f, 0.37f, 1.0f);
-    private static readonly Color OwnRoofFigureColor = new(0.54f, 0.66f, 0.44f, 1.0f);
-    private static readonly Color HostileFigureColor = new(0.86f, 0.30f, 0.24f, 1.0f);
-    private static readonly Color XRayIdleColor = new(0.28f, 0.88f, 0.78f, 0.36f);
-    private static readonly Color XRaySelectedColor = new(0.36f, 1.00f, 0.84f, 0.72f);
-    private static readonly Color XRayCqbColorA = new(1.00f, 0.56f, 0.22f, 0.68f);
-    private static readonly Color XRayCqbColorB = new(1.00f, 0.82f, 0.32f, 0.86f);
-
-    private static readonly Color BadgeOwnBg = new(0.08f, 0.14f, 0.18f, 0.88f);
-    private static readonly Color BadgeOwnSelectedBg = new(0.11f, 0.25f, 0.28f, 0.94f);
-    private static readonly Color BadgeOwnBorder = new(0.30f, 0.78f, 0.72f, 0.95f);
+    private static readonly Color BadgeOwnBg = new(0.08f, 0.14f, 0.18f, 0.90f);
+    private static readonly Color BadgeOwnSelectedBg = new(0.11f, 0.25f, 0.28f, 0.95f);
+    private static readonly Color BadgeOwnBorder = new(0.30f, 0.78f, 0.72f, 0.96f);
     private static readonly Color BadgeOwnSelectedBorder = new(0.46f, 1.00f, 0.86f, 1.0f);
-    private static readonly Color BadgeHostileBg = new(0.22f, 0.08f, 0.08f, 0.88f);
-    private static readonly Color BadgeHostileBorder = new(0.92f, 0.34f, 0.26f, 0.96f);
-    private static readonly Color BadgeCqbBg = new(0.32f, 0.11f, 0.06f, 0.95f);
+    private static readonly Color BadgeHostileBg = new(0.24f, 0.08f, 0.08f, 0.90f);
+    private static readonly Color BadgeHostileBorder = new(0.94f, 0.34f, 0.26f, 0.96f);
+    private static readonly Color BadgeCqbBg = new(0.36f, 0.11f, 0.05f, 0.96f);
     private static readonly Color BadgeCqbBorderA = new(1.00f, 0.44f, 0.14f, 1.0f);
-    private static readonly Color BadgeCqbBorderB = new(1.00f, 0.84f, 0.24f, 1.0f);
-    private static readonly Color BadgeLastKnownBg = new(0.16f, 0.12f, 0.08f, 0.72f);
-    private static readonly Color BadgeLastKnownBorder = new(0.76f, 0.58f, 0.30f, 0.75f);
+    private static readonly Color BadgeCqbBorderB = new(1.00f, 0.86f, 0.24f, 1.0f);
+    private static readonly Color BadgeLastKnownBg = new(0.18f, 0.13f, 0.08f, 0.80f);
+    private static readonly Color BadgeLastKnownBorder = new(0.80f, 0.62f, 0.30f, 0.85f);
 
     private readonly Node3D _root;
-    private readonly MultiMesh _figuresMesh;
-    private readonly MultiMeshInstance3D _figuresInstance;
-    private readonly MultiMesh _xrayMesh;
-    private readonly MultiMeshInstance3D _xrayInstance;
     private readonly MeshInstance3D _entranceHoverRing;
     private Control? _badgeContainer;
     private BadgeSlot[] _badgePool = [];
@@ -163,8 +157,7 @@ internal sealed class BuildingGarrisonView : IDisposable
     public int ActiveXRayCount { get; private set; }
     public int VisibleBadgeCount { get; private set; }
     public int ContestedBuildingCount { get; private set; }
-    public int ActiveMultiMeshDrawCalls =>
-        (ActiveFigureCount > 0 ? 1 : 0) + (ActiveXRayCount > 0 ? 1 : 0);
+    public int ActiveMultiMeshDrawCalls => 0;
 
     public BuildingGarrisonView(
         Node3D parent3D,
@@ -213,12 +206,14 @@ internal sealed class BuildingGarrisonView : IDisposable
                     spec.YawRad,
                     new NumericsVector3(fp.LocalX, 0f, fp.LocalZ));
                 NumericsVector2 normal = GarrisonMath.RotateLocalDirection(spec.YawRad, fp.NormalX, fp.NormalZ);
-                float yaw = MathF.Atan2(normal.X, normal.Y);
-                // Place figure tucked slightly into the window opening so head, shoulders, and rifle read cleanly
+                // Real soldier GLB models face -Z, so outward yaw is atan2(-nx, -nz)
+                float yaw = MathF.Atan2(-normal.X, -normal.Y);
+                // Stand slightly recessed behind the window plane so shoulders/rifle read cleanly at the sill
+                // while wall-occluded parts glow softly via X-Ray overlay
                 worldFiringPorts[p] = new WorldFiringPort(
-                    wp.X + normal.X * 0.06f,
+                    wp.X - normal.X * 0.30f,
                     fp.LocalY,
-                    wp.Z + normal.Y * 0.06f,
+                    wp.Z - normal.Y * 0.30f,
                     yaw,
                     normal.X,
                     normal.Y);
@@ -230,7 +225,7 @@ internal sealed class BuildingGarrisonView : IDisposable
                 BuildingRoofPort rp = gProfile.RoofPorts[p];
                 NumericsVector2 offset = GarrisonMath.RotateLocalDirection(spec.YawRad, rp.LocalX, rp.LocalZ);
                 float yaw = offset.LengthSquared() > 1e-4f
-                    ? MathF.Atan2(offset.X, offset.Y)
+                    ? MathF.Atan2(-offset.X, -offset.Y)
                     : spec.YawRad;
                 worldRoofPorts[p] = new WorldRoofPort(
                     centerXZ.X + offset.X,
@@ -267,62 +262,6 @@ internal sealed class BuildingGarrisonView : IDisposable
         }
         _entryCount = count;
 
-        ArrayMesh soldierMesh = CreateSoldierSilhouetteMesh();
-
-        // MultiMesh #1: Normal depth-tested window and roof figures (1 draw call for entire map)
-        StandardMaterial3D figureMat = new()
-        {
-            VertexColorUseAsAlbedo = true,
-            Roughness = 0.85f,
-            Metallic = 0.05f,
-            CullMode = BaseMaterial3D.CullModeEnum.Disabled
-        };
-        _figuresMesh = new MultiMesh
-        {
-            TransformFormat = MultiMesh.TransformFormatEnum.Transform3D,
-            UseColors = true,
-            InstanceCount = MaxInstances,
-            VisibleInstanceCount = 0,
-            Mesh = soldierMesh
-        };
-        _figuresInstance = new MultiMeshInstance3D
-        {
-            Name = "GarrisonFiguresMultiMesh",
-            Multimesh = _figuresMesh,
-            MaterialOverride = figureMat,
-            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
-            Visible = false
-        };
-        _root.AddChild(_figuresInstance);
-
-        // MultiMesh #2: Variant A X-Ray silhouettes for own interior garrisons (1 draw call for entire map)
-        StandardMaterial3D xrayMat = new()
-        {
-            VertexColorUseAsAlbedo = true,
-            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
-            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
-            NoDepthTest = true,
-            CullMode = BaseMaterial3D.CullModeEnum.Disabled,
-            RenderPriority = 10
-        };
-        _xrayMesh = new MultiMesh
-        {
-            TransformFormat = MultiMesh.TransformFormatEnum.Transform3D,
-            UseColors = true,
-            InstanceCount = MaxInstances,
-            VisibleInstanceCount = 0,
-            Mesh = soldierMesh
-        };
-        _xrayInstance = new MultiMeshInstance3D
-        {
-            Name = "GarrisonXRayMultiMesh",
-            Multimesh = _xrayMesh,
-            MaterialOverride = xrayMat,
-            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
-            Visible = false
-        };
-        _root.AddChild(_xrayInstance);
-
         // Hover entrance highlight ring (shown when hovering a garrisonable building with infantry selected)
         _entranceHoverRing = new MeshInstance3D
         {
@@ -342,7 +281,6 @@ internal sealed class BuildingGarrisonView : IDisposable
         };
         _root.AddChild(_entranceHoverRing);
 
-        // Pre-pooled clickable tactical garrison badges (can also be attached later via AttachBadgeOverlay)
         if (badgeOverlayParent is not null)
         {
             AttachBadgeOverlay(badgeOverlayParent);
@@ -369,31 +307,31 @@ internal sealed class BuildingGarrisonView : IDisposable
             {
                 BgColor = BadgeOwnBg,
                 BorderColor = BadgeOwnBorder,
-                BorderWidthLeft = 1,
-                BorderWidthRight = 1,
-                BorderWidthTop = 1,
-                BorderWidthBottom = 1,
-                CornerRadiusTopLeft = 3,
-                CornerRadiusTopRight = 3,
-                CornerRadiusBottomLeft = 3,
-                CornerRadiusBottomRight = 3,
-                ContentMarginLeft = 6,
-                ContentMarginRight = 6,
-                ContentMarginTop = 2,
-                ContentMarginBottom = 2
+                BorderWidthLeft = 2,
+                BorderWidthRight = 2,
+                BorderWidthTop = 2,
+                BorderWidthBottom = 2,
+                CornerRadiusTopLeft = 4,
+                CornerRadiusTopRight = 4,
+                CornerRadiusBottomLeft = 4,
+                CornerRadiusBottomRight = 4,
+                ContentMarginLeft = 7,
+                ContentMarginRight = 7,
+                ContentMarginTop = 3,
+                ContentMarginBottom = 3
             };
             Button btn = new()
             {
                 Visible = false,
                 FocusMode = Control.FocusModeEnum.None,
                 MouseFilter = Control.MouseFilterEnum.Stop,
-                CustomMinimumSize = new Vector2(46, 20)
+                CustomMinimumSize = new Vector2(56, 22)
             };
             btn.AddThemeStyleboxOverride("normal", style);
             btn.AddThemeStyleboxOverride("hover", style);
             btn.AddThemeStyleboxOverride("pressed", style);
-            btn.AddThemeFontSizeOverride("font_size", 11);
-            btn.AddThemeColorOverride("font_color", new Color(0.92f, 0.98f, 0.96f));
+            btn.AddThemeFontSizeOverride("font_size", 12);
+            btn.AddThemeColorOverride("font_color", new Color(0.95f, 0.99f, 0.97f));
             BadgeSlot slot = new() { Button = btn, Style = style };
             btn.Pressed += () =>
             {
@@ -459,6 +397,28 @@ internal sealed class BuildingGarrisonView : IDisposable
         return false;
     }
 
+    public bool TryGetRoofFastRopeInfo(
+        StructureId structureId,
+        out NumericsVector2 centerXZ,
+        out float roofHeightAboveGround,
+        out byte floorsTotal,
+        out int capacity)
+    {
+        if (_byId.TryGetValue(structureId, out BuildingVisualEntry? entry))
+        {
+            centerXZ = entry.CenterXZ;
+            roofHeightAboveGround = MathF.Max(0f, entry.Bounds.MaxY - entry.Bounds.MinY);
+            floorsTotal = entry.DestructionProfile.FloorsTotal;
+            capacity = entry.GarrisonProfile.Capacity;
+            return true;
+        }
+        centerXZ = default;
+        roofHeightAboveGround = 0f;
+        floorsTotal = 0;
+        capacity = 0;
+        return false;
+    }
+
     public bool TryGetBadgeAtScreenPoint(Vector2 screenPoint, out StructureId structureId)
     {
         for (int i = 0; i < VisibleBadgeCount && i < _badgePool.Length; i++)
@@ -474,13 +434,18 @@ internal sealed class BuildingGarrisonView : IDisposable
         return false;
     }
 
+    internal string GetBadgeTextForTesting(int index) =>
+        (uint)index < (uint)_badgePool.Length ? _badgePool[index].Button.Text : string.Empty;
+
     public void Update(
         ClientReplica replica,
         HashSet<EntityId>? selectedUnits,
         StructureId hoveredStructure,
         bool showEntranceHint,
         Camera3D? camera,
-        float deltaSeconds = 0.016f)
+        float deltaSeconds = 0.016f,
+        UnitViewSet? unitViews = null,
+        ContactViewSet? contactViews = null)
     {
         if (_disposed) return;
 
@@ -507,7 +472,7 @@ internal sealed class BuildingGarrisonView : IDisposable
                 : e.DestructionProfile.FloorsTotal;
         }
 
-        // 2. Tally own garrisoned units from ClientReplica.OwnUnits (including active aiming yaw for window shifting)
+        // 2. Tally own garrisoned units from ClientReplica.OwnUnits
         ReadOnlySpan<OwnUnitObservation> ownUnits = replica.OwnUnits;
         for (int i = 0; i < ownUnits.Length; i++)
         {
@@ -517,11 +482,15 @@ internal sealed class BuildingGarrisonView : IDisposable
             if (!_byId.TryGetValue(u.GarrisonStructureId, out BuildingVisualEntry? entry))
                 continue;
 
+            bool hasAim = u.AttackStatus != AttackExecutionStatus.None;
             if (u.GarrisonSlotKind == GarrisonSlotKind.Roof)
             {
-                if (entry.OwnRoofCount < MaxScratchUnitsPerBuilding)
+                int slotIdx = entry.OwnRoofCount;
+                if (slotIdx < MaxScratchUnitsPerBuilding)
                 {
-                    entry.OwnRoofIds[entry.OwnRoofCount] = u.Id;
+                    entry.OwnRoofIds[slotIdx] = u.Id;
+                    entry.OwnRoofAimYaws[slotIdx] = u.TurretYaw;
+                    entry.OwnRoofHasAim[slotIdx] = hasAim;
                 }
                 entry.OwnRoofCount++;
             }
@@ -532,7 +501,7 @@ internal sealed class BuildingGarrisonView : IDisposable
                 {
                     entry.OwnInteriorIds[slotIdx] = u.Id;
                     entry.OwnInteriorAimYaws[slotIdx] = u.TurretYaw;
-                    entry.OwnInteriorHasAim[slotIdx] = u.AttackStatus != AttackExecutionStatus.None;
+                    entry.OwnInteriorHasAim[slotIdx] = hasAim;
                 }
                 entry.OwnInteriorCount++;
             }
@@ -555,6 +524,13 @@ internal sealed class BuildingGarrisonView : IDisposable
             {
                 if (c.GarrisonSlotKind == GarrisonSlotKind.Roof)
                 {
+                    int slotIdx = entry.HostileCurrentRoofCount;
+                    if (slotIdx < MaxScratchUnitsPerBuilding)
+                    {
+                        entry.HostileRoofContactIndices[slotIdx] = i;
+                        entry.HostileRoofAimYaws[slotIdx] = c.TurretYaw;
+                        entry.HostileRoofHasAim[slotIdx] = true;
+                    }
                     entry.HostileCurrentRoofCount++;
                 }
                 else
@@ -562,6 +538,7 @@ internal sealed class BuildingGarrisonView : IDisposable
                     int slotIdx = entry.HostileCurrentInteriorCount;
                     if (slotIdx < MaxScratchUnitsPerBuilding)
                     {
+                        entry.HostileInteriorContactIndices[slotIdx] = i;
                         entry.HostileInteriorAimYaws[slotIdx] = c.TurretYaw;
                         entry.HostileInteriorHasAim[slotIdx] = true;
                     }
@@ -580,7 +557,7 @@ internal sealed class BuildingGarrisonView : IDisposable
         for (int i = 0; i < _entryCount; i++)
         {
             BuildingVisualEntry e = _entries[i];
-            if (e.OwnInteriorCount == 0) continue;
+            if (e.OwnInteriorCount == 0 && e.OwnRoofCount == 0) continue;
 
             float bestDistSq = watchRangeSq;
             float dirX = 0f;
@@ -612,7 +589,7 @@ internal sealed class BuildingGarrisonView : IDisposable
             }
         }
 
-        // 4. Populate figures MultiMesh & Variant A X-Ray MultiMesh
+        // 4. Position real animated UnitViews & ContactViews and project tactical badges
         int figCount = 0;
         int xrayCount = 0;
         int badgeCount = 0;
@@ -631,62 +608,60 @@ internal sealed class BuildingGarrisonView : IDisposable
 
             bool isHovered = hoveredStructure == e.Id;
             bool isSelected = e.OwnSelected;
-            Color xrayTint = isContested
-                ? XRayCqbColorA.Lerp(XRayCqbColorB, cqbPulse)
-                : ((isSelected || isHovered) ? XRaySelectedColor : XRayIdleColor);
+            GarrisonXRayMode ownXRayMode = isContested
+                ? GarrisonXRayMode.Cqb
+                : ((isSelected || isHovered) ? GarrisonXRayMode.Selected : GarrisonXRayMode.Idle);
 
-            // Clear per-building window mask once so own and hostile figures never stack on the same sill
+            // Clear per-building window mask once so own and hostile soldiers never stack on the same sill
             int maskLen = Math.Min(e.FiringPorts.Length, _portUsedMask.Length);
             for (int m = 0; m < maskLen; m++) _portUsedMask[m] = false;
 
-            // Own interior / rubble figures + Variant A X-Ray silhouettes (with smooth room/pod'ezd running)
+            // Own interior / rubble real soldier models + wall-occluded X-Ray silhouette
             if (e.OwnInteriorCount > 0)
             {
-                AppendInteriorFigures(
+                ApplyOwnInteriorPoses(
                     e,
-                    e.OwnInteriorCount,
-                    e.OwnInteriorIds,
-                    e.OwnInteriorAimYaws,
-                    e.OwnInteriorHasAim,
-                    useThreatWatchFallback: true,
-                    OwnFigureColor,
-                    emitXRay: true,
-                    xrayTint,
-                    rubblePhaseOffset: 0f,
+                    selectedUnits,
+                    isContested,
+                    ownXRayMode,
                     dt,
+                    unitViews,
                     ref figCount,
                     ref xrayCount);
             }
 
-            // Own rooftop figures (full upright figures on parapet, plus subtle X-Ray if selected or in CQB)
+            // Own rooftop real soldier models (exposed on open rooftop: never apply X-Ray tint)
             if (e.OwnRoofCount > 0)
             {
-                AppendRoofFigures(e, e.OwnRoofCount, e.OwnRoofIds, OwnRoofFigureColor, emitXRay: isSelected || isContested, xrayTint, dt, ref figCount, ref xrayCount);
+                ApplyOwnRoofPoses(
+                    e,
+                    selectedUnits,
+                    dt,
+                    unitViews,
+                    ref figCount);
             }
 
-            // Spotted hostile CURRENT interior figures (NEVER X-Ray, NEVER for LastKnown or concealed enemies)
+            // Spotted hostile CURRENT interior real soldier models (red wall-occluded X-Ray ONLY during active CQB)
             if (e.HostileCurrentInteriorCount > 0)
             {
-                AppendInteriorFigures(
+                ApplyHostileInteriorPoses(
                     e,
-                    e.HostileCurrentInteriorCount,
-                    ownUnitIds: null,
-                    e.HostileInteriorAimYaws,
-                    e.HostileInteriorHasAim,
-                    useThreatWatchFallback: false,
-                    HostileFigureColor,
-                    emitXRay: false,
-                    default,
-                    rubblePhaseOffset: MathF.PI * 0.5f,
+                    contacts,
+                    isContested,
                     dt,
-                    ref figCount,
-                    ref xrayCount);
+                    contactViews,
+                    ref figCount);
             }
 
-            // Spotted hostile CURRENT rooftop figures
+            // Spotted hostile CURRENT rooftop real soldier models (NEVER X-Ray)
             if (e.HostileCurrentRoofCount > 0)
             {
-                AppendRoofFigures(e, e.HostileCurrentRoofCount, ownUnitIds: null, HostileFigureColor, emitXRay: false, default, dt, ref figCount, ref xrayCount);
+                ApplyHostileRoofPoses(
+                    e,
+                    contacts,
+                    dt,
+                    contactViews,
+                    ref figCount);
             }
 
             // Project clickable tactical badge if overlay & camera available
@@ -697,7 +672,7 @@ internal sealed class BuildingGarrisonView : IDisposable
                     e.Bounds.MaxY,
                     in e.DestructionProfile,
                     e.ObservedFloorsStanding);
-                Vector3 anchor3D = new(e.CenterXZ.X, currentMaxY + 2.2f, e.CenterXZ.Y);
+                Vector3 anchor3D = new(e.CenterXZ.X, currentMaxY + 2.4f, e.CenterXZ.Y);
                 if (!camera.IsPositionBehind(anchor3D))
                 {
                     Vector2 screenPos = camera.UnprojectPosition(anchor3D);
@@ -743,12 +718,6 @@ internal sealed class BuildingGarrisonView : IDisposable
         VisibleBadgeCount = badgeCount;
         ContestedBuildingCount = contestedCount;
 
-        _figuresMesh.VisibleInstanceCount = figCount;
-        _figuresInstance.Visible = figCount > 0;
-
-        _xrayMesh.VisibleInstanceCount = xrayCount;
-        _xrayInstance.Visible = xrayCount > 0;
-
         // 5. Entrance hover indicator when infantry is selected and hovering a garrisonable building
         if (showEntranceHint && hoveredStructure != default && _byId.TryGetValue(hoveredStructure, out BuildingVisualEntry? hoveredEntry))
         {
@@ -765,39 +734,39 @@ internal sealed class BuildingGarrisonView : IDisposable
         }
     }
 
-    private void AppendInteriorFigures(
+    private void ApplyOwnInteriorPoses(
         BuildingVisualEntry e,
-        int unitCount,
-        EntityId[]? ownUnitIds,
-        float[] aimYaws,
-        bool[] hasAim,
-        bool useThreatWatchFallback,
-        Color figureColor,
-        bool emitXRay,
-        Color xrayColor,
-        float rubblePhaseOffset,
+        HashSet<EntityId>? selectedUnits,
+        bool isContested,
+        GarrisonXRayMode xrayMode,
         float dt,
+        UnitViewSet? unitViews,
         ref int figCount,
         ref int xrayCount)
     {
+        int count = Math.Min(e.OwnInteriorCount, MaxScratchUnitsPerBuilding);
         if (e.ObservedFloorsStanding == 0)
         {
-            // Collapsed rubble cover positions around the rubble crest
-            int shown = Math.Min(unitCount, 6);
             float rubbleY = e.Bounds.MinY + e.DestructionProfile.RubbleHeight;
-            for (int k = 0; k < shown; k++)
+            for (int k = 0; k < count; k++)
             {
-                float angle = (MathF.Tau * k) / Math.Max(1, shown) + e.YawRad + rubblePhaseOffset;
-                float rx = e.CenterXZ.X + MathF.Cos(angle) * 2.8f;
-                float rz = e.CenterXZ.Y + MathF.Sin(angle) * 2.8f;
+                EntityId unitId = e.OwnInteriorIds[k];
+                float angle = (MathF.Tau * k) / Math.Max(1, count) + e.YawRad;
+                float rx = e.CenterXZ.X + MathF.Cos(angle) * 2.6f;
+                float rz = e.CenterXZ.Y + MathF.Sin(angle) * 2.6f;
                 Vector3 targetPos = new(rx, rubbleY, rz);
-                float targetYaw = -angle;
-                if (ownUnitIds is not null && k < MaxScratchUnitsPerBuilding && ownUnitIds[k] != default)
+                float targetYaw = e.OwnInteriorHasAim[k]
+                    ? e.OwnInteriorAimYaws[k]
+                    : MathF.Atan2(-MathF.Cos(angle), -MathF.Sin(angle));
+
+                ResolveSmoothedOwnPose(unitId, targetPos, targetYaw, dt, out Vector3 posePos, out float poseYaw, out bool isRunning);
+                bool unitSelected = selectedUnits is not null && selectedUnits.Contains(unitId);
+                if (unitViews is not null && unitViews.Views.TryGetValue(unitId, out UnitView? view))
                 {
-                    ResolveSmoothedOwnPose(ownUnitIds[k], targetPos, targetYaw, dt, out targetPos, out targetYaw, out _);
+                    view.ApplyGarrisonPresentation(posePos, poseYaw, isRunning, e.OwnInteriorHasAim[k] || e.HasThreatWatchDir, isRoof: false, unitSelected, xrayMode);
                 }
-                Transform3D xform = new(Basis.FromEuler(new Vector3(0f, targetYaw, 0f)).Scaled(new Vector3(0.95f, 0.82f, 0.95f)), targetPos);
-                AddInstance(in xform, figureColor, emitXRay, xrayColor, ref figCount, ref xrayCount);
+                figCount++;
+                xrayCount++;
             }
             return;
         }
@@ -805,125 +774,240 @@ internal sealed class BuildingGarrisonView : IDisposable
         int portCount = e.FiringPorts.Length;
         if (portCount == 0) return;
 
-        // Place figures dynamically at top-standing-floor window ports matching each unit's active firing
-        // or nearest spotted enemy threat direction
         float topFloorBaseY = e.Bounds.MinY + (e.ObservedFloorsStanding - 1) * e.DestructionProfile.FloorHeight;
-        int shownPorts = Math.Min(unitCount, portCount);
-        int stride = shownPorts <= 4 && portCount >= 12 ? 3 : 1;
+        float lowerFloorBaseY = e.ObservedFloorsStanding >= 2
+            ? e.Bounds.MinY + (e.ObservedFloorsStanding - 2) * e.DestructionProfile.FloorHeight
+            : topFloorBaseY;
+        int stride = count <= 4 && portCount >= 12 ? 3 : 1;
         int maskLimit = Math.Min(portCount, _portUsedMask.Length);
+        // During active CQB, shift assault troopers across upper-floor rooms every ~1.8s so
+        // real indoor room-clearing movement and Run animations play continuously.
+        int cqbShift = isContested ? (int)(_cqbPulseTime / 1.8f) : 0;
 
-        for (int k = 0; k < shownPorts; k++)
+        for (int k = 0; k < count; k++)
         {
-            int chosenIdx = -1;
-            bool hasDesiredDir = false;
-            float aimX = 0f;
-            float aimZ = 0f;
-
-            if (k < MaxScratchUnitsPerBuilding && hasAim[k])
-            {
-                aimX = -MathF.Sin(aimYaws[k]);
-                aimZ = -MathF.Cos(aimYaws[k]);
-                hasDesiredDir = true;
-            }
-            else if (useThreatWatchFallback && e.HasThreatWatchDir)
-            {
-                aimX = e.ThreatWatchDirX;
-                aimZ = e.ThreatWatchDirZ;
-                hasDesiredDir = true;
-            }
-
-            if (hasDesiredDir)
-            {
-                float bestDot = float.NegativeInfinity;
-                for (int p = 0; p < portCount; p++)
-                {
-                    if (p < maskLimit && _portUsedMask[p]) continue;
-                    WorldFiringPort cand = e.FiringPorts[p];
-                    float dot = cand.NormalX * aimX + cand.NormalZ * aimZ;
-                    if (dot > bestDot + 1e-4f)
-                    {
-                        bestDot = dot;
-                        chosenIdx = p;
-                    }
-                }
-            }
-
-            if (chosenIdx < 0)
-            {
-                // Idle soldier with no nearby spotted threat: spread across unoccupied facades
-                int startIdx = (k * stride) % portCount;
-                for (int step = 0; step < portCount; step++)
-                {
-                    int candIdx = (startIdx + step) % portCount;
-                    if (candIdx >= maskLimit || !_portUsedMask[candIdx])
-                    {
-                        chosenIdx = candIdx;
-                        break;
-                    }
-                }
-                if (chosenIdx < 0) chosenIdx = startIdx;
-            }
-
-            if (chosenIdx < maskLimit) _portUsedMask[chosenIdx] = true;
+            EntityId unitId = e.OwnInteriorIds[k];
+            int chosenIdx = SelectWindowPort(
+                e,
+                k + cqbShift,
+                stride,
+                maskLimit,
+                hasAim: !isContested && e.OwnInteriorHasAim[k],
+                aimYaw: e.OwnInteriorAimYaws[k],
+                useThreatWatchFallback: !isContested);
 
             WorldFiringPort wp = e.FiringPorts[chosenIdx];
-            // Position figure so head + rifle align with window sill height (port.LocalY)
-            float figureBaseY = topFloorBaseY + MathF.Max(0.05f, wp.LocalY - 1.15f);
-            Vector3 targetPos = new(wp.WorldX, figureBaseY, wp.WorldZ);
-            float targetYaw = wp.YawRad;
-            bool isRunningInside = false;
+            float floorY = (isContested && ((k + cqbShift) & 1) == 1) ? lowerFloorBaseY : topFloorBaseY;
+            Vector3 targetPos = new(wp.WorldX, floorY + 0.08f, wp.WorldZ);
+            float targetYaw = e.OwnInteriorHasAim[k] ? e.OwnInteriorAimYaws[k] : wp.YawRad;
 
-            if (ownUnitIds is not null && k < MaxScratchUnitsPerBuilding && ownUnitIds[k] != default)
+            ResolveSmoothedOwnPose(unitId, targetPos, targetYaw, dt, out Vector3 posePos, out float poseYaw, out bool isRunning);
+            bool unitSelected = selectedUnits is not null && selectedUnits.Contains(unitId);
+            if (unitViews is not null && unitViews.Views.TryGetValue(unitId, out UnitView? view))
             {
-                ResolveSmoothedOwnPose(ownUnitIds[k], targetPos, targetYaw, dt, out targetPos, out targetYaw, out isRunningInside);
+                view.ApplyGarrisonPresentation(
+                    posePos,
+                    poseYaw,
+                    isRunning,
+                    isAiming: e.OwnInteriorHasAim[k] || e.HasThreatWatchDir || isContested,
+                    isRoof: false,
+                    unitSelected,
+                    xrayMode);
             }
-
-            Basis basis = Basis.FromEuler(new Vector3(0f, targetYaw, 0f));
-            Transform3D xform = new(basis, targetPos);
-            // While sprinting indoors across rooms/adjacent pod'ezds, render the X-Ray silhouette smoothly
-            // along the interior corridor and show the solid window figure once settled at the sill
-            if (isRunningInside && emitXRay)
-            {
-                AddXRayOnlyInstance(in xform, xrayColor, ref xrayCount);
-            }
-            else
-            {
-                AddInstance(in xform, figureColor, emitXRay, xrayColor, ref figCount, ref xrayCount);
-            }
+            figCount++;
+            xrayCount++;
         }
     }
 
-    private void AppendRoofFigures(
+    private void ApplyOwnRoofPoses(
         BuildingVisualEntry e,
-        int unitCount,
-        EntityId[]? ownUnitIds,
-        Color figureColor,
-        bool emitXRay,
-        Color xrayColor,
+        HashSet<EntityId>? selectedUnits,
         float dt,
-        ref int figCount,
-        ref int xrayCount)
+        UnitViewSet? unitViews,
+        ref int figCount)
     {
         int portCount = e.RoofPorts.Length;
         if (portCount == 0) return;
 
-        int shown = Math.Min(unitCount, portCount * 2);
-        for (int k = 0; k < shown; k++)
+        int count = Math.Min(e.OwnRoofCount, MaxScratchUnitsPerBuilding);
+        for (int k = 0; k < count; k++)
         {
+            EntityId unitId = e.OwnRoofIds[k];
             WorldRoofPort rp = e.RoofPorts[k % portCount];
             float lateralJitter = k >= portCount ? 1.15f : 0f;
             float rx = rp.WorldX + MathF.Cos(rp.YawRad) * lateralJitter;
             float rz = rp.WorldZ - MathF.Sin(rp.YawRad) * lateralJitter;
             Vector3 targetPos = new(rx, rp.WorldY, rz);
-            float targetYaw = rp.YawRad;
-            if (ownUnitIds is not null && k < MaxScratchUnitsPerBuilding && ownUnitIds[k] != default)
+            float targetYaw = e.OwnRoofHasAim[k]
+                ? e.OwnRoofAimYaws[k]
+                : (e.HasThreatWatchDir ? MathF.Atan2(-e.ThreatWatchDirX, -e.ThreatWatchDirZ) : rp.YawRad);
+
+            ResolveSmoothedOwnPose(unitId, targetPos, targetYaw, dt, out Vector3 posePos, out float poseYaw, out bool isRunning);
+            bool unitSelected = selectedUnits is not null && selectedUnits.Contains(unitId);
+            if (unitViews is not null && unitViews.Views.TryGetValue(unitId, out UnitView? view))
             {
-                ResolveSmoothedOwnPose(ownUnitIds[k], targetPos, targetYaw, dt, out targetPos, out targetYaw, out _);
+                view.ApplyGarrisonPresentation(
+                    posePos,
+                    poseYaw,
+                    isRunning,
+                    isAiming: e.OwnRoofHasAim[k] || e.HasThreatWatchDir,
+                    isRoof: true,
+                    unitSelected,
+                    GarrisonXRayMode.None);
             }
-            Basis basis = Basis.FromEuler(new Vector3(0f, targetYaw, 0f));
-            Transform3D xform = new(basis, targetPos);
-            AddInstance(in xform, figureColor, emitXRay, xrayColor, ref figCount, ref xrayCount);
+            figCount++;
         }
+    }
+
+    private void ApplyHostileInteriorPoses(
+        BuildingVisualEntry e,
+        ReadOnlySpan<ContactObservation> contacts,
+        bool isContested,
+        float dt,
+        ContactViewSet? contactViews,
+        ref int figCount)
+    {
+        int count = Math.Min(e.HostileCurrentInteriorCount, MaxScratchUnitsPerBuilding);
+        if (e.ObservedFloorsStanding == 0)
+        {
+            float rubbleY = e.Bounds.MinY + e.DestructionProfile.RubbleHeight;
+            for (int k = 0; k < count; k++)
+            {
+                int contactIdx = e.HostileInteriorContactIndices[k];
+                ref readonly ContactObservation c = ref contacts[contactIdx];
+                float angle = (MathF.Tau * k) / Math.Max(1, count) + e.YawRad + MathF.PI * 0.5f;
+                Vector3 pos = new(e.CenterXZ.X + MathF.Cos(angle) * 2.6f, rubbleY, e.CenterXZ.Y + MathF.Sin(angle) * 2.6f);
+                float yaw = e.HostileInteriorHasAim[k] ? e.HostileInteriorAimYaws[k] : MathF.Atan2(-MathF.Cos(angle), -MathF.Sin(angle));
+                if (contactViews is not null && contactViews.Views.TryGetValue(c.Id, out ContactView? view))
+                {
+                    view.ApplyGarrisonPresentation(c, pos, yaw, isAiming: true, isSelected: false, dt, isCqbContested: isContested);
+                }
+                figCount++;
+            }
+            return;
+        }
+
+        int portCount = e.FiringPorts.Length;
+        if (portCount == 0) return;
+
+        float topFloorBaseY = e.Bounds.MinY + (e.ObservedFloorsStanding - 1) * e.DestructionProfile.FloorHeight;
+        int stride = count <= 4 && portCount >= 12 ? 3 : 1;
+        int maskLimit = Math.Min(portCount, _portUsedMask.Length);
+
+        for (int k = 0; k < count; k++)
+        {
+            int contactIdx = e.HostileInteriorContactIndices[k];
+            ref readonly ContactObservation c = ref contacts[contactIdx];
+            int chosenIdx = SelectWindowPort(
+                e,
+                k,
+                stride,
+                maskLimit,
+                hasAim: e.HostileInteriorHasAim[k],
+                aimYaw: e.HostileInteriorAimYaws[k],
+                useThreatWatchFallback: false);
+
+            WorldFiringPort wp = e.FiringPorts[chosenIdx];
+            Vector3 pos = new(wp.WorldX, topFloorBaseY + 0.08f, wp.WorldZ);
+            float yaw = wp.YawRad;
+            if (contactViews is not null && contactViews.Views.TryGetValue(c.Id, out ContactView? view))
+            {
+                view.ApplyGarrisonPresentation(c, pos, yaw, isAiming: true, isSelected: false, dt, isCqbContested: isContested);
+            }
+            figCount++;
+        }
+    }
+
+    private void ApplyHostileRoofPoses(
+        BuildingVisualEntry e,
+        ReadOnlySpan<ContactObservation> contacts,
+        float dt,
+        ContactViewSet? contactViews,
+        ref int figCount)
+    {
+        int portCount = e.RoofPorts.Length;
+        if (portCount == 0) return;
+
+        int count = Math.Min(e.HostileCurrentRoofCount, MaxScratchUnitsPerBuilding);
+        for (int k = 0; k < count; k++)
+        {
+            int contactIdx = e.HostileRoofContactIndices[k];
+            ref readonly ContactObservation c = ref contacts[contactIdx];
+            WorldRoofPort rp = e.RoofPorts[k % portCount];
+            float lateralJitter = k >= portCount ? 1.15f : 0f;
+            float rx = rp.WorldX + MathF.Cos(rp.YawRad) * lateralJitter;
+            float rz = rp.WorldZ - MathF.Sin(rp.YawRad) * lateralJitter;
+            Vector3 pos = new(rx, rp.WorldY, rz);
+            float yaw = e.HostileRoofHasAim[k] ? e.HostileRoofAimYaws[k] : rp.YawRad;
+            if (contactViews is not null && contactViews.Views.TryGetValue(c.Id, out ContactView? view))
+            {
+                view.ApplyGarrisonPresentation(c, pos, yaw, isAiming: true, isSelected: false, dt);
+            }
+            figCount++;
+        }
+    }
+
+    private int SelectWindowPort(
+        BuildingVisualEntry e,
+        int unitSlotIndex,
+        int stride,
+        int maskLimit,
+        bool hasAim,
+        float aimYaw,
+        bool useThreatWatchFallback)
+    {
+        int portCount = e.FiringPorts.Length;
+        int chosenIdx = -1;
+        bool hasDesiredDir = false;
+        float aimX = 0f;
+        float aimZ = 0f;
+
+        if (hasAim)
+        {
+            aimX = -MathF.Sin(aimYaw);
+            aimZ = -MathF.Cos(aimYaw);
+            hasDesiredDir = true;
+        }
+        else if (useThreatWatchFallback && e.HasThreatWatchDir)
+        {
+            aimX = e.ThreatWatchDirX;
+            aimZ = e.ThreatWatchDirZ;
+            hasDesiredDir = true;
+        }
+
+        if (hasDesiredDir)
+        {
+            float bestDot = float.NegativeInfinity;
+            for (int p = 0; p < portCount; p++)
+            {
+                if (p < maskLimit && _portUsedMask[p]) continue;
+                WorldFiringPort cand = e.FiringPorts[p];
+                float dot = cand.NormalX * aimX + cand.NormalZ * aimZ;
+                if (dot > bestDot + 1e-4f)
+                {
+                    bestDot = dot;
+                    chosenIdx = p;
+                }
+            }
+        }
+
+        if (chosenIdx < 0)
+        {
+            int startIdx = (unitSlotIndex * stride) % portCount;
+            for (int step = 0; step < portCount; step++)
+            {
+                int candIdx = (startIdx + step) % portCount;
+                if (candIdx >= maskLimit || !_portUsedMask[candIdx])
+                {
+                    chosenIdx = candIdx;
+                    break;
+                }
+            }
+            if (chosenIdx < 0) chosenIdx = startIdx;
+        }
+
+        if (chosenIdx < maskLimit) _portUsedMask[chosenIdx] = true;
+        return chosenIdx;
     }
 
     private void ResolveSmoothedOwnPose(
@@ -959,7 +1043,6 @@ internal sealed class BuildingGarrisonView : IDisposable
                     UnitId = unitId,
                     Position = targetPos,
                     YawRad = targetYaw,
-                    RunPhase = 0f,
                     LastSeenFrame = _frameCounter,
                     Active = true
                 };
@@ -977,10 +1060,8 @@ internal sealed class BuildingGarrisonView : IDisposable
 
         if (dist > 32f || dt <= 0f)
         {
-            // Too far to be an adjacent/interior move (e.g., exited and re-entered far away): snap cleanly
             tr.Position = targetPos;
             tr.YawRad = targetYaw;
-            tr.RunPhase = 0f;
             outPos = targetPos;
             outYaw = targetYaw;
             isRunningInside = false;
@@ -992,7 +1073,6 @@ internal sealed class BuildingGarrisonView : IDisposable
         {
             tr.Position = targetPos;
             tr.YawRad = targetYaw;
-            tr.RunPhase = 0f;
             outPos = targetPos;
             outYaw = targetYaw;
             isRunningInside = false;
@@ -1001,48 +1081,14 @@ internal sealed class BuildingGarrisonView : IDisposable
 
         Vector3 dir = delta / dist;
         tr.Position += dir * maxStep;
-        tr.RunPhase += maxStep * 3.4f;
         float runYaw = (delta.X * delta.X + delta.Z * delta.Z) > 0.001f
-            ? MathF.Atan2(delta.X, delta.Z)
+            ? MathF.Atan2(-delta.X, -delta.Z)
             : targetYaw;
         tr.YawRad = runYaw;
 
-        float strideBob = MathF.Abs(MathF.Sin(tr.RunPhase)) * 0.14f;
-        outPos = new Vector3(tr.Position.X, tr.Position.Y + strideBob, tr.Position.Z);
+        outPos = tr.Position;
         outYaw = runYaw;
         isRunningInside = dist > 0.35f;
-    }
-
-    private void AddXRayOnlyInstance(in Transform3D xform, Color xrayColor, ref int xrayCount)
-    {
-        if (xrayCount < MaxInstances)
-        {
-            _xrayMesh.SetInstanceTransform(xrayCount, xform);
-            _xrayMesh.SetInstanceColor(xrayCount, xrayColor);
-            xrayCount++;
-        }
-    }
-
-    private void AddInstance(
-        in Transform3D xform,
-        Color figureColor,
-        bool emitXRay,
-        Color xrayColor,
-        ref int figCount,
-        ref int xrayCount)
-    {
-        if (figCount < MaxInstances)
-        {
-            _figuresMesh.SetInstanceTransform(figCount, xform);
-            _figuresMesh.SetInstanceColor(figCount, figureColor);
-            figCount++;
-        }
-        if (emitXRay && xrayCount < MaxInstances)
-        {
-            _xrayMesh.SetInstanceTransform(xrayCount, xform);
-            _xrayMesh.SetInstanceColor(xrayCount, xrayColor);
-            xrayCount++;
-        }
     }
 
     private static void UpdateBadgeSlot(
@@ -1079,36 +1125,38 @@ internal sealed class BuildingGarrisonView : IDisposable
             slot.CachedSelected = isSelected;
             slot.CachedHovered = isHovered;
 
+            int cap = e.GarrisonProfile.Capacity;
             if (isContested)
             {
                 slot.Style.BgColor = BadgeCqbBg;
                 slot.Style.BorderColor = BadgeCqbBorderA.Lerp(BadgeCqbBorderB, cqbPulse);
-                slot.Button.Text = $"CQB {ownTotal}v{hostileCurrent}";
+                slot.Button.Text = $"CQB {ownTotal} v {hostileCurrent}";
             }
             else if (ownTotal > 0)
             {
                 slot.Style.BgColor = (isSelected || isHovered) ? BadgeOwnSelectedBg : BadgeOwnBg;
                 slot.Style.BorderColor = (isSelected || isHovered) ? BadgeOwnSelectedBorder : BadgeOwnBorder;
                 slot.Button.Text = ownRoof > 0
-                    ? $"{ownTotal}/{e.GarrisonProfile.Capacity} ROOF"
-                    : $"{ownTotal}/{e.GarrisonProfile.Capacity}";
+                    ? $"{ownTotal} / {cap} ROOF"
+                    : $"{ownTotal} / {cap}";
             }
             else if (hostileCurrent > 0)
             {
                 slot.Style.BgColor = BadgeHostileBg;
                 slot.Style.BorderColor = BadgeHostileBorder;
-                slot.Button.Text = hostileRoof > 0 ? "! ROOF" : "! INF";
+                slot.Button.Text = hostileRoof > 0
+                    ? $"! {hostileCurrent} / {cap} ROOF"
+                    : $"! {hostileCurrent} / {cap}";
             }
             else
             {
                 slot.Style.BgColor = BadgeLastKnownBg;
                 slot.Style.BorderColor = BadgeLastKnownBorder;
-                slot.Button.Text = "? INF";
+                slot.Button.Text = $"? / {cap}";
             }
         }
         else if (isContested)
         {
-            // Smooth zero-allocation border pulse while CQB assault is underway
             slot.Style.BorderColor = BadgeCqbBorderA.Lerp(BadgeCqbBorderB, cqbPulse);
         }
 
@@ -1119,27 +1167,6 @@ internal sealed class BuildingGarrisonView : IDisposable
         {
             slot.Button.Visible = true;
         }
-    }
-
-    private static ArrayMesh CreateSoldierSilhouetteMesh()
-    {
-        // Compact, high-readability ~1.65 m infantry silhouette facing +Z:
-        // boots/legs, torso, helmeted head, and raised rifle barrel pointing forward (+Z).
-        SurfaceTool st = new();
-        st.Begin(Mesh.PrimitiveType.Triangles);
-
-        // Legs (two sturdy blocks)
-        AddBox(st, new Vector3(-0.12f, 0.38f, 0f), new Vector3(0.14f, 0.76f, 0.16f), new Color(0.72f, 0.72f, 0.72f));
-        AddBox(st, new Vector3(0.12f, 0.38f, 0f), new Vector3(0.14f, 0.76f, 0.16f), new Color(0.72f, 0.72f, 0.72f));
-        // Torso + chest rig
-        AddBox(st, new Vector3(0f, 1.02f, 0f), new Vector3(0.44f, 0.56f, 0.24f), new Color(0.95f, 0.95f, 0.95f));
-        // Helmeted head
-        AddBox(st, new Vector3(0f, 1.46f, 0.02f), new Vector3(0.24f, 0.26f, 0.26f), new Color(1.0f, 1.0f, 1.0f));
-        // Forward-aimed rifle silhouette (+Z)
-        AddBox(st, new Vector3(0.14f, 1.16f, 0.38f), new Vector3(0.08f, 0.09f, 0.86f), new Color(0.42f, 0.42f, 0.44f));
-
-        st.GenerateNormals();
-        return st.Commit();
     }
 
     private static ArrayMesh CreateEntranceRingMesh()
@@ -1169,7 +1196,6 @@ internal sealed class BuildingGarrisonView : IDisposable
             st.SetColor(ringCol); st.AddVertex(in1);
         }
 
-        // Small inward arrow pointing from entrance ring toward the doorway (-Z local)
         Vector3 tip = new(0f, 0f, -1.75f);
         Vector3 left = new(-0.45f, 0f, -1.15f);
         Vector3 right = new(0.45f, 0f, -1.15f);
@@ -1179,42 +1205,6 @@ internal sealed class BuildingGarrisonView : IDisposable
 
         st.GenerateNormals();
         return st.Commit();
-    }
-
-    private static void AddBox(SurfaceTool st, Vector3 center, Vector3 size, Color color)
-    {
-        Vector3 h = size * 0.5f;
-        Vector3 p000 = center + new Vector3(-h.X, -h.Y, -h.Z);
-        Vector3 p100 = center + new Vector3(h.X, -h.Y, -h.Z);
-        Vector3 p110 = center + new Vector3(h.X, h.Y, -h.Z);
-        Vector3 p010 = center + new Vector3(-h.X, h.Y, -h.Z);
-        Vector3 p001 = center + new Vector3(-h.X, -h.Y, h.Z);
-        Vector3 p101 = center + new Vector3(h.X, -h.Y, h.Z);
-        Vector3 p111 = center + new Vector3(h.X, h.Y, h.Z);
-        Vector3 p011 = center + new Vector3(-h.X, h.Y, h.Z);
-
-        // +Z front
-        AddQuad(st, p001, p101, p111, p011, color);
-        // -Z back
-        AddQuad(st, p100, p000, p010, p110, color);
-        // +X right
-        AddQuad(st, p101, p100, p110, p111, color);
-        // -X left
-        AddQuad(st, p000, p001, p011, p010, color);
-        // +Y top
-        AddQuad(st, p011, p111, p110, p010, color);
-        // -Y bottom
-        AddQuad(st, p000, p100, p101, p001, color);
-    }
-
-    private static void AddQuad(SurfaceTool st, Vector3 a, Vector3 b, Vector3 c, Vector3 d, Color color)
-    {
-        st.SetColor(color); st.AddVertex(a);
-        st.SetColor(color); st.AddVertex(b);
-        st.SetColor(color); st.AddVertex(c);
-        st.SetColor(color); st.AddVertex(a);
-        st.SetColor(color); st.AddVertex(c);
-        st.SetColor(color); st.AddVertex(d);
     }
 
     public void Dispose()

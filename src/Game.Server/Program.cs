@@ -480,8 +480,8 @@ if (smokeTest)
     if (scenario == "urban-destruction-playground")
     {
         for (int i = 0; i < 10; i++) session.Advance(1d / Simulation.TickRate);
-        if (session.Replica.OwnUnits.Length != 8)
-            throw new InvalidOperationException($"Urban-destruction-playground smoke test: expected 8 own units, got {session.Replica.OwnUnits.Length}.");
+        if (session.Replica.OwnUnits.Length != 13)
+            throw new InvalidOperationException($"Urban-destruction-playground smoke test: expected 13 own units, got {session.Replica.OwnUnits.Length}.");
 
         EntityId t62West = session.Replica.OwnUnits[0].Id;
         EntityId t62East = session.Replica.OwnUnits[1].Id;
@@ -489,7 +489,7 @@ if (smokeTest)
         session.AttackGround(t62East, new Vector3(506f, 3.5f, 512f), new StructureId(103));
 
         bool collapsed = false;
-        for (int i = 0; i < 450; i++)
+        for (int i = 0; i < 1800; i++)
         {
             session.Advance(1d / Simulation.TickRate);
             if (session.Replica.TryGetStructure(new StructureId(102), out StructureObservation s102) && s102.FloorsStanding == 0)

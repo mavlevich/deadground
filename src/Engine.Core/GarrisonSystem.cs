@@ -15,8 +15,9 @@ public sealed class GarrisonSystem : ISimulationSystem
     public const float AdjacencyMaxGapMeters = 2.5f;
     public const float AdjacencyMinOverlapMeters = 2.0f;
     public const int AdjacentTransferTicks = 4;
-    public const float CqbSameBandDamageMultiplier = 0.70f;
-    public const float CqbCrossBandDamageMultiplier = 0.55f;
+    public const int FastRopeRoofHoldTicks = 28;
+    public const float CqbSameBandDamageMultiplier = 0.45f;
+    public const float CqbCrossBandDamageMultiplier = 0.35f;
     private const float FootClearanceRadius = 0.45f;
     private const int ExitFanSlotCount = 20;
     private const int MaxPendingEnterUnits = 1024;
@@ -63,9 +64,12 @@ public sealed class GarrisonSystem : ISimulationSystem
     private readonly BuildingEntry[] _buildingList = new BuildingEntry[WorldState.MaxDestructibleStructures];
     private readonly EntityId[] _scratchOccupants = new EntityId[BuildingGarrisonProfile.MaxOccupantsPerStructure];
     private readonly EntityId[] _pendingEnterUnits = new EntityId[MaxPendingEnterUnits];
+    private readonly EntityId[] _roofAutoDescendUnits = new EntityId[MaxPendingEnterUnits];
+    private readonly int[] _roofAutoDescendTicks = new int[MaxPendingEnterUnits];
     private NavigationSystem? _navigation;
     private int _buildingCount;
     private int _pendingEnterCount;
+    private int _roofAutoDescendCount;
 
     public int RegisteredBuildingCount => _buildingCount;
     public int TotalEntries { get; private set; }
@@ -168,6 +172,63 @@ public sealed class GarrisonSystem : ISimulationSystem
     }
 
     public bool IsRegistered(StructureId structureId) => _buildings.ContainsKey(structureId);
+
+    /// <summary>
+    /// Finds a registered garrisonable building section whose ground footprint contains <paramref name="position"/>.
+    /// Zero allocations.
+    /// </summary>
+    public bool TryFindBuildingContaining(
+        Vector2 position,
+        out StructureId structureId,
+        out Vector2 centerXZ,
+        out float roofHeightAboveGround)
+    {
+        for (int i = 0; i < _buildingCount; i++)
+        {
+            BuildingEntry e = _buildingList[i];
+            if (position.X >= e.Bounds.MinX && position.X <= e.Bounds.MaxX &&
+                position.Y >= e.Bounds.MinZ && position.Y <= e.Bounds.MaxZ)
+            {
+                structureId = e.Id;
+                centerXZ = e.CenterXZ;
+                roofHeightAboveGround = MathF.Max(0f, e.Bounds.MaxY - e.Bounds.MinY);
+                return true;
+            }
+        }
+        structureId = default;
+        centerXZ = default;
+        roofHeightAboveGround = 0f;
+        return false;
+    }
+
+    public bool CanCommitRoofFastRope(WorldState world, StructureId structureId, EntityId unitId)
+    {
+        if (!_buildings.TryGetValue(structureId, out BuildingEntry? entry))
+            return false;
+        if (!world.TryGetUnit(unitId, out UnitState unit) || !_isInfantryDefinition(unit.Definition))
+            return false;
+        if (!CanOccupyRoof(world, structureId))
+            return false;
+        int unitTeam = world.GetPlayerTeam(unit.Owner);
+        if (CountTeamOccupants(entry, world, unitTeam) >= entry.Profile.Capacity)
+            return false;
+        return entry.OccupantCount < BuildingGarrisonProfile.MaxOccupantsPerStructure;
+    }
+
+    /// <summary>
+    /// Commits a freshly fast-roped infantryman directly into a building section's rooftop slot
+    /// (bypassing ground entrance walk-in and initiating CQB if enemy troops already hold the section).
+    /// Schedules automatic descent into interior cover after <see cref="FastRopeRoofHoldTicks"/> ticks.
+    /// </summary>
+    public bool TryCommitFastRopeRoofEntry(WorldState world, EntityId unitId, StructureId structureId)
+    {
+        if (!_buildings.TryGetValue(structureId, out BuildingEntry? entry))
+            return false;
+        if (!TryCommitEntry(entry, unitId, GarrisonSlotKind.Roof, world, _navigation))
+            return false;
+        TrackRoofAutoDescend(unitId, FastRopeRoofHoldTicks);
+        return true;
+    }
 
     /// <summary>
     /// Places an infantry unit directly into a registered building section during scenario setup
@@ -275,16 +336,7 @@ public sealed class GarrisonSystem : ISimulationSystem
         }
 
         GarrisonSlotKind attackerSlot = world.GetGarrisonSlotKind(attackerId);
-        if (attackerSlot == GarrisonSlotKind.Roof && floorsStanding >= destProfile.FloorsTotal && entry.WorldRoofPorts.Length > 0)
-        {
-            PrecomputedRoofPort[] rps = entry.WorldRoofPorts;
-            int idxA = (int)(((uint)attackerId.Value + (uint)(tick / 6)) % (uint)rps.Length);
-            int idxB = (int)(((uint)targetId.Value + 1u + (uint)(tick / 6)) % (uint)rps.Length);
-            if (idxB == idxA && rps.Length > 1) idxB = (idxA + 1) % rps.Length;
-            muzzlePos = new Vector3(rps[idxA].WorldX, rps[idxA].WorldY, rps[idxA].WorldZ);
-            hitPoint = new Vector3(rps[idxB].WorldX, rps[idxB].WorldY, rps[idxB].WorldZ);
-            return true;
-        }
+        GarrisonSlotKind targetSlot = world.GetGarrisonSlotKind(targetId);
 
         if (floorsStanding == 0)
         {
@@ -296,22 +348,64 @@ public sealed class GarrisonSystem : ISimulationSystem
             return true;
         }
 
-        float floorBaseY = entry.Bounds.MinY + (floorsStanding - 1) * destProfile.FloorHeight;
+        PrecomputedRoofPort[] rps = entry.WorldRoofPorts;
         PrecomputedFiringPort[] ports = entry.WorldFiringPorts;
-        if (ports.Length >= 2)
+        bool roofIntact = floorsStanding >= destProfile.FloorsTotal && rps.Length > 0;
+        float topFloorBaseY = entry.Bounds.MinY + (floorsStanding - 1) * destProfile.FloorHeight;
+        float secondFloorBaseY = floorsStanding >= 2
+            ? entry.Bounds.MinY + (floorsStanding - 2) * destProfile.FloorHeight
+            : topFloorBaseY;
+
+        // Cross-band CQB (roof troopers breaching downward into top-floor defenders or vice versa)
+        if (roofIntact && attackerSlot != targetSlot && ports.Length > 0)
         {
-            int idxA = (int)(((uint)attackerId.Value * 5u + (uint)(tick / 6)) % (uint)ports.Length);
-            int idxB = (int)(((uint)targetId.Value * 7u + 3u + (uint)(tick / 6)) % (uint)ports.Length);
-            if (idxB == idxA) idxB = (idxA + 1) % ports.Length;
-            PrecomputedFiringPort pA = ports[idxA];
-            PrecomputedFiringPort pB = ports[idxB];
-            muzzlePos = new Vector3(pA.WorldX, floorBaseY + pA.LocalY, pA.WorldZ);
-            hitPoint = new Vector3(pB.WorldX, floorBaseY + pB.LocalY, pB.WorldZ);
+            int rIdx = (int)(((uint)(attackerSlot == GarrisonSlotKind.Roof ? attackerId.Value : targetId.Value) + (uint)(tick / 6)) % (uint)rps.Length);
+            int pIdx = (int)(((uint)(attackerSlot == GarrisonSlotKind.Interior ? attackerId.Value : targetId.Value) * 5u + (uint)(tick / 6)) % (uint)ports.Length);
+            PrecomputedRoofPort rp = rps[rIdx];
+            PrecomputedFiringPort fp = ports[pIdx];
+            Vector3 roofPt = new(rp.WorldX, rp.WorldY + 1.25f, rp.WorldZ);
+            Vector3 floorPt = new(fp.WorldX, topFloorBaseY + fp.LocalY, fp.WorldZ);
+            if (attackerSlot == GarrisonSlotKind.Roof)
+            {
+                muzzlePos = roofPt;
+                hitPoint = floorPt;
+            }
+            else
+            {
+                muzzlePos = floorPt;
+                hitPoint = roofPt;
+            }
             return true;
         }
 
-        muzzlePos = new Vector3(entry.CenterXZ.X - 1.5f, floorBaseY + 1.4f, entry.CenterXZ.Y);
-        hitPoint = new Vector3(entry.CenterXZ.X + 1.5f, floorBaseY + 1.4f, entry.CenterXZ.Y);
+        // Same-band rooftop CQB
+        if (roofIntact && attackerSlot == GarrisonSlotKind.Roof)
+        {
+            int idxA = (int)(((uint)attackerId.Value + (uint)(tick / 6)) % (uint)rps.Length);
+            int idxB = (int)(((uint)targetId.Value + 1u + (uint)(tick / 6)) % (uint)rps.Length);
+            if (idxB == idxA && rps.Length > 1) idxB = (idxA + 1) % rps.Length;
+            muzzlePos = new Vector3(rps[idxA].WorldX, rps[idxA].WorldY + 1.25f, rps[idxA].WorldZ);
+            hitPoint = new Vector3(rps[idxB].WorldX, rps[idxB].WorldY + 1.15f, rps[idxB].WorldZ);
+            return true;
+        }
+
+        // Same-band interior room-to-room CQB across upper floors & opposite window bays
+        if (ports.Length >= 2)
+        {
+            int idxA = (int)(((uint)attackerId.Value * 5u + (uint)(tick / 6)) % (uint)ports.Length);
+            int idxB = (int)(((uint)targetId.Value * 7u + (uint)(ports.Length / 2) + (uint)(tick / 6)) % (uint)ports.Length);
+            if (idxB == idxA) idxB = (idxA + 1) % ports.Length;
+            PrecomputedFiringPort pA = ports[idxA];
+            PrecomputedFiringPort pB = ports[idxB];
+            float yA = ((attackerId.Value & 1u) == 0u ? topFloorBaseY : secondFloorBaseY) + pA.LocalY;
+            float yB = ((targetId.Value & 1u) == 0u ? topFloorBaseY : secondFloorBaseY) + pB.LocalY;
+            muzzlePos = new Vector3(pA.WorldX, yA, pA.WorldZ);
+            hitPoint = new Vector3(pB.WorldX, yB, pB.WorldZ);
+            return true;
+        }
+
+        muzzlePos = new Vector3(entry.CenterXZ.X - 1.5f, topFloorBaseY + 1.4f, entry.CenterXZ.Y);
+        hitPoint = new Vector3(entry.CenterXZ.X + 1.5f, topFloorBaseY + 1.4f, entry.CenterXZ.Y);
         return true;
     }
 
@@ -498,6 +592,30 @@ public sealed class GarrisonSystem : ISimulationSystem
                 }
                 i++;
             }
+        }
+
+        // 1b. Auto-descend fast-roped rooftop assault infantry into sheltered interior floors
+        int r = 0;
+        while (r < _roofAutoDescendCount)
+        {
+            EntityId unitId = _roofAutoDescendUnits[r];
+            if (!world.TryGetUnit(unitId, out _) ||
+                !world.TryGetGarrison(unitId, out StructureId structId, out GarrisonSlotKind slot) ||
+                slot != GarrisonSlotKind.Roof)
+            {
+                RemoveRoofAutoDescendAt(r);
+                continue;
+            }
+
+            if (_roofAutoDescendTicks[r] > 1)
+            {
+                _roofAutoDescendTicks[r]--;
+                r++;
+                continue;
+            }
+
+            world.SetGarrisonMembership(unitId, structId, GarrisonSlotKind.Interior);
+            RemoveRoofAutoDescendAt(r);
         }
 
         // 2. Complete or cancel tracked pending enter orders and adjacent section transfers in O(pending) time
@@ -907,7 +1025,37 @@ public sealed class GarrisonSystem : ISimulationSystem
         _pendingEnterUnits[last] = default;
     }
 
-    private bool CanOccupyRoof(WorldState world, StructureId structureId)
+    private void TrackRoofAutoDescend(EntityId unitId, int ticks)
+    {
+        for (int i = 0; i < _roofAutoDescendCount; i++)
+        {
+            if (_roofAutoDescendUnits[i] == unitId)
+            {
+                _roofAutoDescendTicks[i] = ticks;
+                return;
+            }
+        }
+        if (_roofAutoDescendCount < _roofAutoDescendUnits.Length)
+        {
+            _roofAutoDescendUnits[_roofAutoDescendCount] = unitId;
+            _roofAutoDescendTicks[_roofAutoDescendCount] = ticks;
+            _roofAutoDescendCount++;
+        }
+    }
+
+    private void RemoveRoofAutoDescendAt(int index)
+    {
+        int last = --_roofAutoDescendCount;
+        if (index != last)
+        {
+            _roofAutoDescendUnits[index] = _roofAutoDescendUnits[last];
+            _roofAutoDescendTicks[index] = _roofAutoDescendTicks[last];
+        }
+        _roofAutoDescendUnits[last] = default;
+        _roofAutoDescendTicks[last] = 0;
+    }
+
+    public bool CanOccupyRoof(WorldState world, StructureId structureId)
     {
         if (world.TryGetDestructibleStructure(structureId, out DestructibleStructureState destState))
         {

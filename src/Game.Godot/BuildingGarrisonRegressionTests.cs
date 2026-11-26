@@ -68,7 +68,7 @@ internal static class BuildingGarrisonRegressionTests
                 "Empty buildings must render zero figures, zero X-Ray silhouettes, and zero badges.");
             Require(view.ActiveMultiMeshDrawCalls == 0, "Empty buildings must consume 0 draw calls.");
 
-            // 2. Two own infantry enter section 101 Interior -> ground meshes hidden, 2 window figures + 2 X-Ray silhouettes
+            // 2. Two own infantry enter section 101 Interior -> real UnitView models positioned at windows with X-Ray overlay
             OwnUnitObservation own1 = new(
                 Id: new EntityId(10),
                 Definition: rifleIdx,
@@ -88,18 +88,22 @@ internal static class BuildingGarrisonRegressionTests
             selected.Add(own1.Id);
 
             ApplySnapshot(replica, snapBuf, seq: 2, tick: 2, [own1, own2], []);
-            unitViews.Sync(replica, 2);
-            Require(!unitViews.Views[own1.Id].Root.Visible && !unitViews.Views[own2.Id].Root.Visible,
-                "Ground UnitView must be hidden while infantry is garrisoned.");
+            unitViews.Sync(replica, 2, externalGarrisonVisuals: true);
             Require(selected.Contains(own1.Id), "Garrisoned own infantry must remain selectable.");
 
-            view.Update(replica, selected, section101, showEntranceHint: false, cam);
+            view.Update(replica, selected, section101, showEntranceHint: false, cam, 0.016f, unitViews, contactViews);
             Require(view.ActiveFigureCount == 2, $"Expected 2 own window figures, got {view.ActiveFigureCount}.");
-            Require(view.ActiveXRayCount == 2, $"Expected 2 Variant A X-Ray silhouettes, got {view.ActiveXRayCount}.");
-            Require(view.ActiveMultiMeshDrawCalls == 2, $"Expected exactly 2 MultiMesh draw calls, got {view.ActiveMultiMeshDrawCalls}.");
+            Require(view.ActiveXRayCount == 2, $"Expected 2 wall-occluded X-Ray soldier models, got {view.ActiveXRayCount}.");
+            Require(unitViews.Views[own1.Id].Root.Visible && unitViews.Views[own1.Id].IsGarrisonedVisual,
+                "Real UnitView soldier model must remain visible and elevated in garrison.");
+            Require(unitViews.Views[own1.Id].ActiveGarrisonXRayMode == GarrisonXRayMode.Selected,
+                "Selected garrisoned soldier must apply Selected X-Ray overlay.");
+            Require(unitViews.Views[own1.Id].Root.Position.Y > 10.0f,
+                $"Expected own interior soldier elevated onto upper panelka floor, got Y={unitViews.Views[own1.Id].Root.Position.Y}.");
             Require(view.VisibleBadgeCount == 1, $"Expected 1 garrison badge for section 101, got {view.VisibleBadgeCount}.");
+            Require(view.GetBadgeTextForTesting(0) == "2 / 12", $"Expected '2 / 12' own badge, got '{view.GetBadgeTextForTesting(0)}'.");
 
-            // 3. LastKnown hostile contact in section 102 -> ZERO live figures and ZERO X-Ray silhouettes (strict FoW)
+            // 3. LastKnown hostile contact in section 102 -> ZERO live figures and ZERO X-Ray (strict FoW), '? / 12' badge
             ContactObservation hostileLastKnown = new(
                 Id: new ContactId(201),
                 State: ContactState.LastKnown,
@@ -110,16 +114,17 @@ internal static class BuildingGarrisonRegressionTests
                 GarrisonStructureId: section102,
                 GarrisonSlotKind: GarrisonSlotKind.Interior);
             ApplySnapshot(replica, snapBuf, seq: 3, tick: 3, [], [hostileLastKnown]);
-            contactViews.Sync(replica, 3);
+            contactViews.Sync(replica, 3, 0.1f, externalGarrisonVisuals: true);
             Require(!contactViews.Views[hostileLastKnown.Id].Root.Visible,
-                "Ground ContactView must be hidden for garrisoned hostile contacts.");
+                "Ground ContactView must be hidden for LastKnown garrisoned hostile contacts.");
 
-            view.Update(replica, selected, default, showEntranceHint: false, cam);
+            view.Update(replica, selected, default, showEntranceHint: false, cam, 0.016f, unitViews, contactViews);
             Require(view.ActiveFigureCount == 0, $"LastKnown hostile contact must render 0 live figures, got {view.ActiveFigureCount}.");
             Require(view.ActiveXRayCount == 0, $"Hostile contact must NEVER render X-Ray silhouettes, got {view.ActiveXRayCount}.");
             Require(view.VisibleBadgeCount == 1, "LastKnown hostile contact should show a faded tactical badge.");
+            Require(view.GetBadgeTextForTesting(0) == "? / 12", $"Expected '? / 12' LastKnown badge, got '{view.GetBadgeTextForTesting(0)}'.");
 
-            // 4. Current spotted hostile rooftop contact in section 102 -> 1 hostile figure, still ZERO X-Ray
+            // 4. Current spotted hostile rooftop contact in section 102 -> 1 real hostile soldier model on roof, still ZERO X-Ray
             ContactObservation hostileCurrentRoof = hostileLastKnown with
             {
                 State = ContactState.Current,
@@ -127,9 +132,15 @@ internal static class BuildingGarrisonRegressionTests
                 GarrisonSlotKind = GarrisonSlotKind.Roof
             };
             ApplySnapshot(replica, snapBuf, seq: 4, tick: 4, [], [hostileCurrentRoof]);
-            view.Update(replica, selected, default, showEntranceHint: false, cam);
+            contactViews.Sync(replica, 4, 0.1f, externalGarrisonVisuals: true);
+            view.Update(replica, selected, default, showEntranceHint: false, cam, 0.016f, unitViews, contactViews);
             Require(view.ActiveFigureCount == 1, $"Spotted Current hostile roof contact must render 1 figure, got {view.ActiveFigureCount}.");
             Require(view.ActiveXRayCount == 0, $"Spotted hostile roof contact must render 0 X-Ray silhouettes, got {view.ActiveXRayCount}.");
+            Require(contactViews.Views[hostileCurrentRoof.Id].Root.Visible && contactViews.Views[hostileCurrentRoof.Id].Root.Position.Y > 14.0f,
+                "Spotted hostile roof contact must render real ContactView soldier on rooftop.");
+            Require(!contactViews.Views[hostileCurrentRoof.Id].HasHostileCqbXRay,
+                "Non-CQB hostile rooftop contact must never enable CQB X-Ray.");
+            Require(view.GetBadgeTextForTesting(0) == "! 1 / 12 ROOF", $"Expected '! 1 / 12 ROOF' badge, got '{view.GetBadgeTextForTesting(0)}'.");
 
             // 5. Contested CQB in section 101 (2 own aiming north + 1 spotted hostile interior) + adjacency check
             Require(view.AreSectionsAdjacent(section101, section102), "Sections 101 and 102 must be detected as adjacent.");
@@ -145,10 +156,54 @@ internal static class BuildingGarrisonRegressionTests
                 TurretYaw = MathF.PI
             };
             ApplySnapshot(replica, snapBuf, seq: 5, tick: 5, [ownAim1, ownAim2], [hostileCqb]);
-            view.Update(replica, selected, default, showEntranceHint: false, cam, deltaSeconds: 0.05f);
+            unitViews.Sync(replica, 5, externalGarrisonVisuals: true);
+            contactViews.Sync(replica, 5, 0.1f, externalGarrisonVisuals: true);
+            view.Update(replica, selected, default, showEntranceHint: false, cam, 0.05f, unitViews, contactViews);
             Require(view.ContestedBuildingCount == 1, $"Expected 1 contested CQB building, got {view.ContestedBuildingCount}.");
             Require(view.ActiveFigureCount == 3, $"Expected 3 total figures (2 own + 1 hostile) in CQB section, got {view.ActiveFigureCount}.");
-            Require(view.ActiveXRayCount == 2, $"Expected X-Ray ONLY for 2 own troops in CQB (never hostile), got {view.ActiveXRayCount}.");
+            Require(view.ActiveXRayCount == 2, $"Expected own interior X-Ray count of 2 in CQB, got {view.ActiveXRayCount}.");
+            Require(unitViews.Views[own1.Id].ActiveGarrisonXRayMode == GarrisonXRayMode.Cqb,
+                "CQB own interior infantry must switch to Cqb X-Ray overlay mode.");
+            Require(contactViews.Views[hostileCqb.Id].HasHostileCqbXRay,
+                "Spotted CQB hostile interior contact must enable red CQB X-Ray silhouette.");
+            Require(view.GetBadgeTextForTesting(0) == "CQB 2 v 1", $"Expected 'CQB 2 v 1' badge, got '{view.GetBadgeTextForTesting(0)}'.");
+
+            // 5b. Own soldier on roof must NEVER show orange/teal X-Ray tint, and fast-rope descent slides smoothly down rope
+            OwnUnitObservation ownRoofUnit = own1 with { GarrisonSlotKind = GarrisonSlotKind.Roof };
+            ApplySnapshot(replica, snapBuf, seq: 6, tick: 6, [ownRoofUnit], [hostileCqb]);
+            unitViews.Sync(replica, 6, externalGarrisonVisuals: true);
+            contactViews.Sync(replica, 6, 0.1f, externalGarrisonVisuals: true);
+            view.Update(replica, selected, default, showEntranceHint: false, cam, 0.05f, unitViews, contactViews);
+            UnitView roofSoldierView = unitViews.Views[ownRoofUnit.Id];
+            Require(roofSoldierView.ActiveGarrisonXRayMode == GarrisonXRayMode.None,
+                "Rooftop soldiers on open roof deck must NEVER receive X-Ray overlay tint.");
+            Vector3 ropeTop = new(567.9f, 29.0f, 479.6f);
+            Vector3 ropeBottom = new(567.9f, 15.75f, 479.6f);
+            Vector3 roofSpot = new(570.0f, 15.75f, 481.0f);
+            roofSoldierView.StartFastRopeDescent(ropeTop, ropeBottom, roofSpot, 0f);
+            Require(roofSoldierView.IsFastRoping && roofSoldierView.Root.Position.Y > 25.0f,
+                "Fast-rope descent must begin near the helicopter ramp top.");
+            roofSoldierView.UpdateEffects(0.65);
+            Require(roofSoldierView.IsFastRoping && roofSoldierView.Root.Position.Y < 26.0f && roofSoldierView.Root.Position.Y > 15.8f,
+                $"Soldier must smoothly slide downward along rope, got Y={roofSoldierView.Root.Position.Y}.");
+            roofSoldierView.UpdateEffects(1.80);
+            Require(!roofSoldierView.IsFastRoping && roofSoldierView.Root.Position.DistanceTo(roofSpot) < 0.05f,
+                "Soldier must complete fast-rope slide and step off to roof position.");
+
+            // 6. Roof Fast-Rope preview metadata & elevated roof-deck zone circle
+            StructureId section106 = new(106);
+            Require(view.TryGetRoofFastRopeInfo(section106, out NumericsVector2 roofCenter, out float roofHeight, out byte roofFloors, out int roofCap),
+                "Section 106 must expose rooftop fast-rope info.");
+            Require(roofFloors == 5 && roofCap >= 4 && roofHeight > 13.0f && roofHeight < 14.5f,
+                $"Unexpected roof fast-rope metadata for section 106: floors={roofFloors}, cap={roofCap}, height={roofHeight}.");
+
+            OrderDestinationView orderView = new();
+            host3D.AddChild(orderView);
+            orderView.ShowZoneCircle(geometry.HeightMap, roofCenter.X, roofCenter.Y, radius: 4.5f, valid: true, elevationOffset: roofHeight);
+            Require(orderView.IsZoneCircleVisible && MathF.Abs(orderView.ZoneCircleElevationOffset - roofHeight) < 0.01f,
+                "OrderDestinationView must render elevated fast-rope zone circle at roof deck height.");
+            orderView.HideZoneCircle();
+            Require(!orderView.IsZoneCircleVisible, "HideZoneCircle must hide the rooftop preview ring.");
             _ = clickedBadge;
         }
         finally
@@ -180,21 +235,19 @@ internal static class BuildingGarrisonRegressionTests
             Require(panel.Visible && panel.EnterBuildingButton.Visible && !panel.ExitBuildingButton.Visible && !panel.GarrisonRoofButton.Visible,
                 "Outside infantry selection must show EnterBuildingButton and hide Exit/Roof buttons.");
 
-            // 2. Infantry garrisoned inside -> EXIT BLDG [U] and TO ROOF [Y] visible, BOARD hidden
+            // 2. Infantry garrisoned inside -> EXIT BLDG [U] visible, BOARD and manual ROOF toggle hidden
             OwnUnitObservation inside = outside with { GarrisonStructureId = new StructureId(101), GarrisonSlotKind = GarrisonSlotKind.Interior };
             ApplySnapshot(replica, snapBuf, seq: 2, tick: 2, [inside], []);
             panel.UpdateContext(selected, replica);
-            Require(panel.Visible && !panel.BoardButton.Visible && panel.ExitBuildingButton.Visible && panel.GarrisonRoofButton.Visible,
-                "Garrisoned interior infantry must show Exit and Roof buttons and hide Board.");
-            Require(panel.GarrisonRoofButton.Text.Contains("ROOF", StringComparison.OrdinalIgnoreCase),
-                $"Expected TO ROOF button text, got '{panel.GarrisonRoofButton.Text}'.");
+            Require(panel.Visible && !panel.BoardButton.Visible && panel.ExitBuildingButton.Visible && !panel.GarrisonRoofButton.Visible,
+                "Garrisoned interior infantry must show Exit button and hide Board and manual Roof toggle.");
 
-            // 3. Infantry on roof -> INSIDE [Y] label + verify steady-state 0 B allocations
+            // 3. Infantry on roof -> EXIT BLDG [U] still visible, manual ROOF toggle hidden, verify steady-state 0 B allocations
             OwnUnitObservation onRoof = inside with { GarrisonSlotKind = GarrisonSlotKind.Roof };
             ApplySnapshot(replica, snapBuf, seq: 3, tick: 3, [onRoof], []);
             panel.UpdateContext(selected, replica);
-            Require(panel.GarrisonRoofButton.Text.Contains("INSIDE", StringComparison.OrdinalIgnoreCase),
-                $"Expected INSIDE button text on roof, got '{panel.GarrisonRoofButton.Text}'.");
+            Require(panel.Visible && panel.ExitBuildingButton.Visible && !panel.GarrisonRoofButton.Visible,
+                "Garrisoned rooftop infantry must keep Exit visible and hide manual Roof toggle.");
 
             for (int w = 0; w < 10; w++) panel.UpdateContext(selected, replica);
             long allocBefore = GC.GetAllocatedBytesForCurrentThread();
@@ -268,8 +321,8 @@ internal static class BuildingGarrisonRegressionTests
             long alloc = GC.GetAllocatedBytesForCurrentThread() - before;
 
             Require(view.ActiveFigureCount == 120, $"Expected 120 active garrison figures, got {view.ActiveFigureCount}.");
-            Require(view.ActiveXRayCount == 120, $"Expected 120 active Variant A X-Ray silhouettes, got {view.ActiveXRayCount}.");
-            Require(view.ActiveMultiMeshDrawCalls == 2, $"Expected exactly 2 MultiMesh draw calls across 120 occupied sections, got {view.ActiveMultiMeshDrawCalls}.");
+            Require(view.ActiveXRayCount == 120, $"Expected 120 active wall-occluded X-Ray models, got {view.ActiveXRayCount}.");
+            Require(view.ActiveMultiMeshDrawCalls == 0, $"Expected 0 extra MultiMesh draw calls (real UnitViews drive figures), got {view.ActiveMultiMeshDrawCalls}.");
             Require(alloc == 0L, $"BuildingGarrisonView steady-state Update across 120 sections must allocate 0 bytes, got {alloc}.");
         }
         finally

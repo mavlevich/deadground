@@ -198,6 +198,10 @@ public static class UrbanDestructionPlaygroundScenario
         ushort rifleIdx = catalog.RequireDefinitionIndex("us_rifleman");
         int rifleAmmo = catalog.GetAmmoCapacity(rifleDef);
 
+        UnitDefinition ch47Def = catalog.RequireDefinition("ch47d");
+        ushort ch47Idx = catalog.RequireDefinitionIndex("ch47d");
+        int ch47Ammo = catalog.GetAmmoCapacity(ch47Def);
+
         // Player 1 (Soviet) facing +Z toward the central panelka block
         const float facingPlusZ = MathF.PI;
         world.CreateUnit(1, t62Idx, SovietT62WestPos, t62Def.Speed, t62Def.MaxHealth, t62Ammo, facingPlusZ);
@@ -211,15 +215,39 @@ public static class UrbanDestructionPlaygroundScenario
         world.CreateUnit(1, rifleIdx, new Vector2(504.0f, 472.0f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingPlusZ);
         world.CreateUnit(1, rifleIdx, new Vector2(512.0f, 472.0f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingPlusZ);
 
+        // Player 1 CH-47D assault transport staged on the south pad with 4 embarked riflemen ready for rooftop Fast-Rope
+        Vector2 chinookPos = new(548.0f, 368.0f);
+        EntityId chinookId = world.CreateUnit(
+            1,
+            ch47Idx,
+            chinookPos,
+            ch47Def.Speed > 0f ? ch47Def.Speed : 18.0f,
+            ch47Def.MaxHealth,
+            ch47Ammo,
+            facingPlusZ,
+            passengerCapacity: ch47Def.PassengerCapacity);
+        for (int r = 0; r < 4; r++)
+        {
+            EntityId airAssault = world.CreateUnit(1, rifleIdx, chinookPos, rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingPlusZ);
+            world.Board(chinookId, airAssault);
+        }
+
         // Player 2 (US) behind central panelka facing -Z toward the courtyard,
-        // plus a 2-man ambush fireteam pre-garrisoned inside east flanking panelka section 106 for CQB testing
+        // plus ambush fireteams pre-garrisoned inside east panelka section 106 (3 riflemen)
+        // and central panelka section 103 (2 riflemen) for direct CQB & rooftop Fast-Rope assault testing
         const float facingMinusZ = 0f;
         world.CreateUnit(2, m60Idx, UsM60WestPos, m60Def.Speed, m60Def.MaxHealth, m60Ammo, facingMinusZ);
         world.CreateUnit(2, m60Idx, UsM60EastPos, m60Def.Speed, m60Def.MaxHealth, m60Ammo, facingMinusZ);
         EntityId opforInf1 = world.CreateUnit(2, rifleIdx, new Vector2(567.9f, 479.6f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, MathF.PI * 0.5f);
         EntityId opforInf2 = world.CreateUnit(2, rifleIdx, new Vector2(567.9f, 479.6f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, MathF.PI * 0.5f);
+        EntityId opforInf3 = world.CreateUnit(2, rifleIdx, new Vector2(567.9f, 479.6f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, MathF.PI * 0.5f);
+        EntityId opforCenter1 = world.CreateUnit(2, rifleIdx, new Vector2(507.2f, 517.9f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingMinusZ);
+        EntityId opforCenter2 = world.CreateUnit(2, rifleIdx, new Vector2(507.2f, 517.9f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingMinusZ);
         world.SetFireStance(opforInf1, FireStance.ReturnFire);
         world.SetFireStance(opforInf2, FireStance.ReturnFire);
+        world.SetFireStance(opforInf3, FireStance.ReturnFire);
+        world.SetFireStance(opforCenter1, FireStance.ReturnFire);
+        world.SetFireStance(opforCenter2, FireStance.ReturnFire);
 
         Simulation simulation = new(world, rules, matchSeed: matchSeed);
         if (simulation.BuildingDestruction is not null)
@@ -238,6 +266,11 @@ public static class UrbanDestructionPlaygroundScenario
             StructureId ambushSection = new(106);
             simulation.Garrison.TryPlaceInitialGarrison(world, opforInf1, ambushSection, GarrisonSlotKind.Interior);
             simulation.Garrison.TryPlaceInitialGarrison(world, opforInf2, ambushSection, GarrisonSlotKind.Interior);
+            simulation.Garrison.TryPlaceInitialGarrison(world, opforInf3, ambushSection, GarrisonSlotKind.Interior);
+
+            StructureId centerAmbushSection = new(103);
+            simulation.Garrison.TryPlaceInitialGarrison(world, opforCenter1, centerAmbushSection, GarrisonSlotKind.Interior);
+            simulation.Garrison.TryPlaceInitialGarrison(world, opforCenter2, centerAmbushSection, GarrisonSlotKind.Interior);
         }
 
         return simulation;

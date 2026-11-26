@@ -3,6 +3,15 @@ using Godot;
 
 namespace DeadGround.Client;
 
+internal enum GarrisonXRayMode : byte
+{
+    None = 0,
+    Idle = 1,
+    Selected = 2,
+    Cqb = 3,
+    HostileCqb = 4
+}
+
 internal sealed class UnitView
 {
     // Orthographic camera sizes where the client switches to LOD1 and LOD2.
@@ -41,6 +50,7 @@ internal sealed class UnitView
         internal float LastBlurBlend = -1f;
         internal Node3D? RearRamp;
         internal Vector3 RearRampBindRotation;
+        internal GeometryInstance3D[] AllMeshes = [];
     }
 
     public Node3D Root { get; } = new();
@@ -97,12 +107,29 @@ internal sealed class UnitView
     private Node3D? _fastRopeRoot;
     private MeshInstance3D? _fastRopeLeft;
     private MeshInstance3D? _fastRopeRight;
+    private float _fastRopeLingerTimer;
     private Node3D? _slingHarnessRoot;
     private GpuParticles3D? _downwashDust;
     private GpuParticles3D? _crashSmoke;
     private string _currentAnim = "";
     private StringName? _currentAnimName;
     private float _aimingTimer;
+    private bool _isGarrisonedVisual;
+    private GarrisonXRayMode _garrisonXRayMode = GarrisonXRayMode.None;
+    private bool _garrisonIsRunning;
+    private bool _isFastRoping;
+    private Vector3 _fastRopeTop;
+    private Vector3 _fastRopeBottom;
+    private Vector3 _fastRopeLandingTarget;
+    private float _fastRopeElapsed;
+    private float _fastRopeYaw;
+    private float _fastRopeStepOffDuration = 0.45f;
+    private const float FastRopeSlideDuration = 1.35f;
+    private const float FastRopeLandingCrouchDuration = 0.20f;
+    internal bool WasContainedInTransport { get; set; }
+    internal bool IsFastRoping => _isFastRoping;
+    internal bool IsGarrisonedVisual => _isGarrisonedVisual;
+    internal GarrisonXRayMode ActiveGarrisonXRayMode => _garrisonXRayMode;
     internal int ActiveLod => _activeLod;
     internal int LodCount => _rigs.Length;
     internal float Altitude => _altitude;
@@ -619,10 +646,11 @@ internal sealed class UnitView
         ConfigureSolidRotorVisual(rig.RearRotor);
         rig.SolidRotorGeoms = CollectGeometryInstances(rig.FrontRotor, rig.RearRotor);
         rig.BlurRotorGeoms = CollectGeometryInstances(rig.FrontRotorBlur, rig.RearRotorBlur);
+        rig.AllMeshes = CollectGeometryInstances(lod, null);
         return rig;
     }
 
-    private static GeometryInstance3D[] CollectGeometryInstances(Node? a, Node? b)
+    internal static GeometryInstance3D[] CollectGeometryInstances(Node? a, Node? b)
     {
         if (a is null && b is null) return [];
         List<GeometryInstance3D> list = [];
@@ -885,6 +913,8 @@ internal sealed class UnitView
         PushTrackTravel();
         if (IsHelicopter)
             ApplyHelicopterRigState(nextRig);
+        if (_isGarrisonedVisual)
+            ApplyGarrisonXRayToRig(nextRig, _garrisonXRayMode);
         VehicleLod.TransferAnimationState(prevPlayer, nextRig.AnimPlayer, _currentAnimName, prevPlayer?.SpeedScale ?? 1.0f);
         return true;
     }
@@ -1007,6 +1037,11 @@ internal sealed class UnitView
         }
         _previousPosition = position;
         _hasPosition = true;
+        if (_isFastRoping)
+        {
+            _fastRopeLandingTarget = position;
+            return;
+        }
         Root.Position = position;
         if (!_ringsDraped || (position - _lastDrapedPosition).LengthSquared() >= MinRedrapeDistanceSquared)
         {
@@ -1158,7 +1193,8 @@ internal sealed class UnitView
         bool hasSlingLoad = false)
     {
         float clampedAlt = MathF.Max(0f, altitude);
-        bool altChanged = MathF.Abs(clampedAlt - _altitude) > 0.001f;
+        float prevAlt = _altitude;
+        bool altChanged = MathF.Abs(clampedAlt - prevAlt) > 0.001f;
         bool poseChanged = MathF.Abs(pitchRad - _pitchRad) > 0.0005f || MathF.Abs(rollRad - _rollRad) > 0.0005f;
         bool flagsChanged = flags != _flightFlags || hasSlingLoad != _hasSlingLoad;
         _altitude = clampedAlt;
@@ -1194,19 +1230,33 @@ internal sealed class UnitView
         {
             if (_fastRopeRoot is not null)
             {
-                bool showRopes = (_flightFlags & FlightStateFlags.FastRopeActive) != 0 && _altitude > 1.0f;
+                bool activeRopes = (_flightFlags & FlightStateFlags.FastRopeActive) != 0 && _altitude > 1.0f;
+                if (activeRopes)
+                {
+                    // Keep ropes visible long enough for the final disembarking trooper to finish sliding down
+                    _fastRopeLingerTimer = FastRopeSlideDuration + 0.25f;
+                }
+                else if (_hasSlingLoad || _altitude <= 1.0f || MathF.Abs(clampedAlt - prevAlt) > 2.0f)
+                {
+                    _fastRopeLingerTimer = 0f;
+                }
+                bool showRopes = (activeRopes || _fastRopeLingerTimer > 0f) && _altitude > 1.0f;
                 if (_fastRopeRoot.Visible != showRopes)
                     _fastRopeRoot.Visible = showRopes;
                 if (showRopes && _fastRopeLeft is not null && _fastRopeRight is not null)
                 {
-                    float ropeHeight = _altitude + 1.2f;
+                    // On open ground (~18 m hover) ropes reach ground; over a building roof (> 20 m hover)
+                    // terminate ropes cleanly at the rooftop deck (~15.2 m drop from rear ramp).
+                    float rampY = _altitude + 1.2f;
+                    float ropeHeight = _altitude > 20.0f ? FlightSystem.RoofFastRopeClearanceAboveRoofMeters + 1.2f : rampY;
+                    float ropeCenterY = rampY - ropeHeight * 0.5f;
                     // Hang twin braided ropes from the lowered rear ramp of the helicopter
                     Vector3 rearOffset = new Vector3(MathF.Sin(_heading), 0f, MathF.Cos(_heading)) * 5.8f;
                     Vector3 sideOffset = new Vector3(MathF.Cos(_heading), 0f, -MathF.Sin(_heading)) * 0.85f;
                     _fastRopeLeft.Scale = new Vector3(1f, ropeHeight, 1f);
-                    _fastRopeLeft.Position = rearOffset - sideOffset + new Vector3(0f, ropeHeight * 0.5f, 0f);
+                    _fastRopeLeft.Position = rearOffset - sideOffset + new Vector3(0f, ropeCenterY, 0f);
                     _fastRopeRight.Scale = new Vector3(1f, ropeHeight, 1f);
-                    _fastRopeRight.Position = rearOffset + sideOffset + new Vector3(0f, ropeHeight * 0.5f, 0f);
+                    _fastRopeRight.Position = rearOffset + sideOffset + new Vector3(0f, ropeCenterY, 0f);
                 }
             }
 
@@ -1401,7 +1451,15 @@ internal sealed class UnitView
             _rotorSpinSpeed = Mathf.Lerp(_rotorSpinSpeed, targetSpin, 1f - Mathf.Exp(-spoolRate * dt));
             _rotorAngle = Mathf.Wrap(_rotorAngle + _rotorSpinSpeed * dt, 0f, Mathf.Tau);
 
-            bool rampOpen = _flightPhase == FlightPhase.Ground || (_flightFlags & FlightStateFlags.FastRopeActive) != 0;
+            bool rampOpen = _flightPhase == FlightPhase.Ground || (_flightFlags & FlightStateFlags.FastRopeActive) != 0 || _fastRopeLingerTimer > 0f;
+            if ((_flightFlags & FlightStateFlags.FastRopeActive) == 0 && _fastRopeLingerTimer > 0f)
+            {
+                _fastRopeLingerTimer = MathF.Max(0f, _fastRopeLingerTimer - dt);
+                if (_fastRopeLingerTimer <= 0f && _fastRopeRoot is not null && _fastRopeRoot.Visible)
+                {
+                    _fastRopeRoot.Visible = false;
+                }
+            }
             float targetRampRad = rampOpen ? Mathf.DegToRad(42f) : 0f;
             _rampAngleRad = Mathf.MoveToward(_rampAngleRad, targetRampRad, Mathf.DegToRad(50f) * dt);
             ApplyHelicopterRigState(ActiveRig);
@@ -1446,6 +1504,22 @@ internal sealed class UnitView
             _pitchRad = Mathf.Sin(_swayPhase) * 0.045f;
             _rollRad = Mathf.Cos(_swayPhase * 0.85f) * 0.055f;
             ApplyHullPose();
+        }
+
+        if (_isFastRoping)
+        {
+            UpdateFastRopeDescent(dt);
+        }
+
+        if (_isGarrisonedVisual)
+        {
+            bool runningStepOff = _isFastRoping && _fastRopeElapsed >= FastRopeSlideDuration + FastRopeLandingCrouchDuration;
+            _dustSpeed = (_garrisonIsRunning || runningStepOff) ? 4.5f : 0f;
+            if (_isFastRoping && !runningStepOff)
+            {
+                // Keep arms raised forward on the rope during slide & landing absorb
+                _hasAim = true;
+            }
         }
 
         AnimationPlayer? animPlayer = ActiveRig.AnimPlayer;
@@ -1551,6 +1625,280 @@ internal sealed class UnitView
     {
         if (_rangeIndicatorsVisible == visible) return;
         _rangeIndicatorsVisible = visible;
+        SetSelected(_isSelected);
+    }
+
+    private static Shader? s_garrisonXRayShader;
+    private static ShaderMaterial? s_garrisonXRayIdle;
+    private static ShaderMaterial? s_garrisonXRaySelected;
+    private static ShaderMaterial? s_garrisonXRayCqb;
+    private static ShaderMaterial? s_garrisonXRayHostileCqb;
+
+    internal static ShaderMaterial? GetGarrisonXRayMaterial(GarrisonXRayMode mode)
+    {
+        if (mode == GarrisonXRayMode.None) return null;
+        s_garrisonXRayShader ??= new Shader
+        {
+            Code = """
+                shader_type spatial;
+                render_mode unshaded, depth_draw_never, depth_test_disabled, cull_back;
+
+                uniform vec4 xray_color : source_color = vec4(0.28, 0.90, 0.80, 0.45);
+                uniform sampler2D depth_tex : hint_depth_texture, filter_nearest;
+
+                void fragment() {
+                    float scene_depth = texture(depth_tex, SCREEN_UV).r;
+                    vec3 ndc_scene = vec3(SCREEN_UV * 2.0 - 1.0, scene_depth);
+                    vec4 view_scene = INV_PROJECTION_MATRIX * vec4(ndc_scene, 1.0);
+                    float scene_dist = -(view_scene.z / view_scene.w);
+
+                    vec3 ndc_frag = vec3(SCREEN_UV * 2.0 - 1.0, FRAGCOORD.z);
+                    vec4 view_frag = INV_PROJECTION_MATRIX * vec4(ndc_frag, 1.0);
+                    float frag_dist = -(view_frag.z / view_frag.w);
+
+                    // Render X-Ray silhouette only when occluded behind a wall/roof (>= 2.0 m closer to camera,
+                    // strictly above soldier body height so unoccluded soldiers never self-highlight)
+                    if (frag_dist <= scene_dist + 2.0) {
+                        discard;
+                    }
+
+                    float fresnel = pow(1.0 - clamp(abs(dot(normalize(NORMAL), normalize(VIEW))), 0.0, 1.0), 1.3);
+                    ALBEDO = xray_color.rgb;
+                    ALPHA = clamp(xray_color.a * (0.55 + 0.65 * fresnel), 0.14, 0.88);
+                }
+                """
+        };
+        return mode switch
+        {
+            GarrisonXRayMode.Idle => s_garrisonXRayIdle ??= CreateXRayMat(new Color(0.28f, 0.90f, 0.80f, 0.44f)),
+            GarrisonXRayMode.Selected => s_garrisonXRaySelected ??= CreateXRayMat(new Color(0.42f, 1.00f, 0.88f, 0.72f)),
+            GarrisonXRayMode.Cqb => s_garrisonXRayCqb ??= CreateXRayMat(new Color(1.00f, 0.54f, 0.18f, 0.76f)),
+            GarrisonXRayMode.HostileCqb => s_garrisonXRayHostileCqb ??= CreateXRayMat(new Color(1.00f, 0.20f, 0.16f, 0.82f)),
+            _ => null
+        };
+
+        static ShaderMaterial CreateXRayMat(Color color)
+        {
+            ShaderMaterial mat = new()
+            {
+                Shader = s_garrisonXRayShader,
+                RenderPriority = 10
+            };
+            mat.SetShaderParameter("xray_color", color);
+            return mat;
+        }
+    }
+
+    internal bool TryGetFastRopeWorldEndpoints(bool leftRope, out Vector3 topWorldPos, out Vector3 bottomWorldPos)
+    {
+        if (IsHelicopter && AreFastRopesVisible && _fastRopeLeft is not null && _fastRopeRight is not null)
+        {
+            MeshInstance3D rope = leftRope ? _fastRopeLeft : _fastRopeRight;
+            Vector3 ropeCenter = Root.Position + rope.Position;
+            float halfH = MathF.Max(1.0f, rope.Scale.Y * 0.5f);
+            topWorldPos = new Vector3(ropeCenter.X, ropeCenter.Y + halfH - 1.0f, ropeCenter.Z);
+            bottomWorldPos = new Vector3(ropeCenter.X, ropeCenter.Y - halfH, ropeCenter.Z);
+            return true;
+        }
+        topWorldPos = default;
+        bottomWorldPos = default;
+        return false;
+    }
+
+    internal void StartFastRopeDescent(Vector3 ropeTop, Vector3 ropeBottom, Vector3 landingTarget, float yawRad)
+    {
+        _isFastRoping = true;
+        // Offset trooper slightly behind the cable axis so raised hands grip the rope naturally
+        Vector3 backFromRope = new Vector3(MathF.Sin(yawRad), 0f, MathF.Cos(yawRad)) * 0.22f;
+        _fastRopeTop = ropeTop + backFromRope;
+        _fastRopeBottom = ropeBottom + backFromRope;
+        _fastRopeLandingTarget = landingTarget;
+        float stepDist = new Vector2(landingTarget.X - _fastRopeBottom.X, landingTarget.Z - _fastRopeBottom.Z).Length();
+        _fastRopeStepOffDuration = Math.Clamp(stepDist / 4.8f, 0.25f, 0.90f);
+        _fastRopeElapsed = 0f;
+        _fastRopeYaw = yawRad;
+        _altitude = 0f;
+        _pitchRad = 0.06f;
+        _rollRad = 0f;
+        _rockAngle = 0f;
+        _rockVelocity = 0f;
+        _heading = yawRad;
+        _hasHeading = true;
+        _hasAim = true;
+        Root.Position = _fastRopeTop;
+        Model.Position = _modelBindPosition;
+        Model.Scale = _modelScale;
+        ApplyHullPose();
+        if (!Root.Visible)
+        {
+            Root.Visible = true;
+        }
+    }
+
+    private void UpdateFastRopeDescent(float dt)
+    {
+        _fastRopeElapsed += dt;
+        float slideEnd = FastRopeSlideDuration;
+        float crouchEnd = slideEnd + FastRopeLandingCrouchDuration;
+        float totalDuration = crouchEnd + _fastRopeStepOffDuration;
+        if (_fastRopeElapsed >= totalDuration)
+        {
+            _isFastRoping = false;
+            _pitchRad = 0f;
+            _rollRad = 0f;
+            Root.Position = _fastRopeLandingTarget;
+            _previousPosition = _fastRopeLandingTarget;
+            Model.Scale = _modelScale;
+            ApplyHullPose();
+            return;
+        }
+
+        if (_fastRopeElapsed < slideEnd)
+        {
+            float t = _fastRopeElapsed / FastRopeSlideDuration;
+            // Controlled military fast-rope descent: brief exit acceleration, steady slide, braking before touchdown
+            float ease = t < 0.20f
+                ? (t / 0.20f) * (t / 0.20f) * 0.14f
+                : (t < 0.80f
+                    ? 0.14f + ((t - 0.20f) / 0.60f) * 0.74f
+                    : 0.88f + (1f - MathF.Pow(1f - (t - 0.80f) / 0.20f, 2f)) * 0.12f);
+            Root.Position = _fastRopeTop.Lerp(_fastRopeBottom, Math.Clamp(ease, 0f, 1f));
+            _pitchRad = 0.06f;
+            _heading = _fastRopeYaw;
+            _hasAim = true;
+            Model.Scale = _modelScale;
+            ApplyHullPose();
+            _dustSpeed = 0f;
+        }
+        else if (_fastRopeElapsed < crouchEnd)
+        {
+            // Brief knee-bend landing absorb at the base of the rope
+            float ct = (_fastRopeElapsed - slideEnd) / FastRopeLandingCrouchDuration;
+            float crouchDip = MathF.Sin(ct * MathF.PI);
+            Root.Position = _fastRopeBottom;
+            _pitchRad = 0.08f * crouchDip;
+            _heading = _fastRopeYaw;
+            _hasAim = true;
+            ApplyHullPose();
+            Model.Scale = new Vector3(_modelScale.X, _modelScale.Y * (1f - 0.16f * crouchDip), _modelScale.Z);
+            _dustSpeed = 0f;
+        }
+        else
+        {
+            float st = (_fastRopeElapsed - crouchEnd) / MathF.Max(0.05f, _fastRopeStepOffDuration);
+            float smooth = st * st * (3f - 2f * st);
+            Root.Position = _fastRopeBottom.Lerp(_fastRopeLandingTarget, Math.Clamp(smooth, 0f, 1f));
+            Vector3 runDir = _fastRopeLandingTarget - _fastRopeBottom;
+            if (runDir.X * runDir.X + runDir.Z * runDir.Z > 0.01f)
+            {
+                _heading = MathF.Atan2(-runDir.X, -runDir.Z);
+            }
+            _pitchRad = 0f;
+            ApplyHullPose();
+            Model.Scale = _modelScale;
+            _dustSpeed = 4.8f;
+        }
+    }
+
+    private static void ApplyGarrisonXRayToRig(Rig? rig, GarrisonXRayMode mode)
+    {
+        if (rig is null) return;
+        ShaderMaterial? mat = GetGarrisonXRayMaterial(mode);
+        GeometryInstance3D[] meshes = rig.AllMeshes;
+        for (int i = 0; i < meshes.Length; i++)
+        {
+            if (meshes[i].MaterialOverlay != mat)
+            {
+                meshes[i].MaterialOverlay = mat;
+            }
+        }
+    }
+
+    internal void ApplyGarrisonPresentation(
+        Vector3 worldPos,
+        float yawRad,
+        bool isRunning,
+        bool isAiming,
+        bool isRoof,
+        bool isSelected,
+        GarrisonXRayMode xrayMode)
+    {
+        _isGarrisonedVisual = true;
+        _garrisonIsRunning = isRunning;
+        _altitude = 0f;
+        _rockAngle = 0f;
+        _rockVelocity = 0f;
+        _turretRotation = Vector3.Zero;
+        _hasAim = isAiming;
+        _previousPosition = worldPos;
+        _hasPosition = true;
+        _distanceSinceEffects = 0f;
+
+        if (_isFastRoping)
+        {
+            _fastRopeLandingTarget = worldPos;
+        }
+        else
+        {
+            _pitchRad = 0f;
+            _rollRad = 0f;
+            _heading = yawRad;
+            _hasHeading = true;
+            _dustSpeed = isRunning ? 4.5f : 0f;
+            Root.Position = worldPos;
+            Model.Position = _modelBindPosition;
+            Model.Rotation = new Vector3(0f, yawRad, 0f);
+        }
+
+        if (_healthBarRoot.Visible)
+        {
+            _healthBarRoot.Visible = false;
+        }
+        _isSelected = isSelected;
+        bool showGroundRing = isSelected && isRoof && !_isFastRoping;
+        if (_selection.Visible != showGroundRing)
+        {
+            _selection.Visible = showGroundRing;
+        }
+        bool showWeaponRange = isSelected && _rangeIndicatorsVisible && _weaponRange > 0f;
+        bool showSensorRange = isSelected && _rangeIndicatorsVisible && _sensorRange > 0f;
+        if (_weaponRangeRing.Visible != showWeaponRange) _weaponRangeRing.Visible = showWeaponRange;
+        if (_sensorRangeRing.Visible != showSensorRange) _sensorRangeRing.Visible = showSensorRange;
+        if (isSelected && _rangeIndicatorsVisible && (!_ringsDraped || (Root.Position - _lastDrapedPosition).LengthSquared() >= MinRedrapeDistanceSquared))
+        {
+            DrapeRings();
+        }
+
+        GarrisonXRayMode effectiveXRay = (_isFastRoping || isRoof) ? GarrisonXRayMode.None : xrayMode;
+        if (_garrisonXRayMode != effectiveXRay)
+        {
+            _garrisonXRayMode = effectiveXRay;
+            ApplyGarrisonXRayToRig(ActiveRig, effectiveXRay);
+        }
+
+        if (!Root.Visible)
+        {
+            Root.Visible = true;
+        }
+    }
+
+    internal void ClearGarrisonPresentation()
+    {
+        if (!_isGarrisonedVisual) return;
+        _isGarrisonedVisual = false;
+        _garrisonIsRunning = false;
+        if (_garrisonXRayMode != GarrisonXRayMode.None)
+        {
+            _garrisonXRayMode = GarrisonXRayMode.None;
+            for (int i = 0; i < _rigs.Length; i++)
+            {
+                ApplyGarrisonXRayToRig(_rigs[i], GarrisonXRayMode.None);
+            }
+        }
+        if (!_healthBarRoot.Visible)
+        {
+            _healthBarRoot.Visible = true;
+        }
         SetSelected(_isSelected);
     }
 
