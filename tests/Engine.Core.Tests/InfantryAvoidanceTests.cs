@@ -65,41 +65,48 @@ public sealed class InfantryAvoidanceTests
     [Fact]
     public void Infantry_OrderedBehindParkedTank_BypassesTankSmoothlyAndReachesDestination()
     {
-        (NavigationSystem nav, WorldState world, Simulation sim) = CreateHarness();
-        using (sim)
+        static void RunScenario(bool measureAlloc, out float distToGoal, out int detours, out long maxSteadyAlloc)
         {
-            // Parked tank directly between infantry start and destination
-            EntityId tank = world.CreateUnit(1, DefTank, new Vector2(60f, 60f), 10f, initialTurretYaw: MathF.PI);
-            EntityId soldier = world.CreateUnit(1, DefInfantry, new Vector2(60f, 44f), 4f, initialTurretYaw: MathF.PI);
-            Vector2 goal = new(60f, 76f);
-
-            Assert.True(sim.TryEnqueue(1, new MoveCommand(1u, sim.Tick, soldier, goal)));
-
-            float minDistance = float.MaxValue;
-            long maxSteadyAlloc = 0;
-            for (int t = 0; t < 180; t++)
+            (NavigationSystem nav, WorldState world, Simulation sim) = CreateHarness();
+            using (sim)
             {
-                long before = t >= 15 ? GC.GetAllocatedBytesForCurrentThread() : 0;
-                sim.Step();
-                if (t >= 15)
+                // Parked tank directly between infantry start and destination
+                EntityId tank = world.CreateUnit(1, DefTank, new Vector2(60f, 60f), 10f, initialTurretYaw: MathF.PI);
+                EntityId soldier = world.CreateUnit(1, DefInfantry, new Vector2(60f, 44f), 4f, initialTurretYaw: MathF.PI);
+                Vector2 goal = new(60f, 76f);
+
+                Assert.True(sim.TryEnqueue(1, new MoveCommand(1u, sim.Tick, soldier, goal)));
+
+                maxSteadyAlloc = 0;
+                for (int t = 0; t < 180; t++)
                 {
-                    long delta = GC.GetAllocatedBytesForCurrentThread() - before;
-                    if (delta > maxSteadyAlloc) maxSteadyAlloc = delta;
+                    long before = measureAlloc && t >= 5 ? GC.GetAllocatedBytesForCurrentThread() : 0;
+                    sim.Step();
+                    if (measureAlloc && t >= 5)
+                    {
+                        long delta = GC.GetAllocatedBytesForCurrentThread() - before;
+                        if (delta > maxSteadyAlloc) maxSteadyAlloc = delta;
+                    }
+
+                    world.TryGetUnit(tank, out UnitState tankState);
+                    world.TryGetUnit(soldier, out UnitState solState);
+                    float dist = Vector2.Distance(tankState.Position, solState.Position);
+                    Assert.True(dist >= 3.6f - 0.05f, $"Infantry penetrated parked tank at tick {t}: dist={dist:F2}m");
                 }
 
-                world.TryGetUnit(tank, out UnitState tankState);
-                world.TryGetUnit(soldier, out UnitState solState);
-                float dist = Vector2.Distance(tankState.Position, solState.Position);
-                minDistance = MathF.Min(minDistance, dist);
-                Assert.True(dist >= 3.6f - 0.05f, $"Infantry penetrated parked tank at tick {t}: dist={dist:F2}m");
+                world.TryGetUnit(soldier, out UnitState finalSol);
+                distToGoal = Vector2.Distance(finalSol.Position, goal);
+                detours = nav.StationaryDetoursInserted;
             }
-
-            world.TryGetUnit(soldier, out UnitState finalSol);
-            float distToGoal = Vector2.Distance(finalSol.Position, goal);
-            Assert.True(distToGoal <= 0.5f, $"Infantry must bypass parked tank and reach destination (60,76), ended at {finalSol.Position} (dist={distToGoal:F2}m, status={nav.GetUnitStatus(soldier)}).");
-            Assert.True(nav.StationaryDetoursInserted >= 1, "Expected at least one local detour around the parked tank.");
-            Assert.Equal(0L, maxSteadyAlloc);
         }
+
+        // Warm up JIT and static paths first so CI thread-allocation measurement is order-independent
+        RunScenario(measureAlloc: false, out _, out _, out _);
+        RunScenario(measureAlloc: true, out float distToGoal, out int detours, out long maxSteadyAlloc);
+
+        Assert.True(distToGoal <= 0.5f, $"Infantry must bypass parked tank and reach destination (60,76), dist={distToGoal:F2}m.");
+        Assert.True(detours >= 1, "Expected at least one local detour around the parked tank.");
+        Assert.Equal(0L, maxSteadyAlloc);
     }
 
     [Fact]
