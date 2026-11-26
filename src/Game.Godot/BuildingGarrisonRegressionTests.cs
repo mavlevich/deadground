@@ -130,6 +130,25 @@ internal static class BuildingGarrisonRegressionTests
             view.Update(replica, selected, default, showEntranceHint: false, cam);
             Require(view.ActiveFigureCount == 1, $"Spotted Current hostile roof contact must render 1 figure, got {view.ActiveFigureCount}.");
             Require(view.ActiveXRayCount == 0, $"Spotted hostile roof contact must render 0 X-Ray silhouettes, got {view.ActiveXRayCount}.");
+
+            // 5. Contested CQB in section 101 (2 own aiming north + 1 spotted hostile interior) + adjacency check
+            Require(view.AreSectionsAdjacent(section101, section102), "Sections 101 and 102 must be detected as adjacent.");
+            Require(!view.AreSectionsAdjacent(section101, new StructureId(105)), "Non-adjacent sections 101 and 105 must not be adjacent.");
+            OwnUnitObservation ownAim1 = own1 with { AttackStatus = AttackExecutionStatus.Aiming, TurretYaw = 0f };
+            OwnUnitObservation ownAim2 = own2 with { AttackStatus = AttackExecutionStatus.Aiming, TurretYaw = 0f };
+            ContactObservation hostileCqb = hostileLastKnown with
+            {
+                State = ContactState.Current,
+                LastSeenTick = 5,
+                GarrisonStructureId = section101,
+                GarrisonSlotKind = GarrisonSlotKind.Interior,
+                TurretYaw = MathF.PI
+            };
+            ApplySnapshot(replica, snapBuf, seq: 5, tick: 5, [ownAim1, ownAim2], [hostileCqb]);
+            view.Update(replica, selected, default, showEntranceHint: false, cam, deltaSeconds: 0.05f);
+            Require(view.ContestedBuildingCount == 1, $"Expected 1 contested CQB building, got {view.ContestedBuildingCount}.");
+            Require(view.ActiveFigureCount == 3, $"Expected 3 total figures (2 own + 1 hostile) in CQB section, got {view.ActiveFigureCount}.");
+            Require(view.ActiveXRayCount == 2, $"Expected X-Ray ONLY for 2 own troops in CQB (never hostile), got {view.ActiveXRayCount}.");
             _ = clickedBadge;
         }
         finally

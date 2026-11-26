@@ -338,58 +338,65 @@ public sealed class DetectionSystem : ISimulationSystem
                     continue;
 
                 bool targetIsGarrisoned = _garrison is not null && _unitGarrisonSlots[targetUnitIndex] != GarrisonSlotKind.None;
-                if (targetIsGarrisoned)
-                {
-                    float dist = MathF.Sqrt(distSq);
-                    if (!_garrison!.IsGarrisonTargetObservable(world, tick, _unitIds[targetUnitIndex], dist))
-                        continue;
-                }
-
-                // Resolve elevated facade/roof eye point if observer is garrisoned
-                Vector3 effectiveEyePos = eyePos;
-                if (_garrison is not null &&
+                bool sameGarrisonCqb = targetIsGarrisoned &&
                     _unitGarrisonSlots[i] != GarrisonSlotKind.None &&
-                    _garrison.TryGetElevatedPoint(world, _unitIds[i], _unitPositions[targetUnitIndex], out Vector3 garrEye))
-                {
-                    effectiveEyePos = garrEye;
-                }
+                    _unitGarrisonStructures[i] == _unitGarrisonStructures[targetUnitIndex];
 
-                bool isObserved = false;
-                if (targetIsGarrisoned &&
-                    _garrison!.TryGetElevatedPoint(world, _unitIds[targetUnitIndex], obsPos, out Vector3 garrTargetPt))
+                bool isObserved = sameGarrisonCqb;
+                if (!isObserved)
                 {
-                    LosQueriesCount++;
-                    isObserved = _geometry.IsLineOfSightClear(effectiveEyePos, garrTargetPt, _losContext, out _);
-                }
-                else
-                {
-                    Vector3 topPoint = _unitTopTargetPoint[targetUnitIndex];
-                    LosQueriesCount++;
-
-                    if (_geometry.IsLineOfSightClear(effectiveEyePos, topPoint, _losContext, out bool blockedByTerrain))
+                    if (targetIsGarrisoned)
                     {
-                        isObserved = true;
+                        float dist = MathF.Sqrt(distSq);
+                        if (!_garrison!.IsGarrisonTargetObservable(world, tick, _unitIds[targetUnitIndex], dist))
+                            continue;
                     }
-                    else if (!blockedByTerrain && points.RelativeHeights.Length > 1)
+
+                    // Resolve elevated facade/roof eye point if observer is garrisoned
+                    Vector3 effectiveEyePos = eyePos;
+                    if (_garrison is not null &&
+                        _unitGarrisonSlots[i] != GarrisonSlotKind.None &&
+                        _garrison.TryGetElevatedPoint(world, _unitIds[i], _unitPositions[targetUnitIndex], out Vector3 garrEye))
                     {
-                        Vector2 targetPos = _unitPositions[targetUnitIndex];
-                        float tx = targetPos.X;
-                        float tz = targetPos.Y;
-                        float targetGroundY = _unitGroundHeights[targetUnitIndex];
-                        for (int p = points.RelativeHeights.Length - 2; p >= 0; p--)
+                        effectiveEyePos = garrEye;
+                    }
+
+                    if (targetIsGarrisoned &&
+                        _garrison!.TryGetElevatedPoint(world, _unitIds[targetUnitIndex], obsPos, out Vector3 garrTargetPt))
+                    {
+                        LosQueriesCount++;
+                        isObserved = _geometry.IsLineOfSightClear(effectiveEyePos, garrTargetPt, _losContext, out _);
+                    }
+                    else
+                    {
+                        Vector3 topPoint = _unitTopTargetPoint[targetUnitIndex];
+                        LosQueriesCount++;
+
+                        if (_geometry.IsLineOfSightClear(effectiveEyePos, topPoint, _losContext, out bool blockedByTerrain))
                         {
-                            Vector3 targetPointPos = new(tx, targetGroundY + points.RelativeHeights[p], tz);
-                            LosQueriesCount++;
-
-                            if (_geometry.IsLineOfSightClear(effectiveEyePos, targetPointPos, _losContext, out bool lowerBlockedByTerrain))
+                            isObserved = true;
+                        }
+                        else if (!blockedByTerrain && points.RelativeHeights.Length > 1)
+                        {
+                            Vector2 targetPos = _unitPositions[targetUnitIndex];
+                            float tx = targetPos.X;
+                            float tz = targetPos.Y;
+                            float targetGroundY = _unitGroundHeights[targetUnitIndex];
+                            for (int p = points.RelativeHeights.Length - 2; p >= 0; p--)
                             {
-                                isObserved = true;
-                                break;
-                            }
+                                Vector3 targetPointPos = new(tx, targetGroundY + points.RelativeHeights[p], tz);
+                                LosQueriesCount++;
 
-                            if (lowerBlockedByTerrain)
-                            {
-                                break;
+                                if (_geometry.IsLineOfSightClear(effectiveEyePos, targetPointPos, _losContext, out bool lowerBlockedByTerrain))
+                                {
+                                    isObserved = true;
+                                    break;
+                                }
+
+                                if (lowerBlockedByTerrain)
+                                {
+                                    break;
+                                }
                             }
                         }
                     }

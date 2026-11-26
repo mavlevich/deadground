@@ -194,6 +194,12 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
     {
         if (_garrison is not null && (world.IsGarrisoned(attacker.Id) || world.IsGarrisoned(targetUnit.Id)))
         {
+            if (_garrison.AreInSameGarrison(world, attacker.Id, targetUnit.Id, out StructureId sharedStructure) &&
+                _garrison.TryGetCqbShotPoints(world, sharedStructure, attacker.Id, targetUnit.Id, _currentTick, out muzzlePos, out hitPoint))
+            {
+                return true;
+            }
+
             if (!_garrison.TryGetElevatedPoint(world, attacker.Id, targetUnit.Position, out muzzlePos))
             {
                 float attackerGroundY = _geometry.GetSurfaceHeight(attacker.Position, attacker.SupportSurface) + world.GetUnitAltitude(attacker.Id);
@@ -295,6 +301,11 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
     {
         if (_garrison is not null && (world.IsGarrisoned(attacker.Id) || world.IsGarrisoned(targetUnit.Id)))
         {
+            if (_garrison.AreInSameGarrison(world, attacker.Id, targetUnit.Id, out _))
+            {
+                return 1.0f;
+            }
+
             if (!_garrison.TryGetElevatedPoint(world, attacker.Id, targetUnit.Position, out Vector3 muzzlePos))
             {
                 float attackerGroundY = _geometry.GetSurfaceHeight(attacker.Position, attacker.SupportSurface) + world.GetUnitAltitude(attacker.Id);
@@ -532,7 +543,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         }
     }
 
-    private static float ComputeAutoFireTargetScore(
+    private float ComputeAutoFireTargetScore(
         UnitState attacker,
         WeaponDefinition weapon,
         in WorldState.CombatState cs,
@@ -542,6 +553,13 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         WorldState world)
     {
         float score = GetBaseTargetThreatScore(weapon, candidate.Classification);
+
+        // Emergency close-quarters priority: enemies inside the same contested building section
+        // always take immediate precedence over distant outside targets
+        if (_garrison is not null && _garrison.AreInSameGarrison(world, attacker.Id, candidateEntityId, out _))
+        {
+            score += 1200f;
+        }
 
         // Quadratic close-range urgency so close threats outrank distant targets
         float normDist = Math.Clamp(distance / MathF.Max(1f, weapon.Range), 0f, 1f);
@@ -1655,7 +1673,11 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
             if (penetrates)
             {
                 int rawDamage = Math.Max(1, (weapon.Damage * roundsFired) / burstRounds);
-                float coverMult = _garrison is not null ? _garrison.GetIncomingCoverDamageMultiplier(world, targetUnit.Id) : 1.0f;
+                float coverMult = _garrison is not null
+                    ? (_garrison.AreInSameGarrison(world, attacker.Id, targetUnit.Id, out _)
+                        ? _garrison.GetCqbDamageMultiplier(world, attacker.Id, targetUnit.Id)
+                        : _garrison.GetIncomingCoverDamageMultiplier(world, targetUnit.Id))
+                    : 1.0f;
                 int damageToApply = Math.Max(1, (int)MathF.Round(rawDamage * coverMult));
                 world.ApplyDamage(targetUnit.Id, damageToApply, out isDestroyed);
                 TotalDamageApplied += damageToApply;
@@ -1668,17 +1690,24 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         }
         else
         {
-            // Miss: calculate dispersed impact point, hits ground or structure, never the target
-            impactPoint = CalculateMissImpactPoint(
-                muzzlePos,
-                attacker.Position,
-                targetUnit.Position,
-                targetRadius,
-                weapon,
-                targetUnit.SupportSurface,
-                world.GetUnitAltitude(targetUnit.Id),
-                hitPoint,
-                isAttackerMoving);
+            // Miss: for room-to-room CQB keep impact on the contested floor; otherwise compute dispersed outdoor point
+            if (_garrison is not null && _garrison.AreInSameGarrison(world, attacker.Id, targetUnit.Id, out _))
+            {
+                impactPoint = hitPoint;
+            }
+            else
+            {
+                impactPoint = CalculateMissImpactPoint(
+                    muzzlePos,
+                    attacker.Position,
+                    targetUnit.Position,
+                    targetRadius,
+                    weapon,
+                    targetUnit.SupportSurface,
+                    world.GetUnitAltitude(targetUnit.Id),
+                    hitPoint,
+                    isAttackerMoving);
+            }
             hitResult = HitResult.Miss;
         }
 

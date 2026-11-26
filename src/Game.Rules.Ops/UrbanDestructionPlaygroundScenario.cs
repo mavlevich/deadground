@@ -211,14 +211,15 @@ public static class UrbanDestructionPlaygroundScenario
         world.CreateUnit(1, rifleIdx, new Vector2(504.0f, 472.0f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingPlusZ);
         world.CreateUnit(1, rifleIdx, new Vector2(512.0f, 472.0f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingPlusZ);
 
-        // Player 2 (US) behind central panelka facing -Z toward the courtyard
+        // Player 2 (US) behind central panelka facing -Z toward the courtyard,
+        // plus a 2-man ambush fireteam pre-garrisoned inside east flanking panelka section 106 for CQB testing
         const float facingMinusZ = 0f;
         world.CreateUnit(2, m60Idx, UsM60WestPos, m60Def.Speed, m60Def.MaxHealth, m60Ammo, facingMinusZ);
         world.CreateUnit(2, m60Idx, UsM60EastPos, m60Def.Speed, m60Def.MaxHealth, m60Ammo, facingMinusZ);
-        EntityId opforInf1 = world.CreateUnit(2, rifleIdx, new Vector2(486.0f, 544.0f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingMinusZ);
-        EntityId opforInf2 = world.CreateUnit(2, rifleIdx, new Vector2(514.0f, 544.0f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingMinusZ);
-        world.SetFireStance(opforInf1, FireStance.HoldFire);
-        world.SetFireStance(opforInf2, FireStance.HoldFire);
+        EntityId opforInf1 = world.CreateUnit(2, rifleIdx, new Vector2(567.9f, 479.6f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, MathF.PI * 0.5f);
+        EntityId opforInf2 = world.CreateUnit(2, rifleIdx, new Vector2(567.9f, 479.6f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, MathF.PI * 0.5f);
+        world.SetFireStance(opforInf1, FireStance.ReturnFire);
+        world.SetFireStance(opforInf2, FireStance.ReturnFire);
 
         Simulation simulation = new(world, rules, matchSeed: matchSeed);
         if (simulation.BuildingDestruction is not null)
@@ -231,6 +232,12 @@ public static class UrbanDestructionPlaygroundScenario
                 StructureDestructionProfile prof = specs[i].Profile;
                 simulation.BuildingDestruction.RegisterStructure(world, specs[i].Id, in prof);
             }
+        }
+        if (simulation.Garrison is not null)
+        {
+            StructureId ambushSection = new(106);
+            simulation.Garrison.TryPlaceInitialGarrison(world, opforInf1, ambushSection, GarrisonSlotKind.Interior);
+            simulation.Garrison.TryPlaceInitialGarrison(world, opforInf2, ambushSection, GarrisonSlotKind.Interior);
         }
 
         return simulation;

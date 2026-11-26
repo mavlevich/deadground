@@ -380,7 +380,11 @@ public sealed class WorldState : IDisposable
     private readonly Dictionary<EntityId, ContainerData> _containers = new();
     private readonly List<EntityId> _containerIds = new(32);
     private readonly record struct GarrisonMembership(StructureId StructureId, GarrisonSlotKind SlotKind);
-    private readonly record struct PendingEnterBuildingOrder(StructureId StructureId, GarrisonSlotKind SlotKind, Vector2 EntrancePos);
+    private readonly record struct PendingEnterBuildingOrder(
+        StructureId StructureId,
+        GarrisonSlotKind SlotKind,
+        Vector2 EntrancePos,
+        int TransferTicksRemaining = 0);
 
     private readonly Dictionary<EntityId, EntityId> _containedIn = new();
     private readonly Dictionary<EntityId, GarrisonMembership> _garrisonedIn = new(128);
@@ -709,24 +713,39 @@ public sealed class WorldState : IDisposable
 
     public void ClearGarrisonMembership(EntityId unitId) => _garrisonedIn.Remove(unitId);
 
-    public bool TryGetPendingEnterOrder(EntityId unitId, out StructureId structureId, out GarrisonSlotKind slotKind, out Vector2 entrancePos)
+    public bool TryGetPendingEnterOrder(EntityId unitId, out StructureId structureId, out GarrisonSlotKind slotKind, out Vector2 entrancePos) =>
+        TryGetPendingEnterOrder(unitId, out structureId, out slotKind, out entrancePos, out _);
+
+    public bool TryGetPendingEnterOrder(
+        EntityId unitId,
+        out StructureId structureId,
+        out GarrisonSlotKind slotKind,
+        out Vector2 entrancePos,
+        out int transferTicksRemaining)
     {
         if (_pendingEnterOrders.TryGetValue(unitId, out PendingEnterBuildingOrder order))
         {
             structureId = order.StructureId;
             slotKind = order.SlotKind;
             entrancePos = order.EntrancePos;
+            transferTicksRemaining = order.TransferTicksRemaining;
             return true;
         }
         structureId = default;
         slotKind = GarrisonSlotKind.None;
         entrancePos = default;
+        transferTicksRemaining = 0;
         return false;
     }
 
-    public void SetPendingEnterOrder(EntityId unitId, StructureId structureId, GarrisonSlotKind slotKind, Vector2 entrancePos)
+    public void SetPendingEnterOrder(
+        EntityId unitId,
+        StructureId structureId,
+        GarrisonSlotKind slotKind,
+        Vector2 entrancePos,
+        int transferTicksRemaining = 0)
     {
-        _pendingEnterOrders[unitId] = new PendingEnterBuildingOrder(structureId, slotKind, entrancePos);
+        _pendingEnterOrders[unitId] = new PendingEnterBuildingOrder(structureId, slotKind, entrancePos, transferTicksRemaining);
     }
 
     public void ClearPendingEnterOrder(EntityId unitId) => _pendingEnterOrders.Remove(unitId);
@@ -1258,6 +1277,7 @@ public sealed class WorldState : IDisposable
             {
                 hash = Mix(hash, (ulong)(uint)pe.StructureId.Value);
                 hash = Mix(hash, (ulong)pe.SlotKind);
+                hash = Mix(hash, (ulong)(uint)pe.TransferTicksRemaining);
             }
             if (_unitLastFiredTicks.TryGetValue(id.Id, out int lastFiredTick))
             {

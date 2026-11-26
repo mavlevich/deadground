@@ -37,7 +37,8 @@ public readonly record struct BuildingRoofPort(
 /// </summary>
 public sealed class BuildingGarrisonProfile
 {
-    public const int MaxOccupantsPerStructure = 16;
+    public const int MaxOccupantsPerTeam = 16;
+    public const int MaxOccupantsPerStructure = 32;
 
     public int Capacity { get; }
     public Vector3 EntranceLocalOffset { get; }
@@ -73,7 +74,7 @@ public sealed class BuildingGarrisonProfile
 
     public bool IsValid =>
         Capacity >= 1 &&
-        Capacity <= MaxOccupantsPerStructure &&
+        Capacity <= MaxOccupantsPerTeam &&
         float.IsFinite(EntranceLocalOffset.X) &&
         float.IsFinite(EntranceLocalOffset.Y) &&
         float.IsFinite(EntranceLocalOffset.Z) &&

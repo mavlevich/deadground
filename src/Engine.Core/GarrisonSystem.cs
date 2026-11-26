@@ -3,17 +3,24 @@ using System.Numerics;
 namespace DeadGround.Engine;
 
 /// <summary>
-/// Server-authoritative building garrison simulation system (Stage 2, PR 2.1 thin slice).
-/// Manages infantry entry/exit through building entrances, single-side occupancy, elevated
-/// window/roof LOS and firing ports, cover damage reduction, concealment rules, and deterministic
-/// structural blast/collapse casualties. Strictly allocation-free during simulation ticks.
+/// Server-authoritative building garrison simulation system (Stage 2, PR 2.1 + PR 2.3).
+/// Manages infantry entry/exit through building entrances, sheltered interior transfers between
+/// adjacent building sections, contested close-quarters battle (CQB), elevated window/roof LOS
+/// and firing ports, cover damage reduction, concealment rules, and deterministic structural
+/// blast/collapse casualties. Strictly allocation-free during simulation ticks.
 /// </summary>
 public sealed class GarrisonSystem : ISimulationSystem
 {
     public const float EntranceArrivalRadius = 3.5f;
+    public const float AdjacencyMaxGapMeters = 2.5f;
+    public const float AdjacencyMinOverlapMeters = 2.0f;
+    public const int AdjacentTransferTicks = 4;
+    public const float CqbSameBandDamageMultiplier = 0.70f;
+    public const float CqbCrossBandDamageMultiplier = 0.55f;
     private const float FootClearanceRadius = 0.45f;
     private const int ExitFanSlotCount = 20;
     private const int MaxPendingEnterUnits = 1024;
+    private const int MaxAdjacentPerBuilding = 8;
 
     private readonly record struct PrecomputedFiringPort(
         float WorldX,
@@ -46,6 +53,8 @@ public sealed class GarrisonSystem : ISimulationSystem
         public readonly EntityId[] Occupants = new EntityId[BuildingGarrisonProfile.MaxOccupantsPerStructure];
         public int OccupantCount;
         public int ExitCursor;
+        public readonly StructureId[] AdjacentStructures = new StructureId[MaxAdjacentPerBuilding];
+        public int AdjacentCount;
     }
 
     private readonly StaticGeometry _geometry;
@@ -61,6 +70,7 @@ public sealed class GarrisonSystem : ISimulationSystem
     public int RegisteredBuildingCount => _buildingCount;
     public int TotalEntries { get; private set; }
     public int TotalExits { get; private set; }
+    public int TotalAdjacentTransfers { get; private set; }
     public int TotalCollapseCasualties { get; private set; }
 
     public GarrisonSystem(StaticGeometry geometry, Func<ushort, bool> isInfantryDefinition)
@@ -144,11 +154,166 @@ public sealed class GarrisonSystem : ISimulationSystem
             WorldRoofPorts = worldRoofPorts
         };
         _buildings[structureId] = entry;
+        for (int i = 0; i < _buildingCount; i++)
+        {
+            BuildingEntry other = _buildingList[i];
+            if (AreBoundsAdjacent(entry.Bounds, other.Bounds))
+            {
+                LinkAdjacent(entry, other.Id);
+                LinkAdjacent(other, entry.Id);
+            }
+        }
         _buildingList[_buildingCount++] = entry;
         return true;
     }
 
     public bool IsRegistered(StructureId structureId) => _buildings.ContainsKey(structureId);
+
+    /// <summary>
+    /// Places an infantry unit directly into a registered building section during scenario setup
+    /// (bypassing entrance walk-in).
+    /// </summary>
+    public bool TryPlaceInitialGarrison(
+        WorldState world,
+        EntityId unitId,
+        StructureId structureId,
+        GarrisonSlotKind slotKind = GarrisonSlotKind.Interior)
+    {
+        if (!_buildings.TryGetValue(structureId, out BuildingEntry? entry))
+            return false;
+        return TryCommitEntry(entry, unitId, slotKind, world, _navigation);
+    }
+
+    public bool AreSectionsAdjacent(StructureId a, StructureId b)
+    {
+        if (a == b || !_buildings.TryGetValue(a, out BuildingEntry? entry))
+            return false;
+        for (int i = 0; i < entry.AdjacentCount; i++)
+        {
+            if (entry.AdjacentStructures[i] == b)
+                return true;
+        }
+        return false;
+    }
+
+    public bool AreInSameGarrison(WorldState world, EntityId unitA, EntityId unitB, out StructureId structureId)
+    {
+        if (world.TryGetGarrison(unitA, out StructureId sA, out GarrisonSlotKind slotA) &&
+            slotA != GarrisonSlotKind.None &&
+            world.TryGetGarrison(unitB, out StructureId sB, out GarrisonSlotKind slotB) &&
+            slotB != GarrisonSlotKind.None &&
+            sA == sB)
+        {
+            structureId = sA;
+            return true;
+        }
+        structureId = default;
+        return false;
+    }
+
+    public bool IsContested(WorldState world, StructureId structureId)
+    {
+        if (!_buildings.TryGetValue(structureId, out BuildingEntry? entry) || entry.OccupantCount < 2)
+            return false;
+        int firstTeam = -1;
+        for (int i = 0; i < entry.OccupantCount; i++)
+        {
+            if (!world.TryGetUnit(entry.Occupants[i], out UnitState occ))
+                continue;
+            int team = world.GetPlayerTeam(occ.Owner);
+            if (firstTeam < 0)
+                firstTeam = team;
+            else if (team != firstTeam)
+                return true;
+        }
+        return false;
+    }
+
+    public float GetCqbDamageMultiplier(WorldState world, EntityId attackerId, EntityId targetId)
+    {
+        if (world.TryGetGarrison(attackerId, out StructureId sA, out GarrisonSlotKind slotA) &&
+            world.TryGetGarrison(targetId, out StructureId sB, out GarrisonSlotKind slotB) &&
+            sA == sB)
+        {
+            return slotA == slotB ? CqbSameBandDamageMultiplier : CqbCrossBandDamageMultiplier;
+        }
+        return 1.0f;
+    }
+
+    /// <summary>
+    /// Computes deterministic 3D muzzle and impact points for room-to-room CQB shots inside
+    /// a contested section, anchored at window ports on the active floor so external observers
+    /// see muzzle flashes flickering across the facade during indoor assaults.
+    /// </summary>
+    public bool TryGetCqbShotPoints(
+        WorldState world,
+        StructureId structureId,
+        EntityId attackerId,
+        EntityId targetId,
+        int tick,
+        out Vector3 muzzlePos,
+        out Vector3 hitPoint)
+    {
+        if (!_buildings.TryGetValue(structureId, out BuildingEntry? entry))
+        {
+            muzzlePos = default;
+            hitPoint = default;
+            return false;
+        }
+
+        StructureDestructionProfile destProfile;
+        byte floorsStanding;
+        if (world.TryGetDestructibleStructure(structureId, out DestructibleStructureState destState))
+        {
+            destProfile = destState.Profile;
+            floorsStanding = destState.FloorsStanding;
+        }
+        else
+        {
+            destProfile = new StructureDestructionProfile(1, MathF.Max(2.5f, entry.Bounds.MaxY - entry.Bounds.MinY), 1.0f, 100);
+            floorsStanding = 1;
+        }
+
+        GarrisonSlotKind attackerSlot = world.GetGarrisonSlotKind(attackerId);
+        if (attackerSlot == GarrisonSlotKind.Roof && floorsStanding >= destProfile.FloorsTotal && entry.WorldRoofPorts.Length > 0)
+        {
+            PrecomputedRoofPort[] rps = entry.WorldRoofPorts;
+            int idxA = (int)(((uint)attackerId.Value + (uint)(tick / 6)) % (uint)rps.Length);
+            int idxB = (int)(((uint)targetId.Value + 1u + (uint)(tick / 6)) % (uint)rps.Length);
+            if (idxB == idxA && rps.Length > 1) idxB = (idxA + 1) % rps.Length;
+            muzzlePos = new Vector3(rps[idxA].WorldX, rps[idxA].WorldY, rps[idxA].WorldZ);
+            hitPoint = new Vector3(rps[idxB].WorldX, rps[idxB].WorldY, rps[idxB].WorldZ);
+            return true;
+        }
+
+        if (floorsStanding == 0)
+        {
+            float rubbleY = entry.Bounds.MinY + destProfile.RubbleHeight + 0.55f;
+            float angleA = (((uint)attackerId.Value * 17u + (uint)(tick / 6)) % 12u) * (MathF.Tau / 12f);
+            float angleB = angleA + MathF.PI * 0.75f;
+            muzzlePos = new Vector3(entry.CenterXZ.X + MathF.Cos(angleA) * 2.4f, rubbleY, entry.CenterXZ.Y + MathF.Sin(angleA) * 2.4f);
+            hitPoint = new Vector3(entry.CenterXZ.X + MathF.Cos(angleB) * 2.4f, rubbleY, entry.CenterXZ.Y + MathF.Sin(angleB) * 2.4f);
+            return true;
+        }
+
+        float floorBaseY = entry.Bounds.MinY + (floorsStanding - 1) * destProfile.FloorHeight;
+        PrecomputedFiringPort[] ports = entry.WorldFiringPorts;
+        if (ports.Length >= 2)
+        {
+            int idxA = (int)(((uint)attackerId.Value * 5u + (uint)(tick / 6)) % (uint)ports.Length);
+            int idxB = (int)(((uint)targetId.Value * 7u + 3u + (uint)(tick / 6)) % (uint)ports.Length);
+            if (idxB == idxA) idxB = (idxA + 1) % ports.Length;
+            PrecomputedFiringPort pA = ports[idxA];
+            PrecomputedFiringPort pB = ports[idxB];
+            muzzlePos = new Vector3(pA.WorldX, floorBaseY + pA.LocalY, pA.WorldZ);
+            hitPoint = new Vector3(pB.WorldX, floorBaseY + pB.LocalY, pB.WorldZ);
+            return true;
+        }
+
+        muzzlePos = new Vector3(entry.CenterXZ.X - 1.5f, floorBaseY + 1.4f, entry.CenterXZ.Y);
+        hitPoint = new Vector3(entry.CenterXZ.X + 1.5f, floorBaseY + 1.4f, entry.CenterXZ.Y);
+        return true;
+    }
 
     public int GetOccupantCount(StructureId structureId) =>
         _buildings.TryGetValue(structureId, out BuildingEntry? entry) ? entry.OccupantCount : 0;
@@ -188,13 +353,13 @@ public sealed class GarrisonSystem : ISimulationSystem
             return false;
 
         // Switching levels inside the already-occupied building is allowed without extra capacity
-        bool alreadyInsideSame = world.TryGetGarrison(cmd.Unit, out StructureId curStruct, out GarrisonSlotKind curSlot) &&
-            curStruct == cmd.TargetStructure;
+        bool isGarrisoned = world.TryGetGarrison(cmd.Unit, out StructureId curStruct, out GarrisonSlotKind curSlot);
+        bool alreadyInsideSame = isGarrisoned && curStruct == cmd.TargetStructure;
         if (alreadyInsideSame && curSlot == cmd.SlotKind)
             return false;
 
-        // Must exit current building before entering a different building (PR 2.1 thin slice)
-        if (!alreadyInsideSame && world.IsGarrisoned(cmd.Unit))
+        // Already garrisoned in a different section: allow sheltered interior transfer only to adjacent sections
+        if (isGarrisoned && !alreadyInsideSame && !AreSectionsAdjacent(curStruct, cmd.TargetStructure))
             return false;
 
         // Own-side capacity check (never inspects hostile occupants)
@@ -225,13 +390,28 @@ public sealed class GarrisonSystem : ISimulationSystem
         if (!world.TryGetUnit(cmd.Unit, out UnitState unit))
             return false;
 
-        // Already inside this section: switch Interior <-> Roof directly if roof is intact
-        if (world.TryGetGarrison(cmd.Unit, out StructureId curStruct, out _) && curStruct == cmd.TargetStructure)
+        if (world.TryGetGarrison(cmd.Unit, out StructureId curStruct, out _))
         {
-            if (cmd.SlotKind == GarrisonSlotKind.Roof && !CanOccupyRoof(world, entry.Id))
-                return false;
-            world.SetGarrisonMembership(cmd.Unit, cmd.TargetStructure, cmd.SlotKind);
-            return true;
+            // Already inside this section: switch Interior <-> Roof directly if roof is intact
+            if (curStruct == cmd.TargetStructure)
+            {
+                if (cmd.SlotKind == GarrisonSlotKind.Roof && !CanOccupyRoof(world, entry.Id))
+                    return false;
+                world.ClearPendingEnterOrder(cmd.Unit);
+                RemovePendingEnterUnit(cmd.Unit);
+                world.SetGarrisonMembership(cmd.Unit, cmd.TargetStructure, cmd.SlotKind);
+                return true;
+            }
+
+            // Sheltered interior transfer to an adjacent section (pod'ezd-to-pod'ezd without exiting)
+            if (AreSectionsAdjacent(curStruct, cmd.TargetStructure))
+            {
+                world.SetPendingEnterOrder(cmd.Unit, cmd.TargetStructure, cmd.SlotKind, entry.CenterXZ, AdjacentTransferTicks);
+                TrackPendingEnterUnit(cmd.Unit);
+                return true;
+            }
+
+            return false;
         }
 
         // If already at the entrance, enter immediately without detouring
@@ -320,31 +500,55 @@ public sealed class GarrisonSystem : ISimulationSystem
             }
         }
 
-        // 2. Complete or cancel tracked pending enter orders in O(pending) time
+        // 2. Complete or cancel tracked pending enter orders and adjacent section transfers in O(pending) time
         float arriveSq = EntranceArrivalRadius * EntranceArrivalRadius;
         int p = 0;
         while (p < _pendingEnterCount)
         {
             EntityId unitId = _pendingEnterUnits[p];
             if (!world.TryGetUnit(unitId, out UnitState unit) ||
-                !world.TryGetPendingEnterOrder(unitId, out StructureId targetStruct, out GarrisonSlotKind slotKind, out Vector2 entrancePos))
+                !world.TryGetPendingEnterOrder(unitId, out StructureId targetStruct, out GarrisonSlotKind slotKind, out Vector2 entrancePos, out int transferTicks))
             {
                 RemovePendingEnterUnitAt(p);
                 continue;
             }
 
-            if (world.IsContained(unitId) || world.IsGarrisoned(unitId) || !_buildings.TryGetValue(targetStruct, out BuildingEntry? entry))
+            if (world.IsContained(unitId) || !_buildings.TryGetValue(targetStruct, out BuildingEntry? entry))
             {
                 world.ClearPendingEnterOrder(unitId);
                 RemovePendingEnterUnitAt(p);
                 continue;
             }
 
+            // Case A: Sheltered interior transfer from an adjacent occupied section
+            if (world.TryGetGarrison(unitId, out StructureId curStruct, out _))
+            {
+                if (curStruct == targetStruct || !AreSectionsAdjacent(curStruct, targetStruct) || !_buildings.TryGetValue(curStruct, out BuildingEntry? curEntry))
+                {
+                    world.ClearPendingEnterOrder(unitId);
+                    RemovePendingEnterUnitAt(p);
+                    continue;
+                }
+
+                if (transferTicks > 1)
+                {
+                    world.SetPendingEnterOrder(unitId, targetStruct, slotKind, entrancePos, transferTicks - 1);
+                    p++;
+                    continue;
+                }
+
+                TryCommitAdjacentTransfer(curEntry, entry, unitId, slotKind, world);
+                world.ClearPendingEnterOrder(unitId);
+                RemovePendingEnterUnitAt(p);
+                continue;
+            }
+
+            // Case B: Exterior unit walking to building entrance
             if (Vector2.DistanceSquared(unit.Position, entrancePos) <= arriveSq)
             {
                 if (!TryCommitEntry(entry, unitId, slotKind, world, _navigation))
                 {
-                    // Entry blocked (enemy occupied, full, or roof collapsed en route): cancel cleanly
+                    // Entry blocked (own team full or roof collapsed en route): cancel cleanly
                     world.ClearPendingEnterOrder(unitId);
                     world.UpdateUnitNavigation(unitId, unit.Position, unit.Position, active: false, supportSurface: unit.SupportSurface);
                     _navigation?.ClearUnit(unitId);
@@ -592,13 +796,13 @@ public sealed class GarrisonSystem : ISimulationSystem
             return false;
         if (world.IsContained(unitId) || world.IsGarrisoned(unitId))
             return false;
-        if (entry.OccupantCount >= entry.Profile.Capacity)
-            return false;
-        if (slotKind == GarrisonSlotKind.Roof && !CanOccupyRoof(world, entry.Id))
-            return false;
 
         int unitTeam = world.GetPlayerTeam(unit.Owner);
-        if (IsOccupiedByHostile(entry, world, unitTeam))
+        if (CountTeamOccupants(entry, world, unitTeam) >= entry.Profile.Capacity)
+            return false;
+        if (entry.OccupantCount >= BuildingGarrisonProfile.MaxOccupantsPerStructure)
+            return false;
+        if (slotKind == GarrisonSlotKind.Roof && !CanOccupyRoof(world, entry.Id))
             return false;
 
         entry.Occupants[entry.OccupantCount++] = unitId;
@@ -610,6 +814,62 @@ public sealed class GarrisonSystem : ISimulationSystem
         (navigation ?? _navigation)?.ClearUnit(unitId);
         TotalEntries++;
         return true;
+    }
+
+    private bool TryCommitAdjacentTransfer(
+        BuildingEntry fromEntry,
+        BuildingEntry toEntry,
+        EntityId unitId,
+        GarrisonSlotKind requestedSlotKind,
+        WorldState world)
+    {
+        if (!world.TryGetUnit(unitId, out UnitState unit))
+            return false;
+        if (!_isInfantryDefinition(unit.Definition))
+            return false;
+
+        int unitTeam = world.GetPlayerTeam(unit.Owner);
+        if (CountTeamOccupants(toEntry, world, unitTeam) >= toEntry.Profile.Capacity)
+            return false;
+        if (toEntry.OccupantCount >= BuildingGarrisonProfile.MaxOccupantsPerStructure)
+            return false;
+
+        GarrisonSlotKind finalSlot = requestedSlotKind == GarrisonSlotKind.Roof && !CanOccupyRoof(world, toEntry.Id)
+            ? GarrisonSlotKind.Interior
+            : requestedSlotKind;
+
+        RemoveOccupant(fromEntry, unitId);
+        toEntry.Occupants[toEntry.OccupantCount++] = unitId;
+        world.SetGarrisonMembership(unitId, toEntry.Id, finalSlot);
+        world.SetPosition(unitId, toEntry.CenterXZ);
+        world.UpdateUnitNavigation(unitId, toEntry.CenterXZ, toEntry.CenterXZ, active: false, supportSurface: 0u);
+        TotalAdjacentTransfers++;
+        return true;
+    }
+
+    private static bool AreBoundsAdjacent(OpaqueStructure a, OpaqueStructure b)
+    {
+        float gapX = MathF.Max(0f, MathF.Max(a.MinX - b.MaxX, b.MinX - a.MaxX));
+        float gapZ = MathF.Max(0f, MathF.Max(a.MinZ - b.MaxZ, b.MinZ - a.MaxZ));
+        float overlapX = MathF.Min(a.MaxX, b.MaxX) - MathF.Max(a.MinX, b.MinX);
+        float overlapZ = MathF.Min(a.MaxZ, b.MaxZ) - MathF.Max(a.MinZ, b.MinZ);
+
+        bool touchesAlongX = gapX <= AdjacencyMaxGapMeters && overlapZ >= AdjacencyMinOverlapMeters;
+        bool touchesAlongZ = gapZ <= AdjacencyMaxGapMeters && overlapX >= AdjacencyMinOverlapMeters;
+        return touchesAlongX || touchesAlongZ;
+    }
+
+    private static void LinkAdjacent(BuildingEntry entry, StructureId neighborId)
+    {
+        for (int i = 0; i < entry.AdjacentCount; i++)
+        {
+            if (entry.AdjacentStructures[i] == neighborId)
+                return;
+        }
+        if (entry.AdjacentCount < entry.AdjacentStructures.Length)
+        {
+            entry.AdjacentStructures[entry.AdjacentCount++] = neighborId;
+        }
     }
 
     private void TrackPendingEnterUnit(EntityId unitId)
@@ -654,19 +914,6 @@ public sealed class GarrisonSystem : ISimulationSystem
             return destState.FloorsStanding >= destState.Profile.FloorsTotal;
         }
         return true;
-    }
-
-    private static bool IsOccupiedByHostile(BuildingEntry entry, WorldState world, int queryingTeam)
-    {
-        for (int i = 0; i < entry.OccupantCount; i++)
-        {
-            if (world.TryGetUnit(entry.Occupants[i], out UnitState occ) &&
-                world.GetPlayerTeam(occ.Owner) != queryingTeam)
-            {
-                return true;
-            }
-        }
-        return false;
     }
 
     private static int CountTeamOccupants(BuildingEntry entry, WorldState world, int team)
