@@ -1433,8 +1433,10 @@ public partial class Main : Node3D
             }
             _hoveredGarrisonStructure = hoverStruct;
             bool showEntranceHint = _unitViews.Selected.Count > 0 &&
-                (HasSelectedGarrisonableInfantry() || _contextActionPanel?.TargetingMode == ContextTargetingMode.EnterBuilding);
-            _buildingGarrisonView.Update(_session.Replica, _unitViews.Selected, _hoveredGarrisonStructure, showEntranceHint, _camera);
+                (HasSelectedGarrisonableInfantry() ||
+                 HasSelectedTransferableGarrisonInfantry(_hoveredGarrisonStructure) ||
+                 _contextActionPanel?.TargetingMode == ContextTargetingMode.EnterBuilding);
+            _buildingGarrisonView.Update(_session.Replica, _unitViews.Selected, _hoveredGarrisonStructure, showEntranceHint, _camera, (float)delta);
         }
         if (_pendingAttackGroundMaxSeq != 0 &&
             _session.LastCommandResult is { } agResult &&
@@ -1740,18 +1742,28 @@ public partial class Main : Node3D
                     _hoveredGarrisonStructure != default &&
                     _buildingGarrisonView.TryGetBuildingInfo(_hoveredGarrisonStructure, out System.Numerics.Vector2 entPos, out int cap, out _))
                 {
-                    _destination.ShowZoneCircle(_map, entPos.X, entPos.Y, 2.5f, true);
+                    bool canEnterOutside = HasSelectedGarrisonableInfantry();
+                    bool canTransferAdj = HasSelectedTransferableGarrisonInfantry(_hoveredGarrisonStructure);
+                    bool hasHostile = TryGetCurrentHostileContactInBuilding(_hoveredGarrisonStructure, out _);
                     int ownInside = CountOwnUnitsInBuilding(_hoveredGarrisonStructure);
                     bool full = ownInside >= cap;
+                    bool valid = !full && (canEnterOutside || canTransferAdj);
+                    _destination.ShowZoneCircle(_map, entPos.X, entPos.Y, 2.5f, valid);
                     string tip = full
                         ? $"Building full ({ownInside}/{cap}) [Esc to cancel]"
-                        : $"Garrison building ({ownInside}/{cap}) [LMB | Esc to cancel]";
-                    _orderCursorOverlay?.SetCustomTooltip(true, full ? DestinationValidity.Blocked : DestinationValidity.Valid, tip);
+                        : !valid
+                            ? "Select an adjacent building section to transfer inside [Esc to cancel]"
+                            : hasHostile
+                                ? $"Assault enemy-held building ({ownInside}/{cap}) [LMB | Esc]"
+                                : canTransferAdj && !canEnterOutside
+                                    ? $"Move to adjacent section ({ownInside}/{cap}) [LMB | Esc]"
+                                    : $"Garrison building ({ownInside}/{cap}) [LMB | Esc]";
+                    _orderCursorOverlay?.SetCustomTooltip(true, valid ? DestinationValidity.Valid : DestinationValidity.Blocked, tip);
                 }
                 else
                 {
                     _destination.HideZoneCircle();
-                    _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Blocked, "Click a building section to garrison [Esc to cancel]");
+                    _orderCursorOverlay?.SetCustomTooltip(true, DestinationValidity.Blocked, "Click a building section to garrison or assault [Esc to cancel]");
                 }
                 _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
             }
@@ -1779,16 +1791,19 @@ public partial class Main : Node3D
                     _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
                 }
                 else if (!hasEnemyContact &&
-                         HasSelectedGarrisonableInfantry() &&
                          _buildingGarrisonView is not null &&
                          _hoveredGarrisonStructure != default &&
+                         (HasSelectedGarrisonableInfantry() || HasSelectedTransferableGarrisonInfantry(_hoveredGarrisonStructure)) &&
                          _buildingGarrisonView.TryGetBuildingInfo(_hoveredGarrisonStructure, out _, out int garrCap, out _))
                 {
                     int ownInside = CountOwnUnitsInBuilding(_hoveredGarrisonStructure);
                     bool full = ownInside >= garrCap;
+                    bool transferOnly = !HasSelectedGarrisonableInfantry();
                     string tip = full
                         ? $"Building full ({ownInside}/{garrCap})"
-                        : $"Garrison building ({ownInside}/{garrCap}) [RMB]";
+                        : transferOnly
+                            ? $"Move to adjacent section ({ownInside}/{garrCap}) [RMB]"
+                            : $"Garrison building ({ownInside}/{garrCap}) [RMB]";
                     _orderCursorOverlay?.SetCustomTooltip(true, full ? DestinationValidity.Blocked : DestinationValidity.Valid, tip);
                     _orderCursorOverlay?.UpdatePosition(mousePos, viewportSize);
                 }
@@ -3450,9 +3465,9 @@ public partial class Main : Node3D
                     }
                 }
 
-                if (HasSelectedGarrisonableInfantry() &&
-                    _buildingGarrisonView is not null &&
-                    TryPickGarrisonableBuilding(mouse.Position, out StructureId rmbBuildingId))
+                if (_buildingGarrisonView is not null &&
+                    TryPickGarrisonableBuilding(mouse.Position, out StructureId rmbBuildingId) &&
+                    (HasSelectedGarrisonableInfantry() || HasSelectedTransferableGarrisonInfantry(rmbBuildingId)))
                 {
                     if (IssueEnterBuildingForSelection(rmbBuildingId))
                     {
@@ -4196,6 +4211,26 @@ public partial class Main : Node3D
         return false;
     }
 
+    private bool HasSelectedTransferableGarrisonInfantry(StructureId targetStructure)
+    {
+        if (_catalog is null || _unitViews is null || _buildingGarrisonView is null || targetStructure == default) return false;
+        foreach (EntityId id in _unitViews.Selected)
+        {
+            if (_session.Replica.TryGetOwnUnit(id, out OwnUnitObservation obs) &&
+                obs.ContainerId == default &&
+                obs.GarrisonStructureId != default &&
+                obs.GarrisonStructureId != targetStructure &&
+                obs.SlungById == default &&
+                obs.Definition < _catalog.Units.Length &&
+                string.Equals(_catalog.Units[obs.Definition].Classification, "infantry", StringComparison.OrdinalIgnoreCase) &&
+                _buildingGarrisonView.AreSectionsAdjacent(obs.GarrisonStructureId, targetStructure))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private bool TryPickGarrisonableBuilding(Vector2 screenPos, out StructureId structureId)
     {
         structureId = default;
@@ -4288,25 +4323,41 @@ public partial class Main : Node3D
     internal bool IssueEnterBuildingForSelection(StructureId structureId, GarrisonSlotKind slotKind = GarrisonSlotKind.Interior)
     {
         if (_catalog is null || _unitViews is null) return false;
-        int sent = 0;
+        int entered = 0;
+        int transferred = 0;
         foreach (EntityId unitId in _unitViews.Selected)
         {
-            if (_session.Replica.TryGetOwnUnit(unitId, out OwnUnitObservation obs) &&
-                obs.ContainerId == default &&
-                obs.GarrisonStructureId == default &&
-                obs.SlungById == default &&
-                obs.Definition < _catalog.Units.Length &&
-                string.Equals(_catalog.Units[obs.Definition].Classification, "infantry", StringComparison.OrdinalIgnoreCase))
+            if (!_session.Replica.TryGetOwnUnit(unitId, out OwnUnitObservation obs) ||
+                obs.ContainerId != default ||
+                obs.SlungById != default ||
+                obs.Definition >= _catalog.Units.Length ||
+                !string.Equals(_catalog.Units[obs.Definition].Classification, "infantry", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (obs.GarrisonStructureId == default)
             {
                 if (_session.EnterBuilding(unitId, structureId, slotKind))
-                    sent++;
+                    entered++;
+            }
+            else if (obs.GarrisonStructureId != structureId &&
+                     _buildingGarrisonView is not null &&
+                     _buildingGarrisonView.AreSectionsAdjacent(obs.GarrisonStructureId, structureId))
+            {
+                if (_session.EnterBuilding(unitId, structureId, slotKind))
+                    transferred++;
             }
         }
-        if (sent > 0)
+        int total = entered + transferred;
+        if (total > 0)
         {
-            string msg = sent == 1
-                ? "Ordering 1 infantry unit to garrison building"
-                : $"Ordering {sent} infantry units to garrison building";
+            bool hasHostile = TryGetCurrentHostileContactInBuilding(structureId, out _);
+            string msg = hasHostile
+                ? (total == 1 ? "Ordering 1 infantry unit to assault building (CQB)" : $"Ordering {total} infantry units to assault building (CQB)")
+                : (transferred > 0 && entered == 0
+                    ? (transferred == 1 ? "Moving 1 infantry unit to adjacent section" : $"Moving {transferred} infantry units to adjacent section")
+                    : (total == 1 ? "Ordering 1 infantry unit to garrison building" : $"Ordering {total} infantry units to garrison building"));
             _orderNotification?.ShowNotification(msg);
             _status.Text = msg;
             return true;

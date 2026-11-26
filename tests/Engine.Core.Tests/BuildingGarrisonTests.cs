@@ -296,13 +296,15 @@ public sealed class BuildingGarrisonTests
             EntityId overflow = world.CreateUnit(1, DefInfantry, entrance, 4f, 100, 200);
             Assert.False(sim.TryEnqueue(1, new EnterBuildingCommand(seq++, sim.Tick, overflow, panelka.Id, GarrisonSlotKind.Interior)));
 
-            // 3. Hostile infantry cannot enter an enemy-occupied section (no CQB in PR 2.1),
-            //    and enqueueing from afar does NOT leak occupancy as a FoW oracle (rejected on arrival/commit)
+            // 3. Hostile infantry CAN enter an enemy-occupied section to initiate CQB (per-team capacity = 12)
             EntityId hostileAtDoor = world.CreateUnit(2, DefInfantry, entrance, 4f, 100, 200);
+            world.SetFireStance(hostileAtDoor, FireStance.HoldFire);
+            for (int i = 0; i < 12; i++) world.SetFireStance(friendlies[i], FireStance.HoldFire);
             Assert.True(sim.TryEnqueue(2, new EnterBuildingCommand(1u, sim.Tick, hostileAtDoor, panelka.Id, GarrisonSlotKind.Interior)));
             sim.Step();
-            Assert.False(world.IsGarrisoned(hostileAtDoor));
-            Assert.Equal(12, garrison.GetOccupantCount(panelka.Id));
+            Assert.True(world.IsGarrisoned(hostileAtDoor));
+            Assert.Equal(13, garrison.GetOccupantCount(panelka.Id));
+            Assert.True(garrison.IsContested(world, panelka.Id));
 
             // 4. Switching Interior -> Roof works while all 5 floors stand
             Assert.True(sim.TryEnqueue(1, new EnterBuildingCommand(seq++, sim.Tick, friendlies[0], panelka.Id, GarrisonSlotKind.Roof)));
@@ -792,6 +794,178 @@ public sealed class BuildingGarrisonTests
             Assert.Equal(GarrisonSlotKind.Interior, world.GetGarrisonSlotKind(roofSoldier));
             sim.UpdateKnowledge(p1);
             Assert.Null(FindCurrentContact(p1.Contacts));
+        }
+    }
+
+    [Fact]
+    public void Garrison_CqbContestedSection_MutualSpotting_PrioritizesInteriorEnemy_AndResolvesDeterministically()
+    {
+        ulong RunCqb(out bool contestedInitially, out bool clearedEnemy, out long steadyAlloc)
+        {
+            (Simulation sim, WorldState world, GarrisonSystem garrison, _, OpaqueStructure panelka) =
+                CreateHarness(includeNav: false);
+            using (sim)
+            {
+                Assert.True(garrison.TryGetEntrancePosition(panelka.Id, out Vector2 entrance));
+
+                // 2 defending Player 2 riflemen already inside panelka (HoldFire initially to test instant CQB spotting)
+                EntityId def1 = world.CreateUnit(2, DefInfantry, entrance, 4f, 30, 200);
+                EntityId def2 = world.CreateUnit(2, DefInfantry, entrance, 4f, 30, 200);
+                world.SetFireStance(def1, FireStance.HoldFire);
+                world.SetFireStance(def2, FireStance.HoldFire);
+
+                // Outdoor Player 2 decoy unit 120m south to verify assaulting squad prioritizes CQB enemy inside!
+                EntityId outdoorDecoy = world.CreateUnit(2, DefInfantry, new Vector2(200f, 80f), 4f, 1000, 0);
+                world.SetFireStance(outdoorDecoy, FireStance.HoldFire);
+
+                // Distant Player 1 scout 180m away: must NOT spot concealed defenders before CQB begins
+                world.CreateUnit(1, DefScout, new Vector2(200f, 380f), 16f, 80, 0);
+
+                Assert.True(sim.TryEnqueue(2, new EnterBuildingCommand(1u, 0, def1, panelka.Id, GarrisonSlotKind.Interior)));
+                Assert.True(sim.TryEnqueue(2, new EnterBuildingCommand(2u, 0, def2, panelka.Id, GarrisonSlotKind.Interior)));
+                for (int t = 0; t < 4; t++) sim.Step();
+
+                PlayerKnowledge p1 = new(1);
+                sim.UpdateKnowledge(p1);
+                bool sawDefBeforeAssault = false;
+                foreach (ContactObservation c in p1.Contacts)
+                {
+                    if (c.State == ContactState.Current && c.GarrisonStructureId == panelka.Id)
+                        sawDefBeforeAssault = true;
+                }
+                Assert.False(sawDefBeforeAssault, "Distant scout must not see concealed defenders prior to CQB assault.");
+
+                // 4 Player 1 riflemen storm the entrance into the enemy-occupied section
+                uint seq = 1u;
+                EntityId[] attackers = new EntityId[4];
+                for (int i = 0; i < attackers.Length; i++)
+                {
+                    attackers[i] = world.CreateUnit(1, DefInfantry, entrance, 4f, 40, 200);
+                    Assert.True(sim.TryEnqueue(1, new EnterBuildingCommand(seq++, sim.Tick, attackers[i], panelka.Id, GarrisonSlotKind.Interior)));
+                }
+                sim.Step();
+
+                contestedInitially = garrison.IsContested(world, panelka.Id);
+                Assert.True(contestedInitially, "Section with both sides must be marked contested.");
+
+                // Instant mutual CQB detection inside the building even while defenders are on HoldFire
+                sim.Step();
+                sim.Step();
+                sim.UpdateKnowledge(p1);
+                int spottedDefenders = 0;
+                foreach (ContactObservation c in p1.Contacts)
+                {
+                    if (c.State == ContactState.Current && c.GarrisonStructureId == panelka.Id)
+                        spottedDefenders++;
+                }
+                Assert.Equal(2, spottedDefenders);
+
+                // Let defenders fight back too and run CQB to resolution while measuring steady-state allocations
+                world.SetFireStance(def1, FireStance.FireAtWill);
+                world.SetFireStance(def2, FireStance.FireAtWill);
+
+                // Warmup 5 ticks then measure 15 CQB ticks for 0 B steady-state allocations
+                for (int t = 0; t < 5; t++) sim.Step();
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                for (int t = 0; t < 15; t++) sim.Step();
+                steadyAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
+
+                for (int t = 0; t < 300 && garrison.IsContested(world, panelka.Id); t++)
+                {
+                    sim.Step();
+                }
+
+                clearedEnemy = !world.TryGetUnit(def1, out _) && !world.TryGetUnit(def2, out _);
+                return world.ComputeStateHash();
+            }
+        }
+
+        ulong hashA = RunCqb(out bool contestedA, out bool clearedA, out long allocA);
+        ulong hashB = RunCqb(out bool contestedB, out bool clearedB, out long _);
+        Assert.True(contestedA && contestedB);
+        Assert.True(clearedA && clearedB, "4 assaulting riflemen should clear 2 defenders in CQB.");
+        Assert.Equal(0L, allocA);
+        Assert.Equal(hashA, hashB);
+    }
+
+    [Fact]
+    public void Garrison_AdjacentSectionTransfer_MovesShelteredBetweenNeighbors_AndRejectsNonAdjacent()
+    {
+        // Panelka 101 is at X=192.8..207.2, Z=194.1..205.9; 102 touches its east wall; 103 is detached 40m away
+        OpaqueStructure s102 = new(new StructureId(102), 207.2f, 0f, 194.1f, 221.6f, 13.75f, 205.9f, isGrounded: true);
+        OpaqueStructure s103 = new(new StructureId(103), 260.0f, 0f, 194.1f, 274.4f, 13.75f, 205.9f, isGrounded: true);
+        (Simulation sim, WorldState world, GarrisonSystem garrison, BuildingDestructionSystem destruction, OpaqueStructure s101) =
+            CreateHarness(extraStructures: [s102, s103], includeNav: false);
+        using (sim)
+        {
+            StructureDestructionProfile destProfile = new(FloorsTotal: 5, FloorHeight: 2.75f, RubbleHeight: 1.65f, MaxHealth: 760, StructuralArmor: 18);
+            BuildingGarrisonProfile gProfile = BuildingGarrisonProfile.CreateDefault();
+            Assert.True(destruction.RegisterStructure(world, s102.Id, in destProfile));
+            Assert.True(destruction.RegisterStructure(world, s103.Id, in destProfile));
+            Assert.True(garrison.RegisterBuilding(s102.Id, MathF.PI, gProfile));
+            Assert.True(garrison.RegisterBuilding(s103.Id, MathF.PI, gProfile));
+
+            Assert.True(garrison.AreSectionsAdjacent(s101.Id, s102.Id));
+            Assert.True(garrison.AreSectionsAdjacent(s102.Id, s101.Id));
+            Assert.False(garrison.AreSectionsAdjacent(s101.Id, s103.Id));
+
+            Assert.True(garrison.TryGetEntrancePosition(s101.Id, out Vector2 ent101));
+            EntityId soldier = world.CreateUnit(1, DefInfantry, ent101, 4f, 100, 200);
+            Assert.True(sim.TryEnqueue(1, new EnterBuildingCommand(1u, 0, soldier, s101.Id, GarrisonSlotKind.Interior)));
+            sim.Step();
+            Assert.Equal(s101.Id, world.GetGarrisonStructureId(soldier));
+
+            // Non-adjacent building transfer must be rejected while garrisoned
+            Assert.False(sim.TryEnqueue(1, new EnterBuildingCommand(2u, sim.Tick, soldier, s103.Id, GarrisonSlotKind.Interior)));
+
+            // Adjacent transfer into 102 is accepted and keeps soldier sheltered inside 101 during transit, then lands in 102
+            Assert.True(sim.TryEnqueue(1, new EnterBuildingCommand(3u, sim.Tick, soldier, s102.Id, GarrisonSlotKind.Interior)));
+            for (int t = 0; t < GarrisonSystem.AdjacentTransferTicks - 2; t++)
+            {
+                sim.Step();
+                Assert.True(world.IsGarrisoned(soldier), "Soldier must remain sheltered (never exposed outside) during adjacent interior transfer.");
+                Assert.Equal(s101.Id, world.GetGarrisonStructureId(soldier));
+            }
+
+            for (int t = 0; t < 5; t++) sim.Step();
+            Assert.Equal(s102.Id, world.GetGarrisonStructureId(soldier));
+            Assert.Equal(0, garrison.GetOccupantCount(s101.Id));
+            Assert.Equal(1, garrison.GetOccupantCount(s102.Id));
+            Assert.Equal(1, garrison.TotalAdjacentTransfers);
+        }
+    }
+
+    [Fact]
+    public void Garrison_AdjacentSectionTransfer_IntoEnemyHeldNeighbor_TriggersCqb()
+    {
+        OpaqueStructure s102 = new(new StructureId(102), 207.2f, 0f, 194.1f, 221.6f, 13.75f, 205.9f, isGrounded: true);
+        (Simulation sim, WorldState world, GarrisonSystem garrison, BuildingDestructionSystem destruction, OpaqueStructure s101) =
+            CreateHarness(extraStructures: [s102], includeNav: false);
+        using (sim)
+        {
+            StructureDestructionProfile destProfile = new(FloorsTotal: 5, FloorHeight: 2.75f, RubbleHeight: 1.65f, MaxHealth: 760, StructuralArmor: 18);
+            BuildingGarrisonProfile gProfile = BuildingGarrisonProfile.CreateDefault();
+            Assert.True(destruction.RegisterStructure(world, s102.Id, in destProfile));
+            Assert.True(garrison.RegisterBuilding(s102.Id, MathF.PI, gProfile));
+
+            Assert.True(garrison.TryGetEntrancePosition(s101.Id, out Vector2 ent101));
+            Assert.True(garrison.TryGetEntrancePosition(s102.Id, out Vector2 ent102));
+
+            EntityId p1Attacker = world.CreateUnit(1, DefInfantry, ent101, 4f, 60, 200);
+            EntityId p2Defender = world.CreateUnit(2, DefInfantry, ent102, 4f, 20, 200);
+            Assert.True(sim.TryEnqueue(1, new EnterBuildingCommand(1u, 0, p1Attacker, s101.Id, GarrisonSlotKind.Interior)));
+            Assert.True(sim.TryEnqueue(2, new EnterBuildingCommand(1u, 0, p2Defender, s102.Id, GarrisonSlotKind.Interior)));
+            sim.Step();
+
+            // Transfer P1 attacker from 101 directly into enemy-occupied 102
+            Assert.True(sim.TryEnqueue(1, new EnterBuildingCommand(2u, sim.Tick, p1Attacker, s102.Id, GarrisonSlotKind.Interior)));
+            for (int t = 0; t < GarrisonSystem.AdjacentTransferTicks + 2; t++) sim.Step();
+
+            Assert.Equal(s102.Id, world.GetGarrisonStructureId(p1Attacker));
+            Assert.True(garrison.IsContested(world, s102.Id));
+
+            for (int t = 0; t < 200 && world.TryGetUnit(p2Defender, out _); t++) sim.Step();
+            Assert.False(world.TryGetUnit(p2Defender, out _), "Attacker breaching from adjacent section 101 should eliminate defender in 102.");
         }
     }
 }

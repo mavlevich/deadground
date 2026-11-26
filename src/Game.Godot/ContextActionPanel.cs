@@ -812,7 +812,7 @@ internal sealed partial class ContextActionPanel : PanelContainer
         _cachedGarrisonedRoofCount = garrisonedRoofCount;
         _cachedAllBoardable = allBoardable;
 
-        bool hasEnterBuildingUi = garrisonableInfantryCount > 0;
+        bool hasEnterBuildingUi = garrisonableInfantryCount > 0 || garrisonedCount > 0;
         bool hasGarrisonedUi = garrisonedCount > 0;
         _enterBuildingButton.Visible = hasEnterBuildingUi;
         if (hasEnterBuildingUi)
@@ -820,7 +820,7 @@ internal sealed partial class ContextActionPanel : PanelContainer
             _enterBuildingButton.Disabled = false;
             _enterBuildingButton.Text = TargetingMode == ContextTargetingMode.EnterBuilding
                 ? "CANCEL [Esc]"
-                : "GARRISON [N]";
+                : (garrisonableInfantryCount > 0 ? "GARRISON [N]" : "MOVE / ASSAULT [N]");
         }
         _exitBuildingButton.Visible = hasGarrisonedUi;
         _garrisonRoofButton.Visible = hasGarrisonedUi;
@@ -992,9 +992,11 @@ internal sealed partial class ContextActionPanel : PanelContainer
             _disembarkButton.Visible = false;
             _passengerLabel.Visible = false;
             _statusLabel.Visible = true;
-            _statusLabel.Text = garrisonedRoofCount >= garrisonedCount
-                ? $"Garrisoned on roof ({garrisonedCount}) - U: exit, Y: inside"
-                : $"Garrisoned inside ({garrisonedCount}) - U: exit, Y: roof";
+            _statusLabel.Text = TargetingMode == ContextTargetingMode.EnterBuilding
+                ? "Click adjacent section to transfer or assault (Esc to cancel)"
+                : (garrisonedRoofCount >= garrisonedCount
+                    ? $"Garrisoned on roof ({garrisonedCount}) - U: exit, Y: inside, N: adjacent"
+                    : $"Garrisoned inside ({garrisonedCount}) - U: exit, Y: roof, N: adjacent");
         }
         else if (allBoardable && count > 0)
         {
