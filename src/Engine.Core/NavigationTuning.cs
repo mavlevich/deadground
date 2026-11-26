@@ -53,7 +53,8 @@ public sealed record NavigationTuning(
     float MinLookaheadDistance = NavigationTuning.DefaultMinLookaheadDistance,
     float MaxLookaheadDistance = NavigationTuning.DefaultMaxLookaheadDistance,
     int MaxOrderExecutionTicks = NavigationTuning.DefaultMaxOrderExecutionTicks,
-    bool CollectStageTimings = false)
+    bool CollectStageTimings = false,
+    bool EnableVehicleStationaryBypass = true)
 {
     public const int DefaultMaxNodeExpansionsPerTick = 1000;
     public const int DefaultMaxPendingRequests = 512;

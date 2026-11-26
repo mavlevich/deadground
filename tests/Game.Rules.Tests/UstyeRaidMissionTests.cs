@@ -514,7 +514,8 @@ public sealed class UstyeRaidMissionTests
     [Fact]
     public void EndToEndPlaythrough_VictoryWithActiveBot()
     {
-        using LocalSession session = new(CreateSimulation());
+        Simulation sim = CreateSimulation();
+        using LocalSession session = new(sim);
 
         EntityId brdmId = new(1);
         EntityId tank1Id = new(2);
@@ -524,21 +525,23 @@ public sealed class UstyeRaidMissionTests
         Assert.True(session.Replica.OwnUnits.Length >= 3);
 
         // Recon vehicle holds fire in western cover to ensure preservation
-        session.SetFireStance(brdmId, FireStance.ReturnFire);
+        session.SetFireStance(brdmId, FireStance.HoldFire);
 
         // Tanks engage at will
         session.SetFireStance(tank1Id, FireStance.FireAtWill);
         session.SetFireStance(tank2Id, FireStance.FireAtWill);
 
-        // Phase 1: Sequential column move along northern approach corridor (Z = 1000)
-        Assert.True(session.Move(tank1Id, new Vector2(2150f, 1000f)));
-        Assert.True(session.Move(tank2Id, new Vector2(2080f, 1000f)));
-        Assert.True(session.Move(brdmId, new Vector2(2010f, 1000f)));
+        // Phase 1: Move tanks north via western defilade towards CROSS-N approach while BRDM retreats west then north into cover
+        Assert.True(session.Move(tank1Id, new Vector2(1950f, 1000f)));
+        Assert.True(session.Move(tank2Id, new Vector2(1880f, 1000f)));
+        Assert.True(session.Move(brdmId, new Vector2(1800f, 2325f)));
 
         bool sawDeck1 = false;
         bool sawDeck2 = false;
         bool crossedNorthLead = false;
         bool crossedNorthTrail = false;
+        bool brdmRelocatedNorth = false;
+        bool linedUpApproach = false;
         bool leadOrderedAcross = false;
         bool trailOrderedAcross = false;
         bool advanceSouthOrdered = false;
@@ -637,8 +640,27 @@ public sealed class UstyeRaidMissionTests
                 }
             }
 
+            // Phase 1a: Once BRDM reaches western defilade, relocate it north out of central-bridge patrol range
+            if (!brdmRelocatedNorth)
+            {
+                Vector2 pBrdm = session.Replica.SamplePosition(brdmId, session.Replica.LatestTick);
+                if (pBrdm.X <= 1850f)
+                {
+                    session.Move(brdmId, new Vector2(1800f, 1000f));
+                    brdmRelocatedNorth = true;
+                }
+            }
+
+            // Phase 1b: Turn east onto the CROSS-N approach road once north of the western defilade
+            if (!linedUpApproach && p1.Y <= 1050f && p2.Y <= 1050f)
+            {
+                session.Move(tank1Id, new Vector2(2150f, 1000f));
+                session.Move(tank2Id, new Vector2(2080f, 1000f));
+                linedUpApproach = true;
+            }
+
             // Phase 2: Order lead tank across CROSS-N once lined up on approach road at Z = 1000
-            if (!leadOrderedAcross && p1.X >= 2140f && MathF.Abs(p1.Y - 1000f) < 2f)
+            if (linedUpApproach && !leadOrderedAcross && p1.X >= 2140f && MathF.Abs(p1.Y - 1000f) < 2f)
             {
                 session.Move(tank1Id, new Vector2(2550f, 1000f));
                 leadOrderedAcross = true;

@@ -60,7 +60,28 @@ public sealed class VehicleSeparationSystem
     }
 
     /// <summary>
-    /// Computes the free distance ahead along the movement corridor before encountering another vehicle.
+    /// Resolves collision radius and height for a destroyed vehicle wreck.
+    /// Falls back to a conservative armored hull footprint when the catalog lacks an entry.
+    /// </summary>
+    private static void ResolveWreckDimensions(
+        IUnitMovementCatalog catalog,
+        ushort definition,
+        out float radius,
+        out float height)
+    {
+        if (catalog.TryGetProfile(definition, out UnitMovementProfile profile) && profile.EffectiveCollisionRadius > 0f)
+        {
+            radius = profile.EffectiveCollisionRadius;
+            height = profile.Height > 0f ? profile.Height : 2.5f;
+            return;
+        }
+
+        radius = 2.4f;
+        height = 2.4f;
+    }
+
+    /// <summary>
+    /// Computes the free distance ahead along the movement corridor before encountering another vehicle or wreck.
     /// Returns float.MaxValue if the corridor is completely clear.
     /// </summary>
     public float ComputeLookaheadClearance(
@@ -77,10 +98,54 @@ public sealed class VehicleSeparationSystem
         float deceleration,
         float dt,
         out int blockingUnitIndex,
-        out float blockingForwardSpeed)
+        out float blockingForwardSpeed) =>
+        ComputeLookaheadClearance(
+            world,
+            catalog,
+            selfUnitIndex,
+            selfPos,
+            selfSurface,
+            selfCollisionRadius,
+            selfHeight,
+            corridorDir,
+            waypoints,
+            currentSpeed,
+            deceleration,
+            dt,
+            out blockingUnitIndex,
+            out blockingForwardSpeed,
+            out _,
+            out _,
+            out _);
+
+    /// <summary>
+    /// Computes the free distance ahead along the movement corridor before encountering another vehicle or wreck,
+    /// returning the blocking obstacle position, radius, and whether it is a destroyed wreck.
+    /// </summary>
+    public float ComputeLookaheadClearance(
+        WorldState world,
+        IUnitMovementCatalog catalog,
+        int selfUnitIndex,
+        Vector2 selfPos,
+        uint selfSurface,
+        float selfCollisionRadius,
+        float selfHeight,
+        Vector2 corridorDir,
+        ReadOnlySpan<Vector2> waypoints,
+        float currentSpeed,
+        float deceleration,
+        float dt,
+        out int blockingUnitIndex,
+        out float blockingForwardSpeed,
+        out bool blockedByWreck,
+        out Vector2 blockingObstaclePos,
+        out float blockingObstacleRadius)
     {
         blockingUnitIndex = -1;
         blockingForwardSpeed = 0f;
+        blockedByWreck = false;
+        blockingObstaclePos = default;
+        blockingObstacleRadius = 0f;
 
         float decel = MathF.Max(0.5f, deceleration);
         float stoppingDistance = (currentSpeed * currentSpeed) / (2f * decel);
@@ -89,7 +154,7 @@ public sealed class VehicleSeparationSystem
         int candidateCount = _spatialGrid.QueryNeighbors(selfPos, searchRadius, ref _candidateBuffer);
         CandidatesChecked += candidateCount;
 
-        if (candidateCount == 0)
+        if (candidateCount == 0 && world.WreckCount == 0)
         {
             return float.MaxValue;
         }
@@ -176,6 +241,61 @@ public sealed class VehicleSeparationSystem
                     minFreeDistance = clearance;
                     blockingUnitIndex = otherIndex;
                     blockingForwardSpeed = otherSpeed;
+                    blockedByWreck = false;
+                    blockingObstaclePos = other.Position;
+                    blockingObstacleRadius = otherRadius;
+                }
+            }
+        }
+
+        if (world.WreckCount > 0)
+        {
+            ReadOnlySpan<WreckState> wrecks = world.Wrecks;
+            float wreckRejectDistSq = (searchRadius + 8.0f) * (searchRadius + 8.0f);
+            for (int w = 0; w < wrecks.Length; w++)
+            {
+                WreckState wreck = wrecks[w];
+                Vector2 toWreck = wreck.Position - selfPos;
+                if (toWreck.LengthSquared() > wreckRejectDistSq) continue;
+
+                ResolveWreckDimensions(catalog, wreck.Definition, out float wreckRadius, out float wreckHeight);
+
+                float wreckSurfaceY = _navGrid.Evaluator.GetSurfaceHeight(wreck.Position, wreck.SupportSurface);
+                float wreckTopY = wreckSurfaceY + wreckHeight;
+                if (MathF.Max(selfSurfaceY, wreckSurfaceY) >= MathF.Min(selfTopY, wreckTopY))
+                {
+                    continue;
+                }
+
+                ExactChecks++;
+
+                float longitudinalDist;
+                float lateralDist;
+                if (waypoints.Length > 0)
+                {
+                    ProjectOntoRoute(selfPos, waypoints, wreck.Position, out longitudinalDist, out lateralDist);
+                }
+                else
+                {
+                    longitudinalDist = Vector2.Dot(toWreck, corridorDir);
+                    Vector2 perp = toWreck - corridorDir * longitudinalDist;
+                    lateralDist = perp.Length();
+                }
+
+                float allowedLateral = selfCollisionRadius + wreckRadius + _lateralMargin;
+                if (lateralDist <= allowedLateral && longitudinalDist > 0.05f)
+                {
+                    float effBuffer = (selfCollisionRadius <= 0.5f || wreckRadius <= 0.5f) ? 0.2f : _separationBuffer;
+                    float clearance = MathF.Max(0f, longitudinalDist - (selfCollisionRadius + wreckRadius + effBuffer));
+                    if (clearance < minFreeDistance)
+                    {
+                        minFreeDistance = clearance;
+                        blockingUnitIndex = -1;
+                        blockingForwardSpeed = 0f;
+                        blockedByWreck = true;
+                        blockingObstaclePos = wreck.Position;
+                        blockingObstacleRadius = wreckRadius;
+                    }
                 }
             }
         }
@@ -286,7 +406,7 @@ public sealed class VehicleSeparationSystem
         int candidateCount = _spatialGrid.QueryNeighbors(selfStartPos, queryRadius, ref _candidateBuffer);
         CandidatesChecked += candidateCount;
 
-        if (candidateCount == 0)
+        if (candidateCount == 0 && world.WreckCount == 0)
         {
             return false;
         }
@@ -412,6 +532,61 @@ public sealed class VehicleSeparationSystem
                         earliestTau = MathF.Min(earliestTau, safeScale);
                         stepModified = true;
                     }
+                }
+            }
+        }
+
+        if (world.WreckCount > 0)
+        {
+            ReadOnlySpan<WreckState> wrecks = world.Wrecks;
+            for (int w = 0; w < wrecks.Length; w++)
+            {
+                WreckState wreck = wrecks[w];
+                ResolveWreckDimensions(catalog, wreck.Definition, out float wreckRadius, out float wreckHeight);
+
+                Vector2 p0 = selfStartPos - wreck.Position;
+                float rejectDist = queryRadius + wreckRadius;
+                if (p0.LengthSquared() > rejectDist * rejectDist) continue;
+
+                float wreckSurfaceY = _navGrid.Evaluator.GetSurfaceHeight(wreck.Position, wreck.SupportSurface);
+                float wreckTopY = wreckSurfaceY + wreckHeight;
+                if (MathF.Max(selfSurfaceY, wreckSurfaceY) >= MathF.Min(selfTopY, wreckTopY))
+                {
+                    continue;
+                }
+
+                ExactChecks++;
+
+                float rSep = selfCollisionRadius + wreckRadius;
+                float c = p0.LengthSquared() - (rSep * rSep);
+
+                if (c < 0f)
+                {
+                    if (Vector2.Dot(p0, selfStep) >= 0f)
+                    {
+                        continue;
+                    }
+                    selfStep = Vector2.Zero;
+                    selfSpeed = 0f;
+                    EmergencyStops++;
+                    return true;
+                }
+
+                float a = selfStep.LengthSquared();
+                if (a < 1e-8f) continue;
+
+                float b = 2f * Vector2.Dot(p0, selfStep);
+                if (b >= 0f) continue;
+
+                float disc = b * b - 4f * a * c;
+                if (disc <= 0f) continue;
+
+                float tauHit = (-b - MathF.Sqrt(disc)) / (2f * a);
+                if (tauHit >= 0f && tauHit <= 1.0f)
+                {
+                    float safeScale = FindSafeScaleAlpha(selfStartPos, selfStep, wreck.Position, Vector2.Zero, rSep + 0.005f);
+                    earliestTau = MathF.Min(earliestTau, safeScale);
+                    stepModified = true;
                 }
             }
         }
@@ -578,6 +753,41 @@ public sealed class VehicleSeparationSystem
                             {
                                 displacements[j] = newStepJ;
                                 speeds[j] = newStepJ.Length() / dt;
+                                anyModified = true;
+                            }
+                        }
+                    }
+                }
+
+                if (world.WreckCount > 0 && stepI.LengthSquared() >= 1e-8f)
+                {
+                    ReadOnlySpan<WreckState> wrecks = world.Wrecks;
+                    for (int w = 0; w < wrecks.Length; w++)
+                    {
+                        WreckState wreck = wrecks[w];
+                        ResolveWreckDimensions(catalog, wreck.Definition, out float wreckRadius, out float wreckHeight);
+
+                        float rejectDist = queryRadius + wreckRadius;
+                        if (Vector2.DistanceSquared(posI, wreck.Position) > rejectDist * rejectDist) continue;
+
+                        float wreckSurfaceY = _navGrid.Evaluator.GetSurfaceHeight(wreck.Position, wreck.SupportSurface);
+                        float wreckTopY = wreckSurfaceY + wreckHeight;
+                        if (MathF.Max(surfaceY_I, wreckSurfaceY) >= MathF.Min(topY_I, wreckTopY))
+                        {
+                            continue;
+                        }
+
+                        float rSepSafe = radiusI + wreckRadius + 0.005f;
+                        ExactChecks++;
+                        if (!IsPairSafe(posI, stepI, wreck.Position, Vector2.Zero, rSepSafe, out _))
+                        {
+                            float alpha = FindSafeScaleAlpha(posI, stepI, wreck.Position, Vector2.Zero, rSepSafe);
+                            Vector2 newStepI = stepI * alpha;
+                            if ((stepI - newStepI).LengthSquared() > 1e-8f)
+                            {
+                                stepI = newStepI;
+                                displacements[i] = stepI;
+                                speeds[i] = stepI.Length() / dt;
                                 anyModified = true;
                             }
                         }
@@ -784,7 +994,7 @@ public sealed class VehicleSeparationSystem
     }
 
     /// <summary>
-    /// Zero-allocation check whether a candidate detour point is clear of other ground units
+    /// Zero-allocation check whether a candidate detour point is clear of other ground units and wrecks
     /// on the same vertical band (excluding self and own boarding target).
     /// </summary>
     public bool IsPointClearOfUnits(
@@ -799,7 +1009,7 @@ public sealed class VehicleSeparationSystem
     {
         float queryRadius = selfCollisionRadius + 8.0f;
         int candidateCount = _spatialGrid.QueryNeighbors(point, queryRadius, ref _candidateBuffer);
-        if (candidateCount == 0)
+        if (candidateCount == 0 && world.WreckCount == 0)
             return true;
 
         float selfSurfaceY = _navGrid.Evaluator.GetSurfaceHeight(point, surface);
@@ -837,12 +1047,33 @@ public sealed class VehicleSeparationSystem
             }
         }
 
+        if (world.WreckCount > 0)
+        {
+            ReadOnlySpan<WreckState> wrecks = world.Wrecks;
+            for (int w = 0; w < wrecks.Length; w++)
+            {
+                WreckState wreck = wrecks[w];
+                ResolveWreckDimensions(catalog, wreck.Definition, out float wreckRadius, out float wreckHeight);
+
+                float wreckSurfaceY = _navGrid.Evaluator.GetSurfaceHeight(wreck.Position, wreck.SupportSurface);
+                float wreckTopY = wreckSurfaceY + wreckHeight;
+                if (MathF.Max(selfSurfaceY, wreckSurfaceY) >= MathF.Min(selfTopY, wreckTopY))
+                    continue;
+
+                float minDist = selfCollisionRadius + wreckRadius + extraMargin;
+                if (Vector2.DistanceSquared(point, wreck.Position) < minDist * minDist)
+                {
+                    return false;
+                }
+            }
+        }
+
         return true;
     }
 
     /// <summary>
     /// Zero-allocation check whether the straight segment [segA, segB] maintains lateral clearance
-    /// from all other ground units on the same vertical band.
+    /// from all stationary ground units and wrecks on the same vertical band.
     /// </summary>
     public bool IsSegmentClearOfUnits(
         WorldState world,
@@ -859,7 +1090,7 @@ public sealed class VehicleSeparationSystem
         float halfLen = Vector2.Distance(segA, segB) * 0.5f;
         float queryRadius = halfLen + selfCollisionRadius + 8.0f;
         int candidateCount = _spatialGrid.QueryNeighbors(mid, queryRadius, ref _candidateBuffer);
-        if (candidateCount == 0)
+        if (candidateCount == 0 && world.WreckCount == 0)
             return true;
 
         float selfSurfaceY = _navGrid.Evaluator.GetSurfaceHeight(mid, surface);
@@ -906,11 +1137,39 @@ public sealed class VehicleSeparationSystem
             }
         }
 
+        if (world.WreckCount > 0)
+        {
+            ReadOnlySpan<WreckState> wrecks = world.Wrecks;
+            for (int w = 0; w < wrecks.Length; w++)
+            {
+                WreckState wreck = wrecks[w];
+                ResolveWreckDimensions(catalog, wreck.Definition, out float wreckRadius, out float wreckHeight);
+
+                float wreckSurfaceY = _navGrid.Evaluator.GetSurfaceHeight(wreck.Position, wreck.SupportSurface);
+                float wreckTopY = wreckSurfaceY + wreckHeight;
+                if (MathF.Max(selfSurfaceY, wreckSurfaceY) >= MathF.Min(selfTopY, wreckTopY))
+                    continue;
+
+                float minDist = selfCollisionRadius + wreckRadius + extraMargin;
+                float endDist = Vector2.Distance(wreck.Position, segB);
+                if (endDist < minDist)
+                {
+                    return false;
+                }
+                float startDist = Vector2.Distance(wreck.Position, segA);
+                float allowedMidDist = startDist < minDist ? MathF.Max(selfCollisionRadius + wreckRadius + 0.05f, startDist - 0.05f) : minDist;
+                if (DistancePointToSegment(wreck.Position, segA, segB) < allowedMidDist)
+                {
+                    return false;
+                }
+            }
+        }
+
         return true;
     }
 
     /// <summary>
-    /// Finds the nearest stationary (or nearly stopped) unit directly obstructing a movement ray.
+    /// Finds the nearest stationary unit or destroyed wreck directly obstructing a movement ray.
     /// Zero allocations.
     /// </summary>
     public bool TryFindBlockingStationaryUnit(
@@ -925,15 +1184,49 @@ public sealed class VehicleSeparationSystem
         float maxLookahead,
         out int blockerIndex,
         out Vector2 blockerPos,
-        out float blockerRadius)
+        out float blockerRadius) =>
+        TryFindBlockingStationaryUnit(
+            world,
+            catalog,
+            selfUnitIndex,
+            selfPos,
+            forwardDir,
+            surface,
+            selfCollisionRadius,
+            selfHeight,
+            maxLookahead,
+            out blockerIndex,
+            out blockerPos,
+            out blockerRadius,
+            out _);
+
+    /// <summary>
+    /// Finds the nearest stationary unit or destroyed wreck directly obstructing a movement ray,
+    /// indicating whether the blocker is a wreck. Zero allocations.
+    /// </summary>
+    public bool TryFindBlockingStationaryUnit(
+        WorldState world,
+        IUnitMovementCatalog catalog,
+        int selfUnitIndex,
+        Vector2 selfPos,
+        Vector2 forwardDir,
+        uint surface,
+        float selfCollisionRadius,
+        float selfHeight,
+        float maxLookahead,
+        out int blockerIndex,
+        out Vector2 blockerPos,
+        out float blockerRadius,
+        out bool blockerIsWreck)
     {
         blockerIndex = -1;
         blockerPos = default;
         blockerRadius = 0f;
+        blockerIsWreck = false;
 
         float queryRadius = selfCollisionRadius + maxLookahead + 6.0f;
         int candidateCount = _spatialGrid.QueryNeighbors(selfPos, queryRadius, ref _candidateBuffer);
-        if (candidateCount == 0)
+        if (candidateCount == 0 && world.WreckCount == 0)
             return false;
 
         float selfSurfaceY = _navGrid.Evaluator.GetSurfaceHeight(selfPos, surface);
@@ -974,7 +1267,7 @@ public sealed class VehicleSeparationSystem
                 continue;
 
             float latDist = MathF.Abs(Vector2.Dot(delta, right));
-            if (latDist > selfCollisionRadius + otherRadius + 0.45f)
+            if (latDist > selfCollisionRadius + otherRadius + _lateralMargin)
                 continue;
 
             if (fwdDist < bestForward)
@@ -983,9 +1276,43 @@ public sealed class VehicleSeparationSystem
                 blockerIndex = otherIndex;
                 blockerPos = otherPos;
                 blockerRadius = otherRadius;
+                blockerIsWreck = false;
             }
         }
 
-        return blockerIndex >= 0;
+        if (world.WreckCount > 0)
+        {
+            ReadOnlySpan<WreckState> wrecks = world.Wrecks;
+            for (int w = 0; w < wrecks.Length; w++)
+            {
+                WreckState wreck = wrecks[w];
+                ResolveWreckDimensions(catalog, wreck.Definition, out float wreckRadius, out float wreckHeight);
+
+                float wreckSurfaceY = _navGrid.Evaluator.GetSurfaceHeight(wreck.Position, wreck.SupportSurface);
+                float wreckTopY = wreckSurfaceY + wreckHeight;
+                if (MathF.Max(selfSurfaceY, wreckSurfaceY) >= MathF.Min(selfTopY, wreckTopY))
+                    continue;
+
+                Vector2 delta = wreck.Position - selfPos;
+                float fwdDist = Vector2.Dot(delta, forwardDir);
+                if (fwdDist < -wreckRadius * 0.25f || fwdDist > maxLookahead + wreckRadius + selfCollisionRadius)
+                    continue;
+
+                float latDist = MathF.Abs(Vector2.Dot(delta, right));
+                if (latDist > selfCollisionRadius + wreckRadius + _lateralMargin)
+                    continue;
+
+                if (fwdDist < bestForward)
+                {
+                    bestForward = fwdDist;
+                    blockerIndex = -1;
+                    blockerPos = wreck.Position;
+                    blockerRadius = wreckRadius;
+                    blockerIsWreck = true;
+                }
+            }
+        }
+
+        return blockerIndex >= 0 || blockerIsWreck;
     }
 }

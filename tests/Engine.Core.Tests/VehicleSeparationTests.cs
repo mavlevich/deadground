@@ -53,6 +53,7 @@ public sealed class VehicleSeparationTests
         geo ??= new StaticGeometry(map, ReadOnlySpan<OpaqueStructure>.Empty);
         NavigationGrid grid = new(geo, cellSize: 0.5f);
 
+        tuning ??= new NavigationTuning(EnableVehicleStationaryBypass: false);
         NavigationSystem nav = new(grid, catalog, tuning);
         WorldState world = new(map);
         RuleSet rules = new(nav);
