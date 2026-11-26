@@ -123,8 +123,9 @@ internal sealed class UnitView
     private Vector3 _fastRopeLandingTarget;
     private float _fastRopeElapsed;
     private float _fastRopeYaw;
-    private const float FastRopeSlideDuration = 0.82f;
-    private const float FastRopeStepOffDuration = 0.28f;
+    private float _fastRopeStepOffDuration = 0.45f;
+    private const float FastRopeSlideDuration = 1.35f;
+    private const float FastRopeLandingCrouchDuration = 0.20f;
     internal bool WasContainedInTransport { get; set; }
     internal bool IsFastRoping => _isFastRoping;
     internal bool IsGarrisonedVisual => _isGarrisonedVisual;
@@ -1233,7 +1234,7 @@ internal sealed class UnitView
                 if (activeRopes)
                 {
                     // Keep ropes visible long enough for the final disembarking trooper to finish sliding down
-                    _fastRopeLingerTimer = FastRopeSlideDuration + 0.15f;
+                    _fastRopeLingerTimer = FastRopeSlideDuration + 0.25f;
                 }
                 else if (_hasSlingLoad || _altitude <= 1.0f || MathF.Abs(clampedAlt - prevAlt) > 2.0f)
                 {
@@ -1512,7 +1513,13 @@ internal sealed class UnitView
 
         if (_isGarrisonedVisual)
         {
-            _dustSpeed = (_garrisonIsRunning || (_isFastRoping && _fastRopeElapsed >= FastRopeSlideDuration)) ? 4.5f : 0f;
+            bool runningStepOff = _isFastRoping && _fastRopeElapsed >= FastRopeSlideDuration + FastRopeLandingCrouchDuration;
+            _dustSpeed = (_garrisonIsRunning || runningStepOff) ? 4.5f : 0f;
+            if (_isFastRoping && !runningStepOff)
+            {
+                // Keep arms raised forward on the rope during slide & landing absorb
+                _hasAim = true;
+            }
         }
 
         AnimationPlayer? animPlayer = ActiveRig.AnimPlayer;
@@ -1701,20 +1708,26 @@ internal sealed class UnitView
     internal void StartFastRopeDescent(Vector3 ropeTop, Vector3 ropeBottom, Vector3 landingTarget, float yawRad)
     {
         _isFastRoping = true;
-        _fastRopeTop = ropeTop;
-        _fastRopeBottom = ropeBottom;
+        // Offset trooper slightly behind the cable axis so raised hands grip the rope naturally
+        Vector3 backFromRope = new Vector3(MathF.Sin(yawRad), 0f, MathF.Cos(yawRad)) * 0.22f;
+        _fastRopeTop = ropeTop + backFromRope;
+        _fastRopeBottom = ropeBottom + backFromRope;
         _fastRopeLandingTarget = landingTarget;
+        float stepDist = new Vector2(landingTarget.X - _fastRopeBottom.X, landingTarget.Z - _fastRopeBottom.Z).Length();
+        _fastRopeStepOffDuration = Math.Clamp(stepDist / 4.8f, 0.25f, 0.90f);
         _fastRopeElapsed = 0f;
         _fastRopeYaw = yawRad;
         _altitude = 0f;
-        _pitchRad = -0.18f; // Slight lean back onto the rope during descent
+        _pitchRad = 0.06f;
         _rollRad = 0f;
         _rockAngle = 0f;
         _rockVelocity = 0f;
         _heading = yawRad;
         _hasHeading = true;
-        Root.Position = ropeTop;
+        _hasAim = true;
+        Root.Position = _fastRopeTop;
         Model.Position = _modelBindPosition;
+        Model.Scale = _modelScale;
         ApplyHullPose();
         if (!Root.Visible)
         {
@@ -1725,7 +1738,9 @@ internal sealed class UnitView
     private void UpdateFastRopeDescent(float dt)
     {
         _fastRopeElapsed += dt;
-        float totalDuration = FastRopeSlideDuration + FastRopeStepOffDuration;
+        float slideEnd = FastRopeSlideDuration;
+        float crouchEnd = slideEnd + FastRopeLandingCrouchDuration;
+        float totalDuration = crouchEnd + _fastRopeStepOffDuration;
         if (_fastRopeElapsed >= totalDuration)
         {
             _isFastRoping = false;
@@ -1733,30 +1748,46 @@ internal sealed class UnitView
             _rollRad = 0f;
             Root.Position = _fastRopeLandingTarget;
             _previousPosition = _fastRopeLandingTarget;
+            Model.Scale = _modelScale;
             ApplyHullPose();
             return;
         }
 
-        if (_fastRopeElapsed < FastRopeSlideDuration)
+        if (_fastRopeElapsed < slideEnd)
         {
             float t = _fastRopeElapsed / FastRopeSlideDuration;
-            // Fast initial drop down the rope with controlled braking right before touchdown
-            float ease = t < 0.75f
-                ? (t / 0.75f) * (t / 0.75f) * 0.82f
-                : 0.82f + (1f - MathF.Pow(1f - (t - 0.75f) / 0.25f, 2f)) * 0.18f;
-            Vector3 ropePos = _fastRopeTop.Lerp(_fastRopeBottom, Math.Clamp(ease, 0f, 1f));
-            Root.Position = ropePos;
-            _pitchRad = -0.20f * (1f - t * 0.6f);
+            // Controlled military fast-rope descent: brief exit acceleration, steady slide, braking before touchdown
+            float ease = t < 0.20f
+                ? (t / 0.20f) * (t / 0.20f) * 0.14f
+                : (t < 0.80f
+                    ? 0.14f + ((t - 0.20f) / 0.60f) * 0.74f
+                    : 0.88f + (1f - MathF.Pow(1f - (t - 0.80f) / 0.20f, 2f)) * 0.12f);
+            Root.Position = _fastRopeTop.Lerp(_fastRopeBottom, Math.Clamp(ease, 0f, 1f));
+            _pitchRad = 0.06f;
             _heading = _fastRopeYaw;
+            _hasAim = true;
+            Model.Scale = _modelScale;
             ApplyHullPose();
+            _dustSpeed = 0f;
+        }
+        else if (_fastRopeElapsed < crouchEnd)
+        {
+            // Brief knee-bend landing absorb at the base of the rope
+            float ct = (_fastRopeElapsed - slideEnd) / FastRopeLandingCrouchDuration;
+            float crouchDip = MathF.Sin(ct * MathF.PI);
+            Root.Position = _fastRopeBottom;
+            _pitchRad = 0.08f * crouchDip;
+            _heading = _fastRopeYaw;
+            _hasAim = true;
+            ApplyHullPose();
+            Model.Scale = new Vector3(_modelScale.X, _modelScale.Y * (1f - 0.16f * crouchDip), _modelScale.Z);
             _dustSpeed = 0f;
         }
         else
         {
-            float t = (_fastRopeElapsed - FastRopeSlideDuration) / FastRopeStepOffDuration;
-            float smooth = t * t * (3f - 2f * t);
-            Vector3 pos = _fastRopeBottom.Lerp(_fastRopeLandingTarget, Math.Clamp(smooth, 0f, 1f));
-            Root.Position = pos;
+            float st = (_fastRopeElapsed - crouchEnd) / MathF.Max(0.05f, _fastRopeStepOffDuration);
+            float smooth = st * st * (3f - 2f * st);
+            Root.Position = _fastRopeBottom.Lerp(_fastRopeLandingTarget, Math.Clamp(smooth, 0f, 1f));
             Vector3 runDir = _fastRopeLandingTarget - _fastRopeBottom;
             if (runDir.X * runDir.X + runDir.Z * runDir.Z > 0.01f)
             {
@@ -1764,7 +1795,8 @@ internal sealed class UnitView
             }
             _pitchRad = 0f;
             ApplyHullPose();
-            _dustSpeed = 4.5f;
+            Model.Scale = _modelScale;
+            _dustSpeed = 4.8f;
         }
     }
 

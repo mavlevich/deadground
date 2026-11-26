@@ -622,6 +622,7 @@ internal sealed class BuildingGarrisonView : IDisposable
                 ApplyOwnInteriorPoses(
                     e,
                     selectedUnits,
+                    isContested,
                     ownXRayMode,
                     dt,
                     unitViews,
@@ -736,6 +737,7 @@ internal sealed class BuildingGarrisonView : IDisposable
     private void ApplyOwnInteriorPoses(
         BuildingVisualEntry e,
         HashSet<EntityId>? selectedUnits,
+        bool isContested,
         GarrisonXRayMode xrayMode,
         float dt,
         UnitViewSet? unitViews,
@@ -773,23 +775,30 @@ internal sealed class BuildingGarrisonView : IDisposable
         if (portCount == 0) return;
 
         float topFloorBaseY = e.Bounds.MinY + (e.ObservedFloorsStanding - 1) * e.DestructionProfile.FloorHeight;
+        float lowerFloorBaseY = e.ObservedFloorsStanding >= 2
+            ? e.Bounds.MinY + (e.ObservedFloorsStanding - 2) * e.DestructionProfile.FloorHeight
+            : topFloorBaseY;
         int stride = count <= 4 && portCount >= 12 ? 3 : 1;
         int maskLimit = Math.Min(portCount, _portUsedMask.Length);
+        // During active CQB, shift assault troopers across upper-floor rooms every ~1.8s so
+        // real indoor room-clearing movement and Run animations play continuously.
+        int cqbShift = isContested ? (int)(_cqbPulseTime / 1.8f) : 0;
 
         for (int k = 0; k < count; k++)
         {
             EntityId unitId = e.OwnInteriorIds[k];
             int chosenIdx = SelectWindowPort(
                 e,
-                k,
+                k + cqbShift,
                 stride,
                 maskLimit,
-                hasAim: e.OwnInteriorHasAim[k],
+                hasAim: !isContested && e.OwnInteriorHasAim[k],
                 aimYaw: e.OwnInteriorAimYaws[k],
-                useThreatWatchFallback: true);
+                useThreatWatchFallback: !isContested);
 
             WorldFiringPort wp = e.FiringPorts[chosenIdx];
-            Vector3 targetPos = new(wp.WorldX, topFloorBaseY + 0.08f, wp.WorldZ);
+            float floorY = (isContested && ((k + cqbShift) & 1) == 1) ? lowerFloorBaseY : topFloorBaseY;
+            Vector3 targetPos = new(wp.WorldX, floorY + 0.08f, wp.WorldZ);
             float targetYaw = e.OwnInteriorHasAim[k] ? e.OwnInteriorAimYaws[k] : wp.YawRad;
 
             ResolveSmoothedOwnPose(unitId, targetPos, targetYaw, dt, out Vector3 posePos, out float poseYaw, out bool isRunning);
@@ -800,7 +809,7 @@ internal sealed class BuildingGarrisonView : IDisposable
                     posePos,
                     poseYaw,
                     isRunning,
-                    isAiming: e.OwnInteriorHasAim[k] || e.HasThreatWatchDir,
+                    isAiming: e.OwnInteriorHasAim[k] || e.HasThreatWatchDir || isContested,
                     isRoof: false,
                     unitSelected,
                     xrayMode);

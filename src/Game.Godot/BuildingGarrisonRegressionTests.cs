@@ -183,10 +183,10 @@ internal static class BuildingGarrisonRegressionTests
             roofSoldierView.StartFastRopeDescent(ropeTop, ropeBottom, roofSpot, 0f);
             Require(roofSoldierView.IsFastRoping && roofSoldierView.Root.Position.Y > 25.0f,
                 "Fast-rope descent must begin near the helicopter ramp top.");
-            roofSoldierView.UpdateEffects(0.45);
+            roofSoldierView.UpdateEffects(0.65);
             Require(roofSoldierView.IsFastRoping && roofSoldierView.Root.Position.Y < 26.0f && roofSoldierView.Root.Position.Y > 15.8f,
                 $"Soldier must smoothly slide downward along rope, got Y={roofSoldierView.Root.Position.Y}.");
-            roofSoldierView.UpdateEffects(0.80);
+            roofSoldierView.UpdateEffects(1.80);
             Require(!roofSoldierView.IsFastRoping && roofSoldierView.Root.Position.DistanceTo(roofSpot) < 0.05f,
                 "Soldier must complete fast-rope slide and step off to roof position.");
 

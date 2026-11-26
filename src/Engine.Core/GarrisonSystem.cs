@@ -15,7 +15,7 @@ public sealed class GarrisonSystem : ISimulationSystem
     public const float AdjacencyMaxGapMeters = 2.5f;
     public const float AdjacencyMinOverlapMeters = 2.0f;
     public const int AdjacentTransferTicks = 4;
-    public const int FastRopeRoofHoldTicks = 50;
+    public const int FastRopeRoofHoldTicks = 28;
     public const float CqbSameBandDamageMultiplier = 0.45f;
     public const float CqbCrossBandDamageMultiplier = 0.35f;
     private const float FootClearanceRadius = 0.45f;
@@ -336,16 +336,7 @@ public sealed class GarrisonSystem : ISimulationSystem
         }
 
         GarrisonSlotKind attackerSlot = world.GetGarrisonSlotKind(attackerId);
-        if (attackerSlot == GarrisonSlotKind.Roof && floorsStanding >= destProfile.FloorsTotal && entry.WorldRoofPorts.Length > 0)
-        {
-            PrecomputedRoofPort[] rps = entry.WorldRoofPorts;
-            int idxA = (int)(((uint)attackerId.Value + (uint)(tick / 6)) % (uint)rps.Length);
-            int idxB = (int)(((uint)targetId.Value + 1u + (uint)(tick / 6)) % (uint)rps.Length);
-            if (idxB == idxA && rps.Length > 1) idxB = (idxA + 1) % rps.Length;
-            muzzlePos = new Vector3(rps[idxA].WorldX, rps[idxA].WorldY, rps[idxA].WorldZ);
-            hitPoint = new Vector3(rps[idxB].WorldX, rps[idxB].WorldY, rps[idxB].WorldZ);
-            return true;
-        }
+        GarrisonSlotKind targetSlot = world.GetGarrisonSlotKind(targetId);
 
         if (floorsStanding == 0)
         {
@@ -357,22 +348,64 @@ public sealed class GarrisonSystem : ISimulationSystem
             return true;
         }
 
-        float floorBaseY = entry.Bounds.MinY + (floorsStanding - 1) * destProfile.FloorHeight;
+        PrecomputedRoofPort[] rps = entry.WorldRoofPorts;
         PrecomputedFiringPort[] ports = entry.WorldFiringPorts;
-        if (ports.Length >= 2)
+        bool roofIntact = floorsStanding >= destProfile.FloorsTotal && rps.Length > 0;
+        float topFloorBaseY = entry.Bounds.MinY + (floorsStanding - 1) * destProfile.FloorHeight;
+        float secondFloorBaseY = floorsStanding >= 2
+            ? entry.Bounds.MinY + (floorsStanding - 2) * destProfile.FloorHeight
+            : topFloorBaseY;
+
+        // Cross-band CQB (roof troopers breaching downward into top-floor defenders or vice versa)
+        if (roofIntact && attackerSlot != targetSlot && ports.Length > 0)
         {
-            int idxA = (int)(((uint)attackerId.Value * 5u + (uint)(tick / 6)) % (uint)ports.Length);
-            int idxB = (int)(((uint)targetId.Value * 7u + 3u + (uint)(tick / 6)) % (uint)ports.Length);
-            if (idxB == idxA) idxB = (idxA + 1) % ports.Length;
-            PrecomputedFiringPort pA = ports[idxA];
-            PrecomputedFiringPort pB = ports[idxB];
-            muzzlePos = new Vector3(pA.WorldX, floorBaseY + pA.LocalY, pA.WorldZ);
-            hitPoint = new Vector3(pB.WorldX, floorBaseY + pB.LocalY, pB.WorldZ);
+            int rIdx = (int)(((uint)(attackerSlot == GarrisonSlotKind.Roof ? attackerId.Value : targetId.Value) + (uint)(tick / 6)) % (uint)rps.Length);
+            int pIdx = (int)(((uint)(attackerSlot == GarrisonSlotKind.Interior ? attackerId.Value : targetId.Value) * 5u + (uint)(tick / 6)) % (uint)ports.Length);
+            PrecomputedRoofPort rp = rps[rIdx];
+            PrecomputedFiringPort fp = ports[pIdx];
+            Vector3 roofPt = new(rp.WorldX, rp.WorldY + 1.25f, rp.WorldZ);
+            Vector3 floorPt = new(fp.WorldX, topFloorBaseY + fp.LocalY, fp.WorldZ);
+            if (attackerSlot == GarrisonSlotKind.Roof)
+            {
+                muzzlePos = roofPt;
+                hitPoint = floorPt;
+            }
+            else
+            {
+                muzzlePos = floorPt;
+                hitPoint = roofPt;
+            }
             return true;
         }
 
-        muzzlePos = new Vector3(entry.CenterXZ.X - 1.5f, floorBaseY + 1.4f, entry.CenterXZ.Y);
-        hitPoint = new Vector3(entry.CenterXZ.X + 1.5f, floorBaseY + 1.4f, entry.CenterXZ.Y);
+        // Same-band rooftop CQB
+        if (roofIntact && attackerSlot == GarrisonSlotKind.Roof)
+        {
+            int idxA = (int)(((uint)attackerId.Value + (uint)(tick / 6)) % (uint)rps.Length);
+            int idxB = (int)(((uint)targetId.Value + 1u + (uint)(tick / 6)) % (uint)rps.Length);
+            if (idxB == idxA && rps.Length > 1) idxB = (idxA + 1) % rps.Length;
+            muzzlePos = new Vector3(rps[idxA].WorldX, rps[idxA].WorldY + 1.25f, rps[idxA].WorldZ);
+            hitPoint = new Vector3(rps[idxB].WorldX, rps[idxB].WorldY + 1.15f, rps[idxB].WorldZ);
+            return true;
+        }
+
+        // Same-band interior room-to-room CQB across upper floors & opposite window bays
+        if (ports.Length >= 2)
+        {
+            int idxA = (int)(((uint)attackerId.Value * 5u + (uint)(tick / 6)) % (uint)ports.Length);
+            int idxB = (int)(((uint)targetId.Value * 7u + (uint)(ports.Length / 2) + (uint)(tick / 6)) % (uint)ports.Length);
+            if (idxB == idxA) idxB = (idxA + 1) % ports.Length;
+            PrecomputedFiringPort pA = ports[idxA];
+            PrecomputedFiringPort pB = ports[idxB];
+            float yA = ((attackerId.Value & 1u) == 0u ? topFloorBaseY : secondFloorBaseY) + pA.LocalY;
+            float yB = ((targetId.Value & 1u) == 0u ? topFloorBaseY : secondFloorBaseY) + pB.LocalY;
+            muzzlePos = new Vector3(pA.WorldX, yA, pA.WorldZ);
+            hitPoint = new Vector3(pB.WorldX, yB, pB.WorldZ);
+            return true;
+        }
+
+        muzzlePos = new Vector3(entry.CenterXZ.X - 1.5f, topFloorBaseY + 1.4f, entry.CenterXZ.Y);
+        hitPoint = new Vector3(entry.CenterXZ.X + 1.5f, topFloorBaseY + 1.4f, entry.CenterXZ.Y);
         return true;
     }
 

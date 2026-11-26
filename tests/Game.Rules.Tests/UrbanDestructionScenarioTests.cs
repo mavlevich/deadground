@@ -19,7 +19,12 @@ public sealed class UrbanDestructionScenarioTests
         sim.UpdateKnowledge(p1);
 
         Assert.Equal(13, p1.OwnUnits.Length);
-        Assert.Equal(0, p1.ContactCount);
+        // US M60A1 tanks behind the central panelka must be concealed (0 tank contacts);
+        // garrisoned ambush infantry in adjacent courtyard buildings (< 75m) are spotted normally.
+        for (int c = 0; c < p1.Contacts.Length; c++)
+        {
+            Assert.NotEqual(ContactClassification.Tank, p1.Contacts[c].Classification);
+        }
         Assert.Equal(0, p1.StructureCount);
 
         // Order both Soviet T-62 tanks to demolish central panelka sections 102 and 103
@@ -50,11 +55,16 @@ public sealed class UrbanDestructionScenarioTests
         {
             sim.Step();
             sim.UpdateKnowledge(p1);
-            if (p1.ContactCount > 0)
+            for (int c = 0; c < p1.Contacts.Length; c++)
             {
-                spottedUsTankThroughRuins = true;
-                break;
+                if (p1.Contacts[c].Classification == ContactClassification.Tank && p1.Contacts[c].State == ContactState.Current)
+                {
+                    spottedUsTankThroughRuins = true;
+                    break;
+                }
             }
+            if (spottedUsTankThroughRuins)
+                break;
         }
 
         Assert.True(spottedUsTankThroughRuins, "Collapsing central panelka sections and letting dust clear must expose US M60A1 tanks behind the ruins.");
@@ -267,7 +277,21 @@ public sealed class UrbanDestructionScenarioTests
         Assert.NotEqual(default, chinookId);
         Assert.Equal(4, sim.World.GetPassengers(chinookId).Length);
 
-        // Order CH-47D to fast-rope onto east flanking panelka section 106 (occupied by 2 OPFOR ambush riflemen)
+        // Put Player 1 ground units on HoldFire so the test isolates the CH-47D rooftop CQB assault cleanly
+        // (ambush defenders in sections 103 & 106 are immediately spotted within 75m tactical recon range)
+        foreach (OwnUnitObservation u in p1.OwnUnits)
+        {
+            if (u.Id != chinookId && u.ContainerId == default)
+            {
+                sim.World.SetFireStance(u.Id, FireStance.HoldFire);
+            }
+        }
+        sim.Step();
+        sim.Step();
+        sim.UpdateKnowledge(p1);
+        Assert.True(p1.Contacts.Length >= 2, "Nearby courtyard scouts/infantry must spot garrisoned OPFOR buildings within 75m.");
+
+        // Order CH-47D to fast-rope onto east flanking panelka section 106 (occupied by 3 OPFOR ambush riflemen)
         StructureId targetSection = new(106);
         Vector2 roof106Center = new(567.9f, 479.6f);
         Assert.True(sim.TryEnqueue(1, new HelicopterCommand(
