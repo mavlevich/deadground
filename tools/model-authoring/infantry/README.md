@@ -76,6 +76,33 @@ Checks of the exported file, standard library only:
 
 ```sh
 python3 -m unittest tools/model-authoring/infantry/test_us_rifleman.py
+python3 -m unittest tools/model-authoring/infantry/test_soviet_soldier.py
+```
+
+## Soviet expeditionary infantry (`soviet_rifleman.glb`, `soviet_rpg.glb`)
+
+Modular 1980s Soviet expeditionary infantry in sand-khaki Afghanka field uniform, 6B3 body armor,
+SSh-68 steel helmet with dust goggles, high laced combat boots, and role-specific loadouts:
+
+- `src/Game.Godot/Assets/Infantry/USSR/soviet_rifleman.glb`: AK-74 (wood + bakelite mag), Lifchik
+  chest rig, RD-54 assault pack with shelter-half roll, canteen, 6Kh4 bayonet, MPL-50 shovel.
+- `src/Game.Godot/Assets/Infantry/USSR/soviet_rpg.glb`: RPG-7V launcher with PGO-7 optical sight
+  and loaded PG-7V warhead, 3-round PG-7V rocket pack, utility pouches, canteen, bayonet, shovel.
+
+Both models use smooth shading with angle-based sharp splits, 6 PBR material surfaces over `COLOR_0`
+vertex colors (no external textures), 53 `game_engine` bones, and all six looping clips (`Idle`,
+`AimStanding`, `AimKneeling`, `AimProne`, `Walk`, `Run`).
+
+Rebuild from this folder:
+
+```sh
+blender --background --python build_soviet_soldier.py -- --role rifleman /tmp/soviet_rifleman_bind.blend
+blender --background --python animate_soviet_soldier.py -- /tmp/soviet_rifleman_bind.blend /tmp/soviet_rifleman_anim.blend \
+  ../../../src/Game.Godot/Assets/Infantry/USSR/soviet_rifleman.glb
+
+blender --background --python build_soviet_soldier.py -- --role rpg /tmp/soviet_rpg_bind.blend
+blender --background --python animate_soviet_soldier.py -- /tmp/soviet_rpg_bind.blend /tmp/soviet_rpg_anim.blend \
+  ../../../src/Game.Godot/Assets/Infantry/USSR/soviet_rpg.glb
 ```
 
 ## Sources and licenses
