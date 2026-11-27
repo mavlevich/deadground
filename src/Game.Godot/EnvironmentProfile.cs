@@ -70,7 +70,15 @@ public sealed record SsaoSettings(
 public sealed record GlowSettings(
     [property: JsonPropertyName("enabled")] bool Enabled,
     [property: JsonPropertyName("intensity")] float Intensity,
-    [property: JsonPropertyName("bloom")] float Bloom);
+    [property: JsonPropertyName("bloom")] float Bloom,
+    [property: JsonPropertyName("hdr_threshold")] float HdrThreshold = 1.05f);
+
+public sealed record WeatherSettings(
+    [property: JsonPropertyName("rain_intensity")] float RainIntensity = 0f,
+    [property: JsonPropertyName("wetness")] float Wetness = 0f,
+    [property: JsonPropertyName("wind_x")] float WindX = 0f,
+    [property: JsonPropertyName("wind_z")] float WindZ = 0f,
+    [property: JsonPropertyName("rain_color")] string RainColorHex = "#a8bccf");
 
 public sealed record MaterialTintsSettings(
     [property: JsonPropertyName("terrain")] string TerrainHex,
@@ -80,7 +88,8 @@ public sealed record MaterialTintsSettings(
     [property: JsonPropertyName("water_deep")] string WaterDeepHex,
     [property: JsonPropertyName("roads_asphalt")] string RoadsAsphaltHex,
     [property: JsonPropertyName("roads_gravel")] string RoadsGravelHex,
-    [property: JsonPropertyName("roads_dirt")] string RoadsDirtHex);
+    [property: JsonPropertyName("roads_dirt")] string RoadsDirtHex,
+    [property: JsonPropertyName("water_horizon_reflect")] float WaterHorizonReflect = 0f);
 
 public sealed record EnvironmentProfile(
     [property: JsonPropertyName("id")] string Id,
@@ -92,7 +101,8 @@ public sealed record EnvironmentProfile(
     [property: JsonPropertyName("haze")] HazeSettings Haze,
     [property: JsonPropertyName("ssao")] SsaoSettings? Ssao,
     [property: JsonPropertyName("glow")] GlowSettings? Glow,
-    [property: JsonPropertyName("material_tints")] MaterialTintsSettings MaterialTints)
+    [property: JsonPropertyName("material_tints")] MaterialTintsSettings MaterialTints,
+    [property: JsonPropertyName("weather")] WeatherSettings? Weather = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -313,6 +323,34 @@ public sealed record EnvironmentProfile(
             {
                 throw new EnvironmentProfileValidationException("glow.bloom", $"Field 'glow.bloom' value {Glow.Bloom} is out of range [0, 16].");
             }
+            if (Glow.HdrThreshold < 0.5f || Glow.HdrThreshold > 4f)
+            {
+                throw new EnvironmentProfileValidationException("glow.hdr_threshold", $"Field 'glow.hdr_threshold' value {Glow.HdrThreshold} is out of range [0.5, 4].");
+            }
+        }
+
+        if (Weather is not null)
+        {
+            if (Weather.RainIntensity < 0f || Weather.RainIntensity > 1f)
+            {
+                throw new EnvironmentProfileValidationException("weather.rain_intensity", $"Field 'weather.rain_intensity' value {Weather.RainIntensity} is out of range [0, 1].");
+            }
+            if (Weather.Wetness < 0f || Weather.Wetness > 1f)
+            {
+                throw new EnvironmentProfileValidationException("weather.wetness", $"Field 'weather.wetness' value {Weather.Wetness} is out of range [0, 1].");
+            }
+            if (Weather.WindX < -30f || Weather.WindX > 30f)
+            {
+                throw new EnvironmentProfileValidationException("weather.wind_x", $"Field 'weather.wind_x' value {Weather.WindX} is out of range [-30, 30].");
+            }
+            if (Weather.WindZ < -30f || Weather.WindZ > 30f)
+            {
+                throw new EnvironmentProfileValidationException("weather.wind_z", $"Field 'weather.wind_z' value {Weather.WindZ} is out of range [-30, 30].");
+            }
+            if (!TryParseHexColor(Weather.RainColorHex, out _))
+            {
+                throw new EnvironmentProfileValidationException("weather.rain_color", $"Field 'weather.rain_color' is not a valid hex color: '{Weather.RainColorHex}'.");
+            }
         }
 
         if (MaterialTints is null)
@@ -350,6 +388,10 @@ public sealed record EnvironmentProfile(
         if (!TryParseHexColor(MaterialTints.RoadsDirtHex, out _))
         {
             throw new EnvironmentProfileValidationException("material_tints.roads_dirt", $"Field 'material_tints.roads_dirt' is missing or not a valid hex color: '{MaterialTints.RoadsDirtHex}'.");
+        }
+        if (MaterialTints.WaterHorizonReflect < 0f || MaterialTints.WaterHorizonReflect > 1f)
+        {
+            throw new EnvironmentProfileValidationException("material_tints.water_horizon_reflect", $"Field 'material_tints.water_horizon_reflect' value {MaterialTints.WaterHorizonReflect} is out of range [0, 1].");
         }
     }
 

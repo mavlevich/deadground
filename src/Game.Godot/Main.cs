@@ -753,7 +753,7 @@ public partial class Main : Node3D
 
         if (_ustyeMapView is not null)
         {
-            _ustyeMapView.ApplyEnvironmentTints(activeProfile.MaterialTints);
+            _ustyeMapView.ApplyEnvironmentTints(activeProfile.MaterialTints, activeProfile.Weather?.Wetness ?? 0f, activeProfile.Sky.SkyHorizonColorHex);
         }
 
         _settingsPanel = new SettingsPanel();
@@ -781,7 +781,7 @@ public partial class Main : Node3D
             _environmentView.UpdateShadowTierForCamera(_cameraRig.Size, _activeShadowMapLayers);
             if (_ustyeMapView is not null)
             {
-                _ustyeMapView.ApplyEnvironmentTints(profile.MaterialTints);
+                _ustyeMapView.ApplyEnvironmentTints(profile.MaterialTints, profile.Weather?.Wetness ?? 0f, profile.Sky.SkyHorizonColorHex);
             }
             _smokeView?.ApplyEnvironment(profile);
         };
@@ -1178,7 +1178,7 @@ public partial class Main : Node3D
             _terrainWindingValid = !_smokeTest || _ustyeMapView.HasUpwardFrontFaces();
             if (_environmentView is not null)
             {
-                _ustyeMapView.ApplyEnvironmentTints(_environmentView.ActiveProfile.MaterialTints);
+                _ustyeMapView.ApplyEnvironmentTints(_environmentView.ActiveProfile.MaterialTints, _environmentView.ActiveWetness, _environmentView.ActiveProfile.Sky.SkyHorizonColorHex);
             }
         }
         else
@@ -2680,6 +2680,17 @@ public partial class Main : Node3D
                 return;
             }
 
+            if (key.Keycode == Key.O && key.ShiftPressed)
+            {
+                if (_settingsPanel is not null)
+                {
+                    _settingsPanel.CycleEnvironmentProfilePreview();
+                    _status.Text = $"Environment preview: {_environmentView.ActiveProfile.Name} (Shift+O to cycle)";
+                }
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
             if (key.Keycode is Key.F10 or Key.O)
             {
                 CancelActiveDrag();
@@ -3021,6 +3032,16 @@ public partial class Main : Node3D
             return;
         }
 
+        if (@event is InputEventMouseMotion orbitMotion &&
+            ((orbitMotion.ButtonMask & MouseButtonMask.Middle) != 0 ||
+             (orbitMotion.AltPressed && (orbitMotion.ButtonMask & (MouseButtonMask.Left | MouseButtonMask.Right)) != 0)))
+        {
+            CancelActiveDrag();
+            _cameraRig.DragOrbit(orbitMotion.Relative);
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
         if (@event is not InputEventMouseButton mouse) return;
 
         if (mouse.ButtonIndex == MouseButton.Left && !mouse.Pressed)
@@ -3054,6 +3075,7 @@ public partial class Main : Node3D
 
         if (mouse.ButtonIndex == MouseButton.Left)
         {
+            if (mouse.AltPressed) return;
             RefreshOccludingPanels();
             if (SelectionController.IsPointOccluded(mouse.Position, _inputOccludingPanels))
             {

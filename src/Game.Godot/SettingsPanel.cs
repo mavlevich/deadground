@@ -84,8 +84,10 @@ internal sealed partial class SettingsPanel : CanvasLayer
         Label profileLabel = new() { Text = "Environment:", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         profileLabel.AddThemeColorOverride("font_color", HudTheme.Text);
         _profileOptions = new OptionButton();
-        _profileOptions.AddItem("Overcast Autumn (Ustye)", 0);
-        _profileOptions.AddItem("Clear Afternoon", 1);
+        for (int i = 0; i < DisplaySettings.EnvironmentProfileCatalog.Length; i++)
+        {
+            _profileOptions.AddItem(DisplaySettings.EnvironmentProfileCatalog[i].Label, i);
+        }
         _profileOptions.ItemSelected += OnProfileSelected;
         profileRow.AddChild(profileLabel);
         profileRow.AddChild(_profileOptions);
@@ -269,7 +271,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
         };
         _fpsOptions.Selected = idx;
 
-        _profileOptions.Selected = _effectiveSettings.EnvironmentProfile == "clear_afternoon" ? 1 : 0;
+        _profileOptions.Selected = FindProfileIndex(_effectiveSettings.EnvironmentProfile);
         _qualityOptions.Selected = (int)_effectiveSettings.Quality;
         _renderScaleOptions.Selected = (int)_effectiveSettings.RenderScale;
         _antiAliasingOptions.Selected = _effectiveSettings.AntiAliasing switch
@@ -284,9 +286,34 @@ internal sealed partial class SettingsPanel : CanvasLayer
         _ssaoOptions.Selected = (int)_effectiveSettings.AmbientOcclusion;
     }
 
+    private static int FindProfileIndex(string profileId)
+    {
+        for (int i = 0; i < DisplaySettings.EnvironmentProfileCatalog.Length; i++)
+        {
+            if (string.Equals(DisplaySettings.EnvironmentProfileCatalog[i].Id, profileId, StringComparison.OrdinalIgnoreCase))
+            {
+                return i;
+            }
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// Cycles the active environment profile for live debug/preview inspection without writing to user config.
+    /// </summary>
+    public string CycleEnvironmentProfilePreview()
+    {
+        string next = DisplaySettings.GetNextEnvironmentProfile(_effectiveSettings.EnvironmentProfile);
+        _effectiveSettings = _effectiveSettings with { EnvironmentProfile = next };
+        SettingsChanged?.Invoke(_effectiveSettings);
+        UpdateUiFromSettings();
+        return next;
+    }
+
     private void OnProfileSelected(long index)
     {
-        string profile = index == 1 ? "clear_afternoon" : "overcast";
+        int idx = index >= 0 && index < DisplaySettings.EnvironmentProfileCatalog.Length ? (int)index : 0;
+        string profile = DisplaySettings.EnvironmentProfileCatalog[idx].Id;
         _cliOverridesProfile = false;
         CommitSettingEdit(
             _savedConfig with { EnvironmentProfile = profile },

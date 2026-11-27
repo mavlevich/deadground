@@ -31,9 +31,10 @@ internal static class EnvironmentProfileRegressionTests
         CheckRenderScaleViewportMapping(scene);
         CheckBenchmarkLifecycleFixes(scene);
         CheckChunkedTerrainSharedEdgesAndLod(scene);
+        CheckAtmosphericWeatherProfilesAndSkyIbl(scene);
         CheckRegressionFailurePropagation();
 
-        GD.Print("ENVIRONMENT_PROFILE_REGRESSIONS_OK 18/18 passed: load_profiles validation required_fields apply_light runtime_switching haze_scaling haze_mode hashes_unaffected zero_allocations quality_levels preview_saved_quality road_normals render_budget shadow_zoom_tiers map_switch_lifecycle render_scale_msaa benchmark_lifecycle chunked_terrain_lod");
+        GD.Print("ENVIRONMENT_PROFILE_REGRESSIONS_OK 19/19 passed: load_profiles validation required_fields apply_light runtime_switching haze_scaling haze_mode hashes_unaffected zero_allocations quality_levels preview_saved_quality road_normals render_budget shadow_zoom_tiers map_switch_lifecycle render_scale_msaa benchmark_lifecycle chunked_terrain_lod atmospheric_weather_sky_ibl");
     }
 
     private static void Require(bool condition, string message)
@@ -43,16 +44,96 @@ internal static class EnvironmentProfileRegressionTests
 
     private static void CheckProfilesLoad()
     {
-        EnvironmentProfile overcast = EnvironmentProfile.Load("overcast");
-        Require(overcast.Id == "overcast", $"Expected id 'overcast', got '{overcast.Id}'");
-        Require(overcast.Sun.Energy > 0f, "Overcast sun energy must be positive.");
-        Require(overcast.Haze.Enabled, "Overcast haze must be enabled.");
-        Require(overcast.Haze.CloseZoomDensity > overcast.Haze.WideZoomDensity, "Close zoom density must be higher than wide zoom density.");
+        foreach (string profileId in DisplaySettings.ValidEnvironmentProfiles)
+        {
+            EnvironmentProfile profile = EnvironmentProfile.Load(profileId);
+            Require(profile.Id == profileId, $"Expected id '{profileId}', got '{profile.Id}'");
+            Require(profile.Sun.Energy > 0f, $"Profile '{profileId}' sun energy must be positive.");
+            Require(profile.Haze.Enabled, $"Profile '{profileId}' haze must be enabled.");
+            Require(profile.Haze.CloseZoomDensity > profile.Haze.WideZoomDensity,
+                $"Profile '{profileId}' close zoom density must be higher than wide zoom density.");
+        }
+    }
 
-        EnvironmentProfile clear = EnvironmentProfile.Load("clear_afternoon");
-        Require(clear.Id == "clear_afternoon", $"Expected id 'clear_afternoon', got '{clear.Id}'");
-        Require(clear.Sun.Energy > 0f, "Clear afternoon sun energy must be positive.");
-        Require(clear.Haze.Enabled, "Clear afternoon haze must be enabled.");
+    private static void CheckAtmosphericWeatherProfilesAndSkyIbl(Node3D scene)
+    {
+        EnvironmentView view = new();
+        scene.AddChild(view);
+        try
+        {
+            EnvironmentProfile coolDay = EnvironmentProfile.Load("cool_clear_day");
+            view.ApplyProfile(coolDay, EnvironmentQuality.High);
+            Require(view.GodotEnvironment.ReflectedLightSource == Godot.Environment.ReflectionSource.Sky,
+                "EnvironmentView must enable sky IBL reflections (ReflectedLightSource.Sky).");
+            Require(view.GodotEnvironment.GlowEnabled, "cool_clear_day should enable HDR combat glow at High quality.");
+            Require(view.GodotEnvironment.GlowHdrThreshold >= 1.0f,
+                $"GlowHdrThreshold must be >= 1.0 so only HDR combat VFX bloom, got {view.GodotEnvironment.GlowHdrThreshold}.");
+            Require(coolDay.Sun.Pitch is <= -45f and >= -55f,
+                $"cool_clear_day calibration sun pitch must stay in [-55, -45] deg, got {coolDay.Sun.Pitch}.");
+            Require(!view.IsRainActive, "cool_clear_day must not emit rain.");
+            Require(Mathf.IsEqualApprox(view.ActiveWetness, 0f), "cool_clear_day wetness must be 0.");
+
+            EnvironmentProfile sunset = EnvironmentProfile.Load("amber_sunset");
+            view.ApplyProfile(sunset, EnvironmentQuality.High);
+            Require(sunset.Sun.Pitch > -25f, "amber_sunset must use a low warm sun elevation.");
+            Require(view.GodotEnvironment.GlowEnabled && view.GodotEnvironment.GlowHdrThreshold >= 1.0f,
+                "amber_sunset must enable HDR glow with threshold >= 1.0.");
+            Require(!view.IsRainActive, "amber_sunset must not emit rain.");
+
+            EnvironmentProfile night = EnvironmentProfile.Load("night_ops");
+            view.ApplyProfile(night, EnvironmentQuality.High);
+            Require(night.Sun.Energy < 0.5f, "night_ops directional moonlight energy must be subdued.");
+            Require(view.GodotEnvironment.GlowEnabled && view.GodotEnvironment.GlowIntensity > coolDay.Glow!.Intensity,
+                "night_ops must provide stronger HDR combat bloom contrast than daytime.");
+            Require(!view.IsRainActive, "night_ops must not emit rain.");
+
+            EnvironmentProfile storm = EnvironmentProfile.Load("storm_rain");
+            view.ApplyProfile(storm, EnvironmentQuality.High);
+            Require(storm.Weather is not null && storm.Weather.RainIntensity > 0.5f && storm.Weather.Wetness > 0.5f,
+                "storm_rain must configure rain intensity and surface wetness.");
+            Require(view.ActiveWetness > 0.5f, "EnvironmentView must expose storm_rain surface wetness.");
+
+            // Rain fades smoothly between close/play zoom (<= 380) and wide strategic zoom (>= 680)
+            Require(Mathf.IsEqualApprox(EnvironmentView.CalculateRainZoomFade(180f), 1.0f),
+                "Rain zoom fade must be 1.0 at tactical zoom.");
+            float midFade = EnvironmentView.CalculateRainZoomFade(530f);
+            Require(midFade > 0.45f && midFade < 0.55f,
+                $"Rain zoom fade must smoothly ramp around 0.5 at mid-zoom 530, got {midFade}.");
+            Require(Mathf.IsEqualApprox(EnvironmentView.CalculateRainZoomFade(680f), 0.0f),
+                "Rain zoom fade must reach 0.0 at RainMaxCameraSize.");
+
+            view.UpdateHazeForCamera(180f, new Vector3(1200f, 12f, 1400f), 0.8f);
+            Require(view.IsRainActive, "storm_rain must emit rain particles at play zoom on High quality.");
+
+            view.UpdateHazeForCamera(1800f, new Vector3(1200f, 12f, 1400f), 0.8f);
+            Require(!view.IsRainActive, "storm_rain must disable rain particles at wide strategic zoom.");
+
+            view.UpdateHazeForCamera(180f, new Vector3(1250f, 12f, 1450f), 0.8f);
+            Require(view.IsRainActive, "storm_rain must re-enable rain when zooming back in.");
+
+            view.SetQuality(EnvironmentQuality.Low);
+            Require(!view.IsRainActive, "Low graphics quality must disable weather rain particles.");
+            view.SetQuality(EnvironmentQuality.High);
+            Require(view.IsRainActive, "Returning to High quality must restore storm rain particles.");
+
+            // Zero managed allocations while rain follows the camera focus
+            for (int i = 0; i < 4; i++)
+            {
+                view.UpdateHazeForCamera(180f, new Vector3(1300f + i * 10f, 12f, 1450f), 0.8f);
+            }
+            long allocBefore = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 60; i++)
+            {
+                view.UpdateHazeForCamera(180f, new Vector3(1400f + i * 8f, 12f, 1500f), 0.8f);
+            }
+            long allocAfter = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
+            Require(allocAfter == 0, $"Storm rain camera follow must allocate 0 bytes, got {allocAfter} B.");
+        }
+        finally
+        {
+            scene.RemoveChild(view);
+            view.QueueFree();
+        }
     }
 
     private static void CheckValidationErrors()

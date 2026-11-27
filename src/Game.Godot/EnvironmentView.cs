@@ -20,12 +20,21 @@ public sealed partial class EnvironmentView : Node3D
     private readonly DirectionalLight3D _sun;
     private readonly WorldEnvironment _worldEnvironment;
     private readonly ProceduralSkyMaterial _skyMaterial;
+    private readonly GpuParticles3D _rainParticles;
+    private readonly ParticleProcessMaterial _rainProcessMaterial;
+    private readonly StandardMaterial3D _rainDrawMaterial;
     private EnvironmentProfile _activeProfile = null!;
     private EnvironmentQuality _activeQuality = EnvironmentQuality.High;
     private AmbientOcclusionPreset _ambientOcclusionPreset = AmbientOcclusionPreset.Auto;
     private Vector2I _outputPixelSize = new(1440, 900);
     private float _lastCameraSize = -999f;
     private float _lastCameraPitch = -999f;
+    private Vector3 _lastRainFocus = new(-99999f, -99999f, -99999f);
+    private bool _rainConfiguredActive;
+    private float _activeRainIntensity;
+    private Color _activeRainBaseColor = new(0.75f, 0.82f, 0.89f);
+    private float _activeRainBaseAlpha;
+    private float _lastAppliedRainFade = -1f;
     private ShadowZoomTier? _activeShadowTier;
     private bool _shadowTierApplied;
     private bool _effectiveTreeShadows;
@@ -39,6 +48,10 @@ public sealed partial class EnvironmentView : Node3D
     private const float ShadowFadeDurationSeconds = 0.3f;
     private const float SizeUpdateThreshold = 1.0f;
     private const float PitchUpdateThreshold = 0.02f;
+    private const float RainFadeStartCameraSize = 380f;
+    private const float RainMaxCameraSize = 680f;
+    private const float RainFocusMoveThresholdSq = 16.0f;
+    private const float RainCanopyHeightOffset = 54.0f;
 
     public DirectionalLight3D Sun => _sun;
     public WorldEnvironment WorldEnvironment => _worldEnvironment;
@@ -50,6 +63,8 @@ public sealed partial class EnvironmentView : Node3D
     public bool EffectiveTreeShadows => _effectiveTreeShadows;
     public bool EffectiveTerrainShadows => _effectiveTerrainShadows;
     public int ShadowTierApplyCount => _shadowTierApplyCount;
+    public bool IsRainActive => _rainParticles.Emitting;
+    public float ActiveWetness => _activeProfile?.Weather?.Wetness ?? 0f;
 
     public EnvironmentView(RenderBudget? renderBudget = null)
     {
@@ -73,6 +88,7 @@ public sealed partial class EnvironmentView : Node3D
             {
                 SkyMaterial = _skyMaterial
             },
+            ReflectedLightSource = Godot.Environment.ReflectionSource.Sky,
             FogEnabled = true,
             FogMode = Godot.Environment.FogModeEnum.Depth
         };
@@ -83,6 +99,102 @@ public sealed partial class EnvironmentView : Node3D
             Environment = env
         };
         AddChild(_worldEnvironment);
+
+        (_rainParticles, _rainProcessMaterial, _rainDrawMaterial) = CreateRainEmitter();
+        AddChild(_rainParticles);
+    }
+
+    private static (GpuParticles3D Particles, ParticleProcessMaterial Process, StandardMaterial3D DrawMat) CreateRainEmitter()
+    {
+        // Soft tapered vertical streak texture so raindrops feather organically instead of reading as hard dashes.
+        const int texW = 16;
+        const int texH = 64;
+        byte[] texBytes = new byte[texW * texH * 4];
+        for (int y = 0; y < texH; y++)
+        {
+            float v = (y + 0.5f) / texH; // 0 = top tail, 1 = bottom drop head
+            float topFade = Math.Clamp(v / 0.55f, 0f, 1f);
+            float bottomFade = Math.Clamp((1f - v) / 0.18f, 0f, 1f);
+            float verticalProfile = topFade * topFade * bottomFade;
+            for (int x = 0; x < texW; x++)
+            {
+                float u = ((x + 0.5f) / texW) * 2f - 1f;
+                float radial = Math.Clamp(1f - u * u, 0f, 1f);
+                float alpha = Math.Clamp(verticalProfile * radial * radial, 0f, 1f);
+                int idx = (y * texW + x) * 4;
+                texBytes[idx] = 255;
+                texBytes[idx + 1] = 255;
+                texBytes[idx + 2] = 255;
+                texBytes[idx + 3] = (byte)MathF.Round(alpha * 255f);
+            }
+        }
+        Image streakImg = Image.CreateFromData(texW, texH, useMipmaps: false, Image.Format.Rgba8, texBytes);
+        ImageTexture streakTex = ImageTexture.CreateFromImage(streakImg);
+
+        StandardMaterial3D drawMat = new()
+        {
+            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+            BlendMode = BaseMaterial3D.BlendModeEnum.Mix,
+            CullMode = BaseMaterial3D.CullModeEnum.Disabled,
+            DepthDrawMode = BaseMaterial3D.DepthDrawModeEnum.Disabled,
+            NoDepthTest = false,
+            AlbedoTexture = streakTex,
+            AlbedoColor = new Color(0.75f, 0.82f, 0.89f, 0.34f)
+        };
+
+        // Crossed twin-ribbon streak mesh (4 triangles) with UVs so tapered raindrops read softly from every azimuth.
+        const float halfW = 0.042f;
+        const float halfH = 1.90f;
+        Vector3[] verts =
+        [
+            new(-halfW, -halfH, 0f), new(halfW, -halfH, 0f), new(halfW, halfH, 0f), new(-halfW, halfH, 0f),
+            new(0f, -halfH, -halfW), new(0f, -halfH, halfW), new(0f, halfH, halfW), new(0f, halfH, -halfW)
+        ];
+        Vector2[] uvs =
+        [
+            new(0f, 1f), new(1f, 1f), new(1f, 0f), new(0f, 0f),
+            new(0f, 1f), new(1f, 1f), new(1f, 0f), new(0f, 0f)
+        ];
+        int[] indices = [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7];
+        using Godot.Collections.Array arrays = new();
+        arrays.Resize((int)Mesh.ArrayType.Max);
+        arrays[(int)Mesh.ArrayType.Vertex] = verts;
+        arrays[(int)Mesh.ArrayType.TexUV] = uvs;
+        arrays[(int)Mesh.ArrayType.Index] = indices;
+        ArrayMesh streakMesh = new();
+        streakMesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+        streakMesh.SurfaceSetMaterial(0, drawMat);
+
+        ParticleProcessMaterial process = new()
+        {
+            EmissionShape = ParticleProcessMaterial.EmissionShapeEnum.Box,
+            EmissionBoxExtents = new Vector3(145f, 8f, 145f),
+            Direction = new Vector3(0.10f, -1.0f, 0.06f).Normalized(),
+            Spread = 5.0f,
+            InitialVelocityMin = 44f,
+            InitialVelocityMax = 66f,
+            Gravity = new Vector3(3.0f, -32f, 1.5f),
+            ScaleMin = 0.65f,
+            ScaleMax = 1.45f,
+            ParticleFlagAlignY = true
+        };
+
+        GpuParticles3D particles = new()
+        {
+            Name = "WeatherRainParticles",
+            Amount = 2600,
+            Lifetime = 1.05f,
+            Preprocess = 0.8f,
+            Emitting = false,
+            Visible = false,
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+            VisibilityAabb = new Aabb(new Vector3(-190f, -90f, -190f), new Vector3(380f, 120f, 380f)),
+            ProcessMaterial = process,
+            DrawPass1 = streakMesh
+        };
+
+        return (particles, process, drawMat);
     }
 
     public void ApplyProfile(EnvironmentProfile profile, EnvironmentQuality quality = EnvironmentQuality.High)
@@ -113,7 +225,7 @@ public sealed partial class EnvironmentView : Node3D
         env.BackgroundColor = new Color(profile.Haze.ColorHex);
         env.BackgroundMode = Godot.Environment.BGMode.Color;
 
-        // 3. Ambient lighting
+        // 3. Ambient lighting & Sky IBL reflections
         string ambientSource = profile.Ambient.Source.Trim().ToLowerInvariant();
         env.AmbientLightSource = ambientSource switch
         {
@@ -123,6 +235,8 @@ public sealed partial class EnvironmentView : Node3D
         };
         env.AmbientLightColor = new Color(profile.Ambient.ColorHex);
         env.AmbientLightEnergy = profile.Ambient.Energy;
+        env.AmbientLightSkyContribution = env.AmbientLightSource == Godot.Environment.AmbientSource.Sky ? 0.55f : 0f;
+        env.ReflectedLightSource = Godot.Environment.ReflectionSource.Sky;
 
         // 4. Tonemap and exposure
         string tonemap = profile.Tonemap.Mode.Trim().ToLowerInvariant();
@@ -159,16 +273,85 @@ public sealed partial class EnvironmentView : Node3D
             env.SsaoDetail = profile.Ssao.Detail;
         }
 
-        // 7. Glow
+        // 7. Glow (restricted strictly to HDR > 1.0 combat VFX via GlowHdrThreshold)
         if (profile.Glow is not null && profile.Glow.Enabled)
         {
             env.GlowIntensity = profile.Glow.Intensity;
             env.GlowBloom = profile.Glow.Bloom;
+            env.GlowHdrThreshold = profile.Glow.HdrThreshold;
+            env.GlowBlendMode = Godot.Environment.GlowBlendModeEnum.Additive;
         }
+
+        // 8. Weather / Precipitation
+        ConfigureWeather(profile.Weather);
 
         // Apply quality level adjustments
         _shadowTierApplied = false;
         SetQuality(quality);
+    }
+
+    private void ConfigureWeather(WeatherSettings? weather)
+    {
+        float intensity = weather is not null ? Math.Clamp(weather.RainIntensity, 0f, 1f) : 0f;
+        _activeRainIntensity = intensity;
+        _rainConfiguredActive = intensity > 0.01f;
+        _lastAppliedRainFade = -1f;
+
+        if (!_rainConfiguredActive || weather is null)
+        {
+            _rainParticles.Emitting = false;
+            _rainParticles.Visible = false;
+            return;
+        }
+
+        Color rainColor = EnvironmentProfile.TryParseHexColor(weather.RainColorHex, out Color parsedRain)
+            ? parsedRain
+            : new Color(0.75f, 0.82f, 0.89f);
+        _activeRainBaseColor = rainColor;
+        _activeRainBaseAlpha = Mathf.Lerp(0.22f, 0.42f, intensity);
+        _rainDrawMaterial.AlbedoColor = new Color(rainColor.R, rainColor.G, rainColor.B, _activeRainBaseAlpha);
+
+        Vector3 fallDir = new Vector3(weather.WindX, -28f, weather.WindZ).Normalized();
+        _rainProcessMaterial.Direction = fallDir;
+        _rainProcessMaterial.Gravity = new Vector3(weather.WindX * 2.2f, -32f, weather.WindZ * 2.2f);
+    }
+
+    public static float CalculateRainZoomFade(float cameraSize)
+    {
+        if (cameraSize <= 0f || cameraSize <= RainFadeStartCameraSize) return 1.0f;
+        if (cameraSize >= RainMaxCameraSize) return 0.0f;
+        return (RainMaxCameraSize - cameraSize) / (RainMaxCameraSize - RainFadeStartCameraSize);
+    }
+
+    private void RefreshRainEmissionState(float cameraSize)
+    {
+        float zoomFade = CalculateRainZoomFade(cameraSize);
+        bool shouldEmit = _rainConfiguredActive
+            && _activeQuality != EnvironmentQuality.Low
+            && zoomFade > 0.01f;
+
+        if (shouldEmit)
+        {
+            float qualityScale = _activeQuality == EnvironmentQuality.Medium ? 0.65f : 1.0f;
+            _rainParticles.AmountRatio = Math.Clamp(_activeRainIntensity * qualityScale, 0.1f, 1.0f);
+            if (MathF.Abs(zoomFade - _lastAppliedRainFade) > 0.01f)
+            {
+                _lastAppliedRainFade = zoomFade;
+                _rainDrawMaterial.AlbedoColor = new Color(
+                    _activeRainBaseColor.R,
+                    _activeRainBaseColor.G,
+                    _activeRainBaseColor.B,
+                    _activeRainBaseAlpha * zoomFade);
+            }
+            if (!_rainParticles.Visible) _rainParticles.Visible = true;
+            if (!_rainParticles.Emitting) _rainParticles.Emitting = true;
+        }
+        else
+        {
+            _lastAppliedRainFade = 0f;
+            if (_rainParticles.Emitting) _rainParticles.Emitting = false;
+            if (_rainParticles.Visible) _rainParticles.Visible = false;
+        }
     }
 
     public void SetProfile(EnvironmentProfile profile)
@@ -214,6 +397,8 @@ public sealed partial class EnvironmentView : Node3D
             _activeProfile.Ssao?.Enabled ?? false,
             _outputPixelSize.X,
             _outputPixelSize.Y);
+
+        RefreshRainEmissionState(_lastCameraSize > 0f ? _lastCameraSize : 0f);
 
         _shadowTierApplied = false;
         if (_activeShadowTier.HasValue)
@@ -537,6 +722,25 @@ public sealed partial class EnvironmentView : Node3D
             {
                 env.BackgroundMode = Godot.Environment.BGMode.Color;
                 env.BackgroundColor = new Color(_activeProfile.Haze.ColorHex);
+            }
+        }
+
+        if (_rainConfiguredActive)
+        {
+            RefreshRainEmissionState(cameraSize);
+            if (_rainParticles.Emitting)
+            {
+                float dx = cameraPosition.X - _lastRainFocus.X;
+                float dy = cameraPosition.Y - _lastRainFocus.Y;
+                float dz = cameraPosition.Z - _lastRainFocus.Z;
+                if (dx * dx + dy * dy + dz * dz >= RainFocusMoveThresholdSq)
+                {
+                    _lastRainFocus = cameraPosition;
+                    _rainParticles.Position = new Vector3(
+                        cameraPosition.X,
+                        cameraPosition.Y + RainCanopyHeightOffset,
+                        cameraPosition.Z);
+                }
             }
         }
 
