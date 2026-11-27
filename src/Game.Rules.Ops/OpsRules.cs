@@ -640,11 +640,15 @@ public sealed class OpsCombatCatalog : IUnitCombatCatalog
                         ? WeaponPresentationKind.Cannon
                         : string.Equals(w.PresentationKind, "rifle", StringComparison.OrdinalIgnoreCase)
                             ? WeaponPresentationKind.Rifle
-                            : string.Equals(w.PresentationKind, "rocket_artillery", StringComparison.OrdinalIgnoreCase)
-                                ? WeaponPresentationKind.RocketArtillery
-                                : string.Equals(w.PresentationKind, "surface_to_air_missile", StringComparison.OrdinalIgnoreCase)
-                                    ? WeaponPresentationKind.SurfaceToAirMissile
-                                    : throw new InvalidOperationException($"Unsupported presentation_kind '{w.PresentationKind}'.");
+                            : string.Equals(w.PresentationKind, "rifle_ak", StringComparison.OrdinalIgnoreCase)
+                                ? WeaponPresentationKind.RifleAk
+                                : string.Equals(w.PresentationKind, "anti_tank_rocket", StringComparison.OrdinalIgnoreCase)
+                                    ? WeaponPresentationKind.AntiTankRocket
+                                    : string.Equals(w.PresentationKind, "rocket_artillery", StringComparison.OrdinalIgnoreCase)
+                                        ? WeaponPresentationKind.RocketArtillery
+                                        : string.Equals(w.PresentationKind, "surface_to_air_missile", StringComparison.OrdinalIgnoreCase)
+                                            ? WeaponPresentationKind.SurfaceToAirMissile
+                                            : throw new InvalidOperationException($"Unsupported presentation_kind '{w.PresentationKind}'.");
 
                 MissileGuidanceKind guidanceKind = ParseGuidanceKind(w.GuidanceKind);
 
@@ -1069,6 +1073,8 @@ public static class PrototypeScenario
                 if (!string.Equals(weapon.PresentationKind, "cannon", StringComparison.OrdinalIgnoreCase) &&
                     !string.Equals(weapon.PresentationKind, "machine_gun", StringComparison.OrdinalIgnoreCase) &&
                     !string.Equals(weapon.PresentationKind, "rifle", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(weapon.PresentationKind, "rifle_ak", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(weapon.PresentationKind, "anti_tank_rocket", StringComparison.OrdinalIgnoreCase) &&
                     !string.Equals(weapon.PresentationKind, "rocket_artillery", StringComparison.OrdinalIgnoreCase) &&
                     !string.Equals(weapon.PresentationKind, "surface_to_air_missile", StringComparison.OrdinalIgnoreCase))
                 {

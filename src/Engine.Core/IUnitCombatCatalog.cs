@@ -25,7 +25,9 @@ public enum WeaponPresentationKind : byte
     MachineGun = 2,
     Rifle = 3,
     RocketArtillery = 4,
-    SurfaceToAirMissile = 5
+    SurfaceToAirMissile = 5,
+    RifleAk = 6,
+    AntiTankRocket = 7
 }
 
 public static class WeaponPresentation
@@ -43,6 +45,8 @@ public static class WeaponPresentation
             (byte)WeaponPresentationKind.Rifle => WeaponPresentationKind.Rifle,
             (byte)WeaponPresentationKind.RocketArtillery => WeaponPresentationKind.RocketArtillery,
             (byte)WeaponPresentationKind.SurfaceToAirMissile => WeaponPresentationKind.SurfaceToAirMissile,
+            (byte)WeaponPresentationKind.RifleAk => WeaponPresentationKind.RifleAk,
+            (byte)WeaponPresentationKind.AntiTankRocket => WeaponPresentationKind.AntiTankRocket,
             _ => WeaponPresentationKind.None
         };
     }
@@ -54,7 +58,13 @@ public static class WeaponPresentation
         GetKind(presentationId) == WeaponPresentationKind.Cannon;
 
     public static bool IsRifle(ushort presentationId) =>
-        GetKind(presentationId) == WeaponPresentationKind.Rifle;
+        GetKind(presentationId) is WeaponPresentationKind.Rifle or WeaponPresentationKind.RifleAk;
+
+    public static bool IsSovietRifle(ushort presentationId) =>
+        GetKind(presentationId) == WeaponPresentationKind.RifleAk;
+
+    public static bool IsAntiTankRocket(ushort presentationId) =>
+        GetKind(presentationId) == WeaponPresentationKind.AntiTankRocket;
 
     public static bool IsRocketArtillery(ushort presentationId) =>
         GetKind(presentationId) == WeaponPresentationKind.RocketArtillery;
@@ -108,6 +118,7 @@ public sealed record WeaponDefinition(
     float MovingAccuracyMultiplier = 0f)
 {
     public bool IsGuidedMissile => GuidanceKind != MissileGuidanceKind.None;
+    public bool IsAntiTankRocket => WeaponPresentation.IsAntiTankRocket(PresentationId);
     public bool CanFireOnMove => MovingAccuracyMultiplier > 0f && !IsIndirectFire && !IsGuidedMissile;
     public float Dispersion => DispersionMils;
 

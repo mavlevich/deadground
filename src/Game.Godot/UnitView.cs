@@ -86,10 +86,12 @@ internal sealed class UnitView
     private static readonly StringName AnimWalk = "Walk";
     private static readonly StringName AnimRun = "Run";
     private static readonly StringName AnimAimStanding = "AimStanding";
+    private static readonly StringName AnimAimKneeling = "AimKneeling";
 
     internal string? UnitId { get; }
     internal bool HasVehicleModel { get; }
     internal bool IsInfantry { get; }
+    internal bool IsAntiTankInfantry { get; }
     internal bool IsHelicopter { get; }
     private float _altitude;
     private float _pitchRad;
@@ -114,6 +116,7 @@ internal sealed class UnitView
     private string _currentAnim = "";
     private StringName? _currentAnimName;
     private float _aimingTimer;
+    private float _infantryRecoilKick;
     private bool _isGarrisonedVisual;
     private GarrisonXRayMode _garrisonXRayMode = GarrisonXRayMode.None;
     private bool _garrisonIsRunning;
@@ -158,11 +161,11 @@ internal sealed class UnitView
     internal string CurrentAnimation => _currentAnim;
     internal AnimationPlayer? AnimationPlayer => ActiveRig.AnimPlayer;
 
-    public void SetAiming(bool aiming)
+    public void SetAiming(bool aiming, float duration = 0.8f)
     {
         if (aiming)
         {
-            _aimingTimer = 0.8f;
+            _aimingTimer = MathF.Max(_aimingTimer, duration);
         }
     }
 
@@ -192,6 +195,7 @@ internal sealed class UnitView
         UnitId = unitId;
         classification ??= UnitViewSet.GetDefaultClassification(unitId);
         IsInfantry = string.Equals(classification, "infantry", StringComparison.OrdinalIgnoreCase);
+        IsAntiTankInfantry = IsInfantry && unitId is not null && unitId.Contains("rpg", StringComparison.OrdinalIgnoreCase);
         IsHelicopter = string.Equals(classification, "helicopter", StringComparison.OrdinalIgnoreCase);
         HasVehicleModel = visual is not null;
         Model = visual?.Root ?? new Node3D { Name = "PlaceholderModel" };
@@ -212,7 +216,10 @@ internal sealed class UnitView
         _muzzle = initialRig.Muzzle;
         if (_muzzle is null && IsInfantry)
         {
-            Node3D mNode = new() { Name = "Muzzle", Position = new Vector3(0, 1.35f, -0.6f) };
+            Vector3 muzzlePos = IsAntiTankInfantry
+                ? new Vector3(0.14f, 1.48f, -0.78f)
+                : new Vector3(0f, 1.35f, -0.60f);
+            Node3D mNode = new() { Name = "Muzzle", Position = muzzlePos };
             Model.AddChild(mNode);
             _muzzle = mNode;
             initialRig.Muzzle = mNode;
@@ -1100,11 +1107,13 @@ internal sealed class UnitView
 
     internal Vector3 TurretRotation => ActiveRig.Turret?.Rotation ?? _turret?.Rotation ?? Vector3.Zero;
 
-    public void ApplyRecoil(Vector3 shotDirection, bool isMachineGun = false, bool isRifle = false)
+    public void ApplyRecoil(Vector3 shotDirection, bool isMachineGun = false, bool isRifle = false, bool isAntiTankRocket = false)
     {
-        if (IsInfantry || isRifle)
+        if (IsInfantry || isRifle || isAntiTankRocket)
         {
-            SetAiming(true);
+            SetAiming(true, isAntiTankRocket ? 1.45f : 0.85f);
+            _infantryRecoilKick = isAntiTankRocket ? 0.11f : 0.045f;
+            ApplyHullPose();
             return;
         }
         if (isMachineGun)
@@ -1148,6 +1157,11 @@ internal sealed class UnitView
         {
             _fallbackRecoilOffset = _fallbackRecoilOffset.MoveToward(Vector3.Zero, dt * 3.5f);
             Model.Position = _modelBindPosition + new Vector3(0f, _altitude, 0f) + _fallbackRecoilOffset;
+        }
+        if (_infantryRecoilKick > 0f)
+        {
+            _infantryRecoilKick = Mathf.MoveToward(_infantryRecoilKick, 0f, dt * 0.65f);
+            ApplyHullPose();
         }
         UpdateRock(dt);
     }
@@ -1363,7 +1377,7 @@ internal sealed class UnitView
             float yaw = (IsInfantry && (_aimingTimer > 0f || _hasAim) && _dustSpeed < 0.15f)
                 ? (_turretRotation.Y + _heading)
                 : _heading;
-            Model.Rotation = new Vector3(0, yaw, 0);
+            Model.Rotation = new Vector3(_infantryRecoilKick, yaw, 0f);
             return;
         }
         Basis basis = new Basis(Vector3.Up, _heading);
@@ -1545,8 +1559,16 @@ internal sealed class UnitView
             }
             else if (_aimingTimer > 0f || _hasAim)
             {
-                targetAnimName = AnimAimStanding;
-                targetAnimStr = "AimStanding";
+                if (IsAntiTankInfantry && !_isGarrisonedVisual && animPlayer.HasAnimation(AnimAimKneeling))
+                {
+                    targetAnimName = AnimAimKneeling;
+                    targetAnimStr = "AimKneeling";
+                }
+                else
+                {
+                    targetAnimName = AnimAimStanding;
+                    targetAnimStr = "AimStanding";
+                }
             }
             else
             {
@@ -1556,9 +1578,15 @@ internal sealed class UnitView
 
             if (_currentAnimName != targetAnimName && animPlayer.HasAnimation(targetAnimName))
             {
-                animPlayer.Play(targetAnimName);
+                animPlayer.Play(targetAnimName, customBlend: 0.12);
                 _currentAnimName = targetAnimName;
                 _currentAnim = targetAnimStr;
+                if (IsAntiTankInfantry && _muzzle is not null)
+                {
+                    _muzzle.Position = targetAnimName == AnimAimKneeling
+                        ? new Vector3(0.14f, 1.05f, -0.78f)
+                        : new Vector3(0.14f, 1.48f, -0.78f);
+                }
             }
 
             if (targetAnimName == AnimRun)

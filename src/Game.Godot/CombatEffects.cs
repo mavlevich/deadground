@@ -132,6 +132,7 @@ internal partial class CombatEffects : Node3D
         public float ElapsedTime;
         public float SmokeAccumulator;
         public bool IncomingSoundPlayed;
+        public bool IsAntiTankRocket;
         public bool Active;
     }
 
@@ -187,6 +188,7 @@ internal partial class CombatEffects : Node3D
         public HitResult Result;
         public bool IsMachineGun;
         public bool IsRifle;
+        public bool IsAntiTankRocket;
         public float DelayRemaining;
         public bool Active;
     }
@@ -250,6 +252,15 @@ internal partial class CombatEffects : Node3D
     public const int RifleVariantCount = 3;
     private readonly AudioStreamWav[] _rifleVariants = new AudioStreamWav[RifleVariantCount];
     internal AudioStreamWav[] RifleVariants => _rifleVariants;
+    public const int Ak74VariantCount = 3;
+    private readonly AudioStreamWav[] _ak74Variants = new AudioStreamWav[Ak74VariantCount];
+    internal AudioStreamWav[] Ak74Variants => _ak74Variants;
+    public const int RpgLaunchVariantCount = 3;
+    private readonly AudioStreamWav[] _rpgLaunchVariants = new AudioStreamWav[RpgLaunchVariantCount];
+    internal AudioStreamWav[] RpgLaunchVariants => _rpgLaunchVariants;
+    public const int RpgImpactVariantCount = 3;
+    private readonly AudioStreamWav[] _rpgImpactVariants = new AudioStreamWav[RpgImpactVariantCount];
+    internal AudioStreamWav[] RpgImpactVariants => _rpgImpactVariants;
     public const int RocketLaunchVariantCount = 3;
     private readonly AudioStreamWav[] _rocketLaunchVariants = new AudioStreamWav[RocketLaunchVariantCount];
     internal AudioStreamWav[] RocketLaunchVariants => _rocketLaunchVariants;
@@ -1009,6 +1020,12 @@ void fragment() {
             _mgBurstVariants[i] = CannonSound.CreateBurstStream(2000 + i * 17);
         for (int i = 0; i < RifleVariantCount; i++)
             _rifleVariants[i] = CannonSound.CreateRifleStream(3000 + i * 29);
+        for (int i = 0; i < Ak74VariantCount; i++)
+            _ak74Variants[i] = CannonSound.CreateAk74Stream(3300 + i * 29);
+        for (int i = 0; i < RpgLaunchVariantCount; i++)
+            _rpgLaunchVariants[i] = CannonSound.CreateRpgLaunchStream(3600 + i * 31);
+        for (int i = 0; i < RpgImpactVariantCount; i++)
+            _rpgImpactVariants[i] = CannonSound.CreateRpgImpactStream(3900 + i * 37);
         for (int i = 0; i < RocketLaunchVariantCount; i++)
             _rocketLaunchVariants[i] = CannonSound.CreateRocketLaunchStream(4000 + i * 31);
         for (int i = 0; i < ArtilleryImpactVariantCount; i++)
@@ -1231,9 +1248,13 @@ void fragment() {
             if (ev.Kind == CombatEventKind.ShotFired)
             {
                 bool isRifle = WeaponPresentation.IsRifle(ev.PresentationId);
+                bool isSovietRifle = WeaponPresentation.IsSovietRifle(ev.PresentationId);
                 bool isMg = WeaponPresentation.IsMachineGun(ev.PresentationId);
+                bool isRpg = WeaponPresentation.IsAntiTankRocket(ev.PresentationId);
                 float distance = origin.DistanceTo(target);
-                float flightDuration = Mathf.Clamp(distance / TracerSpeed, MinTracerDuration, MaxTracerDuration);
+                float flightDuration = isRpg
+                    ? Mathf.Clamp(distance / 115f, 0.08f, 3.0f)
+                    : Mathf.Clamp(distance / TracerSpeed, MinTracerDuration, MaxTracerDuration);
 
                 // If entire shot sequence including impact has expired, discard
                 if (ageSeconds >= flightDuration + SmokePuffLifetime)
@@ -1253,7 +1274,7 @@ void fragment() {
                     }
                     if (ageSeconds < 0.10f)
                     {
-                        shooter.ApplyRecoil(shotDir, isMachineGun: isMg, isRifle: isRifle);
+                        shooter.ApplyRecoil(shotDir, isMachineGun: isMg, isRifle: isRifle, isAntiTankRocket: isRpg);
                     }
                 }
                 else if (contactViews is not null)
@@ -1272,11 +1293,57 @@ void fragment() {
                             }
                             if (ageSeconds < 0.10f)
                             {
-                                cv.SetAiming(true);
+                                cv.SetAiming(true, isRpg ? 1.45f : 0.85f);
                             }
                             break;
                         }
                     }
+                }
+
+                if (isRpg)
+                {
+                    Vector3 backblastPos = origin - shotDir * 1.15f;
+                    if (ageSeconds < MuzzleFlashLifetime * 1.8f)
+                    {
+                        SpawnMuzzleFlash(origin, shotDir, isMachineGun: true, isRifle: false, elapsedOffset: ageSeconds * 0.6f);
+                        SpawnMuzzleFlash(backblastPos, -shotDir, isMachineGun: false, isRifle: false, elapsedOffset: ageSeconds * 0.5f);
+                        SpawnFlashLight(origin, energy: 4.8f, range: 18f, lifetime: 0.14f);
+                        if (ageSeconds < 0.12f)
+                        {
+                            OnBlastImpulse?.Invoke(origin, 0.12f);
+                        }
+                    }
+                    if (ageSeconds < SmokePuffLifetime)
+                    {
+                        SpawnRocketTrailSmoke(origin, initialScale: 0.35f, targetScale: 1.4f, lifetime: 1.4f, elapsedOffset: ageSeconds);
+                        SpawnRocketTrailSmoke(backblastPos - shotDir * 0.45f, initialScale: 0.70f, targetScale: 2.6f, lifetime: 2.4f, elapsedOffset: ageSeconds);
+                    }
+                    if (ageSeconds < flightDuration)
+                    {
+                        System.Numerics.Vector3 rpgOrigin = new(origin.X, origin.Y, origin.Z);
+                        System.Numerics.Vector3 rpgTarget = new(target.X, target.Y, target.Z);
+                        float rpgApex = Mathf.Clamp(distance * 0.014f, 0.18f, 1.8f);
+                        SpawnRocket(rpgOrigin, rpgTarget, rpgApex, flightDuration, ageSeconds, isAntiTankRocket: true);
+                        QueuePendingImpact(target, shotDir, ev.Result, flightDuration - ageSeconds, isMachineGun: false, isRifle: false, isAntiTankRocket: true);
+                    }
+                    else
+                    {
+                        float hitElapsed = ageSeconds - flightDuration;
+                        if (hitElapsed < SmokePuffLifetime)
+                        {
+                            TriggerRpgImpactFeedback(target, shotDir, ev.Result, hitElapsed);
+                        }
+                    }
+                    if (ageSeconds < 0.20f)
+                    {
+                        PlaySound(
+                            _rpgLaunchVariants[_presentationRng.Next(RpgLaunchVariantCount)],
+                            origin,
+                            SoundPriority.Cannon,
+                            maxDistance: 450f,
+                            unitSize: 28f);
+                    }
+                    continue;
                 }
 
                 if (ageSeconds < MuzzleFlashLifetime)
@@ -1305,9 +1372,13 @@ void fragment() {
                     {
                         SpawnMachineGunTracerBurst(origin, target, flightDuration, ageSeconds);
                     }
+                    else if (isRifle)
+                    {
+                        SpawnRifleTracerBurst(origin, target, flightDuration, isSovietRifle ? 0.095f : 0.075f, ageSeconds);
+                    }
                     else
                     {
-                        SpawnTracer(origin, target, flightDuration, isMachineGun: false, isRifle: isRifle, elapsedOffset: ageSeconds);
+                        SpawnTracer(origin, target, flightDuration, isMachineGun: false, isRifle: false, elapsedOffset: ageSeconds);
                     }
                     QueuePendingImpact(target, shotDir, ev.Result, flightDuration - ageSeconds, isMachineGun: isMg, isRifle: isRifle);
                 }
@@ -1333,7 +1404,11 @@ void fragment() {
 
                 if (ageSeconds < 0.15f)
                 {
-                    if (isRifle)
+                    if (isSovietRifle)
+                    {
+                        PlaySound(_ak74Variants[_presentationRng.Next(Ak74VariantCount)], origin, SoundPriority.MachineGunBurst);
+                    }
+                    else if (isRifle)
                     {
                         PlaySound(_rifleVariants[_presentationRng.Next(RifleVariantCount)], origin, SoundPriority.MachineGunBurst);
                     }
@@ -1385,7 +1460,12 @@ void fragment() {
                 {
                     bool isRifle = WeaponPresentation.IsRifle(ev.PresentationId);
                     bool isMg = WeaponPresentation.IsMachineGun(ev.PresentationId);
-                    if (ev.Result == HitResult.Deflected)
+                    bool isRpg = WeaponPresentation.IsAntiTankRocket(ev.PresentationId);
+                    if (isRpg)
+                    {
+                        TriggerRpgImpactFeedback(target, shotDir, ev.Result, ageSeconds);
+                    }
+                    else if (ev.Result == HitResult.Deflected)
                     {
                         TriggerRicochetFeedback(target, shotDir, ageSeconds, isMachineGun: isMg || isRifle);
                     }
@@ -1707,6 +1787,48 @@ void fragment() {
         smoke.Restart();
     }
 
+    private void TriggerRpgImpactFeedback(Vector3 position, Vector3 incomingDir, HitResult result, float elapsedOffset = 0f)
+    {
+        if (elapsedOffset >= SmokePuffLifetime)
+        {
+            return;
+        }
+
+        SpawnExplosion(position, elapsedOffset);
+        SpawnImpact(position, elapsedOffset);
+        SpawnSparks(position, elapsedOffset);
+        SpawnImpactSparkBurst(position, Vector3.Up, elapsedOffset);
+        SpawnSmokePuff(position, isImpactSmoke: true, elapsedOffset);
+        SpawnFlashLight(position + new Vector3(0f, 1.0f, 0f), energy: 6.4f, range: 24f, lifetime: 0.22f);
+
+        if (elapsedOffset < 0.14f)
+        {
+            OnBlastImpulse?.Invoke(position, 0.36f);
+            if (result == HitResult.Miss)
+            {
+                int burstIdx = _nextArtilleryBurst;
+                _nextArtilleryBurst = (_nextArtilleryBurst + 1) % MaxArtilleryBursts;
+                GpuParticles3D debris = _artilleryDebris[burstIdx];
+                debris.Position = position + new Vector3(0f, 0.25f, 0f);
+                debris.Scale = Vector3.One * 0.55f;
+                debris.AmountRatio = 0.45f;
+                debris.Preprocess = elapsedOffset;
+                debris.Restart();
+                SpawnResidue(position, elapsedOffset, scaleMultiplier: 0.45f);
+            }
+            else if (result == HitResult.Deflected)
+            {
+                TriggerRicochetFeedback(position, incomingDir, elapsedOffset, isMachineGun: false);
+            }
+            PlaySound(
+                _rpgImpactVariants[_presentationRng.Next(RpgImpactVariantCount)],
+                position,
+                SoundPriority.Explosion,
+                maxDistance: 520f,
+                unitSize: 32f);
+        }
+    }
+
     private void TriggerImpactFeedback(Vector3 position, float elapsedOffset = 0f)
     {
         if (elapsedOffset >= SmokePuffLifetime)
@@ -1950,6 +2072,44 @@ void fragment() {
         }
     }
 
+    private void SpawnRifleTracerBurst(Vector3 origin, Vector3 target, float flightDuration, float roundSpacingSeconds, float elapsedOffset)
+    {
+        // Tight 3-round infantry rifle burst synchronized with the procedural AK-74 / M16A1 audio cadence.
+        const int burstRounds = 3;
+        Vector3 dir = target - origin;
+        float dist = dir.Length();
+        if (dist < 0.1f) return;
+        Vector3 fwd = dir / dist;
+        Vector3 upRef = MathF.Abs(fwd.Y) > 0.96f ? Vector3.Right : Vector3.Up;
+        Vector3 side = fwd.Cross(upRef).Normalized();
+        Vector3 perpUp = side.Cross(fwd).Normalized();
+        float spreadRadius = Mathf.Clamp(dist * 0.004f, 0.12f, 0.60f);
+
+        for (int r = 0; r < burstRounds; r++)
+        {
+            float startDelay = r * roundSpacingSeconds - elapsedOffset;
+            float roundElapsed = startDelay < 0f ? -startDelay : 0f;
+            float pendingDelay = startDelay > 0f ? startDelay : 0f;
+
+            Vector3 roundTarget = target;
+            if (r > 0)
+            {
+                float sx = ((float)_presentationRng.NextDouble() * 2f - 1f) * spreadRadius;
+                float sy = ((float)_presentationRng.NextDouble() * 2f - 1f) * (spreadRadius * 0.55f);
+                roundTarget = target + side * sx + perpUp * sy;
+            }
+
+            SpawnTracer(
+                origin,
+                roundTarget,
+                flightDuration,
+                isMachineGun: false,
+                isRifle: true,
+                elapsedOffset: roundElapsed,
+                delay: pendingDelay);
+        }
+    }
+
     private void SpawnTracer(Vector3 origin, Vector3 target, float flightDuration, bool isMachineGun = false, bool isRifle = false, float elapsedOffset = 0f, float delay = 0f)
     {
         float distance = origin.DistanceTo(target);
@@ -1986,7 +2146,7 @@ void fragment() {
         tracer.Mesh.Visible = true;
     }
 
-    private void QueuePendingImpact(Vector3 target, Vector3 incomingDirection, HitResult result, float delay, bool isMachineGun = false, bool isRifle = false)
+    private void QueuePendingImpact(Vector3 target, Vector3 incomingDirection, HitResult result, float delay, bool isMachineGun = false, bool isRifle = false, bool isAntiTankRocket = false)
     {
         int idx = AcquirePendingImpactSlot();
         ref PendingImpact pi = ref _pendingImpacts[idx];
@@ -1996,6 +2156,7 @@ void fragment() {
         pi.Result = result;
         pi.IsMachineGun = isMachineGun;
         pi.IsRifle = isRifle;
+        pi.IsAntiTankRocket = isAntiTankRocket;
         pi.DelayRemaining = delay;
     }
 
@@ -2380,7 +2541,8 @@ void fragment() {
         System.Numerics.Vector3 target,
         float apexHeight,
         float flightDuration,
-        float elapsedOffset = 0f)
+        float elapsedOffset = 0f,
+        bool isAntiTankRocket = false)
     {
         if (elapsedOffset >= flightDuration) return;
 
@@ -2393,12 +2555,14 @@ void fragment() {
         rocket.TotalDuration = flightDuration;
         rocket.ElapsedTime = elapsedOffset;
         rocket.SmokeAccumulator = 0f;
-        rocket.IncomingSoundPlayed = (flightDuration - elapsedOffset) < 0.45f;
+        rocket.IsAntiTankRocket = isAntiTankRocket;
+        rocket.IncomingSoundPlayed = isAntiTankRocket || (flightDuration - elapsedOffset) < 0.45f;
+        rocket.Root.Scale = isAntiTankRocket ? Vector3.One * 0.36f : Vector3.One;
 
         PositionRocket(ref rocket);
         rocket.BodyMesh.Visible = true;
         rocket.Root.Visible = true;
-        rocket.Contrail.AmountRatio = 1.0f;
+        rocket.Contrail.AmountRatio = isAntiTankRocket ? 0.65f : 1.0f;
         rocket.Contrail.Emitting = true;
     }
 
@@ -2422,9 +2586,9 @@ void fragment() {
             rocket.Root.LookAt(gPos + gDir, up);
         }
 
-        // Authentic 9M22U two-phase flight: bright ~2.1s solid-fuel boost, rapid sputter burnout, then dark ballistic coast
-        const float burnEnd = 0.26f;
-        const float taperEnd = 0.32f;
+        // PG-7V sustainer burns across most of its short direct-fire flight; 9M22U boosts then coasts.
+        float burnEnd = rocket.IsAntiTankRocket ? 0.84f : 0.26f;
+        float taperEnd = rocket.IsAntiTankRocket ? 0.94f : 0.32f;
         bool motorBurning = t < taperEnd;
         rocket.FlameMesh.Visible = motorBurning;
         rocket.GlowMesh.Visible = motorBurning;
@@ -2736,7 +2900,11 @@ void fragment() {
             {
                 float overshoot = -pi.DelayRemaining;
                 pi.Active = false;
-                if (pi.Result == HitResult.Deflected)
+                if (pi.IsAntiTankRocket)
+                {
+                    TriggerRpgImpactFeedback(pi.Target, pi.IncomingDirection, pi.Result, overshoot);
+                }
+                else if (pi.Result == HitResult.Deflected)
                 {
                     TriggerRicochetFeedback(pi.Target, pi.IncomingDirection, overshoot, isMachineGun: pi.IsMachineGun || pi.IsRifle);
                 }
@@ -2946,16 +3114,19 @@ void fragment() {
             }
 
             float t = rocket.ElapsedTime / rocket.TotalDuration;
-            if (t < 0.28f)
+            float contrailFullEnd = rocket.IsAntiTankRocket ? 0.86f : 0.28f;
+            float contrailFadeEnd = rocket.IsAntiTankRocket ? 0.96f : 0.34f;
+            float baseRatio = rocket.IsAntiTankRocket ? 0.65f : 1.0f;
+            if (t < contrailFullEnd)
             {
-                rocket.Contrail.AmountRatio = 1.0f;
+                rocket.Contrail.AmountRatio = baseRatio;
                 rocket.Contrail.Emitting = true;
             }
-            else if (t < 0.34f)
+            else if (t < contrailFadeEnd)
             {
                 // Brief thinning smolder tail immediately after propellant exhaustion
-                float wisp = 1.0f - (t - 0.28f) / 0.06f;
-                rocket.Contrail.AmountRatio = Math.Clamp(0.18f + 0.82f * wisp, 0.15f, 1.0f);
+                float wisp = 1.0f - (t - contrailFullEnd) / (contrailFadeEnd - contrailFullEnd);
+                rocket.Contrail.AmountRatio = Math.Clamp((0.18f + 0.82f * wisp) * baseRatio, 0.12f, baseRatio);
                 rocket.Contrail.Emitting = true;
             }
             else

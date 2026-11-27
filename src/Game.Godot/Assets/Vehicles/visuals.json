@@ -135,9 +135,27 @@
     "scene": "res://Assets/Infantry/US/us_rifleman.glb",
     "scale": 1.0
   },
+  "soviet_rifleman": {
+    "scene": "res://Assets/Infantry/USSR/soviet_rifleman.glb",
+    "scale": 1.0
+  },
+  "soviet_rpg": {
+    "scene": "res://Assets/Infantry/USSR/soviet_rpg.glb",
+    "scale": 1.0
+  },
   "contact_infantry": {
     "scene": "res://Assets/Infantry/US/us_rifleman.glb",
-    "scale": 1.0
+    "scale": 1.0,
+    "factions": {
+      "soviet": {
+        "scene": "res://Assets/Infantry/USSR/soviet_rifleman.glb",
+        "scale": 1.0
+      },
+      "us": {
+        "scene": "res://Assets/Infantry/US/us_rifleman.glb",
+        "scale": 1.0
+      }
+    }
   },
   "ch47d": {
     "scene": "res://Assets/Vehicles/CH47/ch47.glb",
