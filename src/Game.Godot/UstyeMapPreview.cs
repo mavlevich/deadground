@@ -263,7 +263,7 @@ public partial class UstyeMapPreview : Node3D
 
         if (_mapView is not null)
         {
-            _mapView.ApplyEnvironmentTints(profile.MaterialTints, profile.Weather?.Wetness ?? 0f);
+            _mapView.ApplyEnvironmentTints(profile.MaterialTints, profile.Weather?.Wetness ?? 0f, profile.Sky.SkyHorizonColorHex);
         }
     }
 

@@ -8,6 +8,9 @@ uniform float depth_distance : hint_range(0.1, 4.0) = 1.4;
 uniform float roughness : hint_range(0.0, 1.0) = 0.16;
 uniform float metallic : hint_range(0.0, 1.0) = 0.08;
 uniform float flow_speed : hint_range(0.0, 1.0) = 0.12;
+uniform vec4 horizon_reflect_color : source_color = vec4(0.54, 0.60, 0.64, 1.0);
+uniform float horizon_reflect_strength : hint_range(0.0, 1.0) = 0.0;
+uniform float rain_ripple : hint_range(0.0, 1.0) = 0.0;
 
 uniform sampler2D depth_texture : hint_depth_texture, filter_linear_mipmap;
 
@@ -55,6 +58,23 @@ void fragment() {
     vec4 water_col = mix(shallows_color, deep_color, depth_factor);
     ALBEDO = water_col.rgb;
 
+    // Grazing-angle sky horizon reflection (brings sunset and moonlit water surfaces alive)
+    if (horizon_reflect_strength > 0.001) {
+        float ndotv = clamp(dot(normalize(NORMAL), normalize(VIEW)), 0.0, 1.0);
+        float fresnel = pow(1.0 - ndotv, 2.4);
+        ALBEDO = mix(ALBEDO, horizon_reflect_color.rgb, fresnel * horizon_reflect_strength);
+    }
+
+    // Subtle raindrop shimmer ripples during storm weather
+    float effective_roughness = roughness;
+    if (rain_ripple > 0.001) {
+        float rip1 = sin(world_pos.x * 3.1 + TIME * 11.0) * sin(world_pos.z * 3.4 - TIME * 9.5);
+        float rip2 = sin((world_pos.x - world_pos.z) * 4.7 + TIME * 13.0);
+        float sparkle = smoothstep(0.55, 0.95, 0.5 + 0.35 * rip1 + 0.15 * rip2);
+        ALBEDO = mix(ALBEDO, horizon_reflect_color.rgb * 0.95, sparkle * rain_ripple * 0.18);
+        effective_roughness = mix(roughness, 0.28, rain_ripple * 0.55);
+    }
+
     // Smooth shoreline fade: zero hard geometric seam at the bank edge
     float shore_alpha = smoothstep(0.0, 0.18, water_depth);
     ALPHA = water_col.a * shore_alpha;
@@ -63,12 +83,11 @@ void fragment() {
     if (water_depth < 0.22) {
         float foam_t = 1.0 - (water_depth / 0.22);
         float foam_break = sin(world_pos.x * 0.45 + world_pos.z * 0.35 + TIME * 0.6) * 0.5 + 0.5;
-        foam_break *= sin(world_pos.x * 1.2 - world_pos.z * 0.8) * 0.5 + 0.5;
-        float foam_intensity = foam_t * smoothstep(0.35, 0.70, foam_break);
+        float foam_intensity = foam_t * smoothstep(0.35, 0.70, foam_break * (sin(world_pos.x * 1.2 - world_pos.z * 0.8) * 0.5 + 0.5));
         ALBEDO = mix(ALBEDO, vec3(0.72, 0.76, 0.73), foam_intensity * 0.40);
     }
 
-    ROUGHNESS = roughness;
+    ROUGHNESS = effective_roughness;
     METALLIC = metallic;
     SPECULAR = 0.5;
 }

@@ -95,14 +95,25 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
         }
     }
 
-    public void ApplyEnvironmentTints(MaterialTintsSettings tints, float wetness = 0f)
+    public void ApplyEnvironmentTints(MaterialTintsSettings tints, float wetness = 0f, string? skyHorizonHex = null)
     {
+        float w = Math.Clamp(wetness, 0f, 1f);
         if (_waterMaterial is not null)
         {
             if (EnvironmentProfile.TryParseHexColor(tints.WaterShallowsHex, out Color shallows))
                 _waterMaterial.SetShaderParameter("shallows_color", shallows);
             if (EnvironmentProfile.TryParseHexColor(tints.WaterDeepHex, out Color deep))
                 _waterMaterial.SetShaderParameter("deep_color", deep);
+            if (!string.IsNullOrWhiteSpace(skyHorizonHex) && EnvironmentProfile.TryParseHexColor(skyHorizonHex, out Color skyHorizon))
+            {
+                _waterMaterial.SetShaderParameter("horizon_reflect_color", skyHorizon);
+                _waterMaterial.SetShaderParameter("horizon_reflect_strength", 0.52f);
+            }
+            else
+            {
+                _waterMaterial.SetShaderParameter("horizon_reflect_strength", 0.0f);
+            }
+            _waterMaterial.SetShaderParameter("rain_ripple", w);
         }
         if (_coniferMat is not null && EnvironmentProfile.TryParseHexColor(tints.ForestConiferHex, out Color conifer))
         {
@@ -113,7 +124,6 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
             _deciduousMat.AlbedoColor = deciduous;
         }
 
-        float w = Math.Clamp(wetness, 0f, 1f);
         BaseMaterial3D.SpecularModeEnum roadSpecMode = w > 0.01f
             ? BaseMaterial3D.SpecularModeEnum.SchlickGgx
             : BaseMaterial3D.SpecularModeEnum.Disabled;
@@ -125,7 +135,11 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
                 _asphaltMaterial.AlbedoColor = asphalt;
             }
             _asphaltMaterial.SpecularMode = roadSpecMode;
-            _asphaltMaterial.Roughness = Mathf.Lerp(0.88f, 0.34f, w);
+            _asphaltMaterial.Roughness = Mathf.Lerp(0.88f, 0.38f, w);
+            _asphaltMaterial.MetallicSpecular = Mathf.Lerp(0.50f, 0.75f, w);
+            _asphaltMaterial.ClearcoatEnabled = w > 0.2f;
+            _asphaltMaterial.Clearcoat = w * 0.48f;
+            _asphaltMaterial.ClearcoatRoughness = 0.22f;
         }
         if (_gravelMaterial is not null)
         {

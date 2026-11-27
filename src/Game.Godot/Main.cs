@@ -753,7 +753,7 @@ public partial class Main : Node3D
 
         if (_ustyeMapView is not null)
         {
-            _ustyeMapView.ApplyEnvironmentTints(activeProfile.MaterialTints, activeProfile.Weather?.Wetness ?? 0f);
+            _ustyeMapView.ApplyEnvironmentTints(activeProfile.MaterialTints, activeProfile.Weather?.Wetness ?? 0f, activeProfile.Sky.SkyHorizonColorHex);
         }
 
         _settingsPanel = new SettingsPanel();
@@ -781,7 +781,7 @@ public partial class Main : Node3D
             _environmentView.UpdateShadowTierForCamera(_cameraRig.Size, _activeShadowMapLayers);
             if (_ustyeMapView is not null)
             {
-                _ustyeMapView.ApplyEnvironmentTints(profile.MaterialTints, profile.Weather?.Wetness ?? 0f);
+                _ustyeMapView.ApplyEnvironmentTints(profile.MaterialTints, profile.Weather?.Wetness ?? 0f, profile.Sky.SkyHorizonColorHex);
             }
             _smokeView?.ApplyEnvironment(profile);
         };
@@ -1178,7 +1178,7 @@ public partial class Main : Node3D
             _terrainWindingValid = !_smokeTest || _ustyeMapView.HasUpwardFrontFaces();
             if (_environmentView is not null)
             {
-                _ustyeMapView.ApplyEnvironmentTints(_environmentView.ActiveProfile.MaterialTints, _environmentView.ActiveWetness);
+                _ustyeMapView.ApplyEnvironmentTints(_environmentView.ActiveProfile.MaterialTints, _environmentView.ActiveWetness, _environmentView.ActiveProfile.Sky.SkyHorizonColorHex);
             }
         }
         else

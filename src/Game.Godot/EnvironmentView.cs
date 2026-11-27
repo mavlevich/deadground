@@ -102,6 +102,31 @@ public sealed partial class EnvironmentView : Node3D
 
     private static (GpuParticles3D Particles, ParticleProcessMaterial Process, StandardMaterial3D DrawMat) CreateRainEmitter()
     {
+        // Soft tapered vertical streak texture so raindrops feather organically instead of reading as hard dashes.
+        const int texW = 16;
+        const int texH = 64;
+        byte[] texBytes = new byte[texW * texH * 4];
+        for (int y = 0; y < texH; y++)
+        {
+            float v = (y + 0.5f) / texH; // 0 = top tail, 1 = bottom drop head
+            float topFade = Math.Clamp(v / 0.55f, 0f, 1f);
+            float bottomFade = Math.Clamp((1f - v) / 0.18f, 0f, 1f);
+            float verticalProfile = topFade * topFade * bottomFade;
+            for (int x = 0; x < texW; x++)
+            {
+                float u = ((x + 0.5f) / texW) * 2f - 1f;
+                float radial = Math.Clamp(1f - u * u, 0f, 1f);
+                float alpha = Math.Clamp(verticalProfile * radial * radial, 0f, 1f);
+                int idx = (y * texW + x) * 4;
+                texBytes[idx] = 255;
+                texBytes[idx + 1] = 255;
+                texBytes[idx + 2] = 255;
+                texBytes[idx + 3] = (byte)MathF.Round(alpha * 255f);
+            }
+        }
+        Image streakImg = Image.CreateFromData(texW, texH, useMipmaps: false, Image.Format.Rgba8, texBytes);
+        ImageTexture streakTex = ImageTexture.CreateFromImage(streakImg);
+
         StandardMaterial3D drawMat = new()
         {
             ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
@@ -110,21 +135,28 @@ public sealed partial class EnvironmentView : Node3D
             CullMode = BaseMaterial3D.CullModeEnum.Disabled,
             DepthDrawMode = BaseMaterial3D.DepthDrawModeEnum.Disabled,
             NoDepthTest = false,
-            AlbedoColor = new Color(0.71f, 0.78f, 0.85f, 0.34f)
+            AlbedoTexture = streakTex,
+            AlbedoColor = new Color(0.75f, 0.82f, 0.89f, 0.34f)
         };
 
-        // Crossed twin-ribbon streak mesh (4 triangles) so slanted raindrops read clearly from every camera azimuth.
-        const float halfW = 0.020f;
-        const float halfH = 1.65f;
+        // Crossed twin-ribbon streak mesh (4 triangles) with UVs so tapered raindrops read softly from every azimuth.
+        const float halfW = 0.042f;
+        const float halfH = 1.90f;
         Vector3[] verts =
         [
             new(-halfW, -halfH, 0f), new(halfW, -halfH, 0f), new(halfW, halfH, 0f), new(-halfW, halfH, 0f),
             new(0f, -halfH, -halfW), new(0f, -halfH, halfW), new(0f, halfH, halfW), new(0f, halfH, -halfW)
         ];
+        Vector2[] uvs =
+        [
+            new(0f, 1f), new(1f, 1f), new(1f, 0f), new(0f, 0f),
+            new(0f, 1f), new(1f, 1f), new(1f, 0f), new(0f, 0f)
+        ];
         int[] indices = [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7];
         using Godot.Collections.Array arrays = new();
         arrays.Resize((int)Mesh.ArrayType.Max);
         arrays[(int)Mesh.ArrayType.Vertex] = verts;
+        arrays[(int)Mesh.ArrayType.TexUV] = uvs;
         arrays[(int)Mesh.ArrayType.Index] = indices;
         ArrayMesh streakMesh = new();
         streakMesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
@@ -133,25 +165,27 @@ public sealed partial class EnvironmentView : Node3D
         ParticleProcessMaterial process = new()
         {
             EmissionShape = ParticleProcessMaterial.EmissionShapeEnum.Box,
-            EmissionBoxExtents = new Vector3(135f, 6f, 135f),
+            EmissionBoxExtents = new Vector3(145f, 8f, 145f),
             Direction = new Vector3(0.10f, -1.0f, 0.06f).Normalized(),
-            Spread = 3.5f,
-            InitialVelocityMin = 46f,
-            InitialVelocityMax = 62f,
+            Spread = 5.0f,
+            InitialVelocityMin = 44f,
+            InitialVelocityMax = 66f,
             Gravity = new Vector3(3.0f, -32f, 1.5f),
+            ScaleMin = 0.65f,
+            ScaleMax = 1.45f,
             ParticleFlagAlignY = true
         };
 
         GpuParticles3D particles = new()
         {
             Name = "WeatherRainParticles",
-            Amount = 2200,
+            Amount = 2600,
             Lifetime = 1.05f,
             Preprocess = 0.8f,
             Emitting = false,
             Visible = false,
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
-            VisibilityAabb = new Aabb(new Vector3(-180f, -90f, -180f), new Vector3(360f, 120f, 360f)),
+            VisibilityAabb = new Aabb(new Vector3(-190f, -90f, -190f), new Vector3(380f, 120f, 380f)),
             ProcessMaterial = process,
             DrawPass1 = streakMesh
         };
@@ -197,7 +231,7 @@ public sealed partial class EnvironmentView : Node3D
         };
         env.AmbientLightColor = new Color(profile.Ambient.ColorHex);
         env.AmbientLightEnergy = profile.Ambient.Energy;
-        env.AmbientLightSkyContribution = env.AmbientLightSource == Godot.Environment.AmbientSource.Sky ? 0.72f : 0f;
+        env.AmbientLightSkyContribution = env.AmbientLightSource == Godot.Environment.AmbientSource.Sky ? 0.55f : 0f;
         env.ReflectedLightSource = Godot.Environment.ReflectionSource.Sky;
 
         // 4. Tonemap and exposure
@@ -268,7 +302,7 @@ public sealed partial class EnvironmentView : Node3D
         Color rainColor = EnvironmentProfile.TryParseHexColor(weather.RainColorHex, out Color parsedRain)
             ? parsedRain
             : new Color(0.71f, 0.78f, 0.85f);
-        float alpha = Mathf.Lerp(0.14f, 0.25f, intensity);
+        float alpha = Mathf.Lerp(0.22f, 0.42f, intensity);
         _rainDrawMaterial.AlbedoColor = new Color(rainColor.R, rainColor.G, rainColor.B, alpha);
 
         Vector3 fallDir = new Vector3(weather.WindX, -28f, weather.WindZ).Normalized();
