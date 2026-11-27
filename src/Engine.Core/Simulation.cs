@@ -1198,5 +1198,47 @@ public sealed class Simulation : IDisposable, IRandomStreamProvider
         return false;
     }
 
+    // Local proving-ground sandbox helper: spawns a unit cleanly through WorldState and initializes auxiliary systems.
+    public bool TrySpawnSandboxUnit(
+        int owner,
+        ushort definition,
+        Vector2 position,
+        float speed,
+        int maxHealth,
+        int ammo,
+        float initialYaw,
+        FireStance stance,
+        int passengerCapacity,
+        out EntityId spawnedId)
+    {
+        spawnedId = default;
+        if (owner < 1 || owner > MaxPlayers || _world.Count >= _world.Capacity || !_world.Map.Contains(position) || speed <= 0f)
+        {
+            return false;
+        }
+        spawnedId = _world.CreateUnit(owner, definition, position, speed, maxHealth, ammo, initialYaw, passengerCapacity: passengerCapacity);
+        _world.SetFireStance(spawnedId, stance);
+        _smoke?.EnsureUnitsInitialized(_world);
+        _flight?.EnsureUnitsInitialized(_world);
+        _guidedMissiles?.EnsureUnitsInitialized(_world);
+        return true;
+    }
+
+    // Local proving-ground sandbox helper: switches fire stance for all active units owned by a given side.
+    public int SetAllUnitsFireStanceForOwner(int owner, FireStance stance)
+    {
+        int updated = 0;
+        for (int i = 0; i < _world.Count; i++)
+        {
+            UnitState unit = _world.GetUnitAt(i);
+            if (unit.Owner == owner)
+            {
+                _world.SetFireStance(unit.Id, stance);
+                updated++;
+            }
+        }
+        return updated;
+    }
+
     public void Dispose() => _world.Dispose();
 }

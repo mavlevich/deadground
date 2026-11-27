@@ -78,6 +78,7 @@ public partial class Main : Node3D
     private SelectionCard _selectionCard = null!;
     private ContextActionPanel _contextActionPanel = null!;
     private UnitCommandPanel _commandPanel = null!;
+    private ProvingGroundPanel? _provingGroundPanel;
     private ControlsHelpPanel _helpPanel = null!;
     private bool _debugHudVisible;
     private bool _showRangeRings;
@@ -92,8 +93,8 @@ public partial class Main : Node3D
     private readonly SelectionController _selectionController = new();
     private PanelContainer _topHud = null!, _utilityHud = null!;
     private TacticalMinimap _minimap = null!;
-    private readonly Rect2[] _badgeOccludingPanels = new Rect2[9];
-    private readonly Rect2[] _inputOccludingPanels = new Rect2[8];
+    private readonly Rect2[] _badgeOccludingPanels = new Rect2[10];
+    private readonly Rect2[] _inputOccludingPanels = new Rect2[9];
     private FogOfWarView? _fogOfWar;
     private string? _screenshotPath;
     private double _screenshotTimer = 0.5;
@@ -638,6 +639,12 @@ public partial class Main : Node3D
                 _map = scenarioGeometry.HeightMap;
                 setup = UrbanDestructionPlaygroundScenario.CreateMatchSetup(scenarioGeometry);
             }
+            else if (_scenario == "proving-ground")
+            {
+                scenarioGeometry = ProvingGroundScenario.CreateStaticGeometry();
+                _map = scenarioGeometry.HeightMap;
+                setup = ProvingGroundScenario.CreateMatchSetup(scenarioGeometry);
+            }
             else if (_scenario == "tank-battle")
             {
                 scenarioGeometry = TankBattleScenario.CreateStaticGeometry();
@@ -690,6 +697,7 @@ public partial class Main : Node3D
                     "artillery-playground" => ArtilleryPlaygroundScenario.CreateSimulation(scenarioGeometry!),
                     "air-defense-playground" => AirDefensePlaygroundScenario.CreateSimulation(scenarioGeometry!),
                     "urban-destruction-playground" => UrbanDestructionPlaygroundScenario.CreateSimulation(scenarioGeometry!),
+                    "proving-ground" => ProvingGroundScenario.CreateSimulation(scenarioGeometry!),
                     "tank-battle" => TankBattleScenario.CreateSimulation(scenarioGeometry!),
                     _ => PrototypeScenario.Create(_map)
                 };
@@ -838,6 +846,7 @@ public partial class Main : Node3D
             "artillery-playground" => 220,
             "air-defense-playground" => 440,
             "urban-destruction-playground" => 155,
+            "proving-ground" => ProvingGroundScenario.Zones[0].CameraSize,
             "tank-battle" => 160,
             _ => 112
         };
@@ -861,6 +870,7 @@ public partial class Main : Node3D
             "artillery-playground" => new Vector3(1024f, 4f, ArtilleryPlaygroundScenario.GradAlphaPos.Y),
             "air-defense-playground" => new Vector3(1024f, 12f, 920f),
             "urban-destruction-playground" => new Vector3(500f, 4f, 470f),
+            "proving-ground" => new Vector3(ProvingGroundScenario.Zones[0].Focus.X, ProvingGroundScenario.BaseHeight, ProvingGroundScenario.Zones[0].Focus.Y),
             "tank-battle" => new Vector3(TankBattleScenario.Center.X - TankBattleScenario.StartOffset, 4f, TankBattleScenario.Center.Y),
             _ => new Vector3(64, 0, 64)
         };
@@ -868,7 +878,7 @@ public partial class Main : Node3D
         _initialSpawnFocus = initialFocus;
         _initialSpawnSize = initialCameraSize;
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
-        if (_scenario == "ustye-ground" || _scenario == "ustye-raid" || _scenario == "tank-battle" || _scenario == "artillery-playground" || _scenario == "air-defense-playground" || _scenario == "urban-destruction-playground")
+        if (_scenario == "ustye-ground" || _scenario == "ustye-raid" || _scenario == "tank-battle" || _scenario == "artillery-playground" || _scenario == "air-defense-playground" || _scenario == "urban-destruction-playground" || _scenario == "proving-ground")
         {
             _cameraRig.Model.SetSizeLimits(30f, 5500f);
             _cameraRig.FarClipMargin = 3000f;
@@ -2087,6 +2097,7 @@ public partial class Main : Node3D
                     "artillery-playground" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 4,
                     "air-defense-playground" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length >= 3,
                     "urban-destruction-playground" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 4,
+                    "proving-ground" => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length >= 30,
                     _ => _terrainWindingValid && _session.Tick >= 10 && _session.Replica.OwnUnits.Length == 12 &&
                         _session.Replica.OwnUnits[0].Position.Y > 24
                 };
@@ -2108,6 +2119,7 @@ public partial class Main : Node3D
                     "artillery-playground" => "ARTILLERY_PLAYGROUND_SMOKE",
                     "air-defense-playground" => "AIR_DEFENSE_PLAYGROUND_SMOKE",
                     "urban-destruction-playground" => "URBAN_DESTRUCTION_PLAYGROUND_SMOKE",
+                    "proving-ground" => "PROVING_GROUND_SMOKE",
                     _ => "M0_CLIENT_SMOKE"
                 };
                 string token = prefix + (ok ? "_OK" : "_FAILED");
@@ -2702,6 +2714,29 @@ public partial class Main : Node3D
                 return;
             }
 
+            if (_scenario == "proving-ground" && _session is LocalSession)
+            {
+                if (key.Keycode is Key.F1 or Key.F2 or Key.F3 or Key.F4 or Key.F5)
+                {
+                    int zoneIdx = (int)(key.Keycode - Key.F1);
+                    JumpToProvingGroundZone(zoneIdx);
+                    GetViewport().SetInputAsHandled();
+                    return;
+                }
+                if (key.Keycode == Key.F6)
+                {
+                    _provingGroundPanel?.CycleOpforStance();
+                    GetViewport().SetInputAsHandled();
+                    return;
+                }
+                if (key.Keycode == Key.P && !key.CtrlPressed && !key.MetaPressed && !key.AltPressed)
+                {
+                    _provingGroundPanel?.TogglePlacementMode();
+                    GetViewport().SetInputAsHandled();
+                    return;
+                }
+            }
+
             if ((key.Keycode == Key.F5 || (key.Keycode == Key.R && (key.CtrlPressed || key.MetaPressed))) && _session is LocalSession)
             {
                 if (_scenario == "ustye-ground")
@@ -2719,6 +2754,13 @@ public partial class Main : Node3D
 
             if (key.Keycode == Key.Escape)
             {
+                if (_provingGroundPanel?.IsPlacementActive == true)
+                {
+                    _provingGroundPanel.SetPlacementActive(false);
+                    _status.Text = "Unit placement cancelled";
+                    GetViewport().SetInputAsHandled();
+                    return;
+                }
                 if (_hudTargetingMode != HudTargetingMode.None)
                 {
                     CancelHudTargeting();
@@ -3002,11 +3044,26 @@ public partial class Main : Node3D
 
         if (!mouse.Pressed) return;
 
+        if (mouse.ButtonIndex == MouseButton.Right && mouse.Pressed && _provingGroundPanel?.IsPlacementActive == true)
+        {
+            _provingGroundPanel.SetPlacementActive(false);
+            _status.Text = "Unit placement cancelled";
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
         if (mouse.ButtonIndex == MouseButton.Left)
         {
             RefreshOccludingPanels();
             if (SelectionController.IsPointOccluded(mouse.Position, _inputOccludingPanels))
             {
+                return;
+            }
+
+            if (_provingGroundPanel?.IsPlacementActive == true && _session is LocalSession)
+            {
+                TryPlaceProvingGroundUnit(mouse.Position, mouse.ShiftPressed);
+                GetViewport().SetInputAsHandled();
                 return;
             }
 
@@ -3888,6 +3945,7 @@ public partial class Main : Node3D
         _inputOccludingPanels[5] = minimapRect;
         _inputOccludingPanels[6] = _contextActionPanel?.Visible == true ? _contextActionPanel.GetGlobalRect() : default;
         _inputOccludingPanels[7] = _commandPanel?.Visible == true ? _commandPanel.GetGlobalRect() : default;
+        _inputOccludingPanels[8] = _provingGroundPanel?.Visible == true ? _provingGroundPanel.GetGlobalRect() : default;
 
         _badgeOccludingPanels[0] = topRect;
         _badgeOccludingPanels[1] = utilityRect;
@@ -3898,6 +3956,7 @@ public partial class Main : Node3D
         _badgeOccludingPanels[6] = minimapRect;
         _badgeOccludingPanels[7] = _contextActionPanel?.Visible == true ? _contextActionPanel.GetGlobalRect() : default;
         _badgeOccludingPanels[8] = _commandPanel?.Visible == true ? _commandPanel.GetGlobalRect() : default;
+        _badgeOccludingPanels[9] = _provingGroundPanel?.Visible == true ? _provingGroundPanel.GetGlobalRect() : default;
     }
 
     internal static bool TryGetNavigationLargeDebugTarget(
@@ -5354,6 +5413,29 @@ public partial class Main : Node3D
         _orderCursorOverlay = new OrderCursorOverlay();
         canvas.AddChild(_orderCursorOverlay);
 
+        _provingGroundPanel = new ProvingGroundPanel
+        {
+            Visible = _scenario == "proving-ground" && _session is LocalSession
+        };
+        _provingGroundPanel.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.TopRight);
+        _provingGroundPanel.OffsetRight = -16;
+        _provingGroundPanel.OffsetLeft = -256;
+        _provingGroundPanel.OffsetTop = 64;
+        _provingGroundPanel.ZoneSelected += JumpToProvingGroundZone;
+        _provingGroundPanel.OpforStanceChanged += ApplyProvingGroundOpforStance;
+        _provingGroundPanel.ResetRequested += () =>
+        {
+            ResetLocalScenario();
+            _status.Text = "Proving ground reset";
+        };
+        _provingGroundPanel.PlacementModeChanged += active =>
+        {
+            _status.Text = active
+                ? $"Placement ON: click terrain to spawn {_provingGroundPanel.SelectedUnitId} (Shift: multi, RMB/Esc: stop)"
+                : "Placement OFF";
+        };
+        canvas.AddChild(_provingGroundPanel);
+
         UstyePlanData? plan = (_scenario == "ustye-ground" || _scenario == "ustye-raid") ? UstyePlanData.Load() : null;
         _minimap.Initialize(_scenarioGeometry!, _cameraRig, _camera, _session, _unitViews, _contactViews, _catalog, plan);
 
@@ -5454,6 +5536,8 @@ public partial class Main : Node3D
             "combat" => CombatScenario.CreateSimulation(_scenarioGeometry),
             "visibility" => VisibilityScenario.CreateSimulation(_scenarioGeometry),
             "navigation" => NavigationScenario.CreateSimulation(_scenarioGeometry),
+            "urban-destruction-playground" => UrbanDestructionPlaygroundScenario.CreateSimulation(_scenarioGeometry),
+            "proving-ground" => ProvingGroundScenario.CreateSimulation(_scenarioGeometry),
             "navigation-large" => LargeNavigationScenario.CreateSimulation(_scenarioGeometry),
             _ => PrototypeScenario.Create(_map)
         };
@@ -5747,6 +5831,17 @@ public partial class Main : Node3D
             Simulation localSimulation = UrbanDestructionPlaygroundScenario.CreateSimulation(scenarioGeometry);
             _session = new LocalSession(localSimulation, player: 1);
         }
+        else if (scenarioName == "proving-ground")
+        {
+            scenarioGeometry = ProvingGroundScenario.CreateStaticGeometry();
+            _map = scenarioGeometry.HeightMap;
+            setup = ProvingGroundScenario.CreateMatchSetup(scenarioGeometry);
+            _matchSetup = setup;
+            _scenarioGeometry = scenarioGeometry;
+            _catalog = ScenarioContent.LoadCatalog("proving-ground");
+            Simulation localSimulation = ProvingGroundScenario.CreateSimulation(scenarioGeometry);
+            _session = new LocalSession(localSimulation, player: 1);
+        }
         else if (scenarioName == "ustye-ground")
         {
             scenarioGeometry = UstyeGroundScenario.CreateStaticGeometry();
@@ -5782,6 +5877,7 @@ public partial class Main : Node3D
             "artillery-playground" => new Vector3(1024f, 4f, ArtilleryPlaygroundScenario.GradAlphaPos.Y),
             "air-defense-playground" => new Vector3(1024f, 12f, 920f),
             "urban-destruction-playground" => new Vector3(500f, 4f, 470f),
+            "proving-ground" => new Vector3(ProvingGroundScenario.Zones[0].Focus.X, ProvingGroundScenario.BaseHeight, ProvingGroundScenario.Zones[0].Focus.Y),
             _ => new Vector3(64, 0, 64)
         };
         float initialCameraSize = scenarioName switch
@@ -5797,8 +5893,14 @@ public partial class Main : Node3D
             "artillery-playground" => 220f,
             "air-defense-playground" => 440f,
             "urban-destruction-playground" => 155f,
+            "proving-ground" => ProvingGroundScenario.Zones[0].CameraSize,
             _ => 112f
         };
+        if (_provingGroundPanel is not null)
+        {
+            _provingGroundPanel.Visible = scenarioName == "proving-ground" && _session is LocalSession;
+            _provingGroundPanel.SetPlacementActive(false);
+        }
         _cameraRig = new CameraRig(_camera, initialFocus, initialCameraSize, _map.Width, _map.Depth);
         _cameraRig.SetDefaultView(initialFocus, initialCameraSize);
         _environmentView?.UpdateShadowTierForCamera(_cameraRig.Size, _activeShadowMapLayers);
@@ -6017,6 +6119,7 @@ public partial class Main : Node3D
             "artillery-playground" => "BM-21 GRAD ROCKET ARTILLERY PROVING GROUND",
             "air-defense-playground" => "9K35 STRELA-10 AIR DEFENSE & FLARES PROVING GROUND",
             "urban-destruction-playground" => "SOVIET PANELKA 1-464 URBAN DESTRUCTION PROVING GROUND",
+            "proving-ground" => "MULTI-ZONE TACTICAL PROVING GROUND (F1-F5 ZONES, P SPAWN)",
             _ => "M0 NETWORK TEST"
         };
         return $"DEAD GROUND   /   SIDE {assignedSide}   /   {name}";
@@ -6101,7 +6204,83 @@ public partial class Main : Node3D
             return new Vector3(500f, 4f, 470f);
         }
 
+        if (scenario == "proving-ground")
+        {
+            return new Vector3(ProvingGroundScenario.Zones[0].Focus.X, ProvingGroundScenario.BaseHeight, ProvingGroundScenario.Zones[0].Focus.Y);
+        }
+
         return fallbackFocus;
+    }
+
+    private void JumpToProvingGroundZone(int zoneIndex)
+    {
+        if (zoneIndex < 0 || zoneIndex >= ProvingGroundScenario.Zones.Length) return;
+        (string name, NumericsVector2 focus, float camSize) = ProvingGroundScenario.Zones[zoneIndex];
+        float groundY = _map.GetHeight(focus.X, focus.Y);
+        _cameraRig.Model.SetZoom(camSize);
+        _cameraRig.CenterOn(new Vector3(focus.X, groundY, focus.Y));
+        _status.Text = $"Proving ground: {name}";
+        _orderNotification?.ShowNotification(name);
+    }
+
+    private void ApplyProvingGroundOpforStance(FireStance stance)
+    {
+        if (_session is not LocalSession local) return;
+        int updated = local.SetAllUnitsFireStanceForOwner(2, stance);
+        string label = stance switch
+        {
+            FireStance.HoldFire => "Hold Fire",
+            FireStance.ReturnFire => "Return Fire",
+            _ => "Fire at Will"
+        };
+        string msg = $"OPFOR ({updated} units) stance: {label}";
+        _status.Text = msg;
+        _orderNotification?.ShowNotification(msg);
+    }
+
+    private void TryPlaceProvingGroundUnit(Vector2 mousePos, bool keepPlacing)
+    {
+        if (_session is not LocalSession local || _provingGroundPanel is null) return;
+        Vector3 origin = _camera.ProjectRayOrigin(mousePos);
+        Vector3 normal = _camera.ProjectRayNormal(mousePos);
+        if (MathF.Abs(normal.Y) < 1e-5f) return;
+
+        // Intersect at ProvingGround base elevation and refine once against HeightMap
+        float t = (ProvingGroundScenario.BaseHeight - origin.Y) / normal.Y;
+        if (t < 0f) return;
+        Vector3 hit = origin + normal * t;
+        if (hit.X < 8f || hit.X > _map.Width - 8f || hit.Z < 8f || hit.Z > _map.Depth - 8f) return;
+        float terrainY = _map.GetHeight(hit.X, hit.Z);
+        float tRefined = (terrainY - origin.Y) / normal.Y;
+        if (tRefined > 0f)
+        {
+            hit = origin + normal * tRefined;
+        }
+        if (hit.X < 8f || hit.X > _map.Width - 8f || hit.Z < 8f || hit.Z > _map.Depth - 8f) return;
+
+        string unitId = _provingGroundPanel.SelectedUnitId;
+        ushort defIdx = _catalog.RequireDefinitionIndex(unitId);
+        UnitDefinition def = _catalog.Units[defIdx];
+        int ammo = _catalog.GetAmmoCapacity(def);
+        float speed = def.Speed > 0f ? def.Speed : 18.0f;
+        _provingGroundPanel.GetSpawnOwnerAndStance(out int owner, out FireStance stance, out float headingRad);
+
+        NumericsVector2 spawnPos = new(hit.X, hit.Z);
+        if (local.TrySpawnSandboxUnit(owner, defIdx, spawnPos, speed, def.MaxHealth, ammo, headingRad, stance, def.PassengerCapacity, out EntityId id))
+        {
+            string sideTag = owner == 1 ? "USSR" : $"OPFOR ({stance})";
+            string msg = $"Spawned {def.Name} [{sideTag}] #{id.Value} at ({hit.X:F0}, {hit.Z:F0})";
+            _status.Text = msg;
+            _orderNotification?.ShowNotification(msg);
+            if (!keepPlacing)
+            {
+                _provingGroundPanel.SetPlacementActive(false);
+            }
+        }
+        else
+        {
+            _status.Text = "Cannot place unit there (out of bounds or capacity full)";
+        }
     }
 
     internal static string FormatControlsHelpText(bool isMacOs) =>

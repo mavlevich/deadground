@@ -566,6 +566,36 @@ public sealed class SimulationHost : IDisposable
         }
     }
 
+    public bool TrySpawnSandboxUnit(
+        int owner,
+        ushort definition,
+        System.Numerics.Vector2 position,
+        float speed,
+        int maxHealth,
+        int ammo,
+        float initialYaw,
+        FireStance stance,
+        int passengerCapacity,
+        out EntityId spawnedId)
+    {
+        bool ok = _simulation.TrySpawnSandboxUnit(owner, definition, position, speed, maxHealth, ammo, initialYaw, stance, passengerCapacity, out spawnedId);
+        if (ok)
+        {
+            PublishAll();
+        }
+        return ok;
+    }
+
+    public int SetAllUnitsFireStanceForOwner(int owner, FireStance stance)
+    {
+        int updated = _simulation.SetAllUnitsFireStanceForOwner(owner, stance);
+        if (updated > 0)
+        {
+            PublishAll();
+        }
+        return updated;
+    }
+
     public void Dispose()
     {
         _simulation.Dispose();

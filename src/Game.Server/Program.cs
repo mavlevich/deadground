@@ -101,7 +101,8 @@ string[] validScenarios =
     "helicopter-playground",
     "artillery-playground",
     "air-defense-playground",
-    "urban-destruction-playground"
+    "urban-destruction-playground",
+    "proving-ground"
 ];
 
 if (!validScenarios.Contains(scenario))
@@ -135,6 +136,7 @@ StaticGeometry? scenarioGeometry = scenario switch
     "artillery-playground" => ArtilleryPlaygroundScenario.CreateStaticGeometry(),
     "air-defense-playground" => AirDefensePlaygroundScenario.CreateStaticGeometry(),
     "urban-destruction-playground" => UrbanDestructionPlaygroundScenario.CreateStaticGeometry(),
+    "proving-ground" => ProvingGroundScenario.CreateStaticGeometry(),
     "prototype" => null,
     _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
 };
@@ -162,6 +164,7 @@ MatchSetup setup = scenario switch
     "artillery-playground" => ArtilleryPlaygroundScenario.CreateMatchSetup(scenarioGeometry!),
     "air-defense-playground" => AirDefensePlaygroundScenario.CreateMatchSetup(scenarioGeometry!),
     "urban-destruction-playground" => UrbanDestructionPlaygroundScenario.CreateMatchSetup(scenarioGeometry!),
+    "proving-ground" => ProvingGroundScenario.CreateMatchSetup(scenarioGeometry!),
     "prototype" => PrototypeScenario.CreateMatchSetup(map),
     _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
 };
@@ -201,6 +204,7 @@ Simulation CreateSimulation(ulong seed = 0)
         "artillery-playground" => ArtilleryPlaygroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "air-defense-playground" => AirDefensePlaygroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "urban-destruction-playground" => UrbanDestructionPlaygroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
+        "proving-ground" => ProvingGroundScenario.CreateSimulation(scenarioGeometry!, matchSeed: effectiveSeed),
         "prototype" => PrototypeScenario.Create(map),
         _ => throw new ArgumentException($"Unknown scenario '{scenario}'. Valid scenarios: {string.Join(", ", validScenarios)}")
     };
@@ -503,6 +507,15 @@ if (smokeTest)
             throw new InvalidOperationException("Urban-destruction-playground smoke test failed: panelka section 102 did not collapse.");
 
         Console.WriteLine($"URBAN_DESTRUCTION_PLAYGROUND_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} structures={session.Replica.StructureCount}");
+        return;
+    }
+
+    if (scenario == "proving-ground")
+    {
+        for (int i = 0; i < 20; i++) session.Advance(1d / Simulation.TickRate);
+        if (session.Replica.OwnUnits.Length < 30)
+            throw new InvalidOperationException($"Proving-ground smoke test: expected >=30 own units, got {session.Replica.OwnUnits.Length}.");
+        Console.WriteLine($"PROVING_GROUND_SMOKE_OK tick={session.Tick} own_units={session.Replica.OwnUnits.Length} contacts={session.Replica.ContactCount}");
         return;
     }
 

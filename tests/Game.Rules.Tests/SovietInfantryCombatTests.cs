@@ -256,4 +256,93 @@ public sealed class SovietInfantryCombatTests
         Assert.True(world.TryGetDestructibleStructure(targetSection, out DestructibleStructureState after));
         Assert.True(after.Health < healthBefore, "RPG-7V AttackGround must deal structural damage to destructible buildings.");
     }
+
+    [Fact]
+    public void SovietRpg7_TurnsBodyHullHeadingTowardTarget_WhenFiringAndAfterReload()
+    {
+        (Simulation sim, WorldState world, OpsRules rules, UnitCatalog catalog) = CreateFlatContext(1984UL);
+        using (sim)
+        {
+            sim.SetPlayerAdmitted(1, true);
+            sim.SetPlayerAdmitted(2, true);
+
+            ushort rpgIdx = catalog.RequireDefinitionIndex("soviet_rpg");
+            ushort apcIdx = catalog.RequireDefinitionIndex("m113a1");
+            UnitDefinition rpgDef = catalog.Units[rpgIdx];
+            UnitDefinition apcDef = catalog.Units[apcIdx];
+
+            // Spawn RPG gunner facing south (yaw=0 -> -Z), target directly east (+X -> expected yaw = -Pi/2)
+            EntityId rpg = world.CreateUnit(1, rpgIdx, new Vector2(200f, 300f), rpgDef.Speed, rpgDef.MaxHealth, 4, initialTurretYaw: 0f);
+            EntityId apc = world.CreateUnit(2, apcIdx, new Vector2(310f, 300f), apcDef.Speed, apcDef.MaxHealth, 0);
+            world.SetFireStance(apc, FireStance.HoldFire);
+
+            CombatSystem combat = rules.FindSystem<CombatSystem>()!;
+            for (int i = 0; i < 40 && combat.TotalShotsFired == 0; i++) sim.Step();
+            Assert.True(combat.TotalShotsFired >= 1, "RPG gunner must engage the M113A1 to the east.");
+
+            // Advance 10 more ticks after the shot (during reload / after kill) and confirm gunner stays facing east!
+            for (int i = 0; i < 10; i++) sim.Step();
+
+            Assert.True(world.TryGetCombatState(rpg, out WorldState.CombatState cs));
+            float expectedEastYaw = MathF.Atan2(-1f, 0f); // -Pi/2
+            float hullError = MathF.Abs(CombatSystem.ShorterArcDelta(cs.HullHeading, expectedEastYaw));
+            float turretError = MathF.Abs(CombatSystem.ShorterArcDelta(cs.TurretYaw, expectedEastYaw));
+            Assert.True(hullError < 0.05f, $"RPG gunner HullHeading must turn toward shot direction east (-1.571), got {cs.HullHeading:F3}.");
+            Assert.True(turretError < 0.05f, $"RPG gunner TurretYaw must stay aligned east (-1.571), got {cs.TurretYaw:F3}.");
+
+            // Also verify AttackGround toward west (-X -> expected yaw = +Pi/2) rotates HullHeading west
+            Vector3 westGround = new(120f, 2f, 300f);
+            Assert.True(sim.TryEnqueue(1, new AttackGroundCommand(1, sim.Tick, rpg, westGround, default)));
+            for (int i = 0; i < 5; i++) sim.Step();
+            Assert.True(world.TryGetCombatState(rpg, out WorldState.CombatState csWest));
+            float expectedWestYaw = MathF.Atan2(1f, 0f); // +Pi/2
+            float westErr = MathF.Abs(CombatSystem.ShorterArcDelta(csWest.HullHeading, expectedWestYaw));
+            Assert.True(westErr < 0.05f, $"RPG gunner AttackGround must turn HullHeading west (+1.571), got {csWest.HullHeading:F3}.");
+        }
+    }
+
+    [Fact]
+    public void ProvingGround_KeepsAllFriendlyUnitsAliveOnSpawn_AndSupportsSandboxSpawning()
+    {
+        StaticGeometry geometry = ProvingGroundScenario.CreateStaticGeometry();
+        UnitCatalog catalog = ColdWarContent.LoadCatalog();
+        using Simulation sim = ProvingGroundScenario.CreateSimulation(geometry, catalog, matchSeed: 2048UL);
+        WorldState world = sim.World;
+
+        int initialP1Count = 0;
+        for (int i = 0; i < world.Count; i++)
+        {
+            if (world.GetUnitAt(i).Owner == 1) initialP1Count++;
+        }
+        Assert.True(initialP1Count >= 30, $"Expected >= 30 Soviet units across 5 proving ground zones, got {initialP1Count}.");
+
+        // Run 120 ticks (6 seconds) with no orders: zero Player 1 casualties because OPFOR targets hold/return fire safely
+        for (int t = 0; t < 120; t++) sim.Step();
+
+        int afterP1Count = 0;
+        for (int i = 0; i < world.Count; i++)
+        {
+            if (world.GetUnitAt(i).Owner == 1) afterP1Count++;
+        }
+        Assert.Equal(initialP1Count, afterP1Count);
+
+        // Verify on-the-fly sandbox unit spawning & OPFOR stance switching
+        ushort rpgIdx = catalog.RequireDefinitionIndex("soviet_rpg");
+        UnitDefinition rpgDef = catalog.Units[rpgIdx];
+        Assert.True(sim.TrySpawnSandboxUnit(
+            owner: 1,
+            definition: rpgIdx,
+            position: new Vector2(450f, 520f),
+            speed: rpgDef.Speed,
+            maxHealth: rpgDef.MaxHealth,
+            ammo: catalog.GetAmmoCapacity(rpgDef),
+            initialYaw: MathF.PI,
+            stance: FireStance.FireAtWill,
+            passengerCapacity: 0,
+            out EntityId spawnedRpg));
+        Assert.True(world.TryGetUnit(spawnedRpg, out _));
+
+        int switched = sim.SetAllUnitsFireStanceForOwner(2, FireStance.FireAtWill);
+        Assert.True(switched >= 20, $"Expected >= 20 OPFOR units to switch stance, switched {switched}.");
+    }
 }

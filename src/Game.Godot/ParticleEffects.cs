@@ -43,6 +43,7 @@ internal static class ParticleEffects
     private static ParticleProcessMaterial? _rocketBackblastProcess;
     private static ParticleProcessMaterial? _rocketLaunchGroundBankProcess;
     private static ParticleProcessMaterial? _rocketContrailProcess;
+    private static ParticleProcessMaterial? _rpgContrailProcess;
     private static ParticleProcessMaterial? _artilleryFireballProcess;
     private static ParticleProcessMaterial? _artillerySparksProcess;
     private static ParticleProcessMaterial? _artilleryDirtPlumeProcess;
@@ -443,6 +444,41 @@ void fragment() {
         },
         LitCloudDrawPass,
         visibilityHalfExtent: 1200f);
+
+    // Fine, light-gray smoke ribbon from a hand-held PG-7V sustainer motor (ignites ~11.5 m downrange and disperses quickly).
+    internal static GpuParticles3D CreateRpgContrail() => CreateEmitter(
+        "RpgContrail",
+        oneShot: false,
+        amount: 96,
+        lifetime: 2.3f,
+        explosiveness: 0.0f,
+        _rpgContrailProcess ??= new ParticleProcessMaterial
+        {
+            Direction = new Vector3(0f, 0.02f, 1f),
+            Spread = 5f,
+            InitialVelocityMin = 0.25f,
+            InitialVelocityMax = 0.9f,
+            DampingMin = 2.8f,
+            DampingMax = 4.6f,
+            Gravity = new Vector3(0.22f, 0.14f, 0.12f),
+            AngleMin = -180f,
+            AngleMax = 180f,
+            AngularVelocityMin = -18f,
+            AngularVelocityMax = 18f,
+            TurbulenceEnabled = true,
+            TurbulenceNoiseStrength = 0.65f,
+            TurbulenceNoiseScale = 3.2f,
+            TurbulenceInfluenceMin = 0.03f,
+            TurbulenceInfluenceMax = 0.14f,
+            ScaleMin = 0.20f,
+            ScaleMax = 0.52f,
+            ScaleCurve = CreateContrailScaleCurve(),
+            ColorRamp = CreateRpgContrailRamp(),
+            EmissionShape = ParticleProcessMaterial.EmissionShapeEnum.Box,
+            EmissionBoxExtents = new Vector3(0.025f, 0.025f, 0.32f),
+        },
+        LitCloudDrawPass,
+        visibilityHalfExtent: 450f);
 
     // Brief, violent, ragged incandescent detonation flash tongues bursting out from the base of the blast column.
     internal static GpuParticles3D CreateArtilleryFireballParticles() => CreateEmitter(
@@ -1906,6 +1942,23 @@ void fragment() {
                 new Color(0.80f, 0.81f, 0.82f, 0.24f),
                 new Color(0.76f, 0.78f, 0.80f, 0.08f),
                 new Color(0.74f, 0.76f, 0.78f, 0f),
+            ],
+        };
+        return new GradientTexture1D { Gradient = gradient };
+    }
+
+    private static GradientTexture1D CreateRpgContrailRamp()
+    {
+        Gradient gradient = new()
+        {
+            Offsets = [0f, 0.08f, 0.35f, 0.72f, 1f],
+            Colors =
+            [
+                new Color(0.95f, 0.91f, 0.84f, 0.56f),
+                new Color(0.88f, 0.87f, 0.85f, 0.44f),
+                new Color(0.82f, 0.82f, 0.81f, 0.24f),
+                new Color(0.76f, 0.77f, 0.78f, 0.09f),
+                new Color(0.74f, 0.75f, 0.76f, 0f),
             ],
         };
         return new GradientTexture1D { Gradient = gradient };

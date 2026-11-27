@@ -659,6 +659,21 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         TurnTurretTo(ref cs, MathF.Atan2(-dir.X, -dir.Y), traverseRateDegPerSec);
     }
 
+    // Infantry has no independent turret: aiming while stationary rotates the soldier's body toward the target.
+    private static void TurnWeaponToward(
+        ref WorldState.CombatState cs,
+        in UnitCombatProfile profile,
+        bool isMoving,
+        Vector2 attackerPos,
+        Vector2 targetPos)
+    {
+        TurnTurret(ref cs, attackerPos, targetPos, profile.TurretTraverseRate);
+        if (!profile.LeavesWreck && !isMoving)
+        {
+            cs.HullHeading = cs.TurretYaw;
+        }
+    }
+
     // With nothing to aim at, the gunner lays the gun back over the front of the hull.
     private static void ReturnTurretToFront(ref WorldState.CombatState cs, float traverseRateDegPerSec) =>
         TurnTurretTo(ref cs, cs.HullHeading, traverseRateDegPerSec);
@@ -1186,7 +1201,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                 // Check 2: Is contact LastKnown?
                 if (contact.State != ContactState.Current)
                 {
-                    TurnTurret(ref cs, attacker.Position, contact.Position, profile.TurretTraverseRate);
+                    TurnWeaponToward(ref cs, in profile, attacker.Moving, attacker.Position, contact.Position);
                     cs.Status = AttackExecutionStatus.TargetLost;
                     TryPursueTarget(tick, attacker, contact.Position, ref cs, world);
                     world.SetCombatState(attacker.Id, cs);
@@ -1210,7 +1225,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                 }
 
                 cs.TargetEntityId = targetEntityId;
-                TurnTurret(ref cs, attacker.Position, targetUnit.Position, profile.TurretTraverseRate);
+                TurnWeaponToward(ref cs, in profile, attacker.Moving, attacker.Position, targetUnit.Position);
 
                 float dist = Vector2.Distance(attacker.Position, targetUnit.Position);
 
@@ -1337,7 +1352,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                     // A unit driving off keeps its gun on the target it was engaging while valid;
                     // otherwise the gun returns over the front.
                     if (targetRetained && world.TryGetUnit(cs.TargetEntityId, out UnitState watched))
-                        TurnTurret(ref cs, attacker.Position, watched.Position, profile.TurretTraverseRate);
+                        TurnWeaponToward(ref cs, in profile, attacker.Moving, attacker.Position, watched.Position);
                     else
                         ReturnTurretToFront(ref cs, profile.TurretTraverseRate);
                     world.SetCombatState(attacker.Id, cs);
@@ -1456,7 +1471,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                 {
                     ActiveAttackersCount++;
                     world.TryGetUnit(cs.TargetEntityId, out UnitState targetUnit);
-                    TurnTurret(ref cs, attacker.Position, targetUnit.Position, profile.TurretTraverseRate);
+                    TurnWeaponToward(ref cs, in profile, attacker.Moving, attacker.Position, targetUnit.Position);
                     if (weapon.IsGuidedMissile)
                     {
                         UpdateGuidedLauncherPitch(world, attacker.Id, currentMuzzlePos, currentHitPoint);
@@ -1651,6 +1666,16 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         }
         cs.LastTargetEntityId = targetUnit.Id;
         cs.LastTargetPosition = targetUnit.Position;
+        if (_combatCatalog.TryGetProfile(attacker.Definition, out UnitCombatProfile atkProfile) && !atkProfile.LeavesWreck)
+        {
+            Vector2 shotDir2D = targetUnit.Position - attacker.Position;
+            if (shotDir2D.LengthSquared() >= 0.0001f)
+            {
+                float shotYaw = NormalizeYaw(MathF.Atan2(-shotDir2D.X, -shotDir2D.Y));
+                cs.TurretYaw = shotYaw;
+                cs.HullHeading = shotYaw;
+            }
+        }
         world.SetCombatState(attacker.Id, cs);
 
         // 2. Target movement check
@@ -2136,6 +2161,16 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         cs.Status = AttackExecutionStatus.Aiming;
         cs.LastTargetEntityId = targetUnit.Id;
         cs.LastTargetPosition = targetUnit.Position;
+        if (_combatCatalog.TryGetProfile(attacker.Definition, out UnitCombatProfile atkProfile) && !atkProfile.LeavesWreck)
+        {
+            Vector2 shotDir2D = targetUnit.Position - attacker.Position;
+            if (shotDir2D.LengthSquared() >= 0.0001f)
+            {
+                float shotYaw = NormalizeYaw(MathF.Atan2(-shotDir2D.X, -shotDir2D.Y));
+                cs.TurretYaw = shotYaw;
+                cs.HullHeading = shotYaw;
+            }
+        }
         world.SetCombatState(attacker.Id, cs);
         world.RecordUnitFired(attacker.Id, tick);
 
@@ -3024,7 +3059,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         }
 
         Vector2 target2D = new(targetPoint.X, targetPoint.Z);
-        TurnTurret(ref cs, attacker.Position, target2D, profile.TurretTraverseRate);
+        TurnWeaponToward(ref cs, in profile, attacker.Moving, attacker.Position, target2D);
 
         float dist = Vector2.Distance(attacker.Position, target2D);
         if (dist > weapon.Range + RangeToleranceMargin)
@@ -3116,6 +3151,16 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         cs.Ammunition = Math.Max(0, cs.Ammunition - 1);
         cs.ReloadTicksRemaining = weapon.ReloadDurationTicks;
         cs.Status = cs.Ammunition <= 0 ? AttackExecutionStatus.NoAmmo : AttackExecutionStatus.Aiming;
+        if (_combatCatalog.TryGetProfile(attacker.Definition, out UnitCombatProfile atkProfile) && !atkProfile.LeavesWreck)
+        {
+            Vector2 shotDir2D = new(impactPoint.X - attacker.Position.X, impactPoint.Z - attacker.Position.Y);
+            if (shotDir2D.LengthSquared() >= 0.0001f)
+            {
+                float shotYaw = NormalizeYaw(MathF.Atan2(-shotDir2D.X, -shotDir2D.Y));
+                cs.TurretYaw = shotYaw;
+                cs.HullHeading = shotYaw;
+            }
+        }
         world.RecordUnitFired(attacker.Id, tick);
 
         TotalShotsFired++;
