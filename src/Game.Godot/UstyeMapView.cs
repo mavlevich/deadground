@@ -104,10 +104,11 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
                 _waterMaterial.SetShaderParameter("shallows_color", shallows);
             if (EnvironmentProfile.TryParseHexColor(tints.WaterDeepHex, out Color deep))
                 _waterMaterial.SetShaderParameter("deep_color", deep);
-            if (!string.IsNullOrWhiteSpace(skyHorizonHex) && EnvironmentProfile.TryParseHexColor(skyHorizonHex, out Color skyHorizon))
+            float reflectStrength = Math.Clamp(tints.WaterHorizonReflect, 0f, 1f);
+            if (reflectStrength > 0.001f && !string.IsNullOrWhiteSpace(skyHorizonHex) && EnvironmentProfile.TryParseHexColor(skyHorizonHex, out Color skyHorizon))
             {
                 _waterMaterial.SetShaderParameter("horizon_reflect_color", skyHorizon);
-                _waterMaterial.SetShaderParameter("horizon_reflect_strength", 0.52f);
+                _waterMaterial.SetShaderParameter("horizon_reflect_strength", reflectStrength);
             }
             else
             {
@@ -124,40 +125,37 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
             _deciduousMat.AlbedoColor = deciduous;
         }
 
-        BaseMaterial3D.SpecularModeEnum roadSpecMode = w > 0.01f
-            ? BaseMaterial3D.SpecularModeEnum.SchlickGgx
-            : BaseMaterial3D.SpecularModeEnum.Disabled;
+        // Wet surfaces darken in albedo and drop roughness without toggling shader feature flags (zero recompile hitch).
+        float wetDarken = Mathf.Lerp(1.0f, 0.78f, w);
 
         if (_asphaltMaterial is not null)
         {
             if (EnvironmentProfile.TryParseHexColor(tints.RoadsAsphaltHex, out Color asphalt))
             {
-                _asphaltMaterial.AlbedoColor = asphalt;
+                _asphaltMaterial.AlbedoColor = new Color(asphalt.R * wetDarken, asphalt.G * wetDarken, asphalt.B * wetDarken, asphalt.A);
             }
-            _asphaltMaterial.SpecularMode = roadSpecMode;
-            _asphaltMaterial.Roughness = Mathf.Lerp(0.88f, 0.38f, w);
-            _asphaltMaterial.MetallicSpecular = Mathf.Lerp(0.50f, 0.75f, w);
-            _asphaltMaterial.ClearcoatEnabled = w > 0.2f;
-            _asphaltMaterial.Clearcoat = w * 0.48f;
+            _asphaltMaterial.Roughness = Mathf.Lerp(0.88f, 0.36f, w);
+            _asphaltMaterial.MetallicSpecular = Mathf.Lerp(0.08f, 0.75f, w);
+            _asphaltMaterial.Clearcoat = w * 0.45f;
             _asphaltMaterial.ClearcoatRoughness = 0.22f;
         }
         if (_gravelMaterial is not null)
         {
             if (EnvironmentProfile.TryParseHexColor(tints.RoadsGravelHex, out Color gravel))
             {
-                _gravelMaterial.AlbedoColor = gravel;
+                _gravelMaterial.AlbedoColor = new Color(gravel.R * wetDarken, gravel.G * wetDarken, gravel.B * wetDarken, gravel.A);
             }
-            _gravelMaterial.SpecularMode = roadSpecMode;
             _gravelMaterial.Roughness = Mathf.Lerp(0.94f, 0.52f, w);
+            _gravelMaterial.MetallicSpecular = Mathf.Lerp(0.05f, 0.45f, w);
         }
         if (_dirtPathMaterial is not null)
         {
             if (EnvironmentProfile.TryParseHexColor(tints.RoadsDirtHex, out Color dirt))
             {
-                _dirtPathMaterial.AlbedoColor = dirt;
+                _dirtPathMaterial.AlbedoColor = new Color(dirt.R * wetDarken, dirt.G * wetDarken, dirt.B * wetDarken, dirt.A);
             }
-            _dirtPathMaterial.SpecularMode = roadSpecMode;
-            _dirtPathMaterial.Roughness = Mathf.Lerp(0.98f, 0.65f, w);
+            _dirtPathMaterial.Roughness = Mathf.Lerp(0.98f, 0.62f, w);
+            _dirtPathMaterial.MetallicSpecular = Mathf.Lerp(0.04f, 0.35f, w);
         }
         if (_terrainMaterial is StandardMaterial3D stdTerrain && EnvironmentProfile.TryParseHexColor(tints.TerrainHex, out Color terrain))
         {
@@ -653,8 +651,12 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
         {
             AlbedoColor = new Color("353638"),
             DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
-            SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled,
+            SpecularMode = BaseMaterial3D.SpecularModeEnum.SchlickGgx,
+            MetallicSpecular = 0.08f,
             Roughness = 0.88f,
+            ClearcoatEnabled = true,
+            Clearcoat = 0.0f,
+            ClearcoatRoughness = 0.22f,
             CullMode = BaseMaterial3D.CullModeEnum.Disabled
         };
 
@@ -662,7 +664,8 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
         {
             AlbedoColor = new Color("585246"),
             DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
-            SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled,
+            SpecularMode = BaseMaterial3D.SpecularModeEnum.SchlickGgx,
+            MetallicSpecular = 0.05f,
             Roughness = 0.94f,
             CullMode = BaseMaterial3D.CullModeEnum.Disabled
         };
@@ -671,7 +674,8 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
         {
             AlbedoColor = new Color("655b4b"),
             DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
-            SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled,
+            SpecularMode = BaseMaterial3D.SpecularModeEnum.SchlickGgx,
+            MetallicSpecular = 0.04f,
             Roughness = 0.98f,
             CullMode = BaseMaterial3D.CullModeEnum.Disabled
         };

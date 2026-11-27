@@ -83,7 +83,8 @@ void fragment() {
     if (water_depth < 0.22) {
         float foam_t = 1.0 - (water_depth / 0.22);
         float foam_break = sin(world_pos.x * 0.45 + world_pos.z * 0.35 + TIME * 0.6) * 0.5 + 0.5;
-        float foam_intensity = foam_t * smoothstep(0.35, 0.70, foam_break * (sin(world_pos.x * 1.2 - world_pos.z * 0.8) * 0.5 + 0.5));
+        foam_break *= sin(world_pos.x * 1.2 - world_pos.z * 0.8) * 0.5 + 0.5;
+        float foam_intensity = foam_t * smoothstep(0.35, 0.70, foam_break);
         ALBEDO = mix(ALBEDO, vec3(0.72, 0.76, 0.73), foam_intensity * 0.40);
     }
 

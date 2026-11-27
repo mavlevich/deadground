@@ -2680,12 +2680,12 @@ public partial class Main : Node3D
                 return;
             }
 
-            if (key.Keycode == Key.F11 || (key.Keycode == Key.O && key.ShiftPressed))
+            if (key.Keycode == Key.O && key.ShiftPressed)
             {
                 if (_settingsPanel is not null)
                 {
-                    _settingsPanel.CycleEnvironmentProfile();
-                    _status.Text = $"Environment: {_environmentView.ActiveProfile.Name} (F11 / Shift+O to cycle)";
+                    _settingsPanel.CycleEnvironmentProfilePreview();
+                    _status.Text = $"Environment preview: {_environmentView.ActiveProfile.Name} (Shift+O to cycle)";
                 }
                 GetViewport().SetInputAsHandled();
                 return;
@@ -3036,6 +3036,7 @@ public partial class Main : Node3D
             ((orbitMotion.ButtonMask & MouseButtonMask.Middle) != 0 ||
              (orbitMotion.AltPressed && (orbitMotion.ButtonMask & (MouseButtonMask.Left | MouseButtonMask.Right)) != 0)))
         {
+            CancelActiveDrag();
             _cameraRig.DragOrbit(orbitMotion.Relative);
             GetViewport().SetInputAsHandled();
             return;

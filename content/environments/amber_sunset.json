@@ -65,6 +65,7 @@
     "water_deep": "#132238",
     "roads_asphalt": "#3a3f4a",
     "roads_gravel": "#5e574e",
-    "roads_dirt": "#685e50"
+    "roads_dirt": "#685e50",
+    "water_horizon_reflect": 0.44
   }
 }

@@ -32,6 +32,9 @@ public sealed partial class EnvironmentView : Node3D
     private Vector3 _lastRainFocus = new(-99999f, -99999f, -99999f);
     private bool _rainConfiguredActive;
     private float _activeRainIntensity;
+    private Color _activeRainBaseColor = new(0.75f, 0.82f, 0.89f);
+    private float _activeRainBaseAlpha;
+    private float _lastAppliedRainFade = -1f;
     private ShadowZoomTier? _activeShadowTier;
     private bool _shadowTierApplied;
     private bool _effectiveTreeShadows;
@@ -45,6 +48,7 @@ public sealed partial class EnvironmentView : Node3D
     private const float ShadowFadeDurationSeconds = 0.3f;
     private const float SizeUpdateThreshold = 1.0f;
     private const float PitchUpdateThreshold = 0.02f;
+    private const float RainFadeStartCameraSize = 380f;
     private const float RainMaxCameraSize = 680f;
     private const float RainFocusMoveThresholdSq = 16.0f;
     private const float RainCanopyHeightOffset = 54.0f;
@@ -291,6 +295,7 @@ public sealed partial class EnvironmentView : Node3D
         float intensity = weather is not null ? Math.Clamp(weather.RainIntensity, 0f, 1f) : 0f;
         _activeRainIntensity = intensity;
         _rainConfiguredActive = intensity > 0.01f;
+        _lastAppliedRainFade = -1f;
 
         if (!_rainConfiguredActive || weather is null)
         {
@@ -301,30 +306,49 @@ public sealed partial class EnvironmentView : Node3D
 
         Color rainColor = EnvironmentProfile.TryParseHexColor(weather.RainColorHex, out Color parsedRain)
             ? parsedRain
-            : new Color(0.71f, 0.78f, 0.85f);
-        float alpha = Mathf.Lerp(0.22f, 0.42f, intensity);
-        _rainDrawMaterial.AlbedoColor = new Color(rainColor.R, rainColor.G, rainColor.B, alpha);
+            : new Color(0.75f, 0.82f, 0.89f);
+        _activeRainBaseColor = rainColor;
+        _activeRainBaseAlpha = Mathf.Lerp(0.22f, 0.42f, intensity);
+        _rainDrawMaterial.AlbedoColor = new Color(rainColor.R, rainColor.G, rainColor.B, _activeRainBaseAlpha);
 
         Vector3 fallDir = new Vector3(weather.WindX, -28f, weather.WindZ).Normalized();
         _rainProcessMaterial.Direction = fallDir;
         _rainProcessMaterial.Gravity = new Vector3(weather.WindX * 2.2f, -32f, weather.WindZ * 2.2f);
     }
 
+    public static float CalculateRainZoomFade(float cameraSize)
+    {
+        if (cameraSize <= 0f || cameraSize <= RainFadeStartCameraSize) return 1.0f;
+        if (cameraSize >= RainMaxCameraSize) return 0.0f;
+        return (RainMaxCameraSize - cameraSize) / (RainMaxCameraSize - RainFadeStartCameraSize);
+    }
+
     private void RefreshRainEmissionState(float cameraSize)
     {
+        float zoomFade = CalculateRainZoomFade(cameraSize);
         bool shouldEmit = _rainConfiguredActive
             && _activeQuality != EnvironmentQuality.Low
-            && (cameraSize <= 0f || cameraSize <= RainMaxCameraSize);
+            && zoomFade > 0.01f;
 
         if (shouldEmit)
         {
             float qualityScale = _activeQuality == EnvironmentQuality.Medium ? 0.65f : 1.0f;
             _rainParticles.AmountRatio = Math.Clamp(_activeRainIntensity * qualityScale, 0.1f, 1.0f);
+            if (MathF.Abs(zoomFade - _lastAppliedRainFade) > 0.01f)
+            {
+                _lastAppliedRainFade = zoomFade;
+                _rainDrawMaterial.AlbedoColor = new Color(
+                    _activeRainBaseColor.R,
+                    _activeRainBaseColor.G,
+                    _activeRainBaseColor.B,
+                    _activeRainBaseAlpha * zoomFade);
+            }
             if (!_rainParticles.Visible) _rainParticles.Visible = true;
             if (!_rainParticles.Emitting) _rainParticles.Emitting = true;
         }
         else
         {
+            _lastAppliedRainFade = 0f;
             if (_rainParticles.Emitting) _rainParticles.Emitting = false;
             if (_rainParticles.Visible) _rainParticles.Visible = false;
         }

@@ -88,7 +88,8 @@ public sealed record MaterialTintsSettings(
     [property: JsonPropertyName("water_deep")] string WaterDeepHex,
     [property: JsonPropertyName("roads_asphalt")] string RoadsAsphaltHex,
     [property: JsonPropertyName("roads_gravel")] string RoadsGravelHex,
-    [property: JsonPropertyName("roads_dirt")] string RoadsDirtHex);
+    [property: JsonPropertyName("roads_dirt")] string RoadsDirtHex,
+    [property: JsonPropertyName("water_horizon_reflect")] float WaterHorizonReflect = 0f);
 
 public sealed record EnvironmentProfile(
     [property: JsonPropertyName("id")] string Id,
@@ -387,6 +388,10 @@ public sealed record EnvironmentProfile(
         if (!TryParseHexColor(MaterialTints.RoadsDirtHex, out _))
         {
             throw new EnvironmentProfileValidationException("material_tints.roads_dirt", $"Field 'material_tints.roads_dirt' is missing or not a valid hex color: '{MaterialTints.RoadsDirtHex}'.");
+        }
+        if (MaterialTints.WaterHorizonReflect < 0f || MaterialTints.WaterHorizonReflect > 1f)
+        {
+            throw new EnvironmentProfileValidationException("material_tints.water_horizon_reflect", $"Field 'material_tints.water_horizon_reflect' value {MaterialTints.WaterHorizonReflect} is out of range [0, 1].");
         }
     }
 

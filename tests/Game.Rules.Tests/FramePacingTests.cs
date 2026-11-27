@@ -601,6 +601,7 @@ public sealed class FramePacingTests
         Assert.Equal("storm_rain", DisplaySettings.SanitizeProfile("storm"));
         Assert.Equal("storm_rain", DisplaySettings.SanitizeProfile("rain"));
         Assert.Equal("storm_rain", DisplaySettings.SanitizeProfile("storm_rain"));
+        Assert.Equal("overcast", DisplaySettings.SanitizeProfile("fog"));
 
         string current = DisplaySettings.ValidEnvironmentProfiles[0];
         HashSet<string> visited = [current];
@@ -616,5 +617,67 @@ public sealed class FramePacingTests
         Assert.Equal("amber_sunset", parsed.EnvironmentProfile);
         DisplaySettings parsedRain = DisplaySettings.ParseCommandLine(["--environment=storm_rain"]);
         Assert.Equal("storm_rain", parsedRain.EnvironmentProfile);
+    }
+
+    [Fact]
+    public void EnvironmentProfileJsonFiles_AllCatalogProfilesExistAndPassSchemaValidation()
+    {
+        string? dir = AppContext.BaseDirectory;
+        string? envDir = null;
+        while (!string.IsNullOrEmpty(dir))
+        {
+            string candidate = Path.Combine(dir, "content", "environments");
+            if (Directory.Exists(candidate))
+            {
+                envDir = candidate;
+                break;
+            }
+            dir = Directory.GetParent(dir)?.FullName;
+        }
+        Assert.NotNull(envDir);
+
+        foreach ((string id, string label) in DisplaySettings.EnvironmentProfileCatalog)
+        {
+            Assert.False(string.IsNullOrWhiteSpace(label));
+            string path = Path.Combine(envDir!, $"{id}.json");
+            Assert.True(File.Exists(path), $"Missing environment profile JSON: {path}");
+
+            using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+            System.Text.Json.JsonElement root = doc.RootElement;
+            Assert.Equal(id, root.GetProperty("id").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("name").GetString()));
+
+            System.Text.Json.JsonElement sun = root.GetProperty("sun");
+            float pitch = sun.GetProperty("pitch").GetSingle();
+            float sunEnergy = sun.GetProperty("energy").GetSingle();
+            Assert.InRange(pitch, -90f, 0f);
+            Assert.InRange(sunEnergy, 0.05f, 16f);
+
+            System.Text.Json.JsonElement haze = root.GetProperty("haze");
+            float closeDensity = haze.GetProperty("close_zoom_density").GetSingle();
+            float wideDensity = haze.GetProperty("wide_zoom_density").GetSingle();
+            Assert.True(closeDensity > wideDensity, $"Profile '{id}' must have close_zoom_density > wide_zoom_density.");
+
+            if (root.TryGetProperty("glow", out System.Text.Json.JsonElement glow) &&
+                glow.GetProperty("enabled").GetBoolean())
+            {
+                float threshold = glow.TryGetProperty("hdr_threshold", out System.Text.Json.JsonElement hdrEl)
+                    ? hdrEl.GetSingle()
+                    : 1.05f;
+                Assert.InRange(threshold, 1.0f, 4.0f);
+            }
+
+            if (root.TryGetProperty("weather", out System.Text.Json.JsonElement weather))
+            {
+                Assert.InRange(weather.GetProperty("rain_intensity").GetSingle(), 0f, 1f);
+                Assert.InRange(weather.GetProperty("wetness").GetSingle(), 0f, 1f);
+            }
+
+            System.Text.Json.JsonElement tints = root.GetProperty("material_tints");
+            if (tints.TryGetProperty("water_horizon_reflect", out System.Text.Json.JsonElement reflectEl))
+            {
+                Assert.InRange(reflectEl.GetSingle(), 0f, 1f);
+            }
+        }
     }
 }

@@ -55,15 +55,17 @@ public sealed record DisplaySettings(
     public const float MaxAutoRenderScale = 1.0f;
     public const long LargeOutputBilinearCutoffPixels = 4_500_000L;
     public static readonly int[] ValidFpsLimits = [0, 30, 60, 120, 144, 165, 240];
-    public static readonly string[] ValidEnvironmentProfiles =
+    public static readonly (string Id, string Label)[] EnvironmentProfileCatalog =
     [
-        "overcast",
-        "cool_clear_day",
-        "clear_afternoon",
-        "amber_sunset",
-        "night_ops",
-        "storm_rain"
+        ("overcast", "Overcast Autumn (Ustye)"),
+        ("cool_clear_day", "Cool Clear Day (Calibration)"),
+        ("clear_afternoon", "Clear Afternoon"),
+        ("amber_sunset", "Amber Sunset"),
+        ("night_ops", "Night Operations"),
+        ("storm_rain", "Storm & Rain")
     ];
+    public static readonly string[] ValidEnvironmentProfiles =
+        Array.ConvertAll(EnvironmentProfileCatalog, static entry => entry.Id);
 
     public static int SanitizeMaxFps(int fps)
     {
@@ -91,7 +93,7 @@ public sealed record DisplaySettings(
             "clear_afternoon" or "clear" or "afternoon" => "clear_afternoon",
             "amber_sunset" or "sunset" or "dusk" or "evening" => "amber_sunset",
             "night_ops" or "night" or "midnight" or "moonlight" => "night_ops",
-            "storm_rain" or "storm" or "rain" or "rainy" or "fog" => "storm_rain",
+            "storm_rain" or "storm" or "rain" or "rainy" => "storm_rain",
             "baseline" => "baseline",
             _ => "overcast"
         };

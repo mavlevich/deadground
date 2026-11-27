@@ -93,7 +93,15 @@ internal static class EnvironmentProfileRegressionTests
                 "storm_rain must configure rain intensity and surface wetness.");
             Require(view.ActiveWetness > 0.5f, "EnvironmentView must expose storm_rain surface wetness.");
 
-            // Rain activates at tactical zoom and suppresses at wide strategic zoom or Low quality
+            // Rain fades smoothly between close/play zoom (<= 380) and wide strategic zoom (>= 680)
+            Require(Mathf.IsEqualApprox(EnvironmentView.CalculateRainZoomFade(180f), 1.0f),
+                "Rain zoom fade must be 1.0 at tactical zoom.");
+            float midFade = EnvironmentView.CalculateRainZoomFade(530f);
+            Require(midFade > 0.45f && midFade < 0.55f,
+                $"Rain zoom fade must smoothly ramp around 0.5 at mid-zoom 530, got {midFade}.");
+            Require(Mathf.IsEqualApprox(EnvironmentView.CalculateRainZoomFade(680f), 0.0f),
+                "Rain zoom fade must reach 0.0 at RainMaxCameraSize.");
+
             view.UpdateHazeForCamera(180f, new Vector3(1200f, 12f, 1400f), 0.8f);
             Require(view.IsRainActive, "storm_rain must emit rain particles at play zoom on High quality.");
 

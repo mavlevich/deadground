@@ -14,15 +14,6 @@ internal sealed partial class SettingsPanel : CanvasLayer
     public static BenchmarkRenderOverrides? ActiveBenchmarkOverrides { get; set; }
 
     internal const string ConfigPath = "user://display_settings.cfg";
-    private static readonly (string Id, string Label)[] EnvironmentProfileChoices =
-    [
-        ("overcast", "Overcast Autumn (Ustye)"),
-        ("cool_clear_day", "Cool Clear Day (Calibration)"),
-        ("clear_afternoon", "Clear Afternoon"),
-        ("amber_sunset", "Amber Sunset"),
-        ("night_ops", "Night Operations"),
-        ("storm_rain", "Storm & Rain")
-    ];
     private readonly Control _backdrop;
     private readonly PanelContainer _container;
     private readonly CheckButton _vsyncButton;
@@ -93,9 +84,9 @@ internal sealed partial class SettingsPanel : CanvasLayer
         Label profileLabel = new() { Text = "Environment:", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         profileLabel.AddThemeColorOverride("font_color", HudTheme.Text);
         _profileOptions = new OptionButton();
-        for (int i = 0; i < EnvironmentProfileChoices.Length; i++)
+        for (int i = 0; i < DisplaySettings.EnvironmentProfileCatalog.Length; i++)
         {
-            _profileOptions.AddItem(EnvironmentProfileChoices[i].Label, i);
+            _profileOptions.AddItem(DisplaySettings.EnvironmentProfileCatalog[i].Label, i);
         }
         _profileOptions.ItemSelected += OnProfileSelected;
         profileRow.AddChild(profileLabel);
@@ -297,9 +288,9 @@ internal sealed partial class SettingsPanel : CanvasLayer
 
     private static int FindProfileIndex(string profileId)
     {
-        for (int i = 0; i < EnvironmentProfileChoices.Length; i++)
+        for (int i = 0; i < DisplaySettings.EnvironmentProfileCatalog.Length; i++)
         {
-            if (string.Equals(EnvironmentProfileChoices[i].Id, profileId, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(DisplaySettings.EnvironmentProfileCatalog[i].Id, profileId, StringComparison.OrdinalIgnoreCase))
             {
                 return i;
             }
@@ -307,22 +298,22 @@ internal sealed partial class SettingsPanel : CanvasLayer
         return 0;
     }
 
-    public string CycleEnvironmentProfile()
+    /// <summary>
+    /// Cycles the active environment profile for live debug/preview inspection without writing to user config.
+    /// </summary>
+    public string CycleEnvironmentProfilePreview()
     {
         string next = DisplaySettings.GetNextEnvironmentProfile(_effectiveSettings.EnvironmentProfile);
-        _cliOverridesProfile = false;
-        CommitSettingEdit(
-            _savedConfig with { EnvironmentProfile = next },
-            _effectiveSettings with { EnvironmentProfile = next },
-            "Environment profile applied and saved");
+        _effectiveSettings = _effectiveSettings with { EnvironmentProfile = next };
+        SettingsChanged?.Invoke(_effectiveSettings);
         UpdateUiFromSettings();
         return next;
     }
 
     private void OnProfileSelected(long index)
     {
-        int idx = index >= 0 && index < EnvironmentProfileChoices.Length ? (int)index : 0;
-        string profile = EnvironmentProfileChoices[idx].Id;
+        int idx = index >= 0 && index < DisplaySettings.EnvironmentProfileCatalog.Length ? (int)index : 0;
+        string profile = DisplaySettings.EnvironmentProfileCatalog[idx].Id;
         _cliOverridesProfile = false;
         CommitSettingEdit(
             _savedConfig with { EnvironmentProfile = profile },

@@ -70,8 +70,9 @@
     "forest_deciduous": "#455535",
     "water_shallows": "#273a40",
     "water_deep": "#12202a",
-    "roads_asphalt": "#464d56",
-    "roads_gravel": "#524f49",
-    "roads_dirt": "#585249"
+    "roads_asphalt": "#565e69",
+    "roads_gravel": "#635f58",
+    "roads_dirt": "#6b6358",
+    "water_horizon_reflect": 0.22
   }
 }
