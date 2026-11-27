@@ -63,6 +63,8 @@ internal sealed class ContactView
     private ushort _currentModelType = ushort.MaxValue;
     private ContactClassification _currentModelClassification = ContactClassification.Unknown;
     private bool _isAntiTankInfantry;
+    private bool _hasAimOverride;
+    private float _aimOverrideYaw;
 
     internal Node3D? EnemyModel => _enemyModel;
     internal bool HasEnemyModel => _enemyModel is not null && _enemyModel.Visible;
@@ -77,9 +79,25 @@ internal sealed class ContactView
     internal AnimationPlayer? AnimationPlayer => _animPlayer;
     internal float Altitude => _altitude;
 
-    public void SetAiming(bool aiming, float duration = 0.8f)
+    public void SetAiming(bool aiming, float duration = 0.8f, Vector3? shotDirection = null)
     {
-        if (aiming) _aimingTimer = MathF.Max(_aimingTimer, duration);
+        if (aiming)
+        {
+            _aimingTimer = MathF.Max(_aimingTimer, duration);
+            if (shotDirection.HasValue)
+            {
+                Vector3 d = shotDirection.Value;
+                if (d.X * d.X + d.Z * d.Z > 0.0001f)
+                {
+                    _aimOverrideYaw = Mathf.Atan2(-d.X, -d.Z);
+                    _hasAimOverride = true;
+                    if (_enemyModel is not null && _currentModelClassification == ContactClassification.Infantry)
+                    {
+                        _enemyModel.Rotation = new Vector3(0f, _aimOverrideYaw, 0f);
+                    }
+                }
+            }
+        }
     }
 
     public void PlayAnimation(string clipName)
@@ -232,6 +250,14 @@ internal sealed class ContactView
         if (_aimingTimer > 0f)
         {
             _aimingTimer = MathF.Max(0f, _aimingTimer - dt);
+            if (_aimingTimer <= 0f)
+            {
+                _hasAimOverride = false;
+            }
+        }
+        if (speed >= 0.4f)
+        {
+            _hasAimOverride = false;
         }
 
         bool isInfantry = contact.Classification == ContactClassification.Infantry;
@@ -302,7 +328,18 @@ internal sealed class ContactView
                     _hasPendingLodWhileHidden = false;
                 }
                 bool isAiming = _aimingTimer > 0f || MathF.Abs(_relativeTurretYaw) > 0.05f;
-                float yaw = (isInfantry && isAiming && speed < 0.15f) ? turretYaw : hullHeading;
+                float yaw = hullHeading;
+                if (isInfantry && speed < 0.25f)
+                {
+                    if (_hasAimOverride && _aimingTimer > 0f)
+                    {
+                        yaw = _aimOverrideYaw;
+                    }
+                    else if (isAiming)
+                    {
+                        yaw = turretYaw;
+                    }
+                }
                 _enemyModel.Position = new Vector3(0f, _altitude, 0f);
                 _enemyModel.Rotation = new Vector3(0, yaw, 0);
                 if (_turret is not null)
@@ -391,11 +428,11 @@ internal sealed class ContactView
 
                     if (targetAnimName == AnimRun)
                     {
-                        _animPlayer.SpeedScale = Math.Clamp(speed / 3.0f, 0.70f, 1.50f);
+                        _animPlayer.SpeedScale = Math.Clamp(speed / 4.0f, 0.70f, 1.35f);
                     }
                     else if (targetAnimName == AnimWalk)
                     {
-                        _animPlayer.SpeedScale = Math.Clamp(speed / 1.5f, 0.50f, 1.50f);
+                        _animPlayer.SpeedScale = Math.Clamp(speed / 1.6f, 0.50f, 1.40f);
                     }
                     else
                     {

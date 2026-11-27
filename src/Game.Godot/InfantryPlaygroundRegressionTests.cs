@@ -64,11 +64,11 @@ internal static class InfantryPlaygroundRegressionTests
             Require(view.CurrentAnimation == "Run", $"Expected Run animation at 1.0 m/s but got '{view.CurrentAnimation}'");
             Require(MathF.Abs(view.AnimationPlayer!.SpeedScale - 0.70f) < 0.05f, $"Expected clamped Run SpeedScale around 0.70 but got {view.AnimationPlayer.SpeedScale}");
 
-            // 3. Cruise combat run state (speed 3.6 m/s)
+            // 3. Cruise combat run state (speed 3.6 m/s against 4.0 m/s authored tactical run stride)
             view.SetDustSpeedForTesting(3.6f);
             view.UpdateEffects(0.016);
             Require(view.CurrentAnimation == "Run", $"Expected Run animation but got '{view.CurrentAnimation}'");
-            float expectedRunScale = 3.6f / 3.0f;
+            float expectedRunScale = 3.6f / 4.0f;
             Require(MathF.Abs(view.AnimationPlayer!.SpeedScale - expectedRunScale) < 0.05f, $"Expected Run SpeedScale around {expectedRunScale:F2} but got {view.AnimationPlayer.SpeedScale}");
 
             // 4. AimStanding state (speed 0, aiming active)
@@ -118,7 +118,7 @@ internal static class InfantryPlaygroundRegressionTests
             obs = obs with { Position = new NumericsVector2(50.11f, 50f) };
             contactView.Update(obs, obs.Position, 0f, false, 0f, 0f, deltaSeconds: 1f / 60f);
             Require(contactView.CurrentAnimation == "Run", $"Expected contact Run animation at 60 FPS but got '{contactView.CurrentAnimation}'");
-            Require(MathF.Abs(contactView.AnimationPlayer!.SpeedScale - (3.6f / 3.0f)) < 0.1f, $"Expected contact Run SpeedScale near {3.6f / 3.0f:F2} but got {contactView.AnimationPlayer.SpeedScale}");
+            Require(MathF.Abs(contactView.AnimationPlayer!.SpeedScale - (3.6f / 4.0f)) < 0.1f, $"Expected contact Run SpeedScale near {3.6f / 4.0f:F2} but got {contactView.AnimationPlayer.SpeedScale}");
 
             // Step 4: Stand still and aim -> AimStanding
             contactView.SetAiming(true);
@@ -248,17 +248,20 @@ internal static class InfantryPlaygroundRegressionTests
             akView.UpdateEffects(0.016);
             Require(akView.CurrentAnimation == "AimStanding", $"Expected Soviet rifleman AimStanding but got '{akView.CurrentAnimation}'.");
 
-            // RPG-7 gunner transitions: Idle -> Run -> AimKneeling (kneeling anti-tank firing stance)
+            // RPG-7 gunner transitions: Idle -> Run -> AimKneeling and immediately turns to face shot direction
+            rpgView.SetHullHeading(Mathf.Pi); // initially facing north (+Z)
             rpgView.SetDustSpeedForTesting(0f);
             rpgView.UpdateEffects(0.016);
             Require(rpgView.CurrentAnimation == "Idle", $"Expected Soviet RPG Idle but got '{rpgView.CurrentAnimation}'.");
             rpgView.SetDustSpeedForTesting(3.3f);
             rpgView.UpdateEffects(0.016);
             Require(rpgView.CurrentAnimation == "Run", $"Expected Soviet RPG Run but got '{rpgView.CurrentAnimation}'.");
-            rpgView.SetDustSpeedForTesting(0f);
-            rpgView.ApplyRecoil(Vector3.Forward, isAntiTankRocket: true);
+            rpgView.ApplyRecoil(Vector3.Right, isAntiTankRocket: true); // shoot east (+X)
             rpgView.UpdateEffects(0.016);
             Require(rpgView.CurrentAnimation == "AimKneeling", $"Expected Soviet RPG AimKneeling but got '{rpgView.CurrentAnimation}'.");
+            float expectedEastYaw = Mathf.Atan2(-1f, 0f);
+            float yawErr = Mathf.Abs(Mathf.Wrap(rpgView.Model.Rotation.Y - expectedEastYaw, -Mathf.Pi, Mathf.Pi));
+            Require(yawErr < 0.05f, $"RPG gunner must turn Model.Rotation.Y toward shot direction east ({expectedEastYaw:F3}), got {rpgView.Model.Rotation.Y:F3}.");
 
             // Verify Soviet hostile infantry contact resolves to Soviet model
             Node3D? enemySovietInf = ContactVisualCatalog.InstantiateEnemyModel(null, ContactClassification.Infantry, "soviet");
@@ -267,7 +270,7 @@ internal static class InfantryPlaygroundRegressionTests
                 "Hostile Soviet infantry contact must load soviet_rifleman.glb.");
             enemySovietInf.Free();
 
-            // Verify CombatEffects AK-74 3-round burst & RPG-7V rocket flight + backblast + HEAT detonation
+            // Verify CombatEffects AK-74 3-round burst & authentic 3-phase PG-7V rocket flight + HEAT detonation
             HeightMap map = HeightMap.CreatePrototype();
             UnitCatalog catalog = ColdWarContent.LoadCatalog();
             UnitViewSet unitViews = new(parent, map, catalog);
@@ -289,21 +292,41 @@ internal static class InfantryPlaygroundRegressionTests
             effects.ProcessEvents([akShot], unitViews);
             Require(effects.ActiveTracersCount >= 3, $"AK-74 burst must spawn 3 staggered tracers, got {effects.ActiveTracersCount}.");
 
+            // Verify historical PG-7V flight time (~0.92 s at 200 m, ~1.32 s at 300 m)
+            float flight200 = CombatEffects.ComputeRpgFlightDuration(200f);
+            Require(flight200 >= 0.80f && flight200 <= 1.05f, $"PG-7V 200 m flight time should be ~0.92 s, got {flight200:F3} s.");
+
             CombatEventObservation rpgShot = new(
                 EventId: 6002,
                 ServerTick: 11,
                 Kind: CombatEventKind.ShotFired,
                 PresentationId: rpgPresId,
                 Origin: new NumericsVector3(40f, 1.48f, 40f),
-                Target: new NumericsVector3(100f, 1.50f, 40f),
+                Target: new NumericsVector3(260f, 1.50f, 40f), // 220 m shot exercises all 3 phases
                 ShooterUnitId: default,
                 Result: HitResult.Penetrated);
             effects.ProcessEvents([rpgShot], unitViews);
-            Require(effects.ActiveRocketsCount >= 1, "RPG-7V shot must spawn a flying PG-7V rocket.");
+            Require(effects.ActiveRpgProjectilesCount == 1, "RPG-7V shot must spawn a dedicated PG-7V projectile.");
             Require(effects.ActiveMuzzleFlashesCount >= 2, "RPG-7V shot must spawn both muzzle and backblast flashes.");
 
-            // Advance until PG-7V arrives (~60 m / 115 m/s ~= 0.52 s) and verify HEAT detonation spawns explosion
-            for (int f = 0; f < 40; f++)
+            // Phase 1 (t = 0.032 s < 0.10 s safety coast): sustainer flame and contrail MUST be OFF to protect gunner
+            effects.Update(0.032);
+            ref CombatEffects.TimedRpgProjectile proj = ref effects.RpgProjectiles[0];
+            Require(!proj.FlameMesh.Visible && !proj.Contrail.Emitting && proj.TracerDotMesh.Visible,
+                "PG-7V Phase 1 (0..11.5 m safety coast) must keep sustainer flame/contrail OFF with base tracer lit.");
+
+            // Phase 2 (t = 0.25 s, sustainer burn): flame and fine smoke contrail MUST be ON
+            effects.Update(0.22);
+            Require(proj.FlameMesh.Visible && proj.Contrail.Emitting,
+                "PG-7V Phase 2 (sustainer burn) must ignite sustainer flame and fine contrail.");
+
+            // Phase 3 (t = 0.72 s > 0.65 s burnout): sustainer flame and contrail MUST extinguish while base tracer continues
+            effects.Update(0.47);
+            Require(proj.Active && !proj.FlameMesh.Visible && !proj.Contrail.Emitting && proj.TracerDotMesh.Visible,
+                "PG-7V Phase 3 (ballistic coast > 124 m) must extinguish motor while keeping base tracer lit.");
+
+            // Advance until PG-7V arrives (~1.0 s total for 220 m) and verify HEAT detonation spawns explosion
+            for (int f = 0; f < 30; f++)
             {
                 effects.Update(0.016);
             }

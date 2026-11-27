@@ -58,6 +58,22 @@ public sealed class LocalSession : IGameSession
     public bool EnterBuilding(EntityId unit, StructureId targetStructure, GarrisonSlotKind slotKind = GarrisonSlotKind.Interior) => _client.EnterBuilding(unit, targetStructure, slotKind);
     public bool ExitBuilding(EntityId unit) => _client.ExitBuilding(unit);
 
+    public bool TrySpawnSandboxUnit(
+        int owner,
+        ushort definition,
+        Vector2 position,
+        float speed,
+        int maxHealth,
+        int ammo,
+        float initialYaw,
+        FireStance stance,
+        int passengerCapacity,
+        out EntityId spawnedId) =>
+        _host.TrySpawnSandboxUnit(owner, definition, position, speed, maxHealth, ammo, initialYaw, stance, passengerCapacity, out spawnedId);
+
+    public int SetAllUnitsFireStanceForOwner(int owner, FireStance stance) =>
+        _host.SetAllUnitsFireStanceForOwner(owner, stance);
+
     public void Dispose()
     {
         _client.Dispose();

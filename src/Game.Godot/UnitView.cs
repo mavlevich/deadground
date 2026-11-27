@@ -117,6 +117,8 @@ internal sealed class UnitView
     private StringName? _currentAnimName;
     private float _aimingTimer;
     private float _infantryRecoilKick;
+    private bool _hasInfantryAimOverride;
+    private float _infantryAimOverrideYaw;
     private bool _isGarrisonedVisual;
     private GarrisonXRayMode _garrisonXRayMode = GarrisonXRayMode.None;
     private bool _garrisonIsRunning;
@@ -166,6 +168,10 @@ internal sealed class UnitView
         if (aiming)
         {
             _aimingTimer = MathF.Max(_aimingTimer, duration);
+            if (IsInfantry)
+            {
+                ApplyHullPose();
+            }
         }
     }
 
@@ -1111,7 +1117,24 @@ internal sealed class UnitView
     {
         if (IsInfantry || isRifle || isAntiTankRocket)
         {
-            SetAiming(true, isAntiTankRocket ? 1.45f : 0.85f);
+            float flatLenSq = shotDirection.X * shotDirection.X + shotDirection.Z * shotDirection.Z;
+            if (flatLenSq > 0.0001f)
+            {
+                float shotYaw = Mathf.Atan2(-shotDirection.X, -shotDirection.Z);
+                _infantryAimOverrideYaw = shotYaw;
+                _hasInfantryAimOverride = true;
+                _turretRotation = new Vector3(0f, Mathf.Wrap(shotYaw - _heading, -Mathf.Pi, Mathf.Pi), 0f);
+                _hasAim = true;
+            }
+            if (IsInfantry && _distanceSinceEffects < 0.02f)
+            {
+                _dustSpeed = 0f;
+            }
+            if (IsAntiTankInfantry && !_isGarrisonedVisual && _muzzle is not null)
+            {
+                _muzzle.Position = new Vector3(0.14f, 1.05f, -0.78f);
+            }
+            SetAiming(true, isAntiTankRocket ? 1.65f : 0.85f);
             _infantryRecoilKick = isAntiTankRocket ? 0.11f : 0.045f;
             ApplyHullPose();
             return;
@@ -1374,9 +1397,18 @@ internal sealed class UnitView
     {
         if (_rockAngle == 0f && _pitchRad == 0f && _rollRad == 0f)
         {
-            float yaw = (IsInfantry && (_aimingTimer > 0f || _hasAim) && _dustSpeed < 0.15f)
-                ? (_turretRotation.Y + _heading)
-                : _heading;
+            float yaw = _heading;
+            if (IsInfantry && _dustSpeed < 0.25f)
+            {
+                if (_hasInfantryAimOverride && _aimingTimer > 0f)
+                {
+                    yaw = _infantryAimOverrideYaw;
+                }
+                else if (_aimingTimer > 0f || _hasAim)
+                {
+                    yaw = _turretRotation.Y + _heading;
+                }
+            }
             Model.Rotation = new Vector3(_infantryRecoilKick, yaw, 0f);
             return;
         }
@@ -1435,7 +1467,13 @@ internal sealed class UnitView
         if (dt <= 0f) return;
         float speed = _distanceSinceEffects / dt;
         _distanceSinceEffects = 0f;
-        _dustSpeed = Mathf.Lerp(_dustSpeed, speed, 1f - Mathf.Exp(-6f * dt));
+        float speedSmoothing = (IsInfantry && speed < 0.15f) ? 16f : 6f;
+        _dustSpeed = Mathf.Lerp(_dustSpeed, speed, 1f - Mathf.Exp(-speedSmoothing * dt));
+        if (IsInfantry && speed >= 0.4f && _hasInfantryAimOverride)
+        {
+            _hasInfantryAimOverride = false;
+            ApplyHullPose();
+        }
         float ratio = Mathf.Clamp(_dustSpeed / FullDustSpeed, 0f, 1f);
         bool show = ratio > 0.05f && _activeLod < 2 && !IsInfantry;
         foreach (GpuParticles3D? dust in _dust)
@@ -1451,6 +1489,11 @@ internal sealed class UnitView
         if (_aimingTimer > 0f)
         {
             _aimingTimer = MathF.Max(0f, _aimingTimer - dt);
+            if (_aimingTimer <= 0f && _hasInfantryAimOverride)
+            {
+                _hasInfantryAimOverride = false;
+                ApplyHullPose();
+            }
         }
 
         if (IsHelicopter)
@@ -1548,13 +1591,13 @@ internal sealed class UnitView
                 {
                     targetAnimName = AnimRun;
                     targetAnimStr = "Run";
-                    authoredSpeed = 3.0f;
+                    authoredSpeed = 4.0f;
                 }
                 else
                 {
                     targetAnimName = AnimWalk;
                     targetAnimStr = "Walk";
-                    authoredSpeed = 1.5f;
+                    authoredSpeed = 1.6f;
                 }
             }
             else if (_aimingTimer > 0f || _hasAim)

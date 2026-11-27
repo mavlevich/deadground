@@ -239,36 +239,117 @@ def pose_gait(t, stride, lift, drop, bob, lean_deg, twist):
     place_hands(carried_weapon(), CARRY_POLES)
 
 
+def running_weapon(t):
+    # Tactical combat-run weapon carry: pulled close to body with bent elbows,
+    # stabilized forward with inertial bounce lagging pelvis by ~0.08 cycles.
+    bob_phase = math.tau * 2.0 * (t - 0.24)
+    inertia_z = -0.018 * math.cos(bob_phase)
+    pitch_bob = 2.4 * math.sin(bob_phase)
+    sway_yaw = 2.5 * math.sin(math.tau * t)
+    spine_pos = head("spine_03")
+    if ROLE == "rifleman":
+        # Compact tactical cross-chest run: stock tucked near right chest/ribs, bent elbows
+        yaw_rad = math.radians(38.0 + sway_yaw)
+        pitch_rad = math.radians(-12.0 + pitch_bob)
+        ax = (FWD * math.cos(yaw_rad) + LEFT * math.sin(yaw_rad)) * math.cos(pitch_rad) + UP * math.sin(pitch_rad)
+        ax.normalize()
+        up_a = (UP - ax * ax.dot(UP)).normalized()
+        left_a = up_a.cross(ax).normalized()
+        origin = spine_pos + RIGHT * 0.14 + FWD * 0.08 - UP * 0.05 + UP * inertia_z
+    else:
+        # RPG-7V combat run: carried securely at right side/underarm with bent elbows,
+        # angled forward-upward ~18 deg so warhead stays clear and natural (never locked straight-armed).
+        yaw_rad = math.radians(12.0 + sway_yaw * 0.65)
+        pitch_rad = math.radians(18.0 + pitch_bob * 0.7)
+        ax = (FWD * math.cos(yaw_rad) + LEFT * math.sin(yaw_rad)) * math.cos(pitch_rad) + UP * math.sin(pitch_rad)
+        ax.normalize()
+        up_a = (UP - ax * ax.dot(UP)).normalized()
+        left_a = up_a.cross(ax).normalized()
+        origin = spine_pos + RIGHT * 0.20 - FWD * 0.18 - UP * 0.14 + UP * inertia_z
+    return Matrix((
+        (ax.x, up_a.x, left_a.x, origin.x),
+        (ax.y, up_a.y, left_a.y, origin.y),
+        (ax.z, up_a.z, left_a.z, origin.z),
+        (0, 0, 0, 1),
+    ))
+
+
+def _eval_hermite(p0, v0, p1, v1, s):
+    s2 = s * s
+    s3 = s2 * s
+    h00 = 2.0 * s3 - 3.0 * s2 + 1.0
+    h10 = s3 - 2.0 * s2 + s
+    h01 = -2.0 * s3 + 3.0 * s2
+    h11 = s3 - s2
+    return h00 * p0 + h10 * v0 + h01 * p1 + h11 * v1
+
+
 def pose_run(t):
     reset()
     ph = math.tau * t
-    drop = 0.095
-    bob = 0.042
-    move("pelvis", Vector((0.0, 0.0, -(drop - bob * math.cos(2 * ph)))))
-    turn("pelvis", UP, 9.0 * math.sin(ph))
-    turn("pelvis", FWD, 2.5 * math.cos(ph))
-    stride = 0.48
-    for s, p in (("l", ph), ("r", ph + math.pi)):
+
+    # Athletic military combat run (22 frames @ 30 fps = 0.733 s per full L+R stride):
+    # - Stance covers u in [0.00, 0.34] with linear ground sweep (zero foot skating).
+    # - Springy vertical pelvis arc (no duck-squat): low cushion at mid-stance (u=0.16),
+    #   upright extension at push-off/flight (u=0.41).
+    # - Clear runner's heel kick behind the knee during early swing + high forward knee drive.
+    stance_end = 0.34
+    y_front = 0.33
+    y_back = -0.39
+    ground_vel = (y_back - y_front) / stance_end
+
+    bob_ph = math.tau * 2.0 * (t - 0.16)
+    pelvis_drop = 0.044 + 0.030 * math.cos(bob_ph)
+    move("pelvis", Vector((0.0, 0.0, -pelvis_drop)))
+    turn("pelvis", UP, 7.0 * math.cos(ph))
+    turn("pelvis", FWD, 2.5 * math.sin(ph))
+
+    for s, phase_shift, sx in (("l", 0.0, -1.0), ("r", 0.5, 1.0)):
         base = HEAD0["foot_" + s]
-        u = (p % math.tau) / math.tau
-        y_off = stride * math.cos(p)
-        if u < 0.42:
-            lift = 0.0
-            toe_down = -0.025 * max(0.0, 1.0 - u / 0.12) + 0.055 * max(0.0, (u - 0.30) / 0.12)
+        u = (t + phase_shift) % 1.0
+        if u < stance_end:
+            su = u / stance_end
+            y_off = y_front + (y_back - y_front) * su
+            push = max(0.0, (su - 0.60) / 0.40)
+            z_ankle = 0.075 + 0.095 * (push * push)
+            toe_down = -0.025 * max(0.0, 1.0 - su / 0.20) + 0.068 * (push ** 1.2)
+            x_inward = -sx * 0.026 * math.sin(math.pi * su)
         else:
-            su = (u - 0.42) / 0.58
-            kick = math.sin(math.pi * su)
-            rear_peak = math.sin(math.pi * min(1.0, su / 0.65)) if su < 0.65 else 0.0
-            lift = 0.20 * kick + 0.16 * (rear_peak ** 1.4)
-            toe_down = 0.065 * (1.0 - su) - 0.02 * su
-        a = Vector((base.x, base.y + y_off, 0.075 + lift))
+            su = (u - stance_end) / (1.0 - stance_end)
+            swing_dur = 1.0 - stance_end
+            v_stance = ground_vel * swing_dur
+            # 3-part smooth swing: (1) heel-fold behind knee -> (2) forward knee drive -> (3) paw-back plant
+            if su < 0.34:
+                k = su / 0.34
+                y_off = _eval_hermite(y_back, v_stance * 0.34, -0.36, 0.25, k)
+                z_ankle = _eval_hermite(0.170, 0.42, 0.355, 0.04, k)
+                toe_down = 0.068 * (1.0 - 0.25 * k)
+            elif su < 0.76:
+                k = (su - 0.34) / 0.42
+                y_off = _eval_hermite(-0.36, 0.30, 0.28, 0.48, k)
+                z_ankle = _eval_hermite(0.355, -0.02, 0.215, -0.22, k)
+                toe_down = 0.051 * (1.0 - k) - 0.010 * k
+            else:
+                k = (su - 0.76) / 0.24
+                y_off = _eval_hermite(0.28, 0.26, y_front, v_stance * 0.24 * 0.42, k)
+                z_ankle = _eval_hermite(0.215, -0.14, 0.076, -0.22, k)
+                toe_down = -0.010 * (1.0 - k) - 0.025 * k
+            x_inward = -sx * 0.014 * math.sin(math.pi * su)
+
+        a = Vector((base.x + x_inward, base.y + y_off, z_ankle))
         leg(s, a, flat_ball(a, toe_down=toe_down), FWD)
-    lean("spine_01", 11.0 if ROLE == "rifleman" else 8.0)
-    lean("spine_02", 7.0 if ROLE == "rifleman" else 5.0)
-    turn("spine_02", UP, -11.0 * math.sin(ph))
-    lean("neck_01", -7.0)
-    lean("head", -6.0)
-    place_hands(carried_weapon(), CARRY_POLES)
+
+    # Athletic forward sprint lean + smooth shoulder counter-rotation + eyes level ahead
+    bounce_lean = 1.6 * math.cos(bob_ph)
+    lean("spine_01", (13.0 if ROLE == "rifleman" else 11.5) + bounce_lean)
+    lean("spine_02", (6.5 if ROLE == "rifleman" else 5.5) + 0.5 * bounce_lean)
+    turn("spine_02", UP, -8.5 * math.cos(ph))
+    turn("spine_03", UP, -3.0 * math.cos(ph))
+    lean("neck_01", -8.5 if ROLE == "rifleman" else -7.5)
+    lean("head", -7.5 if ROLE == "rifleman" else -6.5)
+    turn("head", UP, 4.5 * math.cos(ph))
+    run_poles = CARRY_POLES if ROLE == "rifleman" else {"r": Vector((1.0, -0.55, -0.65)), "l": Vector((-0.85, 0.25, -0.85))}
+    place_hands(running_weapon(t), run_poles)
 
 
 CLIPS = [
@@ -277,9 +358,9 @@ CLIPS = [
     ("AimKneeling", 40, pose_kneel_aim),
     ("AimProne", 40, pose_prone_aim),
     ("Walk", 32, lambda t: pose_gait(t, 0.27, 0.07, 0.02, 0.012, 3, 4)),
-    ("Run", 20, pose_run),
+    ("Run", 22, pose_run),
 ]
-KEY_STEP = {"Idle": 10, "AimStanding": 10, "AimKneeling": 10, "AimProne": 10, "Walk": 2, "Run": 2}
+KEY_STEP = {"Idle": 10, "AimStanding": 10, "AimKneeling": 10, "AimProne": 10, "Walk": 2, "Run": 1}
 
 rig.animation_data_create()
 scene = bpy.context.scene

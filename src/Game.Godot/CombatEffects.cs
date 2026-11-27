@@ -16,6 +16,7 @@ internal partial class CombatEffects : Node3D
     public const int MaxShockwaves = 32;
     public const int MaxArtilleryPlumes = 32;
     public const int MaxRockets = 48;
+    public const int MaxRpgProjectiles = 16;
     public const int MaxResidues = 64;
     public const int MaxArtilleryCraters = 96;
     public const int MaxPendingImpacts = 16;
@@ -132,7 +133,24 @@ internal partial class CombatEffects : Node3D
         public float ElapsedTime;
         public float SmokeAccumulator;
         public bool IncomingSoundPlayed;
-        public bool IsAntiTankRocket;
+        public bool Active;
+    }
+
+    internal struct TimedRpgProjectile
+    {
+        public Node3D Root;
+        public MeshInstance3D WarheadMesh;
+        public MeshInstance3D MotorShaftMesh;
+        public MeshInstance3D FlameMesh;
+        public MeshInstance3D TracerDotMesh;
+        public GpuParticles3D Contrail;
+        public Vector3 Origin;
+        public Vector3 Target;
+        public float TotalDistance;
+        public float ApexHeight;
+        public float TotalDuration;
+        public float ElapsedTime;
+        public bool IgnitionFlashTriggered;
         public bool Active;
     }
 
@@ -216,6 +234,7 @@ internal partial class CombatEffects : Node3D
     internal TimedMesh[] Shockwaves => _shockwaves;
     internal TimedMesh[] ArtilleryPlumes => _artilleryPlumes;
     internal TimedRocket[] Rockets => _rockets;
+    internal TimedRpgProjectile[] RpgProjectiles => _rpgProjectiles;
     internal TrackedGuidedMissile[] GuidedMissiles => _guidedMissiles;
     internal TimedFlare[] Flares => _flares;
     internal TimedMesh[] Residues => _residues;
@@ -231,6 +250,7 @@ internal partial class CombatEffects : Node3D
     private readonly TimedMesh[] _shockwaves = new TimedMesh[MaxShockwaves];
     private readonly TimedMesh[] _artilleryPlumes = new TimedMesh[MaxArtilleryPlumes];
     private readonly TimedRocket[] _rockets = new TimedRocket[MaxRockets];
+    private readonly TimedRpgProjectile[] _rpgProjectiles = new TimedRpgProjectile[MaxRpgProjectiles];
     private readonly TrackedGuidedMissile[] _guidedMissiles = new TrackedGuidedMissile[MaxGuidedMissiles];
     private readonly TimedFlare[] _flares = new TimedFlare[MaxFlares];
     private readonly TimedMesh[] _residues = new TimedMesh[MaxResidues];
@@ -301,7 +321,8 @@ internal partial class CombatEffects : Node3D
     public int ActiveExplosionsCount => CountActiveMeshPool(_explosions);
     public int ActiveShockwavesCount => CountActiveMeshPool(_shockwaves);
     public int ActiveArtilleryPlumesCount => CountActiveMeshPool(_artilleryPlumes);
-    public int ActiveRocketsCount => CountActiveRockets();
+    public int ActiveRocketsCount => CountActiveRockets() + CountActiveRpgProjectiles();
+    public int ActiveRpgProjectilesCount => CountActiveRpgProjectiles();
     public int ActiveGuidedMissilesCount => CountActiveGuidedMissiles();
     public int ActiveFlaresCount => CountActiveFlares();
     public int ActiveResiduesCount => CountActiveMeshPool(_residues);
@@ -328,6 +349,7 @@ internal partial class CombatEffects : Node3D
         InitShockwaves();
         InitArtilleryPlumes();
         InitRockets();
+        InitRpgProjectiles();
         InitGuidedMissiles();
         InitFlares();
         InitResidues();
@@ -812,6 +834,115 @@ void fragment() {
         }
     }
 
+    private void InitRpgProjectiles()
+    {
+        StandardMaterial3D warheadMat = new()
+        {
+            AlbedoColor = new Color(0.24f, 0.28f, 0.18f),
+            Roughness = 0.62f,
+            Metallic = 0.25f
+        };
+        StandardMaterial3D shaftMat = new()
+        {
+            AlbedoColor = new Color(0.32f, 0.34f, 0.29f),
+            Roughness = 0.55f,
+            Metallic = 0.42f
+        };
+        Shader rpgFlameShader = new()
+        {
+            Code = """
+shader_type spatial;
+render_mode unshaded, blend_add, cull_disabled, depth_draw_never, fog_disabled;
+varying vec3 v_local;
+void vertex() {
+    v_local = VERTEX;
+}
+void fragment() {
+    float along = clamp(v_local.y + 0.5, 0.0, 1.0);
+    float core = pow(along, 2.2);
+    float flicker = 0.88 + 0.12 * sin(TIME * 94.0 + along * 16.0);
+    vec3 col = mix(vec3(2.8, 0.95, 0.18), vec3(5.6, 4.6, 2.8), core) * flicker;
+    ALBEDO = col;
+    ALPHA = pow(along, 0.85) * 0.92;
+}
+"""
+        };
+        ShaderMaterial flameMat = new() { Shader = rpgFlameShader };
+        StandardMaterial3D tracerDotMat = new()
+        {
+            AlbedoColor = new Color(4.6f, 2.0f, 0.55f, 0.94f),
+            AlbedoTexture = ParticleEffects.HotGlow,
+            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+            BlendMode = BaseMaterial3D.BlendModeEnum.Add,
+            DepthDrawMode = BaseMaterial3D.DepthDrawModeEnum.Disabled,
+            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+            BillboardMode = BaseMaterial3D.BillboardModeEnum.Enabled,
+            BillboardKeepScale = true,
+            DisableFog = true
+        };
+
+        // Authentic PG-7V silhouette: 85 mm conical/ogive HEAT warhead ahead of slender sustainer motor tube
+        CylinderMesh warheadMesh = new() { TopRadius = 0.012f, BottomRadius = 0.068f, Height = 0.36f, RadialSegments = 8 };
+        CylinderMesh shaftMesh = new() { TopRadius = 0.032f, BottomRadius = 0.022f, Height = 0.56f, RadialSegments = 6 };
+        CylinderMesh flameMesh = new() { TopRadius = 0.068f, BottomRadius = 0.008f, Height = 0.42f, RadialSegments = 8 };
+        QuadMesh tracerQuad = new() { Size = new Vector2(0.32f, 0.32f) };
+
+        for (int i = 0; i < MaxRpgProjectiles; i++)
+        {
+            Node3D root = new() { Name = $"RpgProjectile_{i}", Visible = false };
+            MeshInstance3D warhead = new()
+            {
+                Mesh = warheadMesh,
+                MaterialOverride = warheadMat,
+                Position = new Vector3(0f, 0f, -0.22f),
+                Rotation = new Vector3(-Mathf.Pi * 0.5f, 0f, 0f),
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
+            };
+            MeshInstance3D shaft = new()
+            {
+                Mesh = shaftMesh,
+                MaterialOverride = shaftMat,
+                Position = new Vector3(0f, 0f, 0.24f),
+                Rotation = new Vector3(-Mathf.Pi * 0.5f, 0f, 0f),
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
+            };
+            MeshInstance3D flame = new()
+            {
+                Mesh = flameMesh,
+                MaterialOverride = flameMat,
+                Position = new Vector3(0f, 0f, 0.42f),
+                Rotation = new Vector3(-Mathf.Pi * 0.5f, 0f, 0f),
+                Visible = false,
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
+            };
+            MeshInstance3D tracerDot = new()
+            {
+                Mesh = tracerQuad,
+                MaterialOverride = tracerDotMat,
+                Position = new Vector3(0f, 0f, 0.54f),
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
+            };
+            GpuParticles3D contrail = ParticleEffects.CreateRpgContrail();
+            contrail.Position = new Vector3(0f, 0f, 0.46f);
+            root.AddChild(warhead);
+            root.AddChild(shaft);
+            root.AddChild(flame);
+            root.AddChild(tracerDot);
+            root.AddChild(contrail);
+            AddChild(root);
+            _rpgProjectiles[i] = new TimedRpgProjectile
+            {
+                Root = root,
+                WarheadMesh = warhead,
+                MotorShaftMesh = shaft,
+                FlameMesh = flame,
+                TracerDotMesh = tracerDot,
+                Contrail = contrail,
+                Active = false
+            };
+        }
+    }
+
     private void InitGuidedMissiles()
     {
         StandardMaterial3D bodyMat = new()
@@ -1253,7 +1384,7 @@ void fragment() {
                 bool isRpg = WeaponPresentation.IsAntiTankRocket(ev.PresentationId);
                 float distance = origin.DistanceTo(target);
                 float flightDuration = isRpg
-                    ? Mathf.Clamp(distance / 115f, 0.08f, 3.0f)
+                    ? ComputeRpgFlightDuration(distance)
                     : Mathf.Clamp(distance / TracerSpeed, MinTracerDuration, MaxTracerDuration);
 
                 // If entire shot sequence including impact has expired, discard
@@ -1264,15 +1395,24 @@ void fragment() {
 
                 if (ev.ShooterUnitId.Value != 0 && unitViews.Views.TryGetValue(ev.ShooterUnitId, out UnitView? shooter))
                 {
+                    if (shooter.IsInfantry && ageSeconds < 0.10f)
+                    {
+                        shooter.ApplyRecoil(shotDir, isMachineGun: isMg, isRifle: isRifle, isAntiTankRocket: isRpg);
+                    }
                     if (shooter.TryGetMuzzleTransformForTarget(target, out Transform3D muzzleXform))
                     {
                         origin = muzzleXform.Origin;
                         if (origin != target)
                         {
                             shotDir = (target - origin).Normalized();
+                            distance = origin.DistanceTo(target);
+                            if (isRpg)
+                            {
+                                flightDuration = ComputeRpgFlightDuration(distance);
+                            }
                         }
                     }
-                    if (ageSeconds < 0.10f)
+                    if (!shooter.IsInfantry && ageSeconds < 0.10f)
                     {
                         shooter.ApplyRecoil(shotDir, isMachineGun: isMg, isRifle: isRifle, isAntiTankRocket: isRpg);
                     }
@@ -1283,17 +1423,22 @@ void fragment() {
                     {
                         if (cv.Observation.IsCurrent && cv.Root.Position.DistanceTo(new Vector3(origin.X, cv.Root.Position.Y, origin.Z)) < 4.0f)
                         {
+                            if (ageSeconds < 0.10f)
+                            {
+                                cv.SetAiming(true, isRpg ? 1.45f : 0.85f, shotDir);
+                            }
                             if (cv.TryGetMuzzleTransformForTarget(target, out Transform3D muzzleXform))
                             {
                                 origin = muzzleXform.Origin;
                                 if (origin != target)
                                 {
                                     shotDir = (target - origin).Normalized();
+                                    distance = origin.DistanceTo(target);
+                                    if (isRpg)
+                                    {
+                                        flightDuration = ComputeRpgFlightDuration(distance);
+                                    }
                                 }
-                            }
-                            if (ageSeconds < 0.10f)
-                            {
-                                cv.SetAiming(true, isRpg ? 1.45f : 0.85f);
                             }
                             break;
                         }
@@ -1303,27 +1448,25 @@ void fragment() {
                 if (isRpg)
                 {
                     Vector3 backblastPos = origin - shotDir * 1.15f;
-                    if (ageSeconds < MuzzleFlashLifetime * 1.8f)
+                    if (ageSeconds < MuzzleFlashLifetime * 1.4f)
                     {
-                        SpawnMuzzleFlash(origin, shotDir, isMachineGun: true, isRifle: false, elapsedOffset: ageSeconds * 0.6f);
-                        SpawnMuzzleFlash(backblastPos, -shotDir, isMachineGun: false, isRifle: false, elapsedOffset: ageSeconds * 0.5f);
-                        SpawnFlashLight(origin, energy: 4.8f, range: 18f, lifetime: 0.14f);
+                        // Compact booster pop at muzzle + pronounced rear venturi backblast cone
+                        SpawnMuzzleFlash(origin, shotDir, isMachineGun: true, isRifle: true, elapsedOffset: ageSeconds * 0.7f);
+                        SpawnMuzzleFlash(backblastPos, -shotDir, isMachineGun: true, isRifle: false, elapsedOffset: ageSeconds * 0.55f);
+                        SpawnFlashLight(backblastPos, energy: 3.6f, range: 14f, lifetime: 0.11f);
                         if (ageSeconds < 0.12f)
                         {
-                            OnBlastImpulse?.Invoke(origin, 0.12f);
+                            OnBlastImpulse?.Invoke(origin, 0.10f);
                         }
                     }
                     if (ageSeconds < SmokePuffLifetime)
                     {
-                        SpawnRocketTrailSmoke(origin, initialScale: 0.35f, targetScale: 1.4f, lifetime: 1.4f, elapsedOffset: ageSeconds);
-                        SpawnRocketTrailSmoke(backblastPos - shotDir * 0.45f, initialScale: 0.70f, targetScale: 2.6f, lifetime: 2.4f, elapsedOffset: ageSeconds);
+                        SpawnRocketTrailSmoke(origin + shotDir * 0.25f, initialScale: 0.22f, targetScale: 0.85f, lifetime: 1.0f, elapsedOffset: ageSeconds);
+                        SpawnRocketTrailSmoke(backblastPos - shotDir * 0.55f, initialScale: 0.45f, targetScale: 1.75f, lifetime: 1.8f, elapsedOffset: ageSeconds);
                     }
                     if (ageSeconds < flightDuration)
                     {
-                        System.Numerics.Vector3 rpgOrigin = new(origin.X, origin.Y, origin.Z);
-                        System.Numerics.Vector3 rpgTarget = new(target.X, target.Y, target.Z);
-                        float rpgApex = Mathf.Clamp(distance * 0.014f, 0.18f, 1.8f);
-                        SpawnRocket(rpgOrigin, rpgTarget, rpgApex, flightDuration, ageSeconds, isAntiTankRocket: true);
+                        SpawnRpgProjectile(origin, target, distance, flightDuration, ageSeconds);
                         QueuePendingImpact(target, shotDir, ev.Result, flightDuration - ageSeconds, isMachineGun: false, isRifle: false, isAntiTankRocket: true);
                     }
                     else
@@ -2541,8 +2684,7 @@ void fragment() {
         System.Numerics.Vector3 target,
         float apexHeight,
         float flightDuration,
-        float elapsedOffset = 0f,
-        bool isAntiTankRocket = false)
+        float elapsedOffset = 0f)
     {
         if (elapsedOffset >= flightDuration) return;
 
@@ -2555,14 +2697,13 @@ void fragment() {
         rocket.TotalDuration = flightDuration;
         rocket.ElapsedTime = elapsedOffset;
         rocket.SmokeAccumulator = 0f;
-        rocket.IsAntiTankRocket = isAntiTankRocket;
-        rocket.IncomingSoundPlayed = isAntiTankRocket || (flightDuration - elapsedOffset) < 0.45f;
-        rocket.Root.Scale = isAntiTankRocket ? Vector3.One * 0.36f : Vector3.One;
+        rocket.IncomingSoundPlayed = (flightDuration - elapsedOffset) < 0.45f;
+        rocket.Root.Scale = Vector3.One;
 
         PositionRocket(ref rocket);
         rocket.BodyMesh.Visible = true;
         rocket.Root.Visible = true;
-        rocket.Contrail.AmountRatio = isAntiTankRocket ? 0.65f : 1.0f;
+        rocket.Contrail.AmountRatio = 1.0f;
         rocket.Contrail.Emitting = true;
     }
 
@@ -2586,9 +2727,9 @@ void fragment() {
             rocket.Root.LookAt(gPos + gDir, up);
         }
 
-        // PG-7V sustainer burns across most of its short direct-fire flight; 9M22U boosts then coasts.
-        float burnEnd = rocket.IsAntiTankRocket ? 0.84f : 0.26f;
-        float taperEnd = rocket.IsAntiTankRocket ? 0.94f : 0.32f;
+        // 9M22U boosts cleanly during the first ~26% of flight then coasts ballistically.
+        const float burnEnd = 0.26f;
+        const float taperEnd = 0.32f;
         bool motorBurning = t < taperEnd;
         rocket.FlameMesh.Visible = motorBurning;
         rocket.GlowMesh.Visible = motorBurning;
@@ -2601,6 +2742,168 @@ void fragment() {
             rocket.FlameMesh.Scale = new Vector3(0.70f + 0.30f * burnFade, MathF.Max(0.05f, flicker), 0.70f + 0.30f * burnFade);
             rocket.GlowMesh.Scale = Vector3.One * MathF.Max(0.05f, (0.90f + 0.22f * flicker) * burnFade);
         }
+    }
+
+    // Authentic PG-7V 3-phase flight profile (Soviet RPG-7V firing tables):
+    // 1. Booster kick (0..11.5 m, 0..0.10 s): constant 115 m/s with sustainer OFF to protect the gunner.
+    // 2. Sustainer motor burn (0.10..0.65 s, ~11.5..124 m): sharp ignition pop, accelerates 115 -> 294 m/s.
+    // 3. Ballistic coast (>0.65 s): motor out, base tracer stays lit, gentle drag deceleration to impact.
+    internal const float RpgBoosterSpeed = 115f;
+    internal const float RpgSafetyCoastDistance = 11.5f;
+    internal const float RpgSustainerIgniteTime = RpgSafetyCoastDistance / RpgBoosterSpeed; // 0.10 s
+    internal const float RpgSustainerBurnDuration = 0.55f;
+    internal const float RpgSustainerEndTime = RpgSustainerIgniteTime + RpgSustainerBurnDuration; // 0.65 s
+    internal const float RpgPeakSpeed = 294f;
+    private const float RpgSustainerAccel = (RpgPeakSpeed - RpgBoosterSpeed) / RpgSustainerBurnDuration;
+    private const float RpgBurnDistance = 0.5f * (RpgBoosterSpeed + RpgPeakSpeed) * RpgSustainerBurnDuration;
+    private const float RpgBurnEndDistance = RpgSafetyCoastDistance + RpgBurnDistance; // ~123.975 m
+    private const float RpgCoastDrag = 95f;
+    private const float RpgCoastFloorSpeed = 180f;
+    private const float RpgCoastDragDuration = (RpgPeakSpeed - RpgCoastFloorSpeed) / RpgCoastDrag;
+    private const float RpgCoastDragDistance = 0.5f * (RpgPeakSpeed + RpgCoastFloorSpeed) * RpgCoastDragDuration;
+
+    internal static float ComputeRpgFlightDuration(float distance)
+    {
+        if (distance <= 0.5f) return 0.04f;
+        if (distance <= RpgSafetyCoastDistance)
+        {
+            return MathF.Max(0.04f, distance / RpgBoosterSpeed);
+        }
+        if (distance <= RpgBurnEndDistance)
+        {
+            float rem = distance - RpgSafetyCoastDistance;
+            float u = (-RpgBoosterSpeed + MathF.Sqrt(RpgBoosterSpeed * RpgBoosterSpeed + 2f * RpgSustainerAccel * rem)) / RpgSustainerAccel;
+            return RpgSustainerIgniteTime + u;
+        }
+        float coastRem = distance - RpgBurnEndDistance;
+        if (coastRem <= RpgCoastDragDistance)
+        {
+            float disc = MathF.Max(0f, RpgPeakSpeed * RpgPeakSpeed - 2f * RpgCoastDrag * coastRem);
+            float w = (RpgPeakSpeed - MathF.Sqrt(disc)) / RpgCoastDrag;
+            return RpgSustainerEndTime + w;
+        }
+        return RpgSustainerEndTime + RpgCoastDragDuration + (coastRem - RpgCoastDragDistance) / RpgCoastFloorSpeed;
+    }
+
+    internal static float SampleRpgDistance(float elapsedSeconds)
+    {
+        if (elapsedSeconds <= 0f) return 0f;
+        if (elapsedSeconds <= RpgSustainerIgniteTime)
+        {
+            return RpgBoosterSpeed * elapsedSeconds;
+        }
+        if (elapsedSeconds <= RpgSustainerEndTime)
+        {
+            float u = elapsedSeconds - RpgSustainerIgniteTime;
+            return RpgSafetyCoastDistance + RpgBoosterSpeed * u + 0.5f * RpgSustainerAccel * u * u;
+        }
+        float w = elapsedSeconds - RpgSustainerEndTime;
+        if (w <= RpgCoastDragDuration)
+        {
+            return RpgBurnEndDistance + RpgPeakSpeed * w - 0.5f * RpgCoastDrag * w * w;
+        }
+        return RpgBurnEndDistance + RpgCoastDragDistance + RpgCoastFloorSpeed * (w - RpgCoastDragDuration);
+    }
+
+    private void SpawnRpgProjectile(Vector3 origin, Vector3 target, float distance, float flightDuration, float elapsedOffset)
+    {
+        if (elapsedOffset >= flightDuration) return;
+
+        int idx = AcquireRpgProjectileSlot();
+        ref TimedRpgProjectile rpg = ref _rpgProjectiles[idx];
+        rpg.Active = true;
+        rpg.Origin = origin;
+        rpg.Target = target;
+        rpg.TotalDistance = MathF.Max(0.5f, distance);
+        // Flat direct-fire PG-7V ordinate: ~0.09 m at 100 m, ~0.36 m at 200 m, ~0.80 m at 300 m
+        float rangeNorm = Math.Clamp(distance / 300f, 0f, 1.15f);
+        rpg.ApexHeight = MathF.Min(0.85f, rangeNorm * rangeNorm * 0.80f);
+        rpg.TotalDuration = flightDuration;
+        rpg.ElapsedTime = elapsedOffset;
+        rpg.IgnitionFlashTriggered = elapsedOffset >= RpgSustainerIgniteTime;
+
+        PositionRpgProjectile(ref rpg);
+        rpg.WarheadMesh.Visible = true;
+        rpg.MotorShaftMesh.Visible = true;
+        rpg.TracerDotMesh.Visible = true;
+        rpg.Root.Visible = true;
+    }
+
+    private void PositionRpgProjectile(ref TimedRpgProjectile rpg)
+    {
+        float distNow = SampleRpgDistance(rpg.ElapsedTime);
+        float s = Math.Clamp(distNow / rpg.TotalDistance, 0f, 1f);
+        float sNext = Math.Clamp(SampleRpgDistance(rpg.ElapsedTime + 0.015f) / rpg.TotalDistance, s + 0.001f, 1f);
+
+        Vector3 pos = rpg.Origin.Lerp(rpg.Target, s);
+        pos.Y += 4f * rpg.ApexHeight * s * (1f - s);
+
+        Vector3 nextPos = rpg.Origin.Lerp(rpg.Target, sNext);
+        nextPos.Y += 4f * rpg.ApexHeight * sNext * (1f - sNext);
+
+        Vector3 dir = nextPos - pos;
+        if (dir.LengthSquared() < 1e-6f)
+        {
+            dir = rpg.Target - rpg.Origin;
+        }
+        rpg.Root.Position = pos;
+        if (dir.LengthSquared() > 1e-6f)
+        {
+            Vector3 gDir = dir.Normalized();
+            Vector3 up = MathF.Abs(gDir.Y) > 0.96f ? Vector3.Right : Vector3.Up;
+            rpg.Root.LookAt(pos + gDir, up);
+        }
+
+        float t = rpg.ElapsedTime;
+        bool inSustainerBurn = t >= RpgSustainerIgniteTime && t < RpgSustainerEndTime;
+        if (inSustainerBurn && !rpg.IgnitionFlashTriggered)
+        {
+            rpg.IgnitionFlashTriggered = true;
+            SpawnRocketTrailSmoke(pos, initialScale: 0.24f, targetScale: 0.95f, lifetime: 1.1f);
+        }
+
+        if (inSustainerBurn)
+        {
+            float sinceIgnite = t - RpgSustainerIgniteTime;
+            float ignitionPulse = sinceIgnite < 0.045f ? (1.45f - 0.45f * (sinceIgnite / 0.045f)) : 1.0f;
+            float burnoutFade = t > RpgSustainerEndTime - 0.06f
+                ? Math.Clamp((RpgSustainerEndTime - t) / 0.06f, 0f, 1f)
+                : 1.0f;
+            float flicker = (0.88f + 0.22f * MathF.Sin(t * 92f)) * ignitionPulse * burnoutFade;
+            rpg.FlameMesh.Visible = true;
+            rpg.FlameMesh.Scale = new Vector3(0.75f + 0.25f * ignitionPulse, MathF.Max(0.08f, flicker), 0.75f + 0.25f * ignitionPulse);
+            rpg.TracerDotMesh.Scale = Vector3.One * (1.25f * ignitionPulse);
+            rpg.Contrail.AmountRatio = Math.Clamp(burnoutFade, 0.15f, 1.0f);
+            rpg.Contrail.Emitting = true;
+        }
+        else
+        {
+            // Phase 1 (0..11.5 m safety coast) & Phase 3 (ballistic coast): sustainer OFF, glowing base tracer only
+            rpg.FlameMesh.Visible = false;
+            rpg.TracerDotMesh.Scale = Vector3.One * (t < RpgSustainerIgniteTime ? 0.85f : 0.72f);
+            rpg.Contrail.Emitting = false;
+        }
+    }
+
+    private int AcquireRpgProjectileSlot()
+    {
+        for (int i = 0; i < MaxRpgProjectiles; i++)
+        {
+            if (!_rpgProjectiles[i].Active) return i;
+        }
+
+        _droppedMeshEffectsCount++;
+        int oldestIdx = 0;
+        float maxElapsed = -1f;
+        for (int i = 0; i < MaxRpgProjectiles; i++)
+        {
+            if (_rpgProjectiles[i].ElapsedTime > maxElapsed)
+            {
+                maxElapsed = _rpgProjectiles[i].ElapsedTime;
+                oldestIdx = i;
+            }
+        }
+        return oldestIdx;
     }
 
     private int AcquireRocketSlot()
@@ -2703,6 +3006,12 @@ void fragment() {
             _rockets[i].Active = false;
             _rockets[i].Contrail.Emitting = false;
             _rockets[i].Root.Visible = false;
+        }
+        for (int i = 0; i < MaxRpgProjectiles; i++)
+        {
+            _rpgProjectiles[i].Active = false;
+            _rpgProjectiles[i].Contrail.Emitting = false;
+            _rpgProjectiles[i].Root.Visible = false;
         }
         for (int i = 0; i < MaxFlashLights; i++)
         {
@@ -2820,6 +3129,7 @@ void fragment() {
 
         UpdateTracers(dt);
         UpdateRockets(dt);
+        UpdateRpgProjectiles(dt);
         UpdateFlares(dt);
         UpdateMeshPool(_muzzleFlashes, dt);
         UpdateMeshPool(_smokePuffs, dt);
@@ -3063,6 +3373,7 @@ void fragment() {
     {
         return CountActiveTracers() +
                CountActiveRockets() +
+               CountActiveRpgProjectiles() +
                CountActiveGuidedMissiles() +
                CountActiveFlares() +
                CountActiveMeshPool(_muzzleFlashes) +
@@ -3114,25 +3425,47 @@ void fragment() {
             }
 
             float t = rocket.ElapsedTime / rocket.TotalDuration;
-            float contrailFullEnd = rocket.IsAntiTankRocket ? 0.86f : 0.28f;
-            float contrailFadeEnd = rocket.IsAntiTankRocket ? 0.96f : 0.34f;
-            float baseRatio = rocket.IsAntiTankRocket ? 0.65f : 1.0f;
+            const float contrailFullEnd = 0.28f;
+            const float contrailFadeEnd = 0.34f;
             if (t < contrailFullEnd)
             {
-                rocket.Contrail.AmountRatio = baseRatio;
+                rocket.Contrail.AmountRatio = 1.0f;
                 rocket.Contrail.Emitting = true;
             }
             else if (t < contrailFadeEnd)
             {
                 // Brief thinning smolder tail immediately after propellant exhaustion
                 float wisp = 1.0f - (t - contrailFullEnd) / (contrailFadeEnd - contrailFullEnd);
-                rocket.Contrail.AmountRatio = Math.Clamp((0.18f + 0.82f * wisp) * baseRatio, 0.12f, baseRatio);
+                rocket.Contrail.AmountRatio = Math.Clamp(0.18f + 0.82f * wisp, 0.12f, 1.0f);
                 rocket.Contrail.Emitting = true;
             }
             else
             {
                 rocket.Contrail.Emitting = false;
             }
+        }
+    }
+
+    private void UpdateRpgProjectiles(float dt)
+    {
+        for (int i = 0; i < MaxRpgProjectiles; i++)
+        {
+            ref TimedRpgProjectile rpg = ref _rpgProjectiles[i];
+            if (!rpg.Active) continue;
+
+            rpg.ElapsedTime += dt;
+            if (rpg.ElapsedTime >= rpg.TotalDuration)
+            {
+                rpg.Active = false;
+                rpg.Contrail.Emitting = false;
+                rpg.WarheadMesh.Visible = false;
+                rpg.MotorShaftMesh.Visible = false;
+                rpg.FlameMesh.Visible = false;
+                rpg.TracerDotMesh.Visible = false;
+                continue;
+            }
+
+            PositionRpgProjectile(ref rpg);
         }
     }
 
@@ -3187,6 +3520,16 @@ void fragment() {
         for (int i = 0; i < MaxRockets; i++)
         {
             if (_rockets[i].Active) count++;
+        }
+        return count;
+    }
+
+    private int CountActiveRpgProjectiles()
+    {
+        int count = 0;
+        for (int i = 0; i < MaxRpgProjectiles; i++)
+        {
+            if (_rpgProjectiles[i].Active) count++;
         }
         return count;
     }
