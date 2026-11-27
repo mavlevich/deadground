@@ -585,4 +585,36 @@ public sealed class FramePacingTests
         Assert.False(sustained.IsBufferSaturated);
         Assert.Equal(36_000, sustained.TotalCount);
     }
+
+    [Fact]
+    public void DisplaySettings_EnvironmentProfiles_SanitizeAndCycleCleanly()
+    {
+        Assert.Equal("overcast", DisplaySettings.SanitizeProfile(null));
+        Assert.Equal("overcast", DisplaySettings.SanitizeProfile("unknown_profile"));
+        Assert.Equal("cool_clear_day", DisplaySettings.SanitizeProfile("cool_clear_day"));
+        Assert.Equal("cool_clear_day", DisplaySettings.SanitizeProfile("day"));
+        Assert.Equal("clear_afternoon", DisplaySettings.SanitizeProfile("clear"));
+        Assert.Equal("amber_sunset", DisplaySettings.SanitizeProfile("sunset"));
+        Assert.Equal("amber_sunset", DisplaySettings.SanitizeProfile("amber_sunset"));
+        Assert.Equal("night_ops", DisplaySettings.SanitizeProfile("night"));
+        Assert.Equal("night_ops", DisplaySettings.SanitizeProfile("night_ops"));
+        Assert.Equal("storm_rain", DisplaySettings.SanitizeProfile("storm"));
+        Assert.Equal("storm_rain", DisplaySettings.SanitizeProfile("rain"));
+        Assert.Equal("storm_rain", DisplaySettings.SanitizeProfile("storm_rain"));
+
+        string current = DisplaySettings.ValidEnvironmentProfiles[0];
+        HashSet<string> visited = [current];
+        for (int i = 0; i < DisplaySettings.ValidEnvironmentProfiles.Length; i++)
+        {
+            current = DisplaySettings.GetNextEnvironmentProfile(current);
+            visited.Add(current);
+        }
+        Assert.Equal(DisplaySettings.ValidEnvironmentProfiles.Length, visited.Count);
+        Assert.Equal(DisplaySettings.ValidEnvironmentProfiles[0], current);
+
+        DisplaySettings parsed = DisplaySettings.ParseCommandLine(["--env", "amber_sunset"]);
+        Assert.Equal("amber_sunset", parsed.EnvironmentProfile);
+        DisplaySettings parsedRain = DisplaySettings.ParseCommandLine(["--environment=storm_rain"]);
+        Assert.Equal("storm_rain", parsedRain.EnvironmentProfile);
+    }
 }

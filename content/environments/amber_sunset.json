@@ -1,0 +1,70 @@
+{
+  "id": "amber_sunset",
+  "name": "Amber Sunset",
+  "sun": {
+    "pitch": -20.0,
+    "yaw": -68.0,
+    "color": "#ffb468",
+    "energy": 1.55,
+    "shadow_enabled": true,
+    "shadow_max_distance": 2000.0,
+    "shadow_pancake_size": 16.0,
+    "shadow_bias": 0.05,
+    "shadow_blur": 1.4
+  },
+  "sky": {
+    "sky_top_color": "#223c6b",
+    "sky_horizon_color": "#f09048",
+    "ground_bottom_color": "#1b2024",
+    "ground_horizon_color": "#6e6152",
+    "sun_angle_max": 30.0,
+    "energy_multiplier": 1.15
+  },
+  "ambient": {
+    "source": "Sky",
+    "color": "#4d6791",
+    "energy": 0.56
+  },
+  "tonemap": {
+    "mode": "Aces",
+    "exposure": 1.04,
+    "white": 1.0
+  },
+  "haze": {
+    "enabled": true,
+    "mode": "Exponential",
+    "color": "#c98f68",
+    "energy": 0.36,
+    "density": 0.00012,
+    "close_zoom_density": 0.00016,
+    "wide_zoom_density": 0.000032,
+    "aerial_perspective": 0.65,
+    "height": 4.5,
+    "height_density": 0.008,
+    "depth_begin": 22.0,
+    "depth_end": 4400.0
+  },
+  "ssao": {
+    "enabled": true,
+    "radius": 1.8,
+    "intensity": 1.4,
+    "power": 1.5,
+    "detail": 0.5
+  },
+  "glow": {
+    "enabled": true,
+    "intensity": 0.48,
+    "bloom": 0.20,
+    "hdr_threshold": 1.04
+  },
+  "material_tints": {
+    "terrain": "#eef2e8",
+    "forest_conifer": "#203b25",
+    "forest_deciduous": "#5f6832",
+    "water_shallows": "#35434c",
+    "water_deep": "#182436",
+    "roads_asphalt": "#383b42",
+    "roads_gravel": "#5d554a",
+    "roads_dirt": "#685c4c"
+  }
+}

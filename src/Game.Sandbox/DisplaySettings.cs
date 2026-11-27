@@ -55,6 +55,15 @@ public sealed record DisplaySettings(
     public const float MaxAutoRenderScale = 1.0f;
     public const long LargeOutputBilinearCutoffPixels = 4_500_000L;
     public static readonly int[] ValidFpsLimits = [0, 30, 60, 120, 144, 165, 240];
+    public static readonly string[] ValidEnvironmentProfiles =
+    [
+        "overcast",
+        "cool_clear_day",
+        "clear_afternoon",
+        "amber_sunset",
+        "night_ops",
+        "storm_rain"
+    ];
 
     public static int SanitizeMaxFps(int fps)
     {
@@ -76,9 +85,29 @@ public sealed record DisplaySettings(
     {
         if (string.IsNullOrWhiteSpace(profile)) return "overcast";
         string trimmed = profile.Trim().ToLowerInvariant();
-        if (trimmed is "clear_afternoon" or "clear" or "afternoon") return "clear_afternoon";
-        if (trimmed is "baseline") return "baseline";
-        return "overcast";
+        return trimmed switch
+        {
+            "cool_clear_day" or "cool_day" or "day" or "daylight" or "calibration" => "cool_clear_day",
+            "clear_afternoon" or "clear" or "afternoon" => "clear_afternoon",
+            "amber_sunset" or "sunset" or "dusk" or "evening" => "amber_sunset",
+            "night_ops" or "night" or "midnight" or "moonlight" => "night_ops",
+            "storm_rain" or "storm" or "rain" or "rainy" or "fog" => "storm_rain",
+            "baseline" => "baseline",
+            _ => "overcast"
+        };
+    }
+
+    public static string GetNextEnvironmentProfile(string? currentProfile)
+    {
+        string canonical = SanitizeProfile(currentProfile);
+        for (int i = 0; i < ValidEnvironmentProfiles.Length; i++)
+        {
+            if (string.Equals(ValidEnvironmentProfiles[i], canonical, StringComparison.OrdinalIgnoreCase))
+            {
+                return ValidEnvironmentProfiles[(i + 1) % ValidEnvironmentProfiles.Length];
+            }
+        }
+        return ValidEnvironmentProfiles[0];
     }
 
     public static EnvironmentQuality ParseQuality(string? val, EnvironmentQuality defaultQuality = EnvironmentQuality.High)

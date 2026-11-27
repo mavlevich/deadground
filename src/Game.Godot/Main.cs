@@ -753,7 +753,7 @@ public partial class Main : Node3D
 
         if (_ustyeMapView is not null)
         {
-            _ustyeMapView.ApplyEnvironmentTints(activeProfile.MaterialTints);
+            _ustyeMapView.ApplyEnvironmentTints(activeProfile.MaterialTints, activeProfile.Weather?.Wetness ?? 0f);
         }
 
         _settingsPanel = new SettingsPanel();
@@ -781,7 +781,7 @@ public partial class Main : Node3D
             _environmentView.UpdateShadowTierForCamera(_cameraRig.Size, _activeShadowMapLayers);
             if (_ustyeMapView is not null)
             {
-                _ustyeMapView.ApplyEnvironmentTints(profile.MaterialTints);
+                _ustyeMapView.ApplyEnvironmentTints(profile.MaterialTints, profile.Weather?.Wetness ?? 0f);
             }
             _smokeView?.ApplyEnvironment(profile);
         };
@@ -1178,7 +1178,7 @@ public partial class Main : Node3D
             _terrainWindingValid = !_smokeTest || _ustyeMapView.HasUpwardFrontFaces();
             if (_environmentView is not null)
             {
-                _ustyeMapView.ApplyEnvironmentTints(_environmentView.ActiveProfile.MaterialTints);
+                _ustyeMapView.ApplyEnvironmentTints(_environmentView.ActiveProfile.MaterialTints, _environmentView.ActiveWetness);
             }
         }
         else
@@ -2676,6 +2676,17 @@ public partial class Main : Node3D
             {
                 _fogOfWar?.Toggle();
                 _status.Text = _fogOfWar?.IsEnabled == true ? "Fog of war enabled" : "Fog of war disabled";
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if (key.Keycode == Key.F11 || (key.Keycode == Key.O && key.ShiftPressed))
+            {
+                if (_settingsPanel is not null)
+                {
+                    _settingsPanel.CycleEnvironmentProfile();
+                    _status.Text = $"Environment: {_environmentView.ActiveProfile.Name} (F11 / Shift+O to cycle)";
+                }
                 GetViewport().SetInputAsHandled();
                 return;
             }

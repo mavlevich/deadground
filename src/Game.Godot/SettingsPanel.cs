@@ -14,6 +14,15 @@ internal sealed partial class SettingsPanel : CanvasLayer
     public static BenchmarkRenderOverrides? ActiveBenchmarkOverrides { get; set; }
 
     internal const string ConfigPath = "user://display_settings.cfg";
+    private static readonly (string Id, string Label)[] EnvironmentProfileChoices =
+    [
+        ("overcast", "Overcast Autumn (Ustye)"),
+        ("cool_clear_day", "Cool Clear Day (Calibration)"),
+        ("clear_afternoon", "Clear Afternoon"),
+        ("amber_sunset", "Amber Sunset"),
+        ("night_ops", "Night Operations"),
+        ("storm_rain", "Storm & Rain")
+    ];
     private readonly Control _backdrop;
     private readonly PanelContainer _container;
     private readonly CheckButton _vsyncButton;
@@ -84,8 +93,10 @@ internal sealed partial class SettingsPanel : CanvasLayer
         Label profileLabel = new() { Text = "Environment:", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         profileLabel.AddThemeColorOverride("font_color", HudTheme.Text);
         _profileOptions = new OptionButton();
-        _profileOptions.AddItem("Overcast Autumn (Ustye)", 0);
-        _profileOptions.AddItem("Clear Afternoon", 1);
+        for (int i = 0; i < EnvironmentProfileChoices.Length; i++)
+        {
+            _profileOptions.AddItem(EnvironmentProfileChoices[i].Label, i);
+        }
         _profileOptions.ItemSelected += OnProfileSelected;
         profileRow.AddChild(profileLabel);
         profileRow.AddChild(_profileOptions);
@@ -269,7 +280,7 @@ internal sealed partial class SettingsPanel : CanvasLayer
         };
         _fpsOptions.Selected = idx;
 
-        _profileOptions.Selected = _effectiveSettings.EnvironmentProfile == "clear_afternoon" ? 1 : 0;
+        _profileOptions.Selected = FindProfileIndex(_effectiveSettings.EnvironmentProfile);
         _qualityOptions.Selected = (int)_effectiveSettings.Quality;
         _renderScaleOptions.Selected = (int)_effectiveSettings.RenderScale;
         _antiAliasingOptions.Selected = _effectiveSettings.AntiAliasing switch
@@ -284,9 +295,34 @@ internal sealed partial class SettingsPanel : CanvasLayer
         _ssaoOptions.Selected = (int)_effectiveSettings.AmbientOcclusion;
     }
 
+    private static int FindProfileIndex(string profileId)
+    {
+        for (int i = 0; i < EnvironmentProfileChoices.Length; i++)
+        {
+            if (string.Equals(EnvironmentProfileChoices[i].Id, profileId, StringComparison.OrdinalIgnoreCase))
+            {
+                return i;
+            }
+        }
+        return 0;
+    }
+
+    public string CycleEnvironmentProfile()
+    {
+        string next = DisplaySettings.GetNextEnvironmentProfile(_effectiveSettings.EnvironmentProfile);
+        _cliOverridesProfile = false;
+        CommitSettingEdit(
+            _savedConfig with { EnvironmentProfile = next },
+            _effectiveSettings with { EnvironmentProfile = next },
+            "Environment profile applied and saved");
+        UpdateUiFromSettings();
+        return next;
+    }
+
     private void OnProfileSelected(long index)
     {
-        string profile = index == 1 ? "clear_afternoon" : "overcast";
+        int idx = index >= 0 && index < EnvironmentProfileChoices.Length ? (int)index : 0;
+        string profile = EnvironmentProfileChoices[idx].Id;
         _cliOverridesProfile = false;
         CommitSettingEdit(
             _savedConfig with { EnvironmentProfile = profile },

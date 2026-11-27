@@ -323,11 +323,14 @@ void fragment() {
 
         Color dieselAlbedo = new(0.73f, 0.73f, 0.69f);
         float energyBoost = Mathf.Clamp(0.86f + profile.Sun.Energy * 0.15f, 0.90f, 1.12f);
+        float lowLightScale = profile.Sun.Energy < 0.65f
+            ? Mathf.Clamp(profile.Sun.Energy / 0.65f, 0.28f, 1.0f)
+            : 1.0f;
 
         Color sunLit = new Color(
-            Mathf.Clamp(dieselAlbedo.R * sunColor.R * energyBoost, 0.60f, 0.82f),
-            Mathf.Clamp(dieselAlbedo.G * sunColor.G * energyBoost, 0.60f, 0.80f),
-            Mathf.Clamp(dieselAlbedo.B * sunColor.B * energyBoost, 0.58f, 0.76f))
+            Mathf.Clamp(dieselAlbedo.R * sunColor.R * energyBoost * lowLightScale, 0.16f * lowLightScale + (lowLightScale >= 0.999f ? 0.44f : 0f), 0.82f),
+            Mathf.Clamp(dieselAlbedo.G * sunColor.G * energyBoost * lowLightScale, 0.16f * lowLightScale + (lowLightScale >= 0.999f ? 0.44f : 0f), 0.80f),
+            Mathf.Clamp(dieselAlbedo.B * sunColor.B * energyBoost * lowLightScale, 0.16f * lowLightScale + (lowLightScale >= 0.999f ? 0.42f : 0f), 0.76f))
             .Lerp(skyHorizon, 0.08f);
 
         Color midShadow = new Color(0.43f, 0.47f, 0.49f)

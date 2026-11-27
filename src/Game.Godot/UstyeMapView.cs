@@ -95,7 +95,7 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
         }
     }
 
-    public void ApplyEnvironmentTints(MaterialTintsSettings tints)
+    public void ApplyEnvironmentTints(MaterialTintsSettings tints, float wetness = 0f)
     {
         if (_waterMaterial is not null)
         {
@@ -112,17 +112,38 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
         {
             _deciduousMat.AlbedoColor = deciduous;
         }
-        if (_asphaltMaterial is not null && EnvironmentProfile.TryParseHexColor(tints.RoadsAsphaltHex, out Color asphalt))
+
+        float w = Math.Clamp(wetness, 0f, 1f);
+        BaseMaterial3D.SpecularModeEnum roadSpecMode = w > 0.01f
+            ? BaseMaterial3D.SpecularModeEnum.SchlickGgx
+            : BaseMaterial3D.SpecularModeEnum.Disabled;
+
+        if (_asphaltMaterial is not null)
         {
-            _asphaltMaterial.AlbedoColor = asphalt;
+            if (EnvironmentProfile.TryParseHexColor(tints.RoadsAsphaltHex, out Color asphalt))
+            {
+                _asphaltMaterial.AlbedoColor = asphalt;
+            }
+            _asphaltMaterial.SpecularMode = roadSpecMode;
+            _asphaltMaterial.Roughness = Mathf.Lerp(0.88f, 0.34f, w);
         }
-        if (_gravelMaterial is not null && EnvironmentProfile.TryParseHexColor(tints.RoadsGravelHex, out Color gravel))
+        if (_gravelMaterial is not null)
         {
-            _gravelMaterial.AlbedoColor = gravel;
+            if (EnvironmentProfile.TryParseHexColor(tints.RoadsGravelHex, out Color gravel))
+            {
+                _gravelMaterial.AlbedoColor = gravel;
+            }
+            _gravelMaterial.SpecularMode = roadSpecMode;
+            _gravelMaterial.Roughness = Mathf.Lerp(0.94f, 0.52f, w);
         }
-        if (_dirtPathMaterial is not null && EnvironmentProfile.TryParseHexColor(tints.RoadsDirtHex, out Color dirt))
+        if (_dirtPathMaterial is not null)
         {
-            _dirtPathMaterial.AlbedoColor = dirt;
+            if (EnvironmentProfile.TryParseHexColor(tints.RoadsDirtHex, out Color dirt))
+            {
+                _dirtPathMaterial.AlbedoColor = dirt;
+            }
+            _dirtPathMaterial.SpecularMode = roadSpecMode;
+            _dirtPathMaterial.Roughness = Mathf.Lerp(0.98f, 0.65f, w);
         }
         if (_terrainMaterial is StandardMaterial3D stdTerrain && EnvironmentProfile.TryParseHexColor(tints.TerrainHex, out Color terrain))
         {
