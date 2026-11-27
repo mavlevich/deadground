@@ -8,6 +8,8 @@ Dead Ground (codename) is a Cold War tactical RTS. Limited forces, reconnaissanc
 
 The technical design is in [docs/tdd.md](docs/tdd.md). Read it before changing architecture. If a change conflicts with it, update the TDD in the same change or ask first.
 
+Visual style, materials, lighting, weather, terrain, and VFX rules are in [docs/art-direction.md](docs/art-direction.md). Read and verify against it before creating or modifying 3D models, shaders, maps, lighting/weather profiles, VFX, or tactical markers.
+
 Current status is in the Status section of [README.md](README.md).
 
 ## Stack
@@ -71,6 +73,7 @@ These are hard rules, enforced for project references, SDK use and resolved comp
 
 ## Models and visual assets
 
+- Follow [docs/art-direction.md](docs/art-direction.md) for visual style (restrained stylized realism, 1:1 metric scale, shape-driven shading, physically grounded PBR, lighting/weather calibration, and VFX/FoW clarity).
 - Every 3D unit or prop model must have a reproducible generator script (for example under `tools/model-authoring/`) and automated validation checks. At minimum validate scale, forward axis, required nodes and anchors, and the triangle budget per LOD.
 - Define and verify metric scale, coordinate axes and forward facing, required node hierarchy and attachment points (hull, turret, muzzle, wheels or tracks, mount points), and LOD levels.
 - Record measured asset budgets (triangles per LOD, draw calls, materials, shader instance usage) and source or license details in [docs/unit-sources.md](docs/unit-sources.md) or the asset notes.
