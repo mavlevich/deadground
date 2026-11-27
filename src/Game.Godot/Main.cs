@@ -3032,6 +3032,15 @@ public partial class Main : Node3D
             return;
         }
 
+        if (@event is InputEventMouseMotion orbitMotion &&
+            ((orbitMotion.ButtonMask & MouseButtonMask.Middle) != 0 ||
+             (orbitMotion.AltPressed && (orbitMotion.ButtonMask & (MouseButtonMask.Left | MouseButtonMask.Right)) != 0)))
+        {
+            _cameraRig.DragOrbit(orbitMotion.Relative);
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
         if (@event is not InputEventMouseButton mouse) return;
 
         if (mouse.ButtonIndex == MouseButton.Left && !mouse.Pressed)
@@ -3065,6 +3074,7 @@ public partial class Main : Node3D
 
         if (mouse.ButtonIndex == MouseButton.Left)
         {
+            if (mouse.AltPressed) return;
             RefreshOccludingPanels();
             if (SelectionController.IsPointOccluded(mouse.Position, _inputOccludingPanels))
             {
