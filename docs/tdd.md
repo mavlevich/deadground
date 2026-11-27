@@ -1171,6 +1171,8 @@ Implementation order:
 
 ## 18. Presentation
 
+Visual style, materials, terrain priority, lighting/weather, and VFX rules are defined in [docs/art-direction.md](art-direction.md).
+
 - Godot reads `ClientReplica` and interpolates. It never changes the simulation.
 - Animation is driven by state (velocity, turret angle), never the other way around.
 - Level of detail by distance (distances are starting guesses):
