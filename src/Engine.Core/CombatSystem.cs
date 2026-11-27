@@ -489,11 +489,37 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         _ => 6
     };
 
+    private static bool IsAllowedForAutoFire(WeaponDefinition weapon, ContactClassification classification)
+    {
+        // Anti-tank rocket gunners carry limited shaped-charge rounds and conserve them for
+        // vehicles and low-flying helicopters during autonomous fire; explicit orders still obey.
+        if (weapon.IsAntiTankRocket && classification == ContactClassification.Infantry)
+        {
+            return false;
+        }
+        return true;
+    }
+
     private static float GetBaseTargetThreatScore(WeaponDefinition weapon, ContactClassification classification)
     {
         if (weapon.AirTargetsOnly)
         {
             return 1000f;
+        }
+
+        if (weapon.IsAntiTankRocket)
+        {
+            return classification switch
+            {
+                ContactClassification.Tank => 1200f,
+                ContactClassification.Apc => 950f,
+                ContactClassification.Artillery => 880f,
+                ContactClassification.AntiAir => 880f,
+                ContactClassification.Recon => 720f,
+                ContactClassification.Helicopter => 640f,
+                ContactClassification.Infantry => 100f,
+                _ => 300f
+            };
         }
 
         return classification switch
@@ -740,6 +766,11 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
         }
 
         if (!CanEngageTargetAltitude(weapon, world, candidateEntityId))
+        {
+            return false;
+        }
+
+        if (!IsAllowedForAutoFire(weapon, contact.Classification))
         {
             return false;
         }
@@ -1281,6 +1312,7 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                         world.TryGetUnit(cs.TargetEntityId, out UnitState currentTargetUnit) &&
                         world.AreHostile(attacker.Owner, currentTargetUnit.Owner) &&
                         CanEngageTargetAltitude(weapon, world, cs.TargetEntityId) &&
+                        IsAllowedForAutoFire(weapon, currentContact.Classification) &&
                         Vector2.Distance(attacker.Position, currentTargetUnit.Position) <= weapon.Range + RangeToleranceMargin &&
                         (!weapon.IsGuidedMissile || Vector2.Distance(attacker.Position, currentTargetUnit.Position) >= weapon.MinRange) &&
                         (cs.Stance != FireStance.ReturnFire || (cs.LastTookFireAttacker.Value != 0 && cs.TargetEntityId.Value == cs.LastTookFireAttacker.Value)) &&
@@ -1359,6 +1391,9 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
                         }
 
                         if (!CanEngageTargetAltitude(weapon, world, candidateEntityId))
+                            continue;
+
+                        if (!IsAllowedForAutoFire(weapon, candidate.Classification))
                             continue;
 
                         float distToCandidate = Vector2.Distance(attacker.Position, candidateUnit.Position);
@@ -1737,6 +1772,18 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
             targetUnit.Owner,
             impactPoint,
             hitResult);
+
+        if (weapon.IsAntiTankRocket && weapon.SplashRadius > 0f)
+        {
+            ApplyDirectFireSplashDamage(
+                tick,
+                attacker,
+                weapon,
+                impactPoint,
+                hits ? targetUnit.Id : default,
+                shotDistance,
+                world);
+        }
 
         if (isDestroyed)
         {
@@ -3162,7 +3209,130 @@ public sealed class CombatSystem : ISimulationSystem, IRandomStreamsAware
             cs.Status = cs.Ammunition <= 0 ? AttackExecutionStatus.NoAmmo : AttackExecutionStatus.None;
         }
 
+        if (weapon.IsAntiTankRocket && weapon.SplashRadius > 0f)
+        {
+            ApplyDirectFireSplashDamage(
+                tick,
+                attacker,
+                weapon,
+                impactPoint,
+                directTargetId: default,
+                Vector3.Distance(muzzlePos, impactPoint),
+                world);
+        }
+
         world.SetCombatState(attacker.Id, cs);
+    }
+
+    private void ApplyDirectFireSplashDamage(
+        int tick,
+        UnitState attacker,
+        WeaponDefinition weapon,
+        Vector3 impactPoint,
+        EntityId directTargetId,
+        float shotDistance,
+        WorldState world)
+    {
+        float radius = weapon.SplashRadius;
+        float radiusSq = radius * radius;
+        Vector2 impact2D = new(impactPoint.X, impactPoint.Z);
+
+        int unitCount = world.Count;
+        for (int i = 0; i < unitCount; i++)
+        {
+            UnitState candidate = world.GetUnitAt(i);
+            if (candidate.Id == directTargetId || candidate.Id == attacker.Id)
+                continue;
+            if (!world.TryGetCombatState(candidate.Id, out WorldState.CombatState candCs) || candCs.CurrentHealth <= 0)
+                continue;
+            if (world.IsContained(candidate.Id) || world.IsCrashing(candidate.Id))
+                continue;
+            if (world.IsAirborne(candidate.Id) && world.GetUnitAltitude(candidate.Id) > FlightSystem.MinCrashAltitude)
+                continue;
+
+            float distSq = Vector2.DistanceSquared(impact2D, candidate.Position);
+            if (distSq > radiusSq)
+                continue;
+
+            if (_combatCatalog.TryGetProfile(candidate.Definition, out UnitCombatProfile candProfile) &&
+                candProfile.Armor.Side > 2.0f)
+            {
+                // Shaped-charge secondary blast only harms unarmored/soft-skin targets; armor requires direct hit.
+                continue;
+            }
+
+            float dist = MathF.Sqrt(distSq);
+            float falloff = Math.Clamp(1f - 0.65f * (dist / radius), 0.35f, 1f);
+            float coverMult = _garrison is not null
+                ? _garrison.GetIncomingCoverDamageMultiplier(world, candidate.Id)
+                : 1.0f;
+            int splashDamage = Math.Max(1, (int)MathF.Round(weapon.Damage * 0.45f * falloff * coverMult));
+            world.ApplyDamage(candidate.Id, splashDamage, out bool killed);
+            TotalDamageApplied += splashDamage;
+            if (!killed)
+                continue;
+
+            bool alreadyQueued = false;
+            for (int d = 0; d < _destroyedCount; d++)
+            {
+                if (_destroyedBuffer[d].Value == candidate.Id.Value)
+                {
+                    alreadyQueued = true;
+                    break;
+                }
+            }
+            if (alreadyQueued)
+                continue;
+
+            TotalUnitsDestroyed++;
+            bool leavesWreck = true;
+            if (_combatCatalog.TryGetProfile(candidate.Definition, out UnitCombatProfile victimProfile))
+            {
+                leavesWreck = victimProfile.LeavesWreck;
+            }
+
+            WreckState wreck = default;
+            if (leavesWreck)
+            {
+                world.TryGetCombatState(candidate.Id, out WorldState.CombatState vCs);
+                wreck = world.AddWreck(
+                    candidate.Definition,
+                    candidate.Position,
+                    candidate.SupportSurface,
+                    vCs.HullHeading,
+                    vCs.TurretYaw,
+                    tick,
+                    candidate.Owner);
+                _detection.NotifyWreckCreated(wreck, candidate.Owner, candidate.Id);
+            }
+
+            RecordDestroyedEvent(
+                tick,
+                candidate.Definition,
+                candidate.Id,
+                candidate.Owner,
+                candidate.Position,
+                candidate.SupportSurface,
+                wreck.Id);
+
+            if (_destroyedCount < _destroyedBuffer.Length)
+            {
+                _destroyedBuffer[_destroyedCount++] = candidate.Id;
+            }
+
+            if (_killCount < _kills.Length)
+            {
+                _kills[_killCount++] = new CombatKillRecord(
+                    tick,
+                    attacker.Id,
+                    attacker.Definition,
+                    attacker.Owner,
+                    candidate.Id,
+                    candidate.Definition,
+                    candidate.Owner,
+                    shotDistance);
+            }
+        }
     }
 
     private void RecordStructureImpactEvent(

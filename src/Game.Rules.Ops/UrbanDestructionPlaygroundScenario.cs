@@ -198,6 +198,14 @@ public static class UrbanDestructionPlaygroundScenario
         ushort rifleIdx = catalog.RequireDefinitionIndex("us_rifleman");
         int rifleAmmo = catalog.GetAmmoCapacity(rifleDef);
 
+        UnitDefinition sovietRifleDef = catalog.RequireDefinition("soviet_rifleman");
+        ushort sovietRifleIdx = catalog.RequireDefinitionIndex("soviet_rifleman");
+        int sovietRifleAmmo = catalog.GetAmmoCapacity(sovietRifleDef);
+
+        UnitDefinition sovietRpgDef = catalog.RequireDefinition("soviet_rpg");
+        ushort sovietRpgIdx = catalog.RequireDefinitionIndex("soviet_rpg");
+        int sovietRpgAmmo = catalog.GetAmmoCapacity(sovietRpgDef);
+
         UnitDefinition ch47Def = catalog.RequireDefinition("ch47d");
         ushort ch47Idx = catalog.RequireDefinitionIndex("ch47d");
         int ch47Ammo = catalog.GetAmmoCapacity(ch47Def);
@@ -209,13 +217,13 @@ public static class UrbanDestructionPlaygroundScenario
         world.CreateUnit(1, brdmIdx, SovietBrdm2Pos, brdmDef.Speed, brdmDef.MaxHealth, brdmAmmo, facingPlusZ);
         world.CreateUnit(1, bm21Idx, SovietBm21Pos, bm21Def.Speed, bm21Def.MaxHealth, bm21Ammo, facingPlusZ);
 
-        // Player 1 urban assault fireteam in the courtyard ready to garrison panelka sections
-        world.CreateUnit(1, rifleIdx, new Vector2(488.0f, 472.0f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingPlusZ);
-        world.CreateUnit(1, rifleIdx, new Vector2(496.0f, 472.0f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingPlusZ);
-        world.CreateUnit(1, rifleIdx, new Vector2(504.0f, 472.0f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingPlusZ);
-        world.CreateUnit(1, rifleIdx, new Vector2(512.0f, 472.0f), rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingPlusZ);
+        // Player 1 Soviet urban assault fireteam (3x AK-74 riflemen + 1x RPG-7 gunner) in the courtyard
+        world.CreateUnit(1, sovietRifleIdx, new Vector2(488.0f, 472.0f), sovietRifleDef.Speed, sovietRifleDef.MaxHealth, sovietRifleAmmo, facingPlusZ);
+        world.CreateUnit(1, sovietRifleIdx, new Vector2(496.0f, 472.0f), sovietRifleDef.Speed, sovietRifleDef.MaxHealth, sovietRifleAmmo, facingPlusZ);
+        world.CreateUnit(1, sovietRpgIdx, new Vector2(504.0f, 472.0f), sovietRpgDef.Speed, sovietRpgDef.MaxHealth, sovietRpgAmmo, facingPlusZ);
+        world.CreateUnit(1, sovietRifleIdx, new Vector2(512.0f, 472.0f), sovietRifleDef.Speed, sovietRifleDef.MaxHealth, sovietRifleAmmo, facingPlusZ);
 
-        // Player 1 CH-47D assault transport staged on the south pad with 4 embarked riflemen ready for rooftop Fast-Rope
+        // Player 1 CH-47D assault transport staged on the south pad with 4 embarked Soviet troops ready for rooftop Fast-Rope
         Vector2 chinookPos = new(548.0f, 368.0f);
         EntityId chinookId = world.CreateUnit(
             1,
@@ -228,7 +236,7 @@ public static class UrbanDestructionPlaygroundScenario
             passengerCapacity: ch47Def.PassengerCapacity);
         for (int r = 0; r < 4; r++)
         {
-            EntityId airAssault = world.CreateUnit(1, rifleIdx, chinookPos, rifleDef.Speed, rifleDef.MaxHealth, rifleAmmo, facingPlusZ);
+            EntityId airAssault = world.CreateUnit(1, sovietRifleIdx, chinookPos, sovietRifleDef.Speed, sovietRifleDef.MaxHealth, sovietRifleAmmo, facingPlusZ);
             world.Board(chinookId, airAssault);
         }
 

@@ -12,6 +12,7 @@ internal sealed class ContactView
     private static readonly StringName AnimWalk = "Walk";
     private static readonly StringName AnimRun = "Run";
     private static readonly StringName AnimAimStanding = "AimStanding";
+    private static readonly StringName AnimAimKneeling = "AimKneeling";
 
     private sealed record ContactRig(
         Node3D? Turret,
@@ -61,6 +62,7 @@ internal sealed class ContactView
     private bool _hasPrevPos;
     private ushort _currentModelType = ushort.MaxValue;
     private ContactClassification _currentModelClassification = ContactClassification.Unknown;
+    private bool _isAntiTankInfantry;
 
     internal Node3D? EnemyModel => _enemyModel;
     internal bool HasEnemyModel => _enemyModel is not null && _enemyModel.Visible;
@@ -75,9 +77,9 @@ internal sealed class ContactView
     internal AnimationPlayer? AnimationPlayer => _animPlayer;
     internal float Altitude => _altitude;
 
-    public void SetAiming(bool aiming)
+    public void SetAiming(bool aiming, float duration = 0.8f)
     {
-        if (aiming) _aimingTimer = 0.8f;
+        if (aiming) _aimingTimer = MathF.Max(_aimingTimer, duration);
     }
 
     public void PlayAnimation(string clipName)
@@ -269,6 +271,7 @@ internal sealed class ContactView
                 _visual = handle?.Visual;
                 _currentModelType = contact.Type;
                 _currentModelClassification = contact.Classification;
+                _isAntiTankInfantry = isInfantry && unitId is not null && unitId.Contains("rpg", StringComparison.OrdinalIgnoreCase);
                 _hasPendingLodWhileHidden = false;
                 if (_enemyModel is not null)
                 {
@@ -356,8 +359,16 @@ internal sealed class ContactView
                     }
                     else if (isAiming)
                     {
-                        targetAnimName = AnimAimStanding;
-                        targetAnimStr = "AimStanding";
+                        if (_isAntiTankInfantry && contact.GarrisonStructureId == default && _animPlayer.HasAnimation(AnimAimKneeling))
+                        {
+                            targetAnimName = AnimAimKneeling;
+                            targetAnimStr = "AimKneeling";
+                        }
+                        else
+                        {
+                            targetAnimName = AnimAimStanding;
+                            targetAnimStr = "AimStanding";
+                        }
                     }
                     else
                     {
@@ -367,9 +378,15 @@ internal sealed class ContactView
 
                     if (_currentAnimName != targetAnimName && _animPlayer.HasAnimation(targetAnimName))
                     {
-                        _animPlayer.Play(targetAnimName);
+                        _animPlayer.Play(targetAnimName, customBlend: 0.12);
                         _currentAnimName = targetAnimName;
                         _currentAnim = targetAnimStr;
+                        if (_isAntiTankInfantry && _muzzle is not null)
+                        {
+                            _muzzle.Position = targetAnimName == AnimAimKneeling
+                                ? new Vector3(0.14f, 1.05f, -0.78f)
+                                : new Vector3(0.14f, 1.48f, -0.78f);
+                        }
                     }
 
                     if (targetAnimName == AnimRun)
@@ -512,7 +529,10 @@ internal sealed class ContactView
         UnitView.ConfigureSolidRotorVisual(rearRotor);
         if (muzzle is null && isInfantry)
         {
-            Node3D mNode = new() { Name = "Muzzle", Position = new Vector3(0, 1.35f, -0.6f) };
+            Vector3 muzzlePos = _isAntiTankInfantry
+                ? new Vector3(0.14f, 1.48f, -0.78f)
+                : new Vector3(0f, 1.35f, -0.60f);
+            Node3D mNode = new() { Name = "Muzzle", Position = muzzlePos };
             lodNode.AddChild(mNode);
             muzzle = mNode;
         }

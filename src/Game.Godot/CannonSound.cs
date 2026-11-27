@@ -12,6 +12,9 @@ internal static class CannonSound
     internal const float Duration = 3.0f;
     internal const float BurstDuration = 1.0f;
     internal const float RifleDuration = 0.6f;
+    internal const float Ak74Duration = 0.72f;
+    internal const float RpgLaunchDuration = 0.92f;
+    internal const float RpgImpactDuration = 0.95f;
     internal const float GroundImpactDuration = 0.4f;
     internal const float RocketLaunchDuration = 1.15f;
     internal const float ArtilleryImpactDuration = 2.4f;
@@ -117,6 +120,197 @@ internal static class CannonSound
         }
 
         return dry;
+    }
+
+    internal static AudioStreamWav CreateAk74Stream(int seed) => CreateWavFromSamples(RenderAk74Burst(seed));
+    internal static AudioStreamWav CreateRpgLaunchStream(int seed) => CreateWavFromSamples(RenderRpgLaunch(seed));
+    internal static AudioStreamWav CreateRpgImpactStream(int seed) => CreateWavFromSamples(RenderRpgImpact(seed));
+
+    // Soviet 5.45mm AK-74 3-round burst: rhythmic 600 rpm cadence (95 ms spacing), punchy
+    // two-chamber muzzle brake mid-low bark, stamped receiver mechanical clack, and sharp crack.
+    internal static float[] RenderAk74Burst(int seed)
+    {
+        int count = (int)(SampleRate * Ak74Duration);
+        Random rand = new(seed);
+        float[] dry = new float[count];
+
+        const int shotCount = 3;
+        const float shotInterval = 0.095f;
+
+        float hp = 0f, hpPrev = 0f;
+        float b1 = 0f, b2 = 0f;
+        float bark1 = 0f, bark2 = 0f;
+        float phase = 0f;
+
+        for (int i = 0; i < count; i++)
+        {
+            float t = (float)i / SampleRate;
+            float white = (float)rand.NextDouble() * 2f - 1f;
+
+            hp = 0.88f * (hp + white - hpPrev);
+            hpPrev = white;
+
+            float kCrack = Coefficient(900f + 1900f * MathF.Exp(-t / 0.12f));
+            b1 += (white - b1) * kCrack;
+            b2 += (b1 - b2) * kCrack;
+
+            float kBark = Coefficient(260f + 420f * MathF.Exp(-t / 0.14f));
+            bark1 += (white - bark1) * kBark;
+            bark2 += (bark1 - bark2) * kBark;
+
+            float signal = 0f;
+            for (int s = 0; s < shotCount; s++)
+            {
+                float shotTime = s * shotInterval;
+                if (t < shotTime) continue;
+                float dt = t - shotTime;
+                if (dt >= 0.11f) continue;
+
+                // Crisp supersonic 5.45mm muzzle crack + heavy compensator gas bark
+                float crack = hp * MathF.Exp(-dt / 0.0055f) * 1.15f;
+                float brakeBark = bark2 * MathF.Exp(-dt / 0.022f) * 1.85f;
+                // Distinct Kalashnikov gas-piston chesty thump (250 Hz -> 145 Hz)
+                phase = MathF.Tau * (145f + 110f * MathF.Exp(-dt / 0.010f)) * dt;
+                float body = MathF.Sin(phase) * MathF.Exp(-dt / 0.015f) * 0.55f;
+                // Subtle metallic bolt-carrier cycle clack (~32 ms after ignition)
+                float boltDt = dt - 0.032f;
+                float boltClack = boltDt > 0f && boltDt < 0.012f
+                    ? hp * MathF.Exp(-boltDt / 0.0025f) * 0.22f
+                    : 0f;
+
+                signal += crack + brakeBark + body + boltClack;
+            }
+
+            dry[i] = signal + b2 * 0.09f * MathF.Exp(-t / 0.22f);
+        }
+
+        // Short dry battlefield slapback echo
+        float[] output = (float[])dry.Clone();
+        int echoOffset = (int)(0.14f * SampleRate);
+        float ek = Coefficient(950f);
+        float e1 = 0f, e2 = 0f;
+        for (int i = 0; i + echoOffset < count; i++)
+        {
+            e1 += (dry[i] - e1) * ek;
+            e2 += (e1 - e2) * ek;
+            output[i + echoOffset] += e2 * 0.16f;
+        }
+
+        int fade = (int)(0.09f * SampleRate);
+        for (int i = count - fade; i < count; i++)
+            output[i] *= (float)(count - i) / fade;
+
+        NormalizeSoftClip(output, driveFactor: 1.35f, targetPeak: Peak * 0.88f);
+        return output;
+    }
+
+    // Soviet RPG-7V launch: Stage 1 hollow steel tube booster pop + backblast pressure slap (0-45 ms),
+    // followed by Stage 2 PG-7V solid sustainer rocket ignition whoosh (75-700 ms).
+    internal static float[] RenderRpgLaunch(int seed)
+    {
+        int count = (int)(SampleRate * RpgLaunchDuration);
+        Random rand = new(seed);
+        float[] output = new float[count];
+
+        float hp = 0f, hpPrev = 0f;
+        float tube1 = 0f, tube2 = 0f;
+        float jet1 = 0f, jet2 = 0f;
+        float low1 = 0f, low2 = 0f;
+        float popPhase = 0f;
+
+        for (int i = 0; i < count; i++)
+        {
+            float t = (float)i / SampleRate;
+            float white = (float)rand.NextDouble() * 2f - 1f;
+
+            hp = 0.87f * (hp + white - hpPrev);
+            hpPrev = white;
+
+            // Stage 1: Hollow venturi booster ejection "THOOM-CRACK" (0 - 65 ms)
+            float popFreq = 115f + 290f * MathF.Exp(-t / 0.014f);
+            popPhase += MathF.Tau * popFreq / SampleRate;
+            float tubeResonance = MathF.Sin(popPhase) * MathF.Exp(-t / 0.030f) * 1.35f;
+
+            float kTube = Coefficient(380f + 1200f * MathF.Exp(-t / 0.028f));
+            tube1 += (white - tube1) * kTube;
+            tube2 += (tube1 - tube2) * kTube;
+            float backblastSlap = (hp * MathF.Exp(-t / 0.014f) * 1.45f) + (tube2 * MathF.Exp(-t / 0.055f) * 2.15f);
+
+            // Stage 2: PG-7V rocket sustainer ignition whoosh (kicks in around 65 ms after tube exit)
+            float sustainer = 0f;
+            float ts = t - 0.065f;
+            if (ts > 0f)
+            {
+                float kJet = Coefficient(520f + 1850f * MathF.Exp(-ts / 0.24f));
+                jet1 += (white - jet1) * kJet;
+                jet2 += (jet1 - jet2) * kJet;
+                float kLow = Coefficient(210f + 180f * MathF.Exp(-ts / 0.20f));
+                low1 += (white - low1) * kLow;
+                low2 += (low1 - low2) * kLow;
+
+                float jetEnv = (1f - MathF.Exp(-ts / 0.022f)) * MathF.Exp(-ts / 0.28f);
+                sustainer = ((jet2 - low2 * 0.4f) * 1.95f + low2 * 1.15f) * jetEnv;
+            }
+
+            output[i] = tubeResonance + backblastSlap + sustainer;
+        }
+
+        int fade = (int)(0.14f * SampleRate);
+        for (int i = count - fade; i < count; i++)
+            output[i] *= (float)(count - i) / fade;
+
+        NormalizeSoftClip(output, driveFactor: 1.45f, targetPeak: Peak * 0.90f);
+        return output;
+    }
+
+    // PG-7V 85mm HEAT warhead detonation: blistering shaped-charge crack + tight concussion punch + debris scatter.
+    internal static float[] RenderRpgImpact(int seed)
+    {
+        int count = (int)(SampleRate * RpgImpactDuration);
+        Random rand = new(seed);
+        float[] output = new float[count];
+
+        float hp = 0f, hpPrev = 0f;
+        float b1 = 0f, b2 = 0f;
+        float r1 = 0f, r2 = 0f;
+        float phase = 0f;
+
+        for (int i = 0; i < count; i++)
+        {
+            float t = (float)i / SampleRate;
+            float white = (float)rand.NextDouble() * 2f - 1f;
+
+            // Razor-sharp shaped-charge explosive shock snap (0 - 25 ms)
+            float pulse = t < 0.05f ? (1f - t / 0.007f) * MathF.Exp(-t / 0.006f) : 0f;
+            hp = 0.85f * (hp + white - hpPrev);
+            hpPrev = white;
+            float crack = hp * MathF.Exp(-t / 0.011f) * 1.55f;
+
+            // Punchy 85mm HE detonation body (2.8 kHz -> 130 Hz)
+            float k = Coefficient(130f + 2650f * MathF.Exp(-t / 0.048f));
+            b1 += (white - b1) * k;
+            b2 += (b1 - b2) * k;
+            float boom = b2 * MathF.Min(1f, t / 0.002f) * MathF.Exp(-t / 0.19f) * (1f + 2.4f * MathF.Exp(-t / 0.025f));
+
+            // Tight chest thump (95 Hz -> 48 Hz, keeps energy well above 60 Hz for laptop speakers)
+            phase += MathF.Tau * (48f + 47f * MathF.Exp(-t / 0.045f)) / SampleRate;
+            float thump = MathF.Sin(phase) * MathF.Min(1f, t / 0.003f) * MathF.Exp(-t / 0.10f) * 0.72f;
+
+            // Brief shrapnel & dust tail
+            float kr = Coefficient(240f + 500f * MathF.Exp(-t / 0.22f));
+            r1 += (white - r1) * kr;
+            r2 += (r1 - r2) * kr;
+            float tail = r2 * (1f - MathF.Exp(-t / 0.03f)) * MathF.Exp(-t / 0.32f) * 1.45f;
+
+            output[i] = pulse * 1.05f + crack + boom * 2.5f + thump + tail;
+        }
+
+        int fade = (int)(0.16f * SampleRate);
+        for (int i = count - fade; i < count; i++)
+            output[i] *= (float)(count - i) / fade;
+
+        NormalizeSoftClip(output, driveFactor: 1.45f, targetPeak: Peak * 0.92f);
+        return output;
     }
 
     internal static float[] RenderBurst(int seed)

@@ -21,10 +21,11 @@ internal static class InfantryPlaygroundRegressionTests
             CheckInfantryAnimationTransitions(scene);
             CheckInfantryContactAnimationTransitions(scene);
             CheckInfantryDestructionAndCombatEffects(scene);
+            CheckSovietRiflemanAndRpgPresentation(scene);
             CheckInfantryNetworkReplication(scene);
             CheckInfantryClassificationSingleSourceOfTruth(scene);
             RunInfantryScaleBenchmarks(scene);
-            GD.Print("INFANTRY_PLAYGROUND_REGRESSIONS_OK 6/6 passed: animation_transitions contact_anims destruction_effects network_replica classification_truth benchmarks_20_100");
+            GD.Print("INFANTRY_PLAYGROUND_REGRESSIONS_OK 7/7 passed: animation_transitions contact_anims destruction_effects soviet_ak_rpg network_replica classification_truth benchmarks_20_100");
             return true;
         }
         catch (Exception exception)
@@ -214,6 +215,99 @@ internal static class InfantryPlaygroundRegressionTests
             // Rifle muzzle flash must be scaled small (scale.X <= 0.12)
             float flashScale = effects.MuzzleFlashes[0].Mesh.Scale.X;
             Require(flashScale <= 0.12f, $"Rifle muzzle flash scale must be small (<=0.12) but was {flashScale}.");
+        }
+        finally
+        {
+            parent.QueueFree();
+        }
+    }
+
+    private static void CheckSovietRiflemanAndRpgPresentation(Node3D scene)
+    {
+        Node3D parent = new();
+        scene.AddChild(parent);
+        try
+        {
+            UnitView akView = new("soviet_rifleman");
+            UnitView rpgView = new("soviet_rpg");
+            parent.AddChild(akView.Root);
+            parent.AddChild(rpgView.Root);
+
+            Require(akView.IsInfantry && !akView.IsAntiTankInfantry, "Soviet rifleman must be regular infantry.");
+            Require(rpgView.IsInfantry && rpgView.IsAntiTankInfantry, "Soviet RPG-7 must be anti-tank infantry.");
+
+            // AK-74 rifleman transitions: Idle -> Run -> AimStanding
+            akView.SetDustSpeedForTesting(0f);
+            akView.UpdateEffects(0.016);
+            Require(akView.CurrentAnimation == "Idle", $"Expected Soviet rifleman Idle but got '{akView.CurrentAnimation}'.");
+            akView.SetDustSpeedForTesting(3.6f);
+            akView.UpdateEffects(0.016);
+            Require(akView.CurrentAnimation == "Run", $"Expected Soviet rifleman Run but got '{akView.CurrentAnimation}'.");
+            akView.SetDustSpeedForTesting(0f);
+            akView.ApplyRecoil(Vector3.Forward, isRifle: true);
+            akView.UpdateEffects(0.016);
+            Require(akView.CurrentAnimation == "AimStanding", $"Expected Soviet rifleman AimStanding but got '{akView.CurrentAnimation}'.");
+
+            // RPG-7 gunner transitions: Idle -> Run -> AimKneeling (kneeling anti-tank firing stance)
+            rpgView.SetDustSpeedForTesting(0f);
+            rpgView.UpdateEffects(0.016);
+            Require(rpgView.CurrentAnimation == "Idle", $"Expected Soviet RPG Idle but got '{rpgView.CurrentAnimation}'.");
+            rpgView.SetDustSpeedForTesting(3.3f);
+            rpgView.UpdateEffects(0.016);
+            Require(rpgView.CurrentAnimation == "Run", $"Expected Soviet RPG Run but got '{rpgView.CurrentAnimation}'.");
+            rpgView.SetDustSpeedForTesting(0f);
+            rpgView.ApplyRecoil(Vector3.Forward, isAntiTankRocket: true);
+            rpgView.UpdateEffects(0.016);
+            Require(rpgView.CurrentAnimation == "AimKneeling", $"Expected Soviet RPG AimKneeling but got '{rpgView.CurrentAnimation}'.");
+
+            // Verify Soviet hostile infantry contact resolves to Soviet model
+            Node3D? enemySovietInf = ContactVisualCatalog.InstantiateEnemyModel(null, ContactClassification.Infantry, "soviet");
+            Require(enemySovietInf is not null, "Soviet infantry fallback contact failed to instantiate.");
+            Require(enemySovietInf!.GetChild<Node3D>(0).SceneFilePath.EndsWith("USSR/soviet_rifleman.glb", StringComparison.Ordinal),
+                "Hostile Soviet infantry contact must load soviet_rifleman.glb.");
+            enemySovietInf.Free();
+
+            // Verify CombatEffects AK-74 3-round burst & RPG-7V rocket flight + backblast + HEAT detonation
+            HeightMap map = HeightMap.CreatePrototype();
+            UnitCatalog catalog = ColdWarContent.LoadCatalog();
+            UnitViewSet unitViews = new(parent, map, catalog);
+            CombatEffects effects = new(map);
+            parent.AddChild(effects);
+
+            ushort akPresId = WeaponPresentation.MakeId(WeaponPresentationKind.RifleAk, 0);
+            ushort rpgPresId = WeaponPresentation.MakeId(WeaponPresentationKind.AntiTankRocket, 0);
+
+            CombatEventObservation akShot = new(
+                EventId: 6001,
+                ServerTick: 10,
+                Kind: CombatEventKind.ShotFired,
+                PresentationId: akPresId,
+                Origin: new NumericsVector3(40f, 1.35f, 40f),
+                Target: new NumericsVector3(90f, 1.35f, 40f),
+                ShooterUnitId: default,
+                Result: HitResult.Penetrated);
+            effects.ProcessEvents([akShot], unitViews);
+            Require(effects.ActiveTracersCount >= 3, $"AK-74 burst must spawn 3 staggered tracers, got {effects.ActiveTracersCount}.");
+
+            CombatEventObservation rpgShot = new(
+                EventId: 6002,
+                ServerTick: 11,
+                Kind: CombatEventKind.ShotFired,
+                PresentationId: rpgPresId,
+                Origin: new NumericsVector3(40f, 1.48f, 40f),
+                Target: new NumericsVector3(100f, 1.50f, 40f),
+                ShooterUnitId: default,
+                Result: HitResult.Penetrated);
+            effects.ProcessEvents([rpgShot], unitViews);
+            Require(effects.ActiveRocketsCount >= 1, "RPG-7V shot must spawn a flying PG-7V rocket.");
+            Require(effects.ActiveMuzzleFlashesCount >= 2, "RPG-7V shot must spawn both muzzle and backblast flashes.");
+
+            // Advance until PG-7V arrives (~60 m / 115 m/s ~= 0.52 s) and verify HEAT detonation spawns explosion
+            for (int f = 0; f < 40; f++)
+            {
+                effects.Update(0.016);
+            }
+            Require(effects.ActiveExplosionsCount >= 1, "PG-7V warhead arrival must trigger a HEAT impact explosion.");
         }
         finally
         {
