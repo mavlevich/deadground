@@ -26,6 +26,7 @@ internal partial class CombatEffects : Node3D
     public const int MaxRocketBackblasts = 16;
     public const int MaxArtilleryBursts = 16;
     public const int MaxImpactSparkBursts = 8;
+    public const int MaxHeatImpacts = 12;
     public const int MaxFlashLights = 8;
     public const int MaxGuidedMissiles = 32;
     public const int MaxFlares = 96;
@@ -70,6 +71,8 @@ internal partial class CombatEffects : Node3D
     private readonly GpuParticles3D[] _artilleryGroundDustRings = new GpuParticles3D[MaxArtilleryBursts];
     private readonly GpuParticles3D[] _artilleryDirtPlumes = new GpuParticles3D[MaxArtilleryBursts];
     private readonly GpuParticles3D[] _impactSparkBursts = new GpuParticles3D[MaxImpactSparkBursts];
+    private readonly GpuParticles3D[] _heatImpactSmokes = new GpuParticles3D[MaxHeatImpacts];
+    private readonly GpuParticles3D[] _heatImpactSparks = new GpuParticles3D[MaxHeatImpacts];
     private readonly GpuParticles3D[] _airburstSmokePuffs = new GpuParticles3D[MaxAirbursts];
     private readonly GpuParticles3D[] _airburstShrapnelSparks = new GpuParticles3D[MaxAirbursts];
     private readonly TimedLight[] _flashLights = new TimedLight[MaxFlashLights];
@@ -78,6 +81,7 @@ internal partial class CombatEffects : Node3D
     private int _nextRocketBackblast;
     private int _nextArtilleryBurst;
     private int _nextImpactSparkBurst;
+    private int _nextHeatImpact;
     private int _nextAirburst;
 
     public Action<Vector3, float>? OnBlastImpulse { get; set; }
@@ -142,6 +146,7 @@ internal partial class CombatEffects : Node3D
         public MeshInstance3D WarheadMesh;
         public MeshInstance3D MotorShaftMesh;
         public MeshInstance3D FlameMesh;
+        public MeshInstance3D TracerStreakMesh;
         public MeshInstance3D TracerDotMesh;
         public GpuParticles3D Contrail;
         public Vector3 Origin;
@@ -390,6 +395,13 @@ internal partial class CombatEffects : Node3D
         {
             _impactSparkBursts[i] = ParticleEffects.CreateImpactSparksParticles();
             AddChild(_impactSparkBursts[i]);
+        }
+        for (int i = 0; i < MaxHeatImpacts; i++)
+        {
+            _heatImpactSmokes[i] = ParticleEffects.CreateHeatImpactSmoke();
+            AddChild(_heatImpactSmokes[i]);
+            _heatImpactSparks[i] = ParticleEffects.CreateHeatImpactSparks();
+            AddChild(_heatImpactSparks[i]);
         }
         for (int i = 0; i < MaxAirbursts; i++)
         {
@@ -868,9 +880,30 @@ void fragment() {
 """
         };
         ShaderMaterial flameMat = new() { Shader = rpgFlameShader };
+        Shader tracerStreakShader = new()
+        {
+            Code = """
+shader_type spatial;
+render_mode unshaded, blend_add, cull_disabled, depth_draw_never, fog_disabled;
+varying vec3 v_local;
+void vertex() {
+    v_local = VERTEX;
+}
+void fragment() {
+    // v_local.y runs -1.3 (tail) .. +1.3 (head near grenade base)
+    float along = clamp((v_local.y + 1.3) / 2.6, 0.0, 1.0);
+    float core = pow(along, 2.6);
+    float flicker = 0.90 + 0.10 * sin(TIME * 110.0 + along * 20.0);
+    vec3 col = mix(vec3(2.4, 0.45, 0.08), vec3(6.8, 5.2, 2.8), core) * flicker;
+    ALBEDO = col;
+    ALPHA = pow(along, 1.15) * 0.95;
+}
+"""
+        };
+        ShaderMaterial tracerStreakMat = new() { Shader = tracerStreakShader };
         StandardMaterial3D tracerDotMat = new()
         {
-            AlbedoColor = new Color(4.6f, 2.0f, 0.55f, 0.94f),
+            AlbedoColor = new Color(5.8f, 2.7f, 0.72f, 0.98f),
             AlbedoTexture = ParticleEffects.HotGlow,
             Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
             BlendMode = BaseMaterial3D.BlendModeEnum.Add,
@@ -882,10 +915,12 @@ void fragment() {
         };
 
         // Authentic PG-7V silhouette: 85 mm conical/ogive HEAT warhead ahead of slender sustainer motor tube
-        CylinderMesh warheadMesh = new() { TopRadius = 0.012f, BottomRadius = 0.068f, Height = 0.36f, RadialSegments = 8 };
-        CylinderMesh shaftMesh = new() { TopRadius = 0.032f, BottomRadius = 0.022f, Height = 0.56f, RadialSegments = 6 };
-        CylinderMesh flameMesh = new() { TopRadius = 0.068f, BottomRadius = 0.008f, Height = 0.42f, RadialSegments = 8 };
-        QuadMesh tracerQuad = new() { Size = new Vector2(0.32f, 0.32f) };
+        // plus readable burning base tracer streak and compact sustainer jet flame.
+        CylinderMesh warheadMesh = new() { TopRadius = 0.015f, BottomRadius = 0.078f, Height = 0.40f, RadialSegments = 8 };
+        CylinderMesh shaftMesh = new() { TopRadius = 0.036f, BottomRadius = 0.026f, Height = 0.62f, RadialSegments = 6 };
+        CylinderMesh flameMesh = new() { TopRadius = 0.13f, BottomRadius = 0.015f, Height = 1.15f, RadialSegments = 8 };
+        CylinderMesh tracerStreakMesh = new() { TopRadius = 0.11f, BottomRadius = 0.012f, Height = 2.6f, RadialSegments = 8 };
+        QuadMesh tracerQuad = new() { Size = new Vector2(0.85f, 0.85f) };
 
         for (int i = 0; i < MaxRpgProjectiles; i++)
         {
@@ -894,7 +929,7 @@ void fragment() {
             {
                 Mesh = warheadMesh,
                 MaterialOverride = warheadMat,
-                Position = new Vector3(0f, 0f, -0.22f),
+                Position = new Vector3(0f, 0f, -0.24f),
                 Rotation = new Vector3(-Mathf.Pi * 0.5f, 0f, 0f),
                 CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
             };
@@ -902,7 +937,7 @@ void fragment() {
             {
                 Mesh = shaftMesh,
                 MaterialOverride = shaftMat,
-                Position = new Vector3(0f, 0f, 0.24f),
+                Position = new Vector3(0f, 0f, 0.26f),
                 Rotation = new Vector3(-Mathf.Pi * 0.5f, 0f, 0f),
                 CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
             };
@@ -910,7 +945,16 @@ void fragment() {
             {
                 Mesh = flameMesh,
                 MaterialOverride = flameMat,
-                Position = new Vector3(0f, 0f, 0.42f),
+                Position = new Vector3(0f, 0f, 0.84f),
+                Rotation = new Vector3(-Mathf.Pi * 0.5f, 0f, 0f),
+                Visible = false,
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
+            };
+            MeshInstance3D tracerStreak = new()
+            {
+                Mesh = tracerStreakMesh,
+                MaterialOverride = tracerStreakMat,
+                Position = new Vector3(0f, 0f, 1.68f),
                 Rotation = new Vector3(-Mathf.Pi * 0.5f, 0f, 0f),
                 Visible = false,
                 CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
@@ -919,14 +963,15 @@ void fragment() {
             {
                 Mesh = tracerQuad,
                 MaterialOverride = tracerDotMat,
-                Position = new Vector3(0f, 0f, 0.54f),
+                Position = new Vector3(0f, 0f, 0.56f),
                 CastShadow = GeometryInstance3D.ShadowCastingSetting.Off
             };
             GpuParticles3D contrail = ParticleEffects.CreateRpgContrail();
-            contrail.Position = new Vector3(0f, 0f, 0.46f);
+            contrail.Position = new Vector3(0f, 0f, 0.62f);
             root.AddChild(warhead);
             root.AddChild(shaft);
             root.AddChild(flame);
+            root.AddChild(tracerStreak);
             root.AddChild(tracerDot);
             root.AddChild(contrail);
             AddChild(root);
@@ -936,6 +981,7 @@ void fragment() {
                 WarheadMesh = warhead,
                 MotorShaftMesh = shaft,
                 FlameMesh = flame,
+                TracerStreakMesh = tracerStreak,
                 TracerDotMesh = tracerDot,
                 Contrail = contrail,
                 Active = false
@@ -1448,21 +1494,24 @@ void fragment() {
                 if (isRpg)
                 {
                     Vector3 backblastPos = origin - shotDir * 1.15f;
-                    if (ageSeconds < MuzzleFlashLifetime * 1.4f)
+                    if (ageSeconds < MuzzleFlashLifetime * 1.6f)
                     {
-                        // Compact booster pop at muzzle + pronounced rear venturi backblast cone
+                        // Compact booster pop at muzzle + pronounced rear venturi backblast flame cone
                         SpawnMuzzleFlash(origin, shotDir, isMachineGun: true, isRifle: true, elapsedOffset: ageSeconds * 0.7f);
-                        SpawnMuzzleFlash(backblastPos, -shotDir, isMachineGun: true, isRifle: false, elapsedOffset: ageSeconds * 0.55f);
-                        SpawnFlashLight(backblastPos, energy: 3.6f, range: 14f, lifetime: 0.11f);
+                        SpawnMuzzleFlash(backblastPos, -shotDir, isMachineGun: false, isRifle: false, elapsedOffset: ageSeconds * 0.50f);
+                        SpawnFlashLight(backblastPos, energy: 4.8f, range: 16f, lifetime: 0.12f);
                         if (ageSeconds < 0.12f)
                         {
-                            OnBlastImpulse?.Invoke(origin, 0.10f);
+                            OnBlastImpulse?.Invoke(origin, 0.12f);
                         }
                     }
                     if (ageSeconds < SmokePuffLifetime)
                     {
-                        SpawnRocketTrailSmoke(origin + shotDir * 0.25f, initialScale: 0.22f, targetScale: 0.85f, lifetime: 1.0f, elapsedOffset: ageSeconds);
-                        SpawnRocketTrailSmoke(backblastPos - shotDir * 0.55f, initialScale: 0.45f, targetScale: 1.75f, lifetime: 1.8f, elapsedOffset: ageSeconds);
+                        // Characteristic RPG-7V launch signature: brief front puff + 3-stage rearward backblast dust/smoke cone
+                        SpawnRocketTrailSmoke(origin + shotDir * 0.30f, initialScale: 0.30f, targetScale: 1.10f, lifetime: 1.2f, elapsedOffset: ageSeconds);
+                        SpawnRocketTrailSmoke(backblastPos, initialScale: 0.55f, targetScale: 1.95f, lifetime: 2.0f, elapsedOffset: ageSeconds);
+                        SpawnRocketTrailSmoke(backblastPos - shotDir * 1.35f, initialScale: 0.75f, targetScale: 2.55f, lifetime: 2.5f, elapsedOffset: ageSeconds);
+                        SpawnRocketTrailSmoke(backblastPos - shotDir * 2.75f, initialScale: 0.65f, targetScale: 2.90f, lifetime: 2.8f, elapsedOffset: ageSeconds);
                     }
                     if (ageSeconds < flightDuration)
                     {
@@ -1937,27 +1986,42 @@ void fragment() {
             return;
         }
 
-        SpawnExplosion(position, elapsedOffset);
+        // Authentic 85 mm PG-7V HEAT warhead detonation (730 g A-IX-1 RDX):
+        // - Razor-sharp, blinding, compact flash (~2 m, ~0.18 s) rather than a huge fuel-tank fireball
+        // - High-velocity directional spray of incandescent copper/steel spall sparks off the impact face
+        // - Snappy dark charcoal-gray RDX soot cloud (plus dirt fountain on ground miss)
+        SpawnExplosion(position, elapsedOffset, scaleMultiplier: 0.42f, lifetimeMultiplier: 0.50f);
         SpawnImpact(position, elapsedOffset);
         SpawnSparks(position, elapsedOffset);
-        SpawnImpactSparkBurst(position, Vector3.Up, elapsedOffset);
-        SpawnSmokePuff(position, isImpactSmoke: true, elapsedOffset);
-        SpawnFlashLight(position + new Vector3(0f, 1.0f, 0f), energy: 6.4f, range: 24f, lifetime: 0.22f);
+        SpawnFlashLight(position + new Vector3(0f, 1.0f, 0f), energy: 8.8f, range: 26f, lifetime: 0.13f);
 
         if (elapsedOffset < 0.14f)
         {
-            OnBlastImpulse?.Invoke(position, 0.36f);
+            Vector3 sprayDir = incomingDir.LengthSquared() > 1e-4f ? -incomingDir.Normalized() : Vector3.Up;
+            SpawnHeatImpactSmoke(position, elapsedOffset);
+            SpawnHeatImpactSparks(position, result == HitResult.Miss ? Vector3.Up : sprayDir, elapsedOffset);
+            OnBlastImpulse?.Invoke(position, 0.34f);
+
             if (result == HitResult.Miss)
             {
                 int burstIdx = _nextArtilleryBurst;
                 _nextArtilleryBurst = (_nextArtilleryBurst + 1) % MaxArtilleryBursts;
+                Vector3 groundPos = position + new Vector3(0f, 0.20f, 0f);
+
+                GpuParticles3D ejecta = _artilleryEjectaJets[burstIdx];
+                ejecta.Position = groundPos;
+                ejecta.Scale = Vector3.One * 0.48f;
+                ejecta.Preprocess = elapsedOffset;
+                ejecta.Restart();
+
                 GpuParticles3D debris = _artilleryDebris[burstIdx];
-                debris.Position = position + new Vector3(0f, 0.25f, 0f);
-                debris.Scale = Vector3.One * 0.55f;
-                debris.AmountRatio = 0.45f;
+                debris.Position = groundPos;
+                debris.Scale = Vector3.One * 0.48f;
+                debris.AmountRatio = 0.50f;
                 debris.Preprocess = elapsedOffset;
                 debris.Restart();
-                SpawnResidue(position, elapsedOffset, scaleMultiplier: 0.45f);
+
+                SpawnResidue(position, elapsedOffset, scaleMultiplier: 0.38f);
             }
             else if (result == HitResult.Deflected)
             {
@@ -1970,6 +2034,31 @@ void fragment() {
                 maxDistance: 520f,
                 unitSize: 32f);
         }
+    }
+
+    private void SpawnHeatImpactSmoke(Vector3 position, float ageSeconds)
+    {
+        int idx = _nextHeatImpact;
+        _nextHeatImpact = (_nextHeatImpact + 1) % MaxHeatImpacts;
+        GpuParticles3D smoke = _heatImpactSmokes[idx];
+        smoke.Position = position + new Vector3(0f, 0.35f, 0f);
+        smoke.Preprocess = ageSeconds;
+        smoke.Restart();
+    }
+
+    private void SpawnHeatImpactSparks(Vector3 position, Vector3 sprayDir, float ageSeconds)
+    {
+        int idx = _nextHeatImpact;
+        GpuParticles3D sparks = _heatImpactSparks[idx];
+        sparks.Position = position + new Vector3(0f, 0.25f, 0f);
+        if (sprayDir.LengthSquared() > 1e-4f)
+        {
+            Vector3 d = sprayDir.Normalized();
+            Vector3 up = MathF.Abs(d.Y) > 0.96f ? Vector3.Right : Vector3.Up;
+            sparks.LookAt(sparks.Position + d, up);
+        }
+        sparks.Preprocess = ageSeconds;
+        sparks.Restart();
     }
 
     private void TriggerImpactFeedback(Vector3 position, float elapsedOffset = 0f)
@@ -2359,25 +2448,26 @@ void fragment() {
         tm.Mesh.Visible = true;
     }
 
-    private void SpawnExplosion(Vector3 position, float elapsedOffset = 0f)
+    private void SpawnExplosion(Vector3 position, float elapsedOffset = 0f, float scaleMultiplier = 1.0f, float lifetimeMultiplier = 1.0f)
     {
-        float remainingLifetime = ExplosionLifetime - elapsedOffset;
+        float maxLife = ExplosionLifetime * lifetimeMultiplier;
+        float remainingLifetime = maxLife - elapsedOffset;
         if (remainingLifetime <= 0f) return;
 
         int idx = AcquireMeshSlot(_explosions, MaxExplosions);
         ref TimedMesh tm = ref _explosions[idx];
         tm.Active = true;
         tm.Lifetime = remainingLifetime;
-        tm.MaxLifetime = ExplosionLifetime;
-        tm.Velocity = new Vector3(0, 0.9f, 0);
+        tm.MaxLifetime = maxLife;
+        tm.Velocity = new Vector3(0, 0.9f * scaleMultiplier, 0);
         tm.ScaleDown = false;
         tm.ScaleUp = true;
         tm.FadeAlpha = true;
-        tm.InitialScale = 0.55f;
-        tm.TargetScale = 2.15f;
+        tm.InitialScale = 0.55f * scaleMultiplier;
+        tm.TargetScale = 2.15f * scaleMultiplier;
         tm.InitialScaleVector = Vector3.Zero;
         tm.Mesh.Position = position + tm.Velocity * elapsedOffset;
-        float t = elapsedOffset / ExplosionLifetime;
+        float t = elapsedOffset / maxLife;
         float factor = Mathf.Lerp(tm.InitialScale, tm.TargetScale, t);
         tm.Mesh.Scale = Vector3.One * factor;
         tm.Mesh.Transparency = t;
@@ -2825,6 +2915,7 @@ void fragment() {
         PositionRpgProjectile(ref rpg);
         rpg.WarheadMesh.Visible = true;
         rpg.MotorShaftMesh.Visible = true;
+        rpg.TracerStreakMesh.Visible = true;
         rpg.TracerDotMesh.Visible = true;
         rpg.Root.Visible = true;
     }
@@ -2859,28 +2950,38 @@ void fragment() {
         if (inSustainerBurn && !rpg.IgnitionFlashTriggered)
         {
             rpg.IgnitionFlashTriggered = true;
-            SpawnRocketTrailSmoke(pos, initialScale: 0.24f, targetScale: 0.95f, lifetime: 1.1f);
+            Vector3 fwdDir = dir.LengthSquared() > 1e-6f ? dir.Normalized() : Vector3.Forward;
+            // Mid-air sustainer motor ignition signature at ~11.5 m downrange
+            SpawnMuzzleFlash(pos, -fwdDir, isMachineGun: true, isRifle: false);
+            SpawnFlashLight(pos, energy: 4.4f, range: 15f, lifetime: 0.09f);
+            SpawnRocketTrailSmoke(pos, initialScale: 0.45f, targetScale: 1.65f, lifetime: 1.8f);
         }
 
         if (inSustainerBurn)
         {
             float sinceIgnite = t - RpgSustainerIgniteTime;
-            float ignitionPulse = sinceIgnite < 0.045f ? (1.45f - 0.45f * (sinceIgnite / 0.045f)) : 1.0f;
+            float ignitionPulse = sinceIgnite < 0.055f ? (1.55f - 0.55f * (sinceIgnite / 0.055f)) : 1.0f;
             float burnoutFade = t > RpgSustainerEndTime - 0.06f
                 ? Math.Clamp((RpgSustainerEndTime - t) / 0.06f, 0f, 1f)
                 : 1.0f;
             float flicker = (0.88f + 0.22f * MathF.Sin(t * 92f)) * ignitionPulse * burnoutFade;
             rpg.FlameMesh.Visible = true;
-            rpg.FlameMesh.Scale = new Vector3(0.75f + 0.25f * ignitionPulse, MathF.Max(0.08f, flicker), 0.75f + 0.25f * ignitionPulse);
+            rpg.FlameMesh.Scale = new Vector3(0.85f + 0.25f * ignitionPulse, MathF.Max(0.12f, flicker), 0.85f + 0.25f * ignitionPulse);
+            rpg.TracerStreakMesh.Visible = true;
+            rpg.TracerStreakMesh.Scale = new Vector3(1.15f, 1.08f * ignitionPulse, 1.15f);
             rpg.TracerDotMesh.Scale = Vector3.One * (1.25f * ignitionPulse);
-            rpg.Contrail.AmountRatio = Math.Clamp(burnoutFade, 0.15f, 1.0f);
+            rpg.Contrail.AmountRatio = Math.Clamp(burnoutFade, 0.20f, 1.0f);
             rpg.Contrail.Emitting = true;
         }
         else
         {
-            // Phase 1 (0..11.5 m safety coast) & Phase 3 (ballistic coast): sustainer OFF, glowing base tracer only
+            // Phase 1 (0..11.5 m booster coast) & Phase 3 (ballistic coast > 124 m):
+            // Sustainer flame and contrail OFF, while the bright PG-7V base tracer streak stays clearly visible.
             rpg.FlameMesh.Visible = false;
-            rpg.TracerDotMesh.Scale = Vector3.One * (t < RpgSustainerIgniteTime ? 0.85f : 0.72f);
+            rpg.TracerStreakMesh.Visible = true;
+            float streakLenScale = t < RpgSustainerIgniteTime ? 0.48f : 0.65f;
+            rpg.TracerStreakMesh.Scale = new Vector3(0.75f, streakLenScale, 0.75f);
+            rpg.TracerDotMesh.Scale = Vector3.One * (t < RpgSustainerIgniteTime ? 0.78f : 0.72f);
             rpg.Contrail.Emitting = false;
         }
     }
@@ -3461,6 +3562,7 @@ void fragment() {
                 rpg.WarheadMesh.Visible = false;
                 rpg.MotorShaftMesh.Visible = false;
                 rpg.FlameMesh.Visible = false;
+                rpg.TracerStreakMesh.Visible = false;
                 rpg.TracerDotMesh.Visible = false;
                 continue;
             }

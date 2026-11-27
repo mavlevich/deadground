@@ -44,6 +44,8 @@ internal static class ParticleEffects
     private static ParticleProcessMaterial? _rocketLaunchGroundBankProcess;
     private static ParticleProcessMaterial? _rocketContrailProcess;
     private static ParticleProcessMaterial? _rpgContrailProcess;
+    private static ParticleProcessMaterial? _heatImpactSmokeProcess;
+    private static ParticleProcessMaterial? _heatImpactSparksProcess;
     private static ParticleProcessMaterial? _artilleryFireballProcess;
     private static ParticleProcessMaterial? _artillerySparksProcess;
     private static ParticleProcessMaterial? _artilleryDirtPlumeProcess;
@@ -445,40 +447,103 @@ void fragment() {
         LitCloudDrawPass,
         visibilityHalfExtent: 1200f);
 
-    // Fine, light-gray smoke ribbon from a hand-held PG-7V sustainer motor (ignites ~11.5 m downrange and disperses quickly).
+    // Continuous, crisp, thin sunlit light-gray smoke ribbon from a PG-7V sustainer motor
+    // (dense enough along the axis to stay unbroken at 294 m/s while remaining ~5x slimmer than BM-21 Grad).
     internal static GpuParticles3D CreateRpgContrail() => CreateEmitter(
         "RpgContrail",
         oneShot: false,
-        amount: 96,
-        lifetime: 2.3f,
+        amount: 320,
+        lifetime: 3.8f,
         explosiveness: 0.0f,
         _rpgContrailProcess ??= new ParticleProcessMaterial
         {
             Direction = new Vector3(0f, 0.02f, 1f),
             Spread = 5f,
-            InitialVelocityMin = 0.25f,
-            InitialVelocityMax = 0.9f,
-            DampingMin = 2.8f,
-            DampingMax = 4.6f,
-            Gravity = new Vector3(0.22f, 0.14f, 0.12f),
+            InitialVelocityMin = 0.35f,
+            InitialVelocityMax = 1.1f,
+            DampingMin = 2.6f,
+            DampingMax = 4.2f,
+            Gravity = new Vector3(0.28f, 0.16f, 0.14f),
             AngleMin = -180f,
             AngleMax = 180f,
-            AngularVelocityMin = -18f,
-            AngularVelocityMax = 18f,
+            AngularVelocityMin = -16f,
+            AngularVelocityMax = 16f,
             TurbulenceEnabled = true,
-            TurbulenceNoiseStrength = 0.65f,
-            TurbulenceNoiseScale = 3.2f,
+            TurbulenceNoiseStrength = 0.95f,
+            TurbulenceNoiseScale = 3.6f,
             TurbulenceInfluenceMin = 0.03f,
-            TurbulenceInfluenceMax = 0.14f,
-            ScaleMin = 0.20f,
-            ScaleMax = 0.52f,
+            TurbulenceInfluenceMax = 0.15f,
+            ScaleMin = 0.72f,
+            ScaleMax = 1.38f,
             ScaleCurve = CreateContrailScaleCurve(),
             ColorRamp = CreateRpgContrailRamp(),
             EmissionShape = ParticleProcessMaterial.EmissionShapeEnum.Box,
-            EmissionBoxExtents = new Vector3(0.025f, 0.025f, 0.32f),
+            EmissionBoxExtents = new Vector3(0.05f, 0.05f, 1.9f),
         },
         LitCloudDrawPass,
-        visibilityHalfExtent: 450f);
+        visibilityHalfExtent: 550f);
+
+    // Compact, snappy dark charcoal-gray RDX (A-IX-1) soot puff characteristic of an 85 mm PG-7V HEAT warhead detonation.
+    internal static GpuParticles3D CreateHeatImpactSmoke() => CreateEmitter(
+        "HeatImpactSmoke",
+        oneShot: true,
+        amount: 22,
+        lifetime: 3.4f,
+        explosiveness: 0.97f,
+        _heatImpactSmokeProcess ??= new ParticleProcessMaterial
+        {
+            Direction = new Vector3(0f, 0.35f, -0.45f),
+            Spread = 140f,
+            InitialVelocityMin = 3.2f,
+            InitialVelocityMax = 11.5f,
+            DampingMin = 5.2f,
+            DampingMax = 8.4f,
+            Gravity = new Vector3(0.25f, 0.65f, 0.15f),
+            AngleMin = -180f,
+            AngleMax = 180f,
+            AngularVelocityMin = -28f,
+            AngularVelocityMax = 28f,
+            TurbulenceEnabled = true,
+            TurbulenceNoiseStrength = 1.25f,
+            TurbulenceNoiseScale = 3.4f,
+            TurbulenceInfluenceMin = 0.06f,
+            TurbulenceInfluenceMax = 0.20f,
+            ScaleMin = 1.45f,
+            ScaleMax = 3.10f,
+            ScaleCurve = Grow(0.32f),
+            ColorRamp = CreateHeatSmokeRamp(),
+            EmissionShape = ParticleProcessMaterial.EmissionShapeEnum.Sphere,
+            EmissionSphereRadius = 0.42f,
+        },
+        LitCloudDrawPass,
+        visibilityHalfExtent: 45f);
+
+    // High-velocity directional shower of incandescent copper/steel spall sparks spraying out from a HEAT impact.
+    internal static GpuParticles3D CreateHeatImpactSparks() => CreateEmitter(
+        "HeatImpactSparks",
+        oneShot: true,
+        amount: 46,
+        lifetime: 0.62f,
+        explosiveness: 0.98f,
+        _heatImpactSparksProcess ??= new ParticleProcessMaterial
+        {
+            ParticleFlagAlignY = true,
+            Direction = new Vector3(0f, 0.28f, -1f),
+            Spread = 58f,
+            InitialVelocityMin = 16f,
+            InitialVelocityMax = 44f,
+            DampingMin = 0.65f,
+            DampingMax = 1.65f,
+            Gravity = new Vector3(0f, -24f, 0f),
+            ScaleMin = 0.55f,
+            ScaleMax = 1.30f,
+            ScaleCurve = Shrink(0.18f),
+            ColorRamp = CreateSparksRamp(),
+            EmissionShape = ParticleProcessMaterial.EmissionShapeEnum.Sphere,
+            EmissionSphereRadius = 0.28f,
+        },
+        AdditiveSparkDrawPass,
+        visibilityHalfExtent: 55f);
 
     // Brief, violent, ragged incandescent detonation flash tongues bursting out from the base of the blast column.
     internal static GpuParticles3D CreateArtilleryFireballParticles() => CreateEmitter(
@@ -1951,14 +2016,32 @@ void fragment() {
     {
         Gradient gradient = new()
         {
-            Offsets = [0f, 0.08f, 0.35f, 0.72f, 1f],
+            Offsets = [0f, 0.06f, 0.28f, 0.66f, 1f],
             Colors =
             [
-                new Color(0.95f, 0.91f, 0.84f, 0.56f),
-                new Color(0.88f, 0.87f, 0.85f, 0.44f),
-                new Color(0.82f, 0.82f, 0.81f, 0.24f),
-                new Color(0.76f, 0.77f, 0.78f, 0.09f),
-                new Color(0.74f, 0.75f, 0.76f, 0f),
+                new Color(0.98f, 0.94f, 0.86f, 0.78f),
+                new Color(0.90f, 0.89f, 0.87f, 0.64f),
+                new Color(0.83f, 0.83f, 0.82f, 0.38f),
+                new Color(0.77f, 0.78f, 0.79f, 0.15f),
+                new Color(0.74f, 0.76f, 0.77f, 0f),
+            ],
+        };
+        return new GradientTexture1D { Gradient = gradient };
+    }
+
+    // Brief hot flash edge -> dense charcoal-black RDX soot -> dark gray battlefield smoke.
+    private static GradientTexture1D CreateHeatSmokeRamp()
+    {
+        Gradient gradient = new()
+        {
+            Offsets = [0f, 0.05f, 0.22f, 0.62f, 1f],
+            Colors =
+            [
+                new Color(0.65f, 0.32f, 0.12f, 0.92f),
+                new Color(0.11f, 0.10f, 0.10f, 0.92f),
+                new Color(0.16f, 0.15f, 0.15f, 0.80f),
+                new Color(0.28f, 0.27f, 0.26f, 0.40f),
+                new Color(0.36f, 0.35f, 0.34f, 0f),
             ],
         };
         return new GradientTexture1D { Gradient = gradient };

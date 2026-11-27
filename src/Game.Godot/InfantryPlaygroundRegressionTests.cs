@@ -309,28 +309,28 @@ internal static class InfantryPlaygroundRegressionTests
             Require(effects.ActiveRpgProjectilesCount == 1, "RPG-7V shot must spawn a dedicated PG-7V projectile.");
             Require(effects.ActiveMuzzleFlashesCount >= 2, "RPG-7V shot must spawn both muzzle and backblast flashes.");
 
-            // Phase 1 (t = 0.032 s < 0.10 s safety coast): sustainer flame and contrail MUST be OFF to protect gunner
+            // Phase 1 (t = 0.032 s < 0.10 s safety coast): sustainer flame and contrail MUST be OFF while base tracer streak stays lit
             effects.Update(0.032);
             ref CombatEffects.TimedRpgProjectile proj = ref effects.RpgProjectiles[0];
-            Require(!proj.FlameMesh.Visible && !proj.Contrail.Emitting && proj.TracerDotMesh.Visible,
-                "PG-7V Phase 1 (0..11.5 m safety coast) must keep sustainer flame/contrail OFF with base tracer lit.");
+            Require(!proj.FlameMesh.Visible && !proj.Contrail.Emitting && proj.TracerStreakMesh.Visible && proj.TracerDotMesh.Visible,
+                "PG-7V Phase 1 (0..11.5 m safety coast) must keep sustainer flame/contrail OFF with base tracer streak lit.");
 
-            // Phase 2 (t = 0.25 s, sustainer burn): flame and fine smoke contrail MUST be ON
+            // Phase 2 (t = 0.25 s, sustainer burn): flame, blazing tracer streak, and continuous smoke contrail MUST be ON
             effects.Update(0.22);
-            Require(proj.FlameMesh.Visible && proj.Contrail.Emitting,
-                "PG-7V Phase 2 (sustainer burn) must ignite sustainer flame and fine contrail.");
+            Require(proj.FlameMesh.Visible && proj.TracerStreakMesh.Visible && proj.Contrail.Emitting,
+                "PG-7V Phase 2 (sustainer burn) must ignite sustainer flame, tracer streak, and contrail.");
 
-            // Phase 3 (t = 0.72 s > 0.65 s burnout): sustainer flame and contrail MUST extinguish while base tracer continues
+            // Phase 3 (t = 0.72 s > 0.65 s burnout): sustainer flame and contrail MUST extinguish while base tracer streak continues
             effects.Update(0.47);
-            Require(proj.Active && !proj.FlameMesh.Visible && !proj.Contrail.Emitting && proj.TracerDotMesh.Visible,
-                "PG-7V Phase 3 (ballistic coast > 124 m) must extinguish motor while keeping base tracer lit.");
+            Require(proj.Active && !proj.FlameMesh.Visible && !proj.Contrail.Emitting && proj.TracerStreakMesh.Visible && proj.TracerDotMesh.Visible,
+                "PG-7V Phase 3 (ballistic coast > 124 m) must extinguish motor while keeping base tracer streak lit.");
 
-            // Advance until PG-7V arrives (~1.0 s total for 220 m) and verify HEAT detonation spawns explosion
-            for (int f = 0; f < 30; f++)
+            // Advance until PG-7V arrives (~1.0 s total for 220 m) and verify compact HEAT detonation flash
+            for (int f = 0; f < 22; f++)
             {
                 effects.Update(0.016);
             }
-            Require(effects.ActiveExplosionsCount >= 1, "PG-7V warhead arrival must trigger a HEAT impact explosion.");
+            Require(effects.ActiveExplosionsCount >= 1, "PG-7V warhead arrival must trigger a compact HEAT impact flash.");
         }
         finally
         {
