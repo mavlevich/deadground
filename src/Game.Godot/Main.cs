@@ -755,6 +755,15 @@ public partial class Main : Node3D
         {
             _ustyeMapView.ApplyEnvironmentTints(activeProfile.MaterialTints, activeProfile.Weather?.Wetness ?? 0f, activeProfile.Sky.SkyHorizonColorHex);
         }
+        else if (_fogOfWar is not null)
+        {
+            if (EnvironmentProfile.TryParseHexColor(activeProfile.MaterialTints.TerrainHex, out Color terrainTint))
+            {
+                _fogOfWar.SetTerrainTint(terrainTint);
+            }
+            _fogOfWar.SetTerrainWetness(activeProfile.Weather?.Wetness ?? 0f);
+            _fogOfWar.SetDetailStrength(_scenario == "proving-ground" ? 0.35f : 1.0f);
+        }
 
         _settingsPanel = new SettingsPanel();
         AddChild(_settingsPanel);
@@ -782,6 +791,14 @@ public partial class Main : Node3D
             if (_ustyeMapView is not null)
             {
                 _ustyeMapView.ApplyEnvironmentTints(profile.MaterialTints, profile.Weather?.Wetness ?? 0f, profile.Sky.SkyHorizonColorHex);
+            }
+            else if (_fogOfWar is not null)
+            {
+                if (EnvironmentProfile.TryParseHexColor(profile.MaterialTints.TerrainHex, out Color terrainTint))
+                {
+                    _fogOfWar.SetTerrainTint(terrainTint);
+                }
+                _fogOfWar.SetTerrainWetness(profile.Weather?.Wetness ?? 0f);
             }
             _smokeView?.ApplyEnvironment(profile);
         };
@@ -1369,7 +1386,7 @@ public partial class Main : Node3D
                 _sessionMenu.SetStatus(_lifecycleController.StatusDescription, _lifecycleController.State);
             }
             _cameraRig.Update(delta, allowInput: false);
-            _environmentView?.UpdateHazeForCamera(_cameraRig.Size, _cameraRig.Focus, _cameraRig.ViewPitch);
+            _environmentView?.UpdateHazeForCamera(_cameraRig.Size, _cameraRig.Focus, _cameraRig.ViewPitch, _cameraRig.ViewYaw);
             _environmentView?.UpdateShadowTierForCamera(_cameraRig.Size, _activeShadowMapLayers);
             _environmentView?.UpdateShadowFade(delta);
             ProcessScreenshot(delta);
@@ -1859,7 +1876,7 @@ public partial class Main : Node3D
             _cameraRig.CenterOn(_panAnchor.Value + new Vector3(offsetX, 0f, offsetZ));
         }
         _cameraRig.Update(delta, allowInput: !_benchmarkActive && !_settingsPanel.IsOpen && !_pauseMenu.IsOpen && !_helpPanel.IsOpen);
-        _environmentView?.UpdateHazeForCamera(_cameraRig.Size, _cameraRig.Focus, _cameraRig.ViewPitch);
+        _environmentView?.UpdateHazeForCamera(_cameraRig.Size, _cameraRig.Focus, _cameraRig.ViewPitch, _cameraRig.ViewYaw);
         _environmentView?.UpdateShadowTierForCamera(_cameraRig.Size, _activeShadowMapLayers);
         _environmentView?.UpdateShadowFade(delta);
         UpdateTerrainLodStep(_terrainView, _camera, _cachedTerrainViewportHeightPx);

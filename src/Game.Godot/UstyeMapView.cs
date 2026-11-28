@@ -39,12 +39,13 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
     private readonly List<ScaleVehicle> _scaleVehicles = [];
 
     private ShaderMaterial? _waterMaterial;
-    private StandardMaterial3D? _asphaltMaterial;
-    private StandardMaterial3D? _gravelMaterial;
-    private StandardMaterial3D? _dirtPathMaterial;
+    private ShaderMaterial? _asphaltMaterial;
+    private ShaderMaterial? _gravelMaterial;
+    private ShaderMaterial? _dirtPathMaterial;
     private StandardMaterial3D? _coniferMat;
     private StandardMaterial3D? _deciduousMat;
     private Material? _terrainMaterial;
+    private Action<bool>? _fogEnabledHandler;
     private bool _vegetationShadowsEnabled = true;
     private bool _terrainShadowsEnabled = true;
 
@@ -80,9 +81,13 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
         _initialVehicleCameraSize = initialVehicleCameraSize;
     }
 
+    private const float UstyeWaterLevel = 2.0f;
+
     internal void AttachFogOfWar(FogOfWarView fog)
     {
+        UnsubscribeFogEvents();
         _fogOverlay = fog;
+        SyncFogOverlayAndRoads();
         if (_terrainRoot is not null)
         {
             foreach (Node child in _terrainRoot.GetChildren())
@@ -93,6 +98,71 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
                 }
             }
         }
+    }
+
+    private void SyncFogOverlayAndRoads()
+    {
+        if (_fogOverlay is not null)
+        {
+            _fogOverlay.SetWaterLevel(UstyeWaterLevel);
+            _fogOverlay.SetDetailStrength(1.0f);
+            SubscribeFogEvents();
+        }
+        SyncRoadFogParameters();
+    }
+
+    private void SubscribeFogEvents()
+    {
+        UnsubscribeFogEvents();
+        if (_fogOverlay is null) return;
+        _fogEnabledHandler = enabled =>
+        {
+            _asphaltMaterial?.SetShaderParameter("fog_enabled", enabled);
+            _gravelMaterial?.SetShaderParameter("fog_enabled", enabled);
+            _dirtPathMaterial?.SetShaderParameter("fog_enabled", enabled);
+        };
+        _fogOverlay.EnabledChanged += _fogEnabledHandler;
+    }
+
+    private void UnsubscribeFogEvents()
+    {
+        if (_fogOverlay is not null && _fogEnabledHandler is not null)
+        {
+            _fogOverlay.EnabledChanged -= _fogEnabledHandler;
+        }
+        _fogEnabledHandler = null;
+    }
+
+    private void SyncRoadFogParameters()
+    {
+        Vector2 mapSize = new(_plan.ExtentX, _plan.ExtentZ);
+        bool fogEnabled = _fogOverlay?.IsEnabled ?? false;
+        ImageTexture? fogTex = _fogOverlay?.Texture;
+
+        ApplyRoadFog(_asphaltMaterial, fogTex, mapSize, fogEnabled);
+        ApplyRoadFog(_gravelMaterial, fogTex, mapSize, fogEnabled);
+        ApplyRoadFog(_dirtPathMaterial, fogTex, mapSize, fogEnabled);
+    }
+
+    private static void ApplyRoadFog(ShaderMaterial? mat, ImageTexture? fogTex, Vector2 mapSize, bool fogEnabled)
+    {
+        if (mat is null) return;
+        mat.SetShaderParameter("map_size", mapSize);
+        if (fogTex is not null)
+        {
+            mat.SetShaderParameter("fog_texture", fogTex);
+            mat.SetShaderParameter("fog_enabled", fogEnabled);
+        }
+        else
+        {
+            mat.SetShaderParameter("fog_enabled", false);
+        }
+    }
+
+    public override void _ExitTree()
+    {
+        UnsubscribeFogEvents();
+        base._ExitTree();
     }
 
     public void ApplyEnvironmentTints(MaterialTintsSettings tints, float wetness = 0f, string? skyHorizonHex = null)
@@ -125,45 +195,51 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
             _deciduousMat.AlbedoColor = deciduous;
         }
 
-        // Wet surfaces darken in albedo and drop roughness without toggling shader feature flags (zero recompile hitch).
-        float wetDarken = Mathf.Lerp(1.0f, 0.78f, w);
+        // Procedural road shader applies wet albedo darkening, glistening tire ruts, and feathered shoulders.
+        Color gravelColor = EnvironmentProfile.TryParseHexColor(tints.RoadsGravelHex, out Color parsedGravel)
+            ? parsedGravel
+            : new Color("585246");
 
         if (_asphaltMaterial is not null)
         {
             if (EnvironmentProfile.TryParseHexColor(tints.RoadsAsphaltHex, out Color asphalt))
             {
-                _asphaltMaterial.AlbedoColor = new Color(asphalt.R * wetDarken, asphalt.G * wetDarken, asphalt.B * wetDarken, asphalt.A);
+                _asphaltMaterial.SetShaderParameter("base_color", asphalt);
             }
-            _asphaltMaterial.Roughness = Mathf.Lerp(0.88f, 0.36f, w);
-            _asphaltMaterial.MetallicSpecular = Mathf.Lerp(0.08f, 0.75f, w);
-            _asphaltMaterial.Clearcoat = w * 0.45f;
-            _asphaltMaterial.ClearcoatRoughness = 0.22f;
+            _asphaltMaterial.SetShaderParameter("shoulder_color", gravelColor);
+            _asphaltMaterial.SetShaderParameter("wetness", w);
         }
         if (_gravelMaterial is not null)
         {
-            if (EnvironmentProfile.TryParseHexColor(tints.RoadsGravelHex, out Color gravel))
-            {
-                _gravelMaterial.AlbedoColor = new Color(gravel.R * wetDarken, gravel.G * wetDarken, gravel.B * wetDarken, gravel.A);
-            }
-            _gravelMaterial.Roughness = Mathf.Lerp(0.94f, 0.52f, w);
-            _gravelMaterial.MetallicSpecular = Mathf.Lerp(0.05f, 0.45f, w);
+            _gravelMaterial.SetShaderParameter("base_color", gravelColor);
+            _gravelMaterial.SetShaderParameter("shoulder_color", gravelColor * 0.88f);
+            _gravelMaterial.SetShaderParameter("wetness", w);
         }
         if (_dirtPathMaterial is not null)
         {
             if (EnvironmentProfile.TryParseHexColor(tints.RoadsDirtHex, out Color dirt))
             {
-                _dirtPathMaterial.AlbedoColor = new Color(dirt.R * wetDarken, dirt.G * wetDarken, dirt.B * wetDarken, dirt.A);
+                _dirtPathMaterial.SetShaderParameter("base_color", dirt);
+                _dirtPathMaterial.SetShaderParameter("shoulder_color", dirt * 0.85f);
             }
-            _dirtPathMaterial.Roughness = Mathf.Lerp(0.98f, 0.62f, w);
-            _dirtPathMaterial.MetallicSpecular = Mathf.Lerp(0.04f, 0.35f, w);
+            _dirtPathMaterial.SetShaderParameter("wetness", w);
         }
-        if (_terrainMaterial is StandardMaterial3D stdTerrain && EnvironmentProfile.TryParseHexColor(tints.TerrainHex, out Color terrain))
+        if (EnvironmentProfile.TryParseHexColor(tints.TerrainHex, out Color terrainTint))
         {
-            stdTerrain.AlbedoColor = terrain;
-        }
-        if (_fogOverlay is not null && EnvironmentProfile.TryParseHexColor(tints.TerrainHex, out Color fowTerrain))
-        {
-            _fogOverlay.SetTerrainTint(fowTerrain);
+            if (_terrainMaterial is StandardMaterial3D stdTerrain)
+            {
+                stdTerrain.AlbedoColor = terrainTint;
+            }
+            else if (_terrainMaterial is ShaderMaterial shaderTerrain)
+            {
+                shaderTerrain.SetShaderParameter("terrain_tint", new Vector3(terrainTint.R, terrainTint.G, terrainTint.B));
+                shaderTerrain.SetShaderParameter("terrain_wetness", w);
+            }
+            if (_fogOverlay is not null)
+            {
+                _fogOverlay.SetTerrainTint(terrainTint);
+                _fogOverlay.SetTerrainWetness(w);
+            }
         }
     }
 
@@ -259,16 +335,20 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
         int chunkCols = (int)(_plan.ExtentX / chunkSize);
         int chunkRows = (int)(_plan.ExtentZ / chunkSize);
 
-        _terrainMaterial = _fogOverlay != null
-            ? _fogOverlay.Material
-            : new StandardMaterial3D
-            {
-                ShadingMode = BaseMaterial3D.ShadingModeEnum.PerPixel,
-                DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
-                VertexColorUseAsAlbedo = true,
-                Roughness = 0.95f,
-                SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled
-            };
+        if (_fogOverlay is not null)
+        {
+            SyncFogOverlayAndRoads();
+            _terrainMaterial = _fogOverlay.Material;
+        }
+        else
+        {
+            (_, ShaderMaterial standaloneMat) = FogOfWarView.CreateTerrainShader(
+                new Vector2(_plan.ExtentX, _plan.ExtentZ),
+                useLambertDiffuse: true,
+                fogEnabled: false);
+            standaloneMat.SetShaderParameter("water_level", UstyeWaterLevel);
+            _terrainMaterial = standaloneMat;
+        }
 
         Vector3 lightDir = new Vector3(-0.55f, 0.75f, -0.35f).Normalized();
 
@@ -516,8 +596,13 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
         Shader waterShader = GD.Load<Shader>("res://UstyeWater.gdshader");
         _waterMaterial = new ShaderMaterial
         {
-            Shader = waterShader
+            Shader = waterShader,
+            RenderPriority = -65
         };
+        if (GD.Load<Texture2D>("res://Assets/Terrain/water_normal.png") is Texture2D waterNorm)
+            _waterMaterial.SetShaderParameter("water_normal", waterNorm);
+        if (GD.Load<Texture2D>("res://Assets/Terrain/macro_noise.png") is Texture2D waterMacro)
+            _waterMaterial.SetShaderParameter("macro_tex", waterMacro);
 
         NumericsVector2[] spline = _plan.RiverSpline;
         float halfWidth = _plan.RiverWidth * 0.52f;
@@ -647,38 +732,44 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
         _roadsRoot = new Node3D { Name = "RoadsRoot" };
         AddChild(_roadsRoot);
 
-        _asphaltMaterial = new StandardMaterial3D
-        {
-            AlbedoColor = new Color("353638"),
-            DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
-            SpecularMode = BaseMaterial3D.SpecularModeEnum.SchlickGgx,
-            MetallicSpecular = 0.08f,
-            Roughness = 0.88f,
-            ClearcoatEnabled = true,
-            Clearcoat = 0.0f,
-            ClearcoatRoughness = 0.22f,
-            CullMode = BaseMaterial3D.CullModeEnum.Disabled
-        };
+        Shader roadShader = GD.Load<Shader>("res://UstyeRoad.gdshader");
+        Texture2D? asphAlbedo = GD.Load<Texture2D>("res://Assets/Terrain/asphalt_albedo.png");
+        Texture2D? asphNormal = GD.Load<Texture2D>("res://Assets/Terrain/asphalt_normal.png");
+        Texture2D? gravAlbedo = GD.Load<Texture2D>("res://Assets/Terrain/gravel_albedo.png");
+        Texture2D? gravNormal = GD.Load<Texture2D>("res://Assets/Terrain/gravel_normal.png");
+        Texture2D? roadMacro = GD.Load<Texture2D>("res://Assets/Terrain/macro_noise.png");
 
-        _gravelMaterial = new StandardMaterial3D
+        static void BindRoadTextures(ShaderMaterial mat, Texture2D? aa, Texture2D? an, Texture2D? ga, Texture2D? gn, Texture2D? mc)
         {
-            AlbedoColor = new Color("585246"),
-            DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
-            SpecularMode = BaseMaterial3D.SpecularModeEnum.SchlickGgx,
-            MetallicSpecular = 0.05f,
-            Roughness = 0.94f,
-            CullMode = BaseMaterial3D.CullModeEnum.Disabled
-        };
+            if (aa is not null) mat.SetShaderParameter("asphalt_albedo", aa);
+            if (an is not null) mat.SetShaderParameter("asphalt_normal", an);
+            if (ga is not null) mat.SetShaderParameter("gravel_albedo", ga);
+            if (gn is not null) mat.SetShaderParameter("gravel_normal", gn);
+            if (mc is not null) mat.SetShaderParameter("macro_tex", mc);
+        }
 
-        _dirtPathMaterial = new StandardMaterial3D
-        {
-            AlbedoColor = new Color("655b4b"),
-            DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
-            SpecularMode = BaseMaterial3D.SpecularModeEnum.SchlickGgx,
-            MetallicSpecular = 0.04f,
-            Roughness = 0.98f,
-            CullMode = BaseMaterial3D.CullModeEnum.Disabled
-        };
+        _asphaltMaterial = new ShaderMaterial { Shader = roadShader, RenderPriority = -58 };
+        BindRoadTextures(_asphaltMaterial, asphAlbedo, asphNormal, gravAlbedo, gravNormal, roadMacro);
+        _asphaltMaterial.SetShaderParameter("road_type", 0);
+        _asphaltMaterial.SetShaderParameter("base_color", new Color("353638"));
+        _asphaltMaterial.SetShaderParameter("shoulder_color", new Color("585246"));
+        _asphaltMaterial.SetShaderParameter("wetness", 0f);
+
+        _gravelMaterial = new ShaderMaterial { Shader = roadShader, RenderPriority = -59 };
+        BindRoadTextures(_gravelMaterial, asphAlbedo, asphNormal, gravAlbedo, gravNormal, roadMacro);
+        _gravelMaterial.SetShaderParameter("road_type", 1);
+        _gravelMaterial.SetShaderParameter("base_color", new Color("585246"));
+        _gravelMaterial.SetShaderParameter("shoulder_color", new Color("4d473c"));
+        _gravelMaterial.SetShaderParameter("wetness", 0f);
+
+        _dirtPathMaterial = new ShaderMaterial { Shader = roadShader, RenderPriority = -60 };
+        BindRoadTextures(_dirtPathMaterial, asphAlbedo, asphNormal, gravAlbedo, gravNormal, roadMacro);
+        _dirtPathMaterial.SetShaderParameter("road_type", 2);
+        _dirtPathMaterial.SetShaderParameter("base_color", new Color("655b4b"));
+        _dirtPathMaterial.SetShaderParameter("shoulder_color", new Color("544c3e"));
+        _dirtPathMaterial.SetShaderParameter("wetness", 0f);
+
+        SyncRoadFogParameters();
 
         foreach (UstyePlanData.Road road in _plan.Roads)
         {
@@ -776,6 +867,8 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
 
         List<Vector3> verts = [];
         List<Vector3> norms = [];
+        List<Vector2> uvs = [];
+        List<Vector2> uv2s = [];
         List<int> indices = [];
 
         foreach (List<Vector2> strip in strips)
@@ -783,10 +876,15 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
             if (strip.Count < 2) continue;
             List<Vector2> densePoints = SubdividePoints(strip.ToArray(), 6.0f);
             int stripBaseVertex = verts.Count;
+            float cumulativeDistance = 0f;
 
             for (int i = 0; i < densePoints.Count; i++)
             {
                 Vector2 curr = densePoints[i];
+                if (i > 0)
+                {
+                    cumulativeDistance += curr.DistanceTo(densePoints[i - 1]);
+                }
 
                 Vector2 tangent = (i == 0)
                     ? (densePoints[1] - densePoints[0]).Normalized()
@@ -806,6 +904,11 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
                 verts.Add(new Vector3(right.X, yRight, right.Y));
                 norms.Add(Vector3.Up);
                 norms.Add(Vector3.Up);
+                uvs.Add(new Vector2(0f, cumulativeDistance));
+                uvs.Add(new Vector2(1f, cumulativeDistance));
+                // Store road +UV.x cross-axis in world XZ so asphalt normal maps transform accurately
+                uv2s.Add(normal);
+                uv2s.Add(normal);
 
                 if (baseIdx >= stripBaseVertex + 2)
                 {
@@ -831,6 +934,8 @@ public partial class UstyeMapView : Node3D, IMapShadowLayers
         arrays.Resize((int)Mesh.ArrayType.Max);
         arrays[(int)Mesh.ArrayType.Vertex] = verts.ToArray();
         arrays[(int)Mesh.ArrayType.Normal] = norms.ToArray();
+        arrays[(int)Mesh.ArrayType.TexUV] = uvs.ToArray();
+        arrays[(int)Mesh.ArrayType.TexUV2] = uv2s.ToArray();
         arrays[(int)Mesh.ArrayType.Index] = indices.ToArray();
 
         ArrayMesh mesh = new();

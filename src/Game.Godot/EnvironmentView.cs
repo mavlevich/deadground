@@ -17,24 +17,22 @@ public enum ShadowZoomTier : byte
 /// </summary>
 public sealed partial class EnvironmentView : Node3D
 {
+    private static Shader? s_rainShader;
+    private static Texture2D? s_rainStreaksTex;
     private readonly DirectionalLight3D _sun;
     private readonly WorldEnvironment _worldEnvironment;
     private readonly ProceduralSkyMaterial _skyMaterial;
-    private readonly GpuParticles3D _rainParticles;
-    private readonly ParticleProcessMaterial _rainProcessMaterial;
-    private readonly StandardMaterial3D _rainDrawMaterial;
+    private readonly CanvasLayer _rainLayer;
+    private readonly ColorRect _rainRect;
+    private readonly ShaderMaterial _rainMaterial;
     private EnvironmentProfile _activeProfile = null!;
     private EnvironmentQuality _activeQuality = EnvironmentQuality.High;
     private AmbientOcclusionPreset _ambientOcclusionPreset = AmbientOcclusionPreset.Auto;
     private Vector2I _outputPixelSize = new(1440, 900);
     private float _lastCameraSize = -999f;
     private float _lastCameraPitch = -999f;
-    private Vector3 _lastRainFocus = new(-99999f, -99999f, -99999f);
-    private bool _rainConfiguredActive;
-    private float _activeRainIntensity;
-    private Color _activeRainBaseColor = new(0.75f, 0.82f, 0.89f);
-    private float _activeRainBaseAlpha;
-    private float _lastAppliedRainFade = -1f;
+    private float _activeRainOpacity;
+    private Color _lastRainTint = new(-1f, -1f, -1f, -1f);
     private ShadowZoomTier? _activeShadowTier;
     private bool _shadowTierApplied;
     private bool _effectiveTreeShadows;
@@ -50,8 +48,25 @@ public sealed partial class EnvironmentView : Node3D
     private const float PitchUpdateThreshold = 0.02f;
     private const float RainFadeStartCameraSize = 380f;
     private const float RainMaxCameraSize = 680f;
-    private const float RainFocusMoveThresholdSq = 16.0f;
-    private const float RainCanopyHeightOffset = 54.0f;
+    private const string RainShaderCode = @"
+shader_type canvas_item;
+render_mode unshaded, blend_mix;
+
+uniform sampler2D rain_tex : filter_linear_mipmap, repeat_enable;
+uniform float opacity : hint_range(0.0, 1.0) = 0.0;
+uniform vec3 rain_color : source_color = vec3(0.76, 0.82, 0.88);
+uniform float speed = 1.55;
+uniform float wind_x = 0.14;
+
+void fragment() {
+    vec2 uv1 = SCREEN_UV * vec2(5.2, 2.6) + vec2(-TIME * wind_x * 1.35, -TIME * speed * 1.30);
+    vec2 uv2 = SCREEN_UV * vec2(7.6, 3.8) + vec2(0.37 - TIME * wind_x * 0.85, 0.61 - TIME * speed * 0.88);
+    float a1 = texture(rain_tex, uv1).a;
+    float a2 = texture(rain_tex, uv2).a * 0.62;
+    float alpha = clamp((a1 + a2) * opacity, 0.0, 0.32);
+    COLOR = vec4(rain_color, alpha);
+}
+";
 
     public DirectionalLight3D Sun => _sun;
     public WorldEnvironment WorldEnvironment => _worldEnvironment;
@@ -63,7 +78,9 @@ public sealed partial class EnvironmentView : Node3D
     public bool EffectiveTreeShadows => _effectiveTreeShadows;
     public bool EffectiveTerrainShadows => _effectiveTerrainShadows;
     public int ShadowTierApplyCount => _shadowTierApplyCount;
-    public bool IsRainActive => _rainParticles.Emitting;
+    public bool IsRainActive => _rainLayer.Visible && _rainRect.Visible && _activeRainOpacity > 0.01f;
+    internal CanvasLayer RainLayer => _rainLayer;
+    internal float ActiveRainOpacity => _activeRainOpacity;
     public float ActiveWetness => _activeProfile?.Weather?.Wetness ?? 0f;
 
     public EnvironmentView(RenderBudget? renderBudget = null)
@@ -100,101 +117,38 @@ public sealed partial class EnvironmentView : Node3D
         };
         AddChild(_worldEnvironment);
 
-        (_rainParticles, _rainProcessMaterial, _rainDrawMaterial) = CreateRainEmitter();
-        AddChild(_rainParticles);
-    }
-
-    private static (GpuParticles3D Particles, ParticleProcessMaterial Process, StandardMaterial3D DrawMat) CreateRainEmitter()
-    {
-        // Soft tapered vertical streak texture so raindrops feather organically instead of reading as hard dashes.
-        const int texW = 16;
-        const int texH = 64;
-        byte[] texBytes = new byte[texW * texH * 4];
-        for (int y = 0; y < texH; y++)
+        s_rainShader ??= new Shader { Code = RainShaderCode };
+        s_rainStreaksTex ??= GD.Load<Texture2D>("res://Assets/Terrain/rain_streaks.png");
+        _rainMaterial = new ShaderMaterial { Shader = s_rainShader };
+        if (s_rainStreaksTex is not null)
         {
-            float v = (y + 0.5f) / texH; // 0 = top tail, 1 = bottom drop head
-            float topFade = Math.Clamp(v / 0.55f, 0f, 1f);
-            float bottomFade = Math.Clamp((1f - v) / 0.18f, 0f, 1f);
-            float verticalProfile = topFade * topFade * bottomFade;
-            for (int x = 0; x < texW; x++)
-            {
-                float u = ((x + 0.5f) / texW) * 2f - 1f;
-                float radial = Math.Clamp(1f - u * u, 0f, 1f);
-                float alpha = Math.Clamp(verticalProfile * radial * radial, 0f, 1f);
-                int idx = (y * texW + x) * 4;
-                texBytes[idx] = 255;
-                texBytes[idx + 1] = 255;
-                texBytes[idx + 2] = 255;
-                texBytes[idx + 3] = (byte)MathF.Round(alpha * 255f);
-            }
+            _rainMaterial.SetShaderParameter("rain_tex", s_rainStreaksTex);
         }
-        Image streakImg = Image.CreateFromData(texW, texH, useMipmaps: false, Image.Format.Rgba8, texBytes);
-        ImageTexture streakTex = ImageTexture.CreateFromImage(streakImg);
+        _rainMaterial.SetShaderParameter("opacity", 0f);
 
-        StandardMaterial3D drawMat = new()
+        _rainLayer = new CanvasLayer
         {
-            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
-            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
-            BlendMode = BaseMaterial3D.BlendModeEnum.Mix,
-            CullMode = BaseMaterial3D.CullModeEnum.Disabled,
-            DepthDrawMode = BaseMaterial3D.DepthDrawModeEnum.Disabled,
-            NoDepthTest = false,
-            AlbedoTexture = streakTex,
-            AlbedoColor = new Color(0.75f, 0.82f, 0.89f, 0.34f)
+            Name = "WeatherRainLayer",
+            Layer = -10,
+            Visible = false
         };
-
-        // Crossed twin-ribbon streak mesh (4 triangles) with UVs so tapered raindrops read softly from every azimuth.
-        const float halfW = 0.042f;
-        const float halfH = 1.90f;
-        Vector3[] verts =
-        [
-            new(-halfW, -halfH, 0f), new(halfW, -halfH, 0f), new(halfW, halfH, 0f), new(-halfW, halfH, 0f),
-            new(0f, -halfH, -halfW), new(0f, -halfH, halfW), new(0f, halfH, halfW), new(0f, halfH, -halfW)
-        ];
-        Vector2[] uvs =
-        [
-            new(0f, 1f), new(1f, 1f), new(1f, 0f), new(0f, 0f),
-            new(0f, 1f), new(1f, 1f), new(1f, 0f), new(0f, 0f)
-        ];
-        int[] indices = [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7];
-        using Godot.Collections.Array arrays = new();
-        arrays.Resize((int)Mesh.ArrayType.Max);
-        arrays[(int)Mesh.ArrayType.Vertex] = verts;
-        arrays[(int)Mesh.ArrayType.TexUV] = uvs;
-        arrays[(int)Mesh.ArrayType.Index] = indices;
-        ArrayMesh streakMesh = new();
-        streakMesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
-        streakMesh.SurfaceSetMaterial(0, drawMat);
-
-        ParticleProcessMaterial process = new()
+        _rainRect = new ColorRect
         {
-            EmissionShape = ParticleProcessMaterial.EmissionShapeEnum.Box,
-            EmissionBoxExtents = new Vector3(145f, 8f, 145f),
-            Direction = new Vector3(0.10f, -1.0f, 0.06f).Normalized(),
-            Spread = 5.0f,
-            InitialVelocityMin = 44f,
-            InitialVelocityMax = 66f,
-            Gravity = new Vector3(3.0f, -32f, 1.5f),
-            ScaleMin = 0.65f,
-            ScaleMax = 1.45f,
-            ParticleFlagAlignY = true
+            Name = "RainOverlay",
+            AnchorLeft = 0f,
+            AnchorTop = 0f,
+            AnchorRight = 1f,
+            AnchorBottom = 1f,
+            OffsetLeft = 0f,
+            OffsetTop = 0f,
+            OffsetRight = 0f,
+            OffsetBottom = 0f,
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+            Color = Colors.White,
+            Material = _rainMaterial
         };
-
-        GpuParticles3D particles = new()
-        {
-            Name = "WeatherRainParticles",
-            Amount = 2600,
-            Lifetime = 1.05f,
-            Preprocess = 0.8f,
-            Emitting = false,
-            Visible = false,
-            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
-            VisibilityAabb = new Aabb(new Vector3(-190f, -90f, -190f), new Vector3(380f, 120f, 380f)),
-            ProcessMaterial = process,
-            DrawPass1 = streakMesh
-        };
-
-        return (particles, process, drawMat);
+        _rainLayer.AddChild(_rainRect);
+        AddChild(_rainLayer);
     }
 
     public void ApplyProfile(EnvironmentProfile profile, EnvironmentQuality quality = EnvironmentQuality.High)
@@ -282,38 +236,9 @@ public sealed partial class EnvironmentView : Node3D
             env.GlowBlendMode = Godot.Environment.GlowBlendModeEnum.Additive;
         }
 
-        // 8. Weather / Precipitation
-        ConfigureWeather(profile.Weather);
-
         // Apply quality level adjustments
         _shadowTierApplied = false;
         SetQuality(quality);
-    }
-
-    private void ConfigureWeather(WeatherSettings? weather)
-    {
-        float intensity = weather is not null ? Math.Clamp(weather.RainIntensity, 0f, 1f) : 0f;
-        _activeRainIntensity = intensity;
-        _rainConfiguredActive = intensity > 0.01f;
-        _lastAppliedRainFade = -1f;
-
-        if (!_rainConfiguredActive || weather is null)
-        {
-            _rainParticles.Emitting = false;
-            _rainParticles.Visible = false;
-            return;
-        }
-
-        Color rainColor = EnvironmentProfile.TryParseHexColor(weather.RainColorHex, out Color parsedRain)
-            ? parsedRain
-            : new Color(0.75f, 0.82f, 0.89f);
-        _activeRainBaseColor = rainColor;
-        _activeRainBaseAlpha = Mathf.Lerp(0.22f, 0.42f, intensity);
-        _rainDrawMaterial.AlbedoColor = new Color(rainColor.R, rainColor.G, rainColor.B, _activeRainBaseAlpha);
-
-        Vector3 fallDir = new Vector3(weather.WindX, -28f, weather.WindZ).Normalized();
-        _rainProcessMaterial.Direction = fallDir;
-        _rainProcessMaterial.Gravity = new Vector3(weather.WindX * 2.2f, -32f, weather.WindZ * 2.2f);
     }
 
     public static float CalculateRainZoomFade(float cameraSize)
@@ -321,37 +246,6 @@ public sealed partial class EnvironmentView : Node3D
         if (cameraSize <= 0f || cameraSize <= RainFadeStartCameraSize) return 1.0f;
         if (cameraSize >= RainMaxCameraSize) return 0.0f;
         return (RainMaxCameraSize - cameraSize) / (RainMaxCameraSize - RainFadeStartCameraSize);
-    }
-
-    private void RefreshRainEmissionState(float cameraSize)
-    {
-        float zoomFade = CalculateRainZoomFade(cameraSize);
-        bool shouldEmit = _rainConfiguredActive
-            && _activeQuality != EnvironmentQuality.Low
-            && zoomFade > 0.01f;
-
-        if (shouldEmit)
-        {
-            float qualityScale = _activeQuality == EnvironmentQuality.Medium ? 0.65f : 1.0f;
-            _rainParticles.AmountRatio = Math.Clamp(_activeRainIntensity * qualityScale, 0.1f, 1.0f);
-            if (MathF.Abs(zoomFade - _lastAppliedRainFade) > 0.01f)
-            {
-                _lastAppliedRainFade = zoomFade;
-                _rainDrawMaterial.AlbedoColor = new Color(
-                    _activeRainBaseColor.R,
-                    _activeRainBaseColor.G,
-                    _activeRainBaseColor.B,
-                    _activeRainBaseAlpha * zoomFade);
-            }
-            if (!_rainParticles.Visible) _rainParticles.Visible = true;
-            if (!_rainParticles.Emitting) _rainParticles.Emitting = true;
-        }
-        else
-        {
-            _lastAppliedRainFade = 0f;
-            if (_rainParticles.Emitting) _rainParticles.Emitting = false;
-            if (_rainParticles.Visible) _rainParticles.Visible = false;
-        }
     }
 
     public void SetProfile(EnvironmentProfile profile)
@@ -398,14 +292,45 @@ public sealed partial class EnvironmentView : Node3D
             _outputPixelSize.X,
             _outputPixelSize.Y);
 
-        RefreshRainEmissionState(_lastCameraSize > 0f ? _lastCameraSize : 0f);
-
         _shadowTierApplied = false;
         if (_activeShadowTier.HasValue)
         {
             ApplyShadowTier(_activeShadowTier.Value, GetAliveTarget(_lastShadowTarget), allowFade: false);
         }
         ApplyBenchmarkOverridesToEngine();
+        UpdateRainState(_lastCameraSize > 0f ? _lastCameraSize : 0f);
+    }
+
+    private void UpdateRainState(float cameraSize)
+    {
+        float intensity = _activeProfile?.Weather?.RainIntensity ?? 0f;
+        float zoomFade = CalculateRainZoomFade(cameraSize);
+        bool enabled = intensity > 0.01f && _activeQuality != EnvironmentQuality.Low && zoomFade > 0.01f;
+        float qualityScale = _activeQuality == EnvironmentQuality.Medium ? 0.72f : 1.0f;
+        float targetOpacity = enabled ? Mathf.Clamp(intensity * zoomFade * qualityScale * 0.22f, 0f, 0.30f) : 0f;
+
+        if (_rainLayer.Visible != enabled)
+        {
+            _rainLayer.Visible = enabled;
+        }
+
+        if (MathF.Abs(targetOpacity - _activeRainOpacity) > 0.004f || (!enabled && _activeRainOpacity > 0f))
+        {
+            _activeRainOpacity = targetOpacity;
+            _rainMaterial.SetShaderParameter("opacity", targetOpacity);
+        }
+
+        if (enabled && _activeProfile is not null)
+        {
+            Color tint = new Color(_activeProfile.Haze.ColorHex).Lerp(new Color(0.80f, 0.85f, 0.90f), 0.55f);
+            if (MathF.Abs(tint.R - _lastRainTint.R) > 0.005f ||
+                MathF.Abs(tint.G - _lastRainTint.G) > 0.005f ||
+                MathF.Abs(tint.B - _lastRainTint.B) > 0.005f)
+            {
+                _lastRainTint = tint;
+                _rainMaterial.SetShaderParameter("rain_color", new Vector3(tint.R, tint.G, tint.B));
+            }
+        }
     }
 
     public void SetDisplayOutputAndSsao(AmbientOcclusionPreset preset, Vector2I outputPixelSize)
@@ -699,7 +624,7 @@ public sealed partial class EnvironmentView : Node3D
         return Mathf.Lerp(closeDensity, wideDensity, t);
     }
 
-    public void UpdateHazeForCamera(float cameraSize, Vector3 cameraPosition, float cameraPitch = -1f)
+    public void UpdateHazeForCamera(float cameraSize, Vector3 cameraPosition, float cameraPitch = -1f, float cameraYaw = 0f)
     {
         if (_activeProfile is null) return;
 
@@ -725,27 +650,6 @@ public sealed partial class EnvironmentView : Node3D
             }
         }
 
-        if (_rainConfiguredActive)
-        {
-            RefreshRainEmissionState(cameraSize);
-            if (_rainParticles.Emitting)
-            {
-                float dx = cameraPosition.X - _lastRainFocus.X;
-                float dy = cameraPosition.Y - _lastRainFocus.Y;
-                float dz = cameraPosition.Z - _lastRainFocus.Z;
-                if (dx * dx + dy * dy + dz * dz >= RainFocusMoveThresholdSq)
-                {
-                    _lastRainFocus = cameraPosition;
-                    _rainParticles.Position = new Vector3(
-                        cameraPosition.X,
-                        cameraPosition.Y + RainCanopyHeightOffset,
-                        cameraPosition.Z);
-                }
-            }
-        }
-
-        if (!_activeProfile.Haze.Enabled) return;
-
         if (MathF.Abs(cameraSize - _lastCameraSize) < SizeUpdateThreshold &&
             MathF.Abs(effectivePitch - _lastCameraPitch) < PitchUpdateThreshold)
         {
@@ -754,6 +658,10 @@ public sealed partial class EnvironmentView : Node3D
 
         _lastCameraSize = cameraSize;
         _lastCameraPitch = effectivePitch;
+
+        UpdateRainState(cameraSize);
+
+        if (!_activeProfile.Haze.Enabled) return;
 
         float density = CalculateHazeDensity(cameraSize, _activeProfile.Haze.CloseZoomDensity, _activeProfile.Haze.WideZoomDensity);
         env.FogDensity = density;
