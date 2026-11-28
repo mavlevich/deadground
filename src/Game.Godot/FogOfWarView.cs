@@ -21,21 +21,147 @@ internal sealed class FogOfWarView : IDisposable
 {
     private const string TerrainShaderCode = @"
 shader_type spatial;
-render_mode cull_back, diffuse_burley, specular_disabled;
+render_mode cull_back, diffuse_burley;
 
 uniform sampler2D fog_texture : filter_linear, repeat_disable;
+uniform sampler2D meadow_albedo : source_color, filter_linear_mipmap, repeat_enable;
+uniform sampler2D meadow_normal : hint_normal, filter_linear_mipmap, repeat_enable;
+uniform sampler2D dry_albedo : source_color, filter_linear_mipmap, repeat_enable;
+uniform sampler2D dry_normal : hint_normal, filter_linear_mipmap, repeat_enable;
+uniform sampler2D slope_albedo : source_color, filter_linear_mipmap, repeat_enable;
+uniform sampler2D slope_normal : hint_normal, filter_linear_mipmap, repeat_enable;
+uniform sampler2D macro_tex : filter_linear_mipmap, repeat_enable;
+
 uniform vec2 map_size;
 uniform bool fog_enabled = true;
 uniform vec3 terrain_tint = vec3(1.0, 1.0, 1.0);
+uniform float terrain_wetness : hint_range(0.0, 1.0) = 0.0;
+uniform float water_level = -100.0;
+uniform float detail_strength : hint_range(0.0, 1.0) = 1.0;
+uniform float ridge_start = 14.0;
+uniform float ridge_end = 34.0;
 
 varying vec2 terrain_uv;
+varying vec3 world_pos;
+varying vec3 world_normal;
 
 void vertex() {
-    terrain_uv = VERTEX.xz / map_size;
+    world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+    terrain_uv = world_pos.xz / map_size;
+    world_normal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
 }
 
 void fragment() {
-    vec3 base_color = COLOR.rgb * terrain_tint;
+    vec2 xz = world_pos.xz;
+    vec3 wnorm = normalize(world_normal);
+    float slope = 1.0 - clamp(wnorm.y, 0.0, 1.0);
+    float px_size = max(length(dFdx(xz)), length(dFdy(xz)));
+
+    // 2 cheap mipmapped macro reads at wide non-harmonic scales (zero wide-map banding)
+    vec2 rot_xz = vec2(xz.x * 0.80 - xz.y * 0.60, xz.x * 0.60 + xz.y * 0.80);
+    vec4 macro_far = texture(macro_tex, xz * 0.00055);
+    vec4 macro_mid = texture(macro_tex, rot_xz * 0.0038 + vec2(0.37, 0.19));
+
+    // Organic pastoral European meadow vs dry fallow field mix
+    float dry_mask = smoothstep(0.34, 0.72, macro_far.r * 0.62 + macro_mid.g * 0.38);
+    float ridge_mask = smoothstep(ridge_start, max(ridge_start + 1.0, ridge_end), world_pos.y);
+    dry_mask = clamp(dry_mask + ridge_mask * 0.38, 0.0, 1.0);
+
+    // Compute slope & riverbank weights up front so flat pixels skip unused slope textures
+    float slope_mask = smoothstep(0.055, 0.21, slope + (macro_mid.a - 0.5) * 0.045) * 0.88;
+    float bank_mask = 0.0;
+    float bank_wet = 0.0;
+    if (water_level > -50.0) {
+        float h_above_water = world_pos.y - water_level;
+        bank_mask = clamp(1.0 - smoothstep(0.05, 2.2 + (macro_mid.a - 0.5) * 1.1, h_above_water), 0.0, 1.0);
+        bank_wet = 1.0 - smoothstep(-0.1, 0.70, h_above_water);
+    }
+
+    // Distance-culled normals save 3 texture fetches per pixel at wide RTS zoom
+    float norm_fade = smoothstep(0.65, 0.14, px_size) * detail_strength;
+    bool use_normals = norm_fade > 0.01;
+
+    vec2 uv_meadow = xz * 0.068;
+    vec2 uv_meadow_far = rot_xz * 0.019;
+    vec2 uv_dry = rot_xz * 0.056;
+    vec2 uv_dry_far = xz * 0.017 + vec2(0.41, 0.23);
+
+    vec3 col_meadow = vec3(0.0);
+    vec2 n_meadow = vec2(0.0);
+    if (dry_mask < 0.99) {
+        col_meadow = mix(
+            texture(meadow_albedo, uv_meadow).rgb,
+            texture(meadow_albedo, uv_meadow_far).rgb,
+            0.36);
+        if (use_normals) {
+            n_meadow = texture(meadow_normal, uv_meadow).xy * 2.0 - 1.0;
+        }
+    }
+
+    vec3 col_dry = vec3(0.0);
+    vec2 n_dry = vec2(0.0);
+    if (dry_mask > 0.01) {
+        col_dry = mix(
+            texture(dry_albedo, uv_dry).rgb,
+            texture(dry_albedo, uv_dry_far).rgb,
+            0.38);
+        if (use_normals) {
+            // uv_dry uses rot_xz = (0.80*x - 0.60*z, 0.60*x + 0.80*z); transform normal back to world XZ
+            vec2 n_dry_uv = texture(dry_normal, uv_dry).xy * 2.0 - 1.0;
+            n_dry = vec2(
+                n_dry_uv.x * 0.80 + n_dry_uv.y * 0.60,
+                -n_dry_uv.x * 0.60 + n_dry_uv.y * 0.80);
+        }
+    }
+
+    vec3 tex_col = mix(col_meadow, col_dry, dry_mask);
+    vec2 tex_norm = mix(n_meadow, n_dry, dry_mask);
+
+    // Calm Cold War overcast saturation + broad pastoral tone variation
+    float tex_luma = dot(tex_col, vec3(0.299, 0.587, 0.114));
+    tex_col = mix(vec3(tex_luma), tex_col, 0.88);
+    tex_col *= mix(0.86, 1.14, macro_far.g * 0.55 + macro_mid.r * 0.45);
+
+    // Steep slope clay-loam & damp pebble riverbank (skipped on ~88% of flat terrain)
+    if (slope_mask > 0.01 || bank_mask > 0.01) {
+        vec2 uv_slope = xz * 0.082;
+        vec3 col_slope = texture(slope_albedo, uv_slope).rgb;
+        vec2 n_slope = use_normals ? (texture(slope_normal, uv_slope).xy * 2.0 - 1.0) : vec2(0.0);
+        if (slope_mask > 0.01) {
+            tex_col = mix(tex_col, col_slope, slope_mask);
+            tex_norm = mix(tex_norm, n_slope, slope_mask);
+        }
+        if (bank_mask > 0.01) {
+            tex_col = mix(tex_col, col_slope * 0.84, bank_mask * 0.90);
+            tex_norm = mix(tex_norm, n_slope, bank_mask * 0.85);
+        }
+    }
+
+    // Preserve subtle baked terrain relief shading from vertex colors
+    float v_lum = dot(COLOR.rgb, vec3(0.299, 0.587, 0.114));
+    float shade_mod = clamp(v_lum / 0.24, 0.68, 1.18);
+    vec3 ground = mix(COLOR.rgb, tex_col * shade_mod, detail_strength);
+
+    // Rain wetness darkening + domain-warped organic puddles (1 texture channel, 0 ALU noise)
+    float puddle = 0.0;
+    if (terrain_wetness > 0.01) {
+        float flat_mask = 1.0 - smoothstep(0.020, 0.075, slope);
+        float puddle_val = macro_mid.b * 0.65 + macro_far.b * 0.35;
+        puddle = smoothstep(0.58, 0.75, puddle_val) * flat_mask * terrain_wetness;
+    }
+
+    // Apply tangent-space normal map in world space (flattens naturally inside puddles)
+    if (use_normals) {
+        float norm_strength = 0.42 * norm_fade * (1.0 - puddle * 0.90);
+        vec3 perturbed = normalize(wnorm + vec3(tex_norm.x, 0.0, tex_norm.y) * norm_strength);
+        NORMAL = normalize(mat3(VIEW_MATRIX) * perturbed);
+    }
+
+    float total_wet = clamp(max(terrain_wetness, bank_wet * 0.72), 0.0, 1.0);
+    ground *= mix(1.0, 0.85, total_wet);
+    ground = mix(ground, ground * 0.76 + vec3(0.026, 0.034, 0.042), puddle * 0.62);
+
+    vec3 base_color = ground * terrain_tint;
     if (fog_enabled) {
         float vis = texture(fog_texture, clamp(terrain_uv, vec2(0.0), vec2(1.0))).r;
         float gray = dot(base_color, vec3(0.299, 0.587, 0.114));
@@ -45,8 +171,10 @@ void fragment() {
     } else {
         ALBEDO = base_color;
     }
-    ROUGHNESS = 0.95;
-    SPECULAR = 0.0;
+
+    float base_rough = mix(0.93, 0.58, total_wet);
+    ROUGHNESS = mix(base_rough, 0.12, puddle);
+    SPECULAR = mix(mix(0.05, 0.28, total_wet), 0.68, puddle);
 }
 ";
 
@@ -131,6 +259,8 @@ void fragment() {
     public bool IsCalculationSuspended { get; set; }
     public ShaderMaterial Material => _material;
     public ImageTexture Texture => _texture;
+    public Vector2 MapSize { get; }
+    public event Action<bool>? EnabledChanged;
     internal bool IsCycleInProgress => _cycleInProgress;
     // Units swept in the last completed cycle; stationary units are not counted.
     internal int SweepsInLastCycle { get; private set; }
@@ -224,18 +354,65 @@ void fragment() {
             _vegCanopySlopeBuffer = [];
         }
 
+        MapSize = new Vector2(map.Width, map.Depth);
         _image = Image.CreateEmpty(Columns, Rows, false, Image.Format.R8);
         _texture = ImageTexture.CreateFromImage(_image);
 
+        (_shader, _material) = CreateTerrainShader(MapSize, useLambertDiffuse, IsEnabled, _texture);
+    }
+
+    private static Texture2D? s_meadowAlbedo;
+    private static Texture2D? s_meadowNormal;
+    private static Texture2D? s_dryAlbedo;
+    private static Texture2D? s_dryNormal;
+    private static Texture2D? s_slopeAlbedo;
+    private static Texture2D? s_slopeNormal;
+    private static Texture2D? s_macroNoise;
+
+    private static Texture2D? LoadTerrainTexture(ref Texture2D? cache, string resPath)
+    {
+        if (cache is not null && GodotObject.IsInstanceValid(cache)) return cache;
+        cache = GD.Load<Texture2D>(resPath);
+        return cache;
+    }
+
+    internal static (Shader Shader, ShaderMaterial Material) CreateTerrainShader(
+        Vector2 mapSize,
+        bool useLambertDiffuse = true,
+        bool fogEnabled = false,
+        ImageTexture? fogTexture = null)
+    {
         string shaderCode = useLambertDiffuse
             ? TerrainShaderCode.Replace("diffuse_burley", "diffuse_lambert", StringComparison.Ordinal)
             : TerrainShaderCode;
-        _shader = new Shader { Code = shaderCode };
-        _material = new ShaderMaterial { Shader = _shader };
-        _material.SetShaderParameter("fog_texture", _texture);
-        _material.SetShaderParameter("map_size", new Vector2(map.Width, map.Depth));
-        _material.SetShaderParameter("fog_enabled", IsEnabled);
-        _material.SetShaderParameter("terrain_tint", new Vector3(1f, 1f, 1f));
+        Shader shader = new() { Code = shaderCode };
+        ShaderMaterial material = new() { Shader = shader };
+        if (fogTexture is not null)
+        {
+            material.SetShaderParameter("fog_texture", fogTexture);
+        }
+        if (LoadTerrainTexture(ref s_meadowAlbedo, "res://Assets/Terrain/meadow_grass_albedo.png") is Texture2D ma)
+            material.SetShaderParameter("meadow_albedo", ma);
+        if (LoadTerrainTexture(ref s_meadowNormal, "res://Assets/Terrain/meadow_grass_normal.png") is Texture2D mn)
+            material.SetShaderParameter("meadow_normal", mn);
+        if (LoadTerrainTexture(ref s_dryAlbedo, "res://Assets/Terrain/dry_field_albedo.png") is Texture2D da)
+            material.SetShaderParameter("dry_albedo", da);
+        if (LoadTerrainTexture(ref s_dryNormal, "res://Assets/Terrain/dry_field_normal.png") is Texture2D dn)
+            material.SetShaderParameter("dry_normal", dn);
+        if (LoadTerrainTexture(ref s_slopeAlbedo, "res://Assets/Terrain/slope_soil_albedo.png") is Texture2D sa)
+            material.SetShaderParameter("slope_albedo", sa);
+        if (LoadTerrainTexture(ref s_slopeNormal, "res://Assets/Terrain/slope_soil_normal.png") is Texture2D sn)
+            material.SetShaderParameter("slope_normal", sn);
+        if (LoadTerrainTexture(ref s_macroNoise, "res://Assets/Terrain/macro_noise.png") is Texture2D mc)
+            material.SetShaderParameter("macro_tex", mc);
+
+        material.SetShaderParameter("map_size", mapSize);
+        material.SetShaderParameter("fog_enabled", fogEnabled && fogTexture is not null);
+        material.SetShaderParameter("terrain_tint", new Vector3(1f, 1f, 1f));
+        material.SetShaderParameter("terrain_wetness", 0f);
+        material.SetShaderParameter("water_level", -100f);
+        material.SetShaderParameter("detail_strength", 1f);
+        return (shader, material);
     }
 
     public void AttachToTerrain(MeshInstance3D terrain)
@@ -248,6 +425,21 @@ void fragment() {
         _material.SetShaderParameter("terrain_tint", new Vector3(tint.R, tint.G, tint.B));
     }
 
+    public void SetTerrainWetness(float wetness)
+    {
+        _material.SetShaderParameter("terrain_wetness", Math.Clamp(wetness, 0f, 1f));
+    }
+
+    public void SetWaterLevel(float waterLevel)
+    {
+        _material.SetShaderParameter("water_level", waterLevel);
+    }
+
+    public void SetDetailStrength(float strength)
+    {
+        _material.SetShaderParameter("detail_strength", Math.Clamp(strength, 0f, 1f));
+    }
+
     public void Toggle()
     {
         SetEnabled(!IsEnabled);
@@ -257,6 +449,7 @@ void fragment() {
     {
         IsEnabled = enabled;
         _material.SetShaderParameter("fog_enabled", IsEnabled);
+        EnabledChanged?.Invoke(IsEnabled);
     }
 
     public bool IsCellSeen(int cx, int cz)

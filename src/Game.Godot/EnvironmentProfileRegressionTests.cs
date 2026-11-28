@@ -103,18 +103,20 @@ internal static class EnvironmentProfileRegressionTests
                 "Rain zoom fade must reach 0.0 at RainMaxCameraSize.");
 
             view.UpdateHazeForCamera(180f, new Vector3(1200f, 12f, 1400f), 0.8f);
-            Require(view.IsRainActive, "storm_rain must emit rain particles at play zoom on High quality.");
+            Require(view.IsRainActive && view.RainLayer.Visible && view.ActiveRainOpacity > 0.05f,
+                $"storm_rain must display rain overlay at play zoom on High quality (visible={view.RainLayer.Visible}, opacity={view.ActiveRainOpacity:F3}).");
 
             view.UpdateHazeForCamera(1800f, new Vector3(1200f, 12f, 1400f), 0.8f);
-            Require(!view.IsRainActive, "storm_rain must disable rain particles at wide strategic zoom.");
+            Require(!view.IsRainActive && !view.RainLayer.Visible && view.ActiveRainOpacity <= 0.001f,
+                "storm_rain must hide rain overlay at wide strategic zoom.");
 
             view.UpdateHazeForCamera(180f, new Vector3(1250f, 12f, 1450f), 0.8f);
-            Require(view.IsRainActive, "storm_rain must re-enable rain when zooming back in.");
+            Require(view.IsRainActive && view.RainLayer.Visible, "storm_rain must re-enable rain overlay when zooming back in.");
 
             view.SetQuality(EnvironmentQuality.Low);
-            Require(!view.IsRainActive, "Low graphics quality must disable weather rain particles.");
+            Require(!view.IsRainActive && !view.RainLayer.Visible, "Low graphics quality must hide weather rain overlay.");
             view.SetQuality(EnvironmentQuality.High);
-            Require(view.IsRainActive, "Returning to High quality must restore storm rain particles.");
+            Require(view.IsRainActive && view.RainLayer.Visible, "Returning to High quality must restore storm rain overlay.");
 
             // Zero managed allocations while rain follows the camera focus
             for (int i = 0; i < 4; i++)
@@ -504,11 +506,71 @@ internal static class EnvironmentProfileRegressionTests
                         Require(dotUp > 0.85f,
                             $"Road front face normal must point upward into the sky (got dotUp={dotUp:F3}).");
                     }
+                    Vector2[] roadUvs = arrays[(int)Mesh.ArrayType.TexUV].AsVector2Array();
+                    Require(roadUvs.Length == verts.Length && roadUvs.Length >= 4,
+                        $"Road '{mi.Name}' must include per-vertex UVs for shoulder and centerline shading.");
+                    Vector2[] roadUv2s = arrays[(int)Mesh.ArrayType.TexUV2].AsVector2Array();
+                    Require(roadUv2s.Length == verts.Length && MathF.Abs(roadUv2s[0].Length() - 1f) < 0.05f,
+                        $"Road '{mi.Name}' must include unit per-vertex UV2 cross-axis basis for world-space normal mapping.");
+                    Require(mi.MaterialOverride is ShaderMaterial roadMat && roadMat.RenderPriority < 0,
+                        $"Road '{mi.Name}' must use UstyeRoad ShaderMaterial with negative RenderPriority so transparent VFX render above roads.");
+                }
+            }
+
+            foreach (Node waterChild in mapView.WaterRoot.GetChildren())
+            {
+                if (waterChild is MeshInstance3D waterMi && waterMi.MaterialOverride is ShaderMaterial waterMat)
+                {
+                    Require(waterMat.RenderPriority < 0,
+                        $"Water '{waterMi.Name}' must have negative RenderPriority so transparent VFX render above water.");
+                }
+            }
+
+            // Verify FogOfWar attachment, wetness propagation to terrain + all road materials, fog toggle, and clean _ExitTree unsubscribe.
+            HeightMap map = new(65, 65, 80f, 0.01f, new ushort[65 * 65]);
+            using FogOfWarView fog = new(map, null, customCellSize: 80f);
+            mapView.AttachFogOfWar(fog);
+            EnvironmentProfile storm = EnvironmentProfile.Load("storm_rain");
+            float expectedWet = storm.Weather?.Wetness ?? 0f;
+            mapView.ApplyEnvironmentTints(storm.MaterialTints, expectedWet, storm.Sky.SkyHorizonColorHex);
+
+            float terrainWet = fog.Material.GetShaderParameter("terrain_wetness").AsSingle();
+            Require(Mathf.IsEqualApprox(terrainWet, expectedWet),
+                $"Expected terrain_wetness={expectedWet}, got {terrainWet}.");
+
+            foreach (Node child in mapView.RoadsRoot.GetChildren())
+            {
+                if (child is MeshInstance3D roadMi && roadMi.MaterialOverride is ShaderMaterial roadMat)
+                {
+                    float roadWet = roadMat.GetShaderParameter("wetness").AsSingle();
+                    Require(Mathf.IsEqualApprox(roadWet, expectedWet),
+                        $"Road '{roadMi.Name}' expected wetness={expectedWet}, got {roadWet}.");
+                    fog.SetEnabled(false);
+                    Require(!roadMat.GetShaderParameter("fog_enabled").AsBool(),
+                        $"Road '{roadMi.Name}' must disable fog_enabled when FogOfWar is toggled off.");
+                    fog.SetEnabled(true);
+                    Require(roadMat.GetShaderParameter("fog_enabled").AsBool(),
+                        $"Road '{roadMi.Name}' must re-enable fog_enabled when FogOfWar is toggled on.");
+                    break;
+                }
+            }
+
+            // Remove mapView from tree -> _ExitTree must unsubscribe from fog.EnabledChanged (no leak / stale updates).
+            scene.RemoveChild(mapView);
+            fog.SetEnabled(false);
+            foreach (Node child in mapView.RoadsRoot.GetChildren())
+            {
+                if (child is MeshInstance3D roadMi && roadMi.MaterialOverride is ShaderMaterial roadMat)
+                {
+                    Require(roadMat.GetShaderParameter("fog_enabled").AsBool(),
+                        $"Detached mapView road '{roadMi.Name}' must not receive FogOfWar events after _ExitTree.");
+                    break;
                 }
             }
         }
         finally
         {
+            if (mapView.GetParent() == scene) scene.RemoveChild(mapView);
             mapView.QueueFree();
         }
     }
